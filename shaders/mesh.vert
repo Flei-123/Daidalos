@@ -21,7 +21,8 @@ layout(location = 9) in uint  iFlags;
 layout(set = 0, binding = 0) uniform Frame {
     mat4 viewproj;
     mat4 invviewproj;
-    mat4 lightviewproj;
+    mat4 lightviewproj[3];
+    vec4 cascade_split;
     vec4 sun_dir;
     vec4 sun_color;
     vec4 sky_color;

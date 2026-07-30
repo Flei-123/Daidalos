@@ -84,20 +84,76 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     Mat4 proj = mat_perspective(r->fov, aspect, r->znear, r->zfar);
     Mat4 viewproj = mat_mul(proj, view);
 
+    // ---- cascaded shadow maps
+    //
+    // One shadow map over the whole view distance is either blurry up close or
+    // useless far away. Split the view range into N slices, fit a light space
+    // box around each slice's bounding sphere, and let the fragment stage pick
+    // the tightest one that covers it. The sphere (rather than the frustum
+    // corners) is what keeps the box size constant as the camera turns, so the
+    // shadow edges do not shimmer.
     float R = r->shadow_radius;
-    float lp[3] = { r->target[0] + r->sun_dir[0] * R * 2.0f,
-                    r->target[1] + r->sun_dir[1] * R * 2.0f,
-                    r->target[2] + r->sun_dir[2] * R * 2.0f };
+    float splits[DAI_SHADOW_CASCADES + 1];
+    {
+        float near_d = 0.5f, far_d = R * 2.0f;
+        splits[0] = near_d;
+        for (uint32_t i = 1; i <= r->cascades; ++i) {
+            float t = (float)i / (float)r->cascades;
+            float log_split = near_d * powf(far_d / near_d, t);
+            float lin_split = near_d + (far_d - near_d) * t;
+            splits[i] = 0.72f * log_split + 0.28f * lin_split;   // practical split scheme
+        }
+    }
+
+    Mat4 lightvp[DAI_SHADOW_CASCADES];
+    float fwd[3] = { r->target[0] - r->eye[0], r->target[1] - r->eye[1], r->target[2] - r->eye[2] };
+    {
+        float l = sqrtf(fwd[0]*fwd[0] + fwd[1]*fwd[1] + fwd[2]*fwd[2]);
+        if (l > 1e-6f) { fwd[0]/=l; fwd[1]/=l; fwd[2]/=l; }
+    }
     float lup[3] = { 0, 1, 0 };
     if (fabsf(r->sun_dir[1]) > 0.98f) { lup[1] = 0; lup[2] = 1; }
-    Mat4 lview = mat_look_at(lp, r->target, lup);
-    Mat4 lproj = mat_ortho(-R, R, -R, R, 0.05f, R * 4.5f);
-    Mat4 lightvp = mat_mul(lproj, lview);
+
+    for (uint32_t c = 0; c < r->cascades; ++c) {
+        float n = splits[c], f = splits[c + 1];
+        // bounding sphere of the slice, centred on the view axis
+        float mid = (n + f) * 0.5f;
+        float half_fov = r->fov * 3.14159265f / 360.0f;
+        float t = tanf(half_fov);
+        float aspect_r = (float)r->width / (float)r->height;
+        float rn = n * t * sqrtf(1.0f + aspect_r * aspect_r);
+        float rf = f * t * sqrtf(1.0f + aspect_r * aspect_r);
+        float radius = sqrtf(fmaxf(rn * rn + n * n, rf * rf + f * f));
+        // centre the sphere so it covers both slice caps
+        float centre_d = mid + (rf * rf - rn * rn) / (4.0f * fmaxf(mid - n, 1e-3f));
+        if (centre_d < n) centre_d = mid;
+        float cx = r->eye[0] + fwd[0] * centre_d;
+        float cy = r->eye[1] + fwd[1] * centre_d;
+        float cz = r->eye[2] + fwd[2] * centre_d;
+        radius = fmaxf(radius, 1.0f);
+
+        float ctr[3] = { cx, cy, cz };
+        float lp[3] = { cx + r->sun_dir[0] * radius * 2.5f,
+                        cy + r->sun_dir[1] * radius * 2.5f,
+                        cz + r->sun_dir[2] * radius * 2.5f };
+        Mat4 lview = mat_look_at(lp, ctr, lup);
+        // snap the light space origin to whole texels: without this the shadow
+        // edges crawl every time the camera moves a fraction of a texel
+        float texels = (float)r->shadow_size / (2.0f * radius);
+        float ox = lview.m[12] * texels, oy = lview.m[13] * texels;
+        lview.m[12] = floorf(ox) / texels;
+        lview.m[13] = floorf(oy) / texels;
+        Mat4 lproj = mat_ortho(-radius, radius, -radius, radius, 0.05f, radius * 6.0f);
+        lightvp[c] = mat_mul(lproj, lview);
+    }
 
     FrameUBO u{};
     u.viewproj = viewproj;
     if (!mat_invert(viewproj, &u.invviewproj)) u.invviewproj = mat_identity();
-    u.lightviewproj = lightvp;
+    for (uint32_t c = 0; c < DAI_SHADOW_CASCADES; ++c)
+        u.lightviewproj[c] = lightvp[c < r->cascades ? c : r->cascades - 1];
+    for (uint32_t c = 0; c < 4; ++c)
+        u.cascade_split[c] = splits[c + 1 <= r->cascades ? c + 1 : r->cascades];
     for (int i = 0; i < 3; ++i) {
         u.sun_dir[i] = r->sun_dir[i];
         u.sun_color[i] = r->sun_color[i];
@@ -125,16 +181,17 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     VkDeviceSize off[2] = { 0, 0 };
     VkBuffer bufs[2] = { r->vbo.buf, r->inst.buf };
 
-    // --- shadow pass (always runs: it also puts the image in a layout the
-    //     descriptor set expects, even when there is nothing to draw)
+    // --- shadow passes: one per cascade (always runs, so the image ends up in
+    //     the layout the descriptor set expects even with nothing to draw)
     vk_barrier(r->cmd, r->shadow_img, VK_IMAGE_ASPECT_DEPTH_BIT,
                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0,
-               VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-    {
+               VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+               r->cascades);
+    for (uint32_t c = 0; c < r->cascades; ++c) {
         uint32_t ss = r->shadows ? r->shadow_size : 1;
         VkRenderingAttachmentInfo da{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-        da.imageView = r->shadow_view; da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        da.imageView = r->shadow_layer[c]; da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         da.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; da.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         da.clearValue.depthStencil = { 1.0f, 0 };
         VkRenderingInfo ri{ VK_STRUCTURE_TYPE_RENDERING_INFO };
@@ -146,6 +203,12 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
             vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->dset, 0, nullptr);
             vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 1, 1,
                                     &r->materials[0].set, 0, nullptr);
+            // which cascade this pass writes travels in the push constant slot
+            // the shadow vertex stage reads as "extra.w"
+            MaterialPush pc = r->materials[0].p;
+            pc.extra[3] = (float)c;
+            vkCmdPushConstants(r->cmd, r->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(MaterialPush), &pc);
             set_vp(r->cmd, ss, ss);
             vkCmdBindVertexBuffers(r->cmd, 0, 2, bufs, off);
             vkCmdBindIndexBuffer(r->cmd, r->ibo.buf, 0, VK_INDEX_TYPE_UINT32);
@@ -161,7 +224,8 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     vk_barrier(r->cmd, r->shadow_img, VK_IMAGE_ASPECT_DEPTH_BIT,
                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-               VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+               VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+               r->cascades);
 
     // --- main pass
     bool msaa = r->samples != VK_SAMPLE_COUNT_1_BIT;

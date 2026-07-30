@@ -16,7 +16,8 @@ layout(location = 5) in vec2 vUV;
 layout(set = 0, binding = 0) uniform Frame {
     mat4 viewproj;
     mat4 invviewproj;
-    mat4 lightviewproj;
+    mat4 lightviewproj[3];
+    vec4 cascade_split;
     vec4 sun_dir;
     vec4 sun_color;
     vec4 sky_color;
@@ -24,7 +25,7 @@ layout(set = 0, binding = 0) uniform Frame {
     vec4 fog_color;
     vec4 cam_pos;
 } F;
-layout(set = 0, binding = 1) uniform sampler2DShadow uShadow;
+layout(set = 0, binding = 1) uniform sampler2DArrayShadow uShadow;
 
 layout(set = 1, binding = 0) uniform sampler2D uBaseColor;
 layout(set = 1, binding = 1) uniform sampler2D uORM;        // occlusion / roughness / metallic
@@ -48,18 +49,35 @@ vec3 tonemap_aces(vec3 x) {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
+// Cascade selection by view depth, then a 3x3 PCF tap. The cascade index is
+// chosen from the distance to the camera rather than from the depth buffer, so
+// it stays stable under a moving camera and costs one compare.
 float shadow_factor(vec3 world, float ndl) {
     if (F.cam_pos.w < 0.5) return 1.0;
-    vec4 lp = F.lightviewproj * vec4(world, 1.0);
+    float view_depth = length(F.cam_pos.xyz - world);
+    int c = 0;
+    if (view_depth > F.cascade_split.x) c = 1;
+    if (view_depth > F.cascade_split.y) c = 2;
+
+    vec4 lp = F.lightviewproj[c] * vec4(world, 1.0);
     vec3 p  = lp.xyz / lp.w;
     p.xy = p.xy * 0.5 + 0.5;
-    if (p.x < 0.002 || p.x > 0.998 || p.y < 0.002 || p.y > 0.998 || p.z > 1.0 || p.z < 0.0) return 1.0;
-    float bias = mix(0.0040, 0.0008, ndl);
+    if (p.x < 0.002 || p.x > 0.998 || p.y < 0.002 || p.y > 0.998 || p.z > 1.0 || p.z < 0.0) {
+        // outside this cascade: try the widest one before giving up
+        lp = F.lightviewproj[2] * vec4(world, 1.0);
+        p = lp.xyz / lp.w;
+        p.xy = p.xy * 0.5 + 0.5;
+        c = 2;
+        if (p.x < 0.002 || p.x > 0.998 || p.y < 0.002 || p.y > 0.998 || p.z > 1.0 || p.z < 0.0) return 1.0;
+    }
+
+    // bias grows with cascade size, otherwise the far cascade acnes
+    float bias = mix(0.0035, 0.0007, ndl) * (1.0 + float(c) * 1.6);
     float texel = F.sun_color.w;
     float s = 0.0;
     for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x)
-            s += texture(uShadow, vec3(p.xy + vec2(x, y) * texel, p.z - bias));
+            s += texture(uShadow, vec4(p.xy + vec2(x, y) * texel, float(c), p.z - bias));
     return s / 9.0;
 }
 

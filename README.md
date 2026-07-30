@@ -34,9 +34,15 @@ MIT licensed.
 ./build.sh noaudio             # without Aulos
 
 ./build/test_daidalos                                    # 48 simulation assertions
+./build/test_merge                                       # 45 merge/split assertions
 DAI_SHADER_DIR=shaders ./build/test_render_visual /tmp   # 33 visual assertions
 ./build/test_image /tmp/pngfix                           #  9 PNG/DEFLATE assertions
 DAI_SHADER_DIR=shaders ./build/test_gltf assets/test /tmp # 15 import assertions
+
+# a real window, on a machine without a display:
+Xvfb :77 -screen 0 1280x720x24 &
+DISPLAY=:77 DAI_SHADER_DIR=shaders ./build/test_window
+DISPLAY=:77 DAI_SHADER_DIR=shaders ./build/window_demo
 DAI_SHADER_DIR=shaders ./build/sandbox_demo 6 /tmp       # general sandbox scene
 DAI_SHADER_DIR=shaders ./build/vehicle_demo  6 /tmp      # machine built from joints
 ```
@@ -118,9 +124,13 @@ lavapipe, on a GPU through the identical code path).
   derivatives, so assets never need baked tangents.
 - **textures**: PNG loaded by the engine's own DEFLATE decoder, full mip chains
   built on the GPU, sRGB vs linear decided by the slot rather than the artist.
-- **lighting**: directional sun, hemisphere ambient, Blinn-Phong specular,
-  2048² shadow map with 3×3 PCF, squared distance fog, procedural sky with a
-  sun disc, ACES tonemapping, 4× MSAA.
+- **lighting**: directional sun, hemisphere ambient, Cook-Torrance GGX,
+  **3 cascaded shadow maps** (2048² each, 3×3 PCF, texel snapped so edges do
+  not crawl), squared distance fog, procedural sky with a sun disc, ACES
+  tonemapping, 4× MSAA.
+- **window**: X11 + `VK_KHR_swapchain`. Presenting is a blit of the finished
+  offscreen frame, so the headless tests and the on screen build run identical
+  code and a Win32/Wayland port is one file.
 - **output**: `dai_render_write_png` (no zlib dependency) and `write_ppm`.
 
 Conventions, pinned down by the visual tests: right handed, +Y up, +X right on
@@ -195,9 +205,9 @@ and shading when a test fails and you need to know which half is lying.
 
 ## What is still missing
 
-- No swapchain: the renderer is offscreen only. A window backend is a separate
-  `.cpp`, not a rewrite.
-- One shadow cascade. Fine for a scene, not for open world distances.
-- No textures yet - materials are colour plus a checkerboard flag.
+- No particle system yet.
 - No skinning, no animation system.
+- Window backend is X11 only (Win32/Wayland would be the same file again).
+- Shadow cascades are fitted per frame with no caching, so a very large scene
+  re-renders all three every frame.
 - Contact impulses are not filled in yet; snapshots store the full blob per tick.

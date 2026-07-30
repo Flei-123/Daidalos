@@ -26,10 +26,13 @@ bool mat_invert(const Mat4 &in, Mat4 *out);
 
 // Must match the uniform block in the shaders, std140. Every member is a
 // vec4/mat4 so the layout needs no padding gymnastics.
+#define DAI_SHADOW_CASCADES 3
+
 struct FrameUBO {
     Mat4  viewproj;
     Mat4  invviewproj;
-    Mat4  lightviewproj;
+    Mat4  lightviewproj[DAI_SHADOW_CASCADES];
+    float cascade_split[4];      // view depth where each cascade ends
     float sun_dir[4];       // xyz, w = intensity
     float sun_color[4];     // rgb, w = shadow texel size
     float sky_color[4];     // rgb, w = ambient intensity
@@ -97,10 +100,14 @@ struct dai_renderer {
     VkDeviceMemory color_ms_mem = VK_NULL_HANDLE, color_rt_mem = VK_NULL_HANDLE, depth_mem = VK_NULL_HANDLE;
     VkImageView color_ms_view = VK_NULL_HANDLE, color_rt_view = VK_NULL_HANDLE, depth_view = VK_NULL_HANDLE;
 
+    // one array image, one layer per cascade: a layer view to render into and
+    // an array view to sample from
     VkImage shadow_img = VK_NULL_HANDLE;
     VkDeviceMemory shadow_mem = VK_NULL_HANDLE;
-    VkImageView shadow_view = VK_NULL_HANDLE;
+    VkImageView shadow_view = VK_NULL_HANDLE;                       // 2D array, for sampling
+    VkImageView shadow_layer[DAI_SHADOW_CASCADES] = {};             // per cascade, for rendering
     VkSampler shadow_sampler = VK_NULL_HANDLE;
+    uint32_t cascades = DAI_SHADOW_CASCADES;
 
     GpuBuffer vbo, ibo, inst, ubo, readback;
     uint32_t vtx_used = 0, idx_used = 0, inst_capacity = 0;
@@ -135,6 +142,9 @@ struct dai_renderer {
     float shadow_radius = 30.0f;
     int   sky_enabled = 1;
 
+    bool has_surface_ext = false;   // instance level VK_KHR_surface + xlib
+    bool has_swapchain_ext = false;  // device level VK_KHR_swapchain
+
     char device_name[256] = {0};
     char err[256] = {0};
     double last_ms = 0.0;
@@ -151,6 +161,7 @@ void vk_free_buffer(dai_renderer *r, GpuBuffer *b);
 void vk_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect,
                 VkImageLayout from, VkImageLayout to,
                 VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-                VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess);
+                VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess,
+                uint32_t layers = 1);
 
 #endif

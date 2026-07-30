@@ -65,20 +65,29 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan.cpp       -o build/rhi_vulkan.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_frame.cpp -o build/rhi_vulkan_frame.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_texture.cpp -o build/rhi_vulkan_texture.o
+    WINDOW_OBJ=""
+    if [ -f /usr/include/X11/Xlib.h ]; then
+        g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_window.cpp -o build/rhi_vulkan_window.o
+        WINDOW_OBJ=build/rhi_vulkan_window.o
+        X11_LIB="-lX11"
+    else
+        echo "   no X11 headers - building headless only"
+        X11_LIB=""
+    fi
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_meshgen.cpp      -o build/dai_meshgen.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_image.cpp        -o build/dai_image.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_inflate.cpp      -o build/dai_inflate.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_json.cpp         -o build/dai_json.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf.cpp         -o build/dai_gltf.o
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
-           build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o build/dai_gltf.o
+           $WINDOW_OBJ build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o build/dai_gltf.o
     VK_OK=1
 else
     echo "-- renderer: skipped (no vulkan headers)"
 fi
 
 LIBS="build/libdaidalos.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lpthread -lm"
-VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lvulkan -lpthread -lm"
+VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lvulkan ${X11_LIB:-} -lpthread -lm"
 
 # --- backend leak tests -------------------------------------------------
 # Same idea as the Jolt one, for the renderer: the RHI must be swappable for
@@ -116,12 +125,13 @@ g++ $FLAGS $ARCH -Iinclude tests/test_merge.cpp $LIBS -o build/test_merge
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
     g++ $FLAGS $ARCH -Iinclude tests/test_gltf.cpp $VKLIBS -o build/test_gltf
+    [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
 fi
 
 echo "-- examples"
 g++ $FLAGS $ARCH -Iinclude examples/hello_daidalos.cpp $LIBS -o build/hello_daidalos
 if [ "$VK_OK" = "1" ]; then
-    for ex in sandbox_demo vehicle_demo model_viewer; do
+    for ex in sandbox_demo vehicle_demo model_viewer window_demo; do
         [ -f "examples/$ex.cpp" ] || continue
         g++ $FLAGS $ARCH -Iinclude "examples/$ex.cpp" $VKLIBS -o "build/$ex"
     done

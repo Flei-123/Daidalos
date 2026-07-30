@@ -529,6 +529,50 @@ int main(int argc, char **argv) {
         dai_render_exposure(r, 1.2f);
     }
 
+    // ---------------------------------------------------------------- 15
+    // Cascades. One shadow map over the whole view distance is either sharp up
+    // close or present far away, never both. Two casters, one at 6 m and one at
+    // 70 m, must BOTH darken the floor under them.
+    {
+        std::printf("[15] cascaded shadows near and far\n");
+        dai_render_sky(r, 0);
+        dai_render_clear_color(r, 0, 0, 0);
+        dai_render_light(r, dai_vec3{ 0.35f, 0.90f, 0.25f });
+        dai_render_shadow_extent(r, 60.0f);
+        dai_render_exposure(r, 1.0f);
+        dai_render_fog(r, 0.0f, dai_vec3{ 0,0,0 });
+
+        dai_render_instance floor_i = dai_render_instance_default();
+        floor_i.position = { 0, -1, -40 }; floor_i.scale = { 40, 1, 90 }; floor_i.color = { 0.7f,0.7f,0.7f };
+
+        dai_render_camera(r, dai_vec3{ 0, 6, 12 }, dai_vec3{ 0, 0, -40 }, dai_vec3{ 0,1,0 }, 55.0f, 0.1f, 400.0f);
+        dai_render_frame(r, &floor_i, 1);
+        Frame empty = grab(r);
+
+        dai_render_instance in[3];
+        in[0] = floor_i;
+        in[1] = dai_render_instance_default();
+        in[1].mesh = DAI_MESH_SPHERE; in[1].position = { 0, 3, -6 }; in[1].scale = { 1.5f,1.5f,1.5f };
+        in[1].color = { 0.85f,0.3f,0.25f };
+        in[2] = dai_render_instance_default();
+        in[2].mesh = DAI_MESH_SPHERE; in[2].position = { 0, 6, -70 }; in[2].scale = { 3.0f,3.0f,3.0f };
+        in[2].color = { 0.3f,0.5f,0.85f };
+        dai_render_frame(r, in, 3);
+        Frame lit = grab(r); save(r, "vis_15_cascades.ppm");
+
+        // near shadow lands low in the frame, far shadow high up
+        int near_drop = 0, far_drop = 0;
+        for (uint32_t y = 0; y < lit.h; ++y)
+            for (uint32_t x = 0; x < lit.w; ++x) {
+                float d = empty.lum(x, y) - lit.lum(x, y);
+                if (d > 0.08f) { if (y > lit.h * 3 / 5) ++near_drop; else ++far_drop; }
+            }
+        CHECK(near_drop > 200, "the caster 6 m away casts no shadow (%d px darkened)", near_drop);
+        CHECK(far_drop > 100, "the caster 70 m away casts no shadow (%d px darkened) - only one cascade is working", far_drop);
+        std::printf("     darkened pixels: near %d, far %d\n", near_drop, far_drop);
+        dai_render_exposure(r, 1.2f);
+    }
+
     dai_render_destroy(r);
     std::printf("\n%d checks passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

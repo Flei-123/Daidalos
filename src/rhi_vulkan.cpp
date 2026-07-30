@@ -136,13 +136,13 @@ void vk_free_buffer(dai_renderer *r, GpuBuffer *b) {
 void vk_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect,
                 VkImageLayout from, VkImageLayout to,
                 VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-                VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
+                VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess, uint32_t layers) {
     VkImageMemoryBarrier2 b{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
     b.srcStageMask = srcStage; b.srcAccessMask = srcAccess;
     b.dstStageMask = dstStage; b.dstAccessMask = dstAccess;
     b.oldLayout = from; b.newLayout = to;
     b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = img; b.subresourceRange = { aspect, 0, 1, 0, 1 };
+    b.image = img; b.subresourceRange = { aspect, 0, 1, 0, layers };
     VkDependencyInfo d{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
     d.imageMemoryBarrierCount = 1; d.pImageMemoryBarriers = &b;
     vkCmdPipelineBarrier2(cb, &d);
@@ -318,6 +318,27 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     app.apiVersion = VK_API_VERSION_1_3;
     VkInstanceCreateInfo ici{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     ici.pApplicationInfo = &app;
+
+    // Surface extensions are requested whenever the loader has them: headless
+    // rendering does not need them, but asking costs nothing and a window
+    // cannot be opened later if the instance was built without them.
+    uint32_t ext_n = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &ext_n, nullptr);
+    std::vector<VkExtensionProperties> exts(ext_n);
+    vkEnumerateInstanceExtensionProperties(nullptr, &ext_n, exts.data());
+    auto have_ext = [&](const char *name) {
+        for (const auto &e : exts) if (!std::strcmp(e.extensionName, name)) return true;
+        return false;
+    };
+    std::vector<const char *> want;
+    if (have_ext("VK_KHR_surface") && have_ext("VK_KHR_xlib_surface")) {
+        want.push_back("VK_KHR_surface");
+        want.push_back("VK_KHR_xlib_surface");
+        r->has_surface_ext = true;
+    }
+    ici.enabledExtensionCount = (uint32_t)want.size();
+    ici.ppEnabledExtensionNames = want.empty() ? nullptr : want.data();
+
     const char *layers[] = { "VK_LAYER_KHRONOS_validation" };
     if (desc && desc->validation) { ici.enabledLayerCount = 1; ici.ppEnabledLayerNames = layers; }
     if (vkCreateInstance(&ici, nullptr, &r->instance) != VK_SUCCESS) {
@@ -361,8 +382,21 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     VkPhysicalDeviceFeatures2 f2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
     f2.pNext = &f13;
     f2.features.depthClamp = VK_TRUE;
+    uint32_t dext_n = 0;
+    vkEnumerateDeviceExtensionProperties(r->phys, nullptr, &dext_n, nullptr);
+    std::vector<VkExtensionProperties> dexts(dext_n);
+    vkEnumerateDeviceExtensionProperties(r->phys, nullptr, &dext_n, dexts.data());
+    std::vector<const char *> dwant;
+    for (const auto &e : dexts)
+        if (!std::strcmp(e.extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
+            dwant.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+            r->has_swapchain_ext = true;
+        }
+
     VkDeviceCreateInfo dci{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
     dci.pNext = &f2; dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
+    dci.enabledExtensionCount = (uint32_t)dwant.size();
+    dci.ppEnabledExtensionNames = dwant.empty() ? nullptr : dwant.data();
     if (vkCreateDevice(r->phys, &dci, nullptr, &r->dev) != VK_SUCCESS)
         { dai_render_destroy(r); return fail("vkCreateDevice failed (dynamicRendering/sync2 missing?)"); }
     vkGetDeviceQueue(r->dev, r->qfam, 0, &r->queue);
@@ -394,10 +428,39 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
         { dai_render_destroy(r); return fail("depth target could not be created"); }
 
     uint32_t ss = r->shadows ? r->shadow_size : 1;
-    if (!make_image(r, ss, ss, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
-                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                    VK_IMAGE_ASPECT_DEPTH_BIT, &r->shadow_img, &r->shadow_mem, &r->shadow_view))
-        { dai_render_destroy(r); return fail("shadow map could not be created"); }
+    if (!r->shadows) r->cascades = 1;
+    {
+        VkImageCreateInfo ii{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        ii.imageType = VK_IMAGE_TYPE_2D; ii.format = VK_FORMAT_D32_SFLOAT;
+        ii.extent = { ss, ss, 1 }; ii.mipLevels = 1; ii.arrayLayers = r->cascades;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT; ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(r->dev, &ii, nullptr, &r->shadow_img) != VK_SUCCESS)
+            { dai_render_destroy(r); return fail("shadow array image failed"); }
+        VkMemoryRequirements req; vkGetImageMemoryRequirements(r->dev, r->shadow_img, &req);
+        VkMemoryAllocateInfo ai{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = vk_find_mem(r->phys, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(r->dev, &ai, nullptr, &r->shadow_mem) != VK_SUCCESS)
+            { dai_render_destroy(r); return fail("shadow memory failed"); }
+        vkBindImageMemory(r->dev, r->shadow_img, r->shadow_mem, 0);
+
+        VkImageViewCreateInfo vi{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        vi.image = r->shadow_img; vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        vi.format = VK_FORMAT_D32_SFLOAT;
+        vi.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, r->cascades };
+        if (vkCreateImageView(r->dev, &vi, nullptr, &r->shadow_view) != VK_SUCCESS)
+            { dai_render_destroy(r); return fail("shadow array view failed"); }
+        for (uint32_t i = 0; i < r->cascades; ++i) {
+            VkImageViewCreateInfo li{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+            li.image = r->shadow_img; li.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            li.format = VK_FORMAT_D32_SFLOAT;
+            li.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, i, 1 };
+            if (vkCreateImageView(r->dev, &li, nullptr, &r->shadow_layer[i]) != VK_SUCCESS)
+                { dai_render_destroy(r); return fail("shadow layer view failed"); }
+        }
+    }
 
     VkSamplerCreateInfo sci{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
@@ -623,6 +686,8 @@ void dai_render_destroy(dai_renderer *r) {
         }
         for (auto v : { r->color_ms_view, r->color_rt_view, r->depth_view, r->shadow_view })
             if (v) vkDestroyImageView(r->dev, v, nullptr);
+        for (uint32_t i = 0; i < DAI_SHADOW_CASCADES; ++i)
+            if (r->shadow_layer[i]) vkDestroyImageView(r->dev, r->shadow_layer[i], nullptr);
         if (r->color_ms) { vkDestroyImage(r->dev, r->color_ms, nullptr); vkFreeMemory(r->dev, r->color_ms_mem, nullptr); }
         if (r->color_rt) { vkDestroyImage(r->dev, r->color_rt, nullptr); vkFreeMemory(r->dev, r->color_rt_mem, nullptr); }
         if (r->depth) { vkDestroyImage(r->dev, r->depth, nullptr); vkFreeMemory(r->dev, r->depth_mem, nullptr); }

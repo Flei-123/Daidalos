@@ -176,6 +176,32 @@ DAI_API void dai_render_fog(dai_renderer *r, float density, dai_vec3 color);
 DAI_API void dai_render_shadow_extent(dai_renderer *r, float radius);
 DAI_API void dai_render_exposure(dai_renderer *r, float exposure);
 
+/* ---- window and presentation ------------------------------------------- */
+
+/* The renderer draws offscreen and stays that way; a window is a consumer of
+ * the finished frame, not a different rendering path. That is what keeps the
+ * headless tests and the on screen build byte identical - and it means a
+ * window backend is ~300 lines instead of a rewrite.
+ *
+ * Linux/X11 today. A Win32 or Wayland version is another file with the same
+ * four functions. */
+typedef struct dai_window dai_window;
+
+DAI_API dai_window *dai_window_open(dai_renderer *r, const char *title,
+                                    uint32_t width, uint32_t height, char *err, size_t err_len);
+DAI_API void        dai_window_close(dai_window *w);
+
+/* Pumps events. Returns 0 once the window has been closed. */
+DAI_API int  dai_window_poll(dai_window *w);
+/* Blits the last rendered frame to the screen. */
+DAI_API dai_result dai_window_present(dai_window *w);
+
+/* Minimal input: key codes are X11 keysyms (XK_w, XK_Escape, ...) so no
+ * translation table has to exist before the engine is useful. */
+DAI_API int dai_window_key_down(dai_window *w, uint32_t keysym);
+DAI_API int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons);
+DAI_API void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height);
+
 /* ---- frame ------------------------------------------------------------- */
 
 DAI_API dai_result dai_render_frame(dai_renderer *r, const dai_render_instance *inst, uint32_t count);
