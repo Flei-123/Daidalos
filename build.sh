@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Daidalos build.
 #
-#   ./build.sh            engine + both physics backends + tests + examples
+#   ./build.sh            engine + physics backends + renderer + tests + examples
 #   ./build.sh noaudio    build without Aulos
 #
 # The interesting part is the "leak test": dai_engine.cpp is compiled WITHOUT
@@ -44,38 +44,51 @@ g++ $FLAGS $ARCH $JOLT_DEFS -Iinclude -Isrc -I"$JOLT_SRC" -c src/physics_jolt.cp
 echo "-- audio"
 g++ $FLAGS $ARCH $AUDIO_FLAGS -Iinclude -Isrc -c src/dai_audio.cpp -o build/dai_audio.o
 
-ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o build/dai_audio.o
+echo "-- scene layer"
+g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_scene.cpp -o build/dai_scene.o
+
+ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o \
+       build/dai_audio.o build/dai_scene.o
 
 echo "-- shaders"
 if command -v glslangValidator >/dev/null 2>&1; then
-    glslangValidator -V shaders/mesh.vert -o shaders/mesh.vert.spv >/dev/null
-    glslangValidator -V shaders/mesh.frag -o shaders/mesh.frag.spv >/dev/null
+    for s in mesh.vert mesh.frag shadow.vert sky.vert sky.frag; do
+        glslangValidator -V "shaders/$s" -o "shaders/$s.spv" >/dev/null
+    done
+else
+    echo "   glslangValidator missing - using the .spv files already in shaders/"
 fi
 
 VK_OK=0
 if [ -f /usr/include/vulkan/vulkan.h ]; then
     echo "-- renderer: vulkan 1.3"
-    g++ $FLAGS $ARCH -Iinclude -c src/rhi_vulkan.cpp -o build/rhi_vulkan.o
-    ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan.cpp       -o build/rhi_vulkan.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_frame.cpp -o build/rhi_vulkan_frame.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_meshgen.cpp      -o build/dai_meshgen.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_image.cpp        -o build/dai_image.o
+    ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o \
+           build/dai_meshgen.o build/dai_image.o
     VK_OK=1
 else
     echo "-- renderer: skipped (no vulkan headers)"
 fi
 
 LIBS="build/libdaidalos.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lpthread -lm"
+VKLIBS="build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lvulkan -lpthread -lm"
 
 echo "-- tests"
 g++ $FLAGS $ARCH -Iinclude tests/test_daidalos.cpp $LIBS -o build/test_daidalos
+if [ "$VK_OK" = "1" ]; then
+    g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
+fi
 
 echo "-- examples"
 g++ $FLAGS $ARCH -Iinclude examples/hello_daidalos.cpp $LIBS -o build/hello_daidalos
 if [ "$VK_OK" = "1" ]; then
-    g++ $FLAGS $ARCH -Iinclude examples/vehicle_demo.cpp \
-        build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB \
-        -L"$JOLT_LIB" -lJolt -lvulkan -lpthread -lm -o build/vehicle_demo
-    g++ $FLAGS $ARCH -Iinclude examples/render_demo.cpp \
-        build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB \
-        -L"$JOLT_LIB" -lJolt -lvulkan -lpthread -lm -o build/render_demo
+    for ex in sandbox_demo vehicle_demo render_demo; do
+        [ -f "examples/$ex.cpp" ] || continue
+        g++ $FLAGS $ARCH -Iinclude "examples/$ex.cpp" $VKLIBS -o "build/$ex"
+    done
 fi
 
 echo "-- ok"

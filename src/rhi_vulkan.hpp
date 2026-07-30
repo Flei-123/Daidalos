@@ -1,0 +1,123 @@
+// Shared internals of the Vulkan backend. Split in two translation units:
+//   rhi_vulkan.cpp        device, targets, pipelines, meshes, state
+//   rhi_vulkan_frame.cpp  the frame itself (shadow pass, sky, meshes, resolve)
+#ifndef DAI_RHI_VULKAN_HPP
+#define DAI_RHI_VULKAN_HPP
+
+#include "dai_render.h"
+#include <vulkan/vulkan.h>
+#include <cmath>
+#include <cstring>
+#include <vector>
+
+// ---------------------------------------------------------------- math
+
+struct Mat4 { float m[16]; };   // column major, same as GLSL
+
+Mat4 mat_identity();
+Mat4 mat_mul(const Mat4 &a, const Mat4 &b);
+Mat4 mat_look_at(const float eye[3], const float ctr[3], const float up[3]);
+// Vulkan clip space: y down, depth 0..1. Both folded in here.
+Mat4 mat_perspective(float fov_deg, float aspect, float zn, float zf);
+Mat4 mat_ortho(float l, float r, float b, float t, float zn, float zf);
+bool mat_invert(const Mat4 &in, Mat4 *out);
+
+// ---------------------------------------------------------------- gpu data
+
+// Must match the uniform block in the shaders, std140. Every member is a
+// vec4/mat4 so the layout needs no padding gymnastics.
+struct FrameUBO {
+    Mat4  viewproj;
+    Mat4  invviewproj;
+    Mat4  lightviewproj;
+    float sun_dir[4];       // xyz, w = intensity
+    float sun_color[4];     // rgb, w = shadow texel size
+    float sky_color[4];     // rgb, w = ambient intensity
+    float ground_color[4];  // rgb, w = fog density
+    float fog_color[4];     // rgb, w = exposure
+    float cam_pos[4];       // xyz, w = shadows enabled
+};
+
+struct MeshEntry {
+    uint32_t first_index = 0;
+    uint32_t index_count = 0;
+    int32_t  vertex_offset = 0;
+};
+
+struct GpuBuffer {
+    VkBuffer buf = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    void *mapped = nullptr;
+    VkDeviceSize size = 0;
+};
+
+struct dai_renderer {
+    uint32_t width = 1280, height = 720;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_4_BIT;
+    uint32_t shadow_size = 2048;
+    bool     shadows = true;
+
+    VkInstance instance = VK_NULL_HANDLE;
+    VkPhysicalDevice phys = VK_NULL_HANDLE;
+    VkDevice dev = VK_NULL_HANDLE;
+    uint32_t qfam = 0;
+    VkQueue queue = VK_NULL_HANDLE;
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+
+    // colour targets: ms is the multisampled attachment, resolve is what gets
+    // read back. With msaa == 1 only resolve exists and is drawn into directly.
+    VkImage color_ms = VK_NULL_HANDLE, color_rt = VK_NULL_HANDLE, depth = VK_NULL_HANDLE;
+    VkDeviceMemory color_ms_mem = VK_NULL_HANDLE, color_rt_mem = VK_NULL_HANDLE, depth_mem = VK_NULL_HANDLE;
+    VkImageView color_ms_view = VK_NULL_HANDLE, color_rt_view = VK_NULL_HANDLE, depth_view = VK_NULL_HANDLE;
+
+    VkImage shadow_img = VK_NULL_HANDLE;
+    VkDeviceMemory shadow_mem = VK_NULL_HANDLE;
+    VkImageView shadow_view = VK_NULL_HANDLE;
+    VkSampler shadow_sampler = VK_NULL_HANDLE;
+
+    GpuBuffer vbo, ibo, inst, ubo, readback;
+    uint32_t vtx_used = 0, idx_used = 0, inst_capacity = 0;
+
+    std::vector<MeshEntry> meshes;
+
+    VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
+    VkDescriptorPool dpool = VK_NULL_HANDLE;
+    VkDescriptorSet dset = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkPipeline pipe_mesh = VK_NULL_HANDLE, pipe_shadow = VK_NULL_HANDLE, pipe_sky = VK_NULL_HANDLE;
+
+    // state the host sets
+    float eye[3] = { 8, 6, 12 }, target[3] = { 0, 1, 0 }, up[3] = { 0, 1, 0 };
+    float fov = 55.0f, znear = 0.1f, zfar = 500.0f;
+    float sun_dir[3] = { 0.35f, 0.8f, 0.45f };
+    float sun_color[3] = { 1.0f, 0.96f, 0.9f };
+    float sun_intensity = 1.3f;
+    float sky_color[3] = { 0.20f, 0.36f, 0.72f };
+    float ground_color[3] = { 0.28f, 0.26f, 0.24f };
+    float ambient = 0.30f;
+    float fog_color[3] = { 0.55f, 0.63f, 0.74f };
+    float fog_density = 0.0022f;
+    float exposure = 0.55f;
+    float clear[3] = { 0.07f, 0.08f, 0.10f };
+    float shadow_radius = 30.0f;
+    int   sky_enabled = 1;
+
+    char device_name[256] = {0};
+    char err[256] = {0};
+    double last_ms = 0.0;
+    uint32_t last_draws = 0;
+    bool have_frame = false;
+};
+
+uint32_t vk_find_mem(VkPhysicalDevice p, uint32_t bits, VkMemoryPropertyFlags want);
+bool vk_make_buffer(dai_renderer *r, VkDeviceSize size, VkBufferUsageFlags usage,
+                    VkMemoryPropertyFlags props, GpuBuffer *out, bool map);
+void vk_free_buffer(dai_renderer *r, GpuBuffer *b);
+void vk_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect,
+                VkImageLayout from, VkImageLayout to,
+                VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess);
+
+#endif

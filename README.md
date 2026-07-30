@@ -1,226 +1,168 @@
 # Daidalos
 
-A deterministic game engine core in C++17. Physics, audio, fixed tick, rollback
-netcode and a Vulkan renderer — with a hard boundary between the engine and the
-libraries it uses.
+A deterministic C++ game engine. General purpose: it does not assume a genre,
+a camera style or a gameplay loop. What it gives you is the part that is
+painful to retrofit later.
 
 ```
-Jolt Physics  ->  rigid bodies            (behind IPhysicsBackend)
-Aulos         ->  event driven game audio (behind dai_audio.cpp)
-Vulkan 1.3    ->  rendering               (behind dai_render.h)
-Daidalos      ->  tick, world, snapshots, rollback, input, commands
-your host     ->  Unity, SDL, your own renderer. The engine never calls back.
+  simulation   deterministic fixed tick, snapshots, rollback, input queue
+  physics      swappable backend (Jolt today, null backend for proof)
+  scene        entities: a body plus how it looks, compounds, camera helpers
+  rendering    Vulkan 1.3, meshes, materials, sun, sky, shadows, MSAA
+  audio        event driven, decoupled from the sim (Aulos)
+  host         your game, your window, your editor. The engine never calls you.
 ```
 
-## The one rule
+The one rule the whole design follows:
 
 ```
 state(n+1) = step(state(n), input(n))
 ```
 
-The simulation is a pure function of state and input. It never reads wall clock
-time, never reads the audio system, never reads the renderer, never uses an
-unseeded random number. That is what makes rollback possible, and it is the
-thing that cannot be retrofitted later — Wube documented in FFF-215 that adding
-multithreading to Factorio's deterministic sim afterwards would be a full
-rewrite.
+The simulation is a pure function of state and input. It never reads the clock,
+the audio system, the renderer, or an unseeded random number. That is what makes
+rollback netcode possible - and it is the thing you cannot add afterwards.
 
-Everything that mutates the world is a **command stamped with a tick number**,
-so a rollback can undo and replay it exactly.
+MIT licensed.
 
-## Build
+---
+
+## Build and run
 
 ```bash
-./build.sh              # engine, both physics backends, tests, examples
-./build.sh noaudio      # without Aulos
-./build/test_daidalos   # 34 assertions
+./build.sh                     # engine + backends + renderer + tests + examples
+./build.sh noaudio             # without Aulos
+
+./build/test_daidalos                                    # 48 simulation assertions
+DAI_SHADER_DIR=shaders ./build/test_render_visual /tmp   # 29 visual assertions
+DAI_SHADER_DIR=shaders ./build/sandbox_demo 6 /tmp       # general sandbox scene
+DAI_SHADER_DIR=shaders ./build/vehicle_demo  6 /tmp      # machine built from joints
 ```
 
-Dependencies: Jolt 5.6.0 (`JOLT_SRC`, `JOLT_LIB`), Aulos (`AULOS`), optional
-`libvulkan-dev` + `glslang-tools` for the renderer. Nothing else.
+`build.sh` compiles `dai_engine.cpp` **without the Jolt include path**. If a
+Jolt header ever leaks into the engine core, the build breaks. That is the
+entire point of `src/dai_physics.hpp`.
 
-## The physics boundary
+---
 
-`src/dai_physics.hpp` is the contract. It contains **no third party type** — no
-`JPH::Vec3`, no `BodyID`, no Jolt header. Gameplay and engine code only ever see
-`dai_vec3`, `dai_quat` and `uint32_t` slot indices.
+## Layers
 
-| file | rule |
-|---|---|
-| `src/physics_jolt.cpp` | the only file in the engine allowed to include a Jolt header |
-| `src/physics_null.cpp` | gravity + a floor, nothing else |
-| `src/dai_engine.cpp` | compiled **without** the Jolt include path |
+### Simulation core - `include/daidalos.h`
 
-That last line is the leak test, and `build.sh` enforces it: if a Jolt header
-ever sneaks into the engine core, the build fails. The null backend is the
-runtime half of the same test — test `[9]` runs determinism, rollback and
-raycast against it. Both halves have to keep passing.
+Fixed tick, tick stamped command log for every world mutation, snapshot ring,
+rollback with replay, per player input ring, deterministic RNG, audio events.
+Bodies: box, sphere, capsule, compound. Joints: fixed, hinge (bearing), slider
+(piston), point, distance - with limits and motors, all rollback safe.
 
-Switch at runtime:
+### Physics backend - `src/dai_physics.hpp`
 
-```c
-dai_config cfg = {0};
-cfg.backend = DAI_PHYSICS_NULL;   /* or DAI_PHYSICS_JOLT */
-```
+One interface, no foreign types: `dai_vec3`, `dai_quat`, slot indices. Two
+implementations: `physics_jolt.cpp` (the only file in the project that includes
+Jolt) and `physics_null.cpp` (gravity and a floor - it exists so the abstraction
+can be proven, not assumed).
 
-### What a backend swap would and would not carry over
+### Scene layer - `include/dai_scene.h`
 
-Honest list, because the interface does not make this free:
+The glue between "a body exists" and "here is what it looks like". Spawn an
+entity with a body description plus mesh, colour, roughness, emissive, flags.
+Compound bodies expand into one render instance per part. Camera helpers:
+orbit, exponential follow, frame-a-bounding-sphere.
 
-* **Migrates:** body lifetime, forces, queries, your own compound/merge logic,
-  the whole tick/snapshot/input structure.
-* **Does not migrate:** tuning. Every solver has different restitution,
-  penetration and sleeping behaviour. Masses, friction values, motor forces and
-  spring rates all have to be redone.
-* **Does not migrate:** saved solver state (warm starting impulses, sleep
-  flags). `save_state` blobs are backend specific, and `restore_state` rejects
-  a foreign one.
-* **Does not migrate:** old replays and old multiplayer clients. A backend
-  change is a hard version break.
+Without this layer every demo grows a `switch (user_data)` that guesses sizes -
+which is exactly how "why does that crate look like a plank" happens.
 
-The interface buys the *option* plus testability and a deterministic replay
-harness. It does not buy a free migration.
-
-## Usage
-
-```c
-dai_config cfg = {0};
-cfg.tick_hz = 60;
-cfg.seed = 1234;
-cfg.audio_bank = "bank.json";
-cfg.asset_root = "assets";
-
-dai_world *w;
-dai_create(&cfg, &w);
-dai_set_tick_callback(w, on_tick, &game);   /* gameplay lives HERE */
-
-/* per frame */
-float alpha;
-dai_advance(w, delta_seconds, &alpha);      /* runs 0..8 fixed ticks */
-dai_get_transforms(w, transforms, 1024, alpha);
-dai_present(w);                             /* hands queued sounds to Aulos */
-```
-
-Gameplay must live in the tick callback, not in your frame loop — the callback
-is re-run for every re-simulated tick during a rollback. Anything outside it
-happens once and is invisible to the replay.
-
-## Rollback
-
-```c
-int resimulated = dai_apply_remote_input(w, player, tick, &input);
-```
-
-If the late input differs from what was predicted, the engine rewinds to that
-tick, restores the physics state, replays commands and inputs, and returns how
-many ticks it had to redo. Measured cost: **0.031 ms per re-simulated tick**
-for 42 bodies, i.e. a 60 tick rollback costs 1.9 ms.
-
-Sounds emitted during rolled back ticks are dropped before anything is heard —
-that is why `dai_play` only queues an event and `dai_present` plays it.
-
-## Verified, not claimed
-
-Everything below is printed by `./build/test_daidalos`:
-
-| # | claim | result |
-|---|---|---|
-| 1 | two worlds, same inputs, 300 ticks | identical checksum every tick |
-| 2 | rollback without an input change | bit identical state |
-| 3 | rollback with a corrected input == having had it from the start | `18dc26e12d91d9cf` both ways |
-| 4 | bodies created and destroyed inside the rolled back window | body set restored exactly |
-| 5 | audio cancelled by a rollback and re-emitted by the replay | counts match |
-| 6 | static friction holds at 26°, slides at 30° (µ=0.5, critical 26.57°) | 0.000008 m vs 8.24 m |
-| 6 | stiction 0.8/0.35 holds at 30°, slides at 40° (critical 38.66°) | 0.000009 m vs 22.7 m |
-| 7 | 50 ms at 60 Hz | 3 ticks; a 10 s hitch caps at 8 |
-| 8 | cost | 0.032 ms/tick, 42 bodies |
-| 9 | the whole engine on the null backend | determinism + rollback + raycast pass |
-| 10 | raycast and contacts on Jolt | normal (0,1,0), contacts reported |
-| 11 | hinge motor at 2 rad/s | measured 2.000 rad/s, arm driven against gravity |
-| 12 | slider motor + limits | 1.000 m after 1 s, stops at the 1.5 m limit |
-| 13 | joints and bodies created inside a rolled back window | checksum reproduced exactly |
-
-Jolt itself was measured separately before any of this was written
-(`/root/projects/jolt-friction`): identical checksums across 0, 1, 2 and 3
-worker threads — two peers with different core counts do **not** desync.
-
-## Joints
-
-Bearings and pistons, i.e. what a construction game is actually made of.
-
-```c
-dai_joint_desc jd = {0};
-jd.type   = DAI_JOINT_HINGE;      /* FIXED, HINGE, SLIDER, POINT, DISTANCE */
-jd.a      = chassis;
-jd.b      = wheel;                /* DAI_INVALID_BODY -> anchored to the world */
-jd.anchor = (dai_vec3){ x, y, z };
-jd.axis   = (dai_vec3){ 0, 0, 1 };
-jd.max_motor_force = 60000.0f;    /* N*m for a hinge, N for a slider */
-dai_joint axle = dai_joint_create(w, &jd);
-
-dai_joint_set_motor(w, axle, DAI_MOTOR_VELOCITY, 12.0f);   /* rad/s */
-dai_joint_state st; dai_joint_get(w, axle, &st);           /* angle + speed */
-```
-
-Joints are tick stamped commands like everything else, so creation, deletion
-and motor changes all replay through a rollback. `dai_checksum` includes joint
-angle and speed, so a desync in a machine is caught like any other.
-
-`examples/vehicle_demo.cpp` builds a machine from 8 bodies and 5 joints —
-4 motorised wheel bearings and a piston arm — and drives it at 12 rad/s:
-
-```
-Frame 1 | Tick   90 | Chassis x=  1.43 y= 1.41 | Rad  12.03 rad/s | Kolben 1.14 m
-Frame 3 | Tick  180 | Chassis x=  7.21 y= 1.94 | Rad  11.90 rad/s | Kolben 0.50 m
-```
-
-Two things measured while building it, both worth knowing:
-
-* A **4000 N·m** motor stalls a 135 kg arm that needs ~1990 N·m to hold
-  horizontally. Motor limits are impulse limits per step — budget generously.
-* A joint's **speed cannot be read off a fixed world axis**. The axis rotates
-  with body 1, so the backend stores it in body 1's local frame. Getting this
-  wrong reports a clean, believable `0.000 rad/s`.
-
-## Renderer
+### Renderer - `include/dai_render.h`
 
 Vulkan 1.3 with dynamic rendering: no `VkRenderPass`, no `VkFramebuffer`.
-Renders offscreen and can read the frame back, so it is testable without a
-display — here through Mesa lavapipe, on a real GPU through the identical code
-path.
+Renders offscreen and reads the frame back, so it runs headless (here on Mesa
+lavapipe, on a GPU through the identical code path).
+
+- **meshes**: box, sphere, capsule, cylinder, cone, plane, plus
+  `dai_render_mesh_create` for your own vertices and `dai_render_mesh_load_obj`
+  for Wavefront OBJ. Instances are sorted by mesh, one draw call per mesh.
+- **capsules**: one mesh serves every proportion - the caps are pushed apart in
+  the vertex stage by the instance's `param`.
+- **materials**: albedo, roughness, emissive, checkerboard flag, no-shadow flag.
+- **lighting**: directional sun, hemisphere ambient, Blinn-Phong specular,
+  2048² shadow map with 3×3 PCF, squared distance fog, procedural sky with a
+  sun disc, ACES tonemapping, 4× MSAA.
+- **output**: `dai_render_write_png` (no zlib dependency) and `write_ppm`.
+
+Conventions, pinned down by the visual tests: right handed, +Y up, +X right on
+screen, front faces are the outside of a mesh, `scale` is a half extent for
+boxes and a radius for spheres.
+
+---
+
+## Looking at the output
+
+A renderer that runs is not a renderer that is correct. Two tools exist for
+exactly that difference.
+
+### `tests/test_render_visual.cpp` - 29 assertions on pixels
+
+Every test renders a scene whose correct result can be computed on paper, reads
+the pixels back and checks them:
+
+| # | what it pins down |
+|---|---|
+| 1 | cube silhouette matches the projection maths to 6% |
+| 2 | +Y is up on screen, +X is right |
+| 3 | depth test: the near box occludes the far wall |
+| 4 | camera inside a closed box sees nothing (back face culling) |
+| 5 | a slab lit from above is brighter than its underside |
+| 6 | a sphere fills 78.5% of its bounding box, not 100% |
+| 7 | a cube rotated 45° is √2 wider |
+| 8 | the same scene twice is bit identical |
+| 9 | the side facing the sun is the bright one |
+| 10 | a caster darkens the floor (measured by difference) |
+| 11 | capsule proportions follow `param` |
+| 12 | the sky has a gradient and a visible sun |
+| 13 | image quality with shipping defaults: contrast, exposure, clipping, saturation, detail |
+
+Test 13 is the "the pictures look odd" regression: it fails if the frame turns
+into flat grey soup again.
+
+### `tools/look.py` - the renderer's mirror
 
 ```bash
-DAI_SHADER_DIR=shaders ./build/render_demo 4 /tmp
+python3 tools/look.py frame.png --cols=110          # ASCII luminance + colour map
+python3 tools/look.py frame.png --stretch           # normalise contrast first
+python3 tools/look.py frame.png --crop=0.3,0.2,0.7,0.8
 ```
 
-## Layout
+Prints an ASCII view of the frame plus objective numbers (exposure, p2..p98
+contrast, clipping, detail, saturation). It exists so the rendered image can be
+inspected without a display - by a human over ssh, or by an agent that has to
+check its own output instead of claiming it looks fine.
 
-```
-include/daidalos.h     the C ABI. No C++, no Jolt, no Aulos.
-include/dai_render.h   renderer interface
-src/dai_physics.hpp    THE physics boundary
-src/physics_jolt.cpp   Jolt backend  (only Jolt include in the project)
-src/physics_null.cpp   null backend  (the leak test)
-src/dai_engine.cpp     tick, commands, snapshots, rollback
-src/dai_audio.cpp      Aulos backend (only Aulos include in the project)
-src/rhi_vulkan.cpp     Vulkan 1.3 backend
-```
+`tools/diag_projection.cpp` and `tools/diag_shading.cpp` isolate camera maths
+and shading when a test fails and you need to know which half is lying.
 
-## Known limits
+---
 
-* Snapshots hold a full physics blob per tick. 64 ticks × 2000 bodies is a few
-  MB; for larger worlds use `StateRecorderFilter` to skip sleeping bodies.
-* Contacts are reported per manifold, not per contact point, and `impulse` is
-  not filled in yet.
-* Cross platform determinism needs Jolt built with
-  `CROSS_PLATFORM_DETERMINISTIC=ON` (~8% slower). Same binary, same machine is
-  deterministic already.
-* Inputs live in a ring sized after the snapshot window. Writing thousands of
-  ticks ahead silently overwrites the near future and `dai_get_input` then
-  correctly reports "not set" — feed inputs as the simulation advances.
-* Joint motor state set *before* the rollback window is lost if that joint is
-  recreated by the replay. Rare, but real.
-* No gear/rack/cone constraints, no 6DOF joint. Jolt has them, the interface
-  does not expose them yet.
+## Bugs these tools have already caught
 
-MIT.
+- **the flat cube**: box faces were built without the face centre offset, so
+  every face collapsed onto the origin plane. The cube rendered as a flat cross
+  - it looked like planks sticking out of objects. Test 1 measured it as a 17%
+  size error before anyone looked at a picture.
+- **inside out world**: `frontFace` was set to clockwise. Back face culling then
+  kept the far side of everything, so every object was lit from the wrong side
+  and solid crates looked like open shells. Tests 4 and 9 pin it now - and test
+  4 had to be rewritten, because comparing against the corner pixel let it pass
+  while the camera was staring at a wall.
+- **grey soup**: Reinhard tonemapping plus a heavy ambient term produced frames
+  with no black, no white and almost no colour. Now ACES, lower ambient, and
+  test 13 to keep it that way.
+
+---
+
+## What is still missing
+
+- No swapchain: the renderer is offscreen only. A window backend is a separate
+  `.cpp`, not a rewrite.
+- One shadow cascade. Fine for a scene, not for open world distances.
+- No textures yet - materials are colour plus a checkerboard flag.
+- No skinning, no animation system.
+- Contact impulses are not filled in yet; snapshots store the full blob per tick.
