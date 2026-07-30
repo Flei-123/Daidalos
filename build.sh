@@ -70,6 +70,9 @@ g++ $FLAGS $ARCH -Iinclude tests/test_daidalos.cpp $LIBS -o build/test_daidalos
 echo "-- examples"
 g++ $FLAGS $ARCH -Iinclude examples/hello_daidalos.cpp $LIBS -o build/hello_daidalos
 if [ "$VK_OK" = "1" ]; then
+    g++ $FLAGS $ARCH -Iinclude examples/vehicle_demo.cpp \
+        build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB \
+        -L"$JOLT_LIB" -lJolt -lvulkan -lpthread -lm -o build/vehicle_demo
     g++ $FLAGS $ARCH -Iinclude examples/render_demo.cpp \
         build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB \
         -L"$JOLT_LIB" -lJolt -lvulkan -lpthread -lm -o build/render_demo

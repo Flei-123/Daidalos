@@ -136,10 +136,51 @@ Everything below is printed by `./build/test_daidalos`:
 | 8 | cost | 0.032 ms/tick, 42 bodies |
 | 9 | the whole engine on the null backend | determinism + rollback + raycast pass |
 | 10 | raycast and contacts on Jolt | normal (0,1,0), contacts reported |
+| 11 | hinge motor at 2 rad/s | measured 2.000 rad/s, arm driven against gravity |
+| 12 | slider motor + limits | 1.000 m after 1 s, stops at the 1.5 m limit |
+| 13 | joints and bodies created inside a rolled back window | checksum reproduced exactly |
 
 Jolt itself was measured separately before any of this was written
 (`/root/projects/jolt-friction`): identical checksums across 0, 1, 2 and 3
 worker threads — two peers with different core counts do **not** desync.
+
+## Joints
+
+Bearings and pistons, i.e. what a construction game is actually made of.
+
+```c
+dai_joint_desc jd = {0};
+jd.type   = DAI_JOINT_HINGE;      /* FIXED, HINGE, SLIDER, POINT, DISTANCE */
+jd.a      = chassis;
+jd.b      = wheel;                /* DAI_INVALID_BODY -> anchored to the world */
+jd.anchor = (dai_vec3){ x, y, z };
+jd.axis   = (dai_vec3){ 0, 0, 1 };
+jd.max_motor_force = 60000.0f;    /* N*m for a hinge, N for a slider */
+dai_joint axle = dai_joint_create(w, &jd);
+
+dai_joint_set_motor(w, axle, DAI_MOTOR_VELOCITY, 12.0f);   /* rad/s */
+dai_joint_state st; dai_joint_get(w, axle, &st);           /* angle + speed */
+```
+
+Joints are tick stamped commands like everything else, so creation, deletion
+and motor changes all replay through a rollback. `dai_checksum` includes joint
+angle and speed, so a desync in a machine is caught like any other.
+
+`examples/vehicle_demo.cpp` builds a machine from 8 bodies and 5 joints —
+4 motorised wheel bearings and a piston arm — and drives it at 12 rad/s:
+
+```
+Frame 1 | Tick   90 | Chassis x=  1.43 y= 1.41 | Rad  12.03 rad/s | Kolben 1.14 m
+Frame 3 | Tick  180 | Chassis x=  7.21 y= 1.94 | Rad  11.90 rad/s | Kolben 0.50 m
+```
+
+Two things measured while building it, both worth knowing:
+
+* A **4000 N·m** motor stalls a 135 kg arm that needs ~1990 N·m to hold
+  horizontally. Motor limits are impulse limits per step — budget generously.
+* A joint's **speed cannot be read off a fixed world axis**. The axis rotates
+  with body 1, so the backend stores it in body 1's local frame. Getting this
+  wrong reports a clean, believable `0.000 rad/s`.
 
 ## Renderer
 
@@ -174,7 +215,12 @@ src/rhi_vulkan.cpp     Vulkan 1.3 backend
 * Cross platform determinism needs Jolt built with
   `CROSS_PLATFORM_DETERMINISTIC=ON` (~8% slower). Same binary, same machine is
   deterministic already.
-* No constraints/joints in the interface yet — the next thing to add, and the
-  prerequisite for bearings and pistons.
+* Inputs live in a ring sized after the snapshot window. Writing thousands of
+  ticks ahead silently overwrites the near future and `dai_get_input` then
+  correctly reports "not set" — feed inputs as the simulation advances.
+* Joint motor state set *before* the rollback window is lost if that joint is
+  recreated by the replay. Rare, but real.
+* No gear/rack/cone constraints, no 6DOF joint. Jolt has them, the interface
+  does not expose them yet.
 
 MIT.

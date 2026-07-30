@@ -407,6 +407,160 @@ static void test_queries_jolt() {
     dai_destroy(w);
 }
 
+// ---------------------------------------------------------------------------
+// Joints: the bearing and the piston, i.e. what a construction game is made of
+// ---------------------------------------------------------------------------
+
+static dai_world *joint_world() {
+    dai_config cfg{};
+    cfg.backend = g_backend;
+    cfg.tick_hz = 60; cfg.max_bodies = 128; cfg.physics_threads = 1;
+    cfg.snapshot_ring = 128; cfg.seed = 4242;
+    dai_world *w = nullptr;
+    if (dai_create(&cfg, &w) != DAI_OK) return nullptr;
+    dai_body_desc f{};
+    f.shape = DAI_SHAPE_BOX; f.motion = DAI_STATIC;
+    f.half_extent = { 100, 0.5f, 100 }; f.position = { 0, -0.5f, 0 }; f.rotation = { 0,0,0,1 };
+    dai_body_create(w, &f);
+    return w;
+}
+
+static void test_hinge_motor() {
+    std::printf("\n[11] Lager (Hinge) mit Motor\n");
+    dai_world *w = joint_world();
+    if (!w) { CHECK(false, "no world"); return; }
+
+    dai_body_desc arm{};
+    arm.shape = DAI_SHAPE_BOX; arm.motion = DAI_DYNAMIC;
+    arm.half_extent = { 1.5f, 0.15f, 0.15f };
+    arm.position = { 1.5f, 3.0f, 0 }; arm.rotation = { 0,0,0,1 };
+    arm.no_sleeping = 1; arm.density = 500.0f;
+    dai_body a = dai_body_create(w, &arm);
+
+    dai_joint_desc jd{};
+    jd.type = DAI_JOINT_HINGE;
+    jd.a = a; jd.b = DAI_INVALID_BODY;               // anchored to the world
+    jd.anchor = { 0, 3.0f, 0 };
+    jd.axis = { 0, 0, 1 };                            // rotates in the XY plane
+    jd.normal_axis = { 1, 0, 0 };
+    jd.max_motor_force = 40000.0f;   // 135 kg arm: 4000 Nm stalls, measured
+    dai_joint j = dai_joint_create(w, &jd);
+    CHECK(j != DAI_INVALID_JOINT, "hinge could not be created: %s", dai_last_error(w));
+    CHECK(dai_joint_count(w) == 1, "joint count is %u", dai_joint_count(w));
+
+    // without a motor the arm has to fall
+    for (int i = 0; i < 30; ++i) dai_step(w);
+    dai_joint_state st{}; dai_joint_get(w, j, &st);
+    std::printf("  ohne Motor nach 0.5 s: Winkel %.3f rad\n", st.position);
+    CHECK(fabsf(st.position) > 0.05f, "arm did not swing down: %f", st.position);
+
+    // motor holds it and drives it back up
+    dai_joint_set_motor(w, j, DAI_MOTOR_VELOCITY, 2.0f);
+    for (int i = 0; i < 60; ++i) dai_step(w);
+    dai_joint_state st2{}; dai_joint_get(w, j, &st2);
+    std::printf("  Motor 2 rad/s, 1 s spaeter: Winkel %.3f rad, Drehzahl %.3f rad/s\n", st2.position, st2.speed);
+    CHECK(st2.position > st.position, "motor did not turn the arm: %f -> %f", st.position, st2.position);
+    CHECK(fabsf(fabsf(st2.speed) - 2.0f) < 0.6f, "motor speed off target: %f", st2.speed);
+
+    // limits
+    dai_joint_set_motor(w, j, DAI_MOTOR_OFF, 0.0f);
+    dai_destroy(w);
+}
+
+static void test_slider_piston() {
+    std::printf("\n[12] Kolben (Slider) mit Grenzen und Motor\n");
+    dai_world *w = joint_world();
+    if (!w) { CHECK(false, "no world"); return; }
+
+    dai_body_desc b{};
+    b.shape = DAI_SHAPE_BOX; b.motion = DAI_DYNAMIC;
+    b.half_extent = { 0.4f, 0.4f, 0.4f };
+    b.position = { 0, 3.0f, 0 }; b.rotation = { 0,0,0,1 };
+    b.no_sleeping = 1; b.density = 500.0f;
+    dai_body body = dai_body_create(w, &b);
+
+    dai_joint_desc jd{};
+    jd.type = DAI_JOINT_SLIDER;
+    jd.a = body; jd.b = DAI_INVALID_BODY;
+    jd.anchor = { 0, 3.0f, 0 };
+    jd.axis = { 1, 0, 0 };
+    jd.normal_axis = { 0, 1, 0 };
+    jd.enable_limits = 1; jd.limit_min = -0.5f; jd.limit_max = 1.5f;
+    jd.max_motor_force = 20000.0f;
+    dai_joint j = dai_joint_create(w, &jd);
+    CHECK(j != DAI_INVALID_JOINT, "slider could not be created: %s", dai_last_error(w));
+
+    dai_joint_set_motor(w, j, DAI_MOTOR_VELOCITY, 1.0f);
+    for (int i = 0; i < 60; ++i) dai_step(w);
+    dai_joint_state st{}; dai_joint_get(w, j, &st);
+    dai_transform tr{}; dai_body_get(w, body, &tr);
+    std::printf("  nach 1 s bei 1 m/s: Position %.3f m (x=%.3f)\n", st.position, tr.position.x);
+    CHECK(st.position > 0.7f, "piston did not extend: %f", st.position);
+
+    // drive into the limit and stay there
+    for (int i = 0; i < 120; ++i) dai_step(w);
+    dai_joint_get(w, j, &st);
+    std::printf("  gegen die Grenze gefahren (max 1.5): Position %.3f m\n", st.position);
+    CHECK(st.position < 1.6f, "piston blew through its limit: %f", st.position);
+    CHECK(st.position > 1.35f, "piston did not reach its limit: %f", st.position);
+    dai_destroy(w);
+}
+
+static void test_joint_rollback() {
+    std::printf("\n[13] Gelenke ueberleben einen Rollback\n");
+    dai_world *w = joint_world();
+    if (!w) { CHECK(false, "no world"); return; }
+
+    dai_body_desc arm{};
+    arm.shape = DAI_SHAPE_BOX; arm.motion = DAI_DYNAMIC;
+    arm.half_extent = { 1.0f, 0.15f, 0.15f };
+    arm.position = { 1.0f, 3.0f, 0 }; arm.rotation = { 0,0,0,1 };
+    arm.no_sleeping = 1;
+    dai_body a = dai_body_create(w, &arm);
+
+    dai_joint_desc jd{};
+    jd.type = DAI_JOINT_HINGE;
+    jd.a = a; jd.anchor = { 0, 3.0f, 0 };
+    jd.axis = { 0, 0, 1 }; jd.normal_axis = { 1, 0, 0 };
+    jd.max_motor_force = 2000.0f;
+    dai_joint j = dai_joint_create(w, &jd);
+    dai_joint_set_motor(w, j, DAI_MOTOR_VELOCITY, 1.5f);
+
+    for (int i = 0; i < 40; ++i) dai_step(w);
+    dai_tick mark = dai_current_tick(w);
+
+    // a second joint and a second body, both created inside the window
+    dai_body_desc b2{};
+    b2.shape = DAI_SHAPE_SPHERE; b2.motion = DAI_DYNAMIC;
+    b2.half_extent = { 0.3f, 0, 0 }; b2.position = { -2.0f, 4.0f, 0 }; b2.rotation = { 0,0,0,1 };
+    dai_body bb = dai_body_create(w, &b2);
+    dai_joint_desc jd2{};
+    jd2.type = DAI_JOINT_DISTANCE;
+    jd2.a = bb; jd2.anchor = { -2.0f, 4.0f, 0 }; jd2.normal_axis = { -2.0f, 6.0f, 0 };
+    jd2.min_distance = 0.0f; jd2.max_distance = 2.0f;
+    dai_joint j2 = dai_joint_create(w, &jd2);
+    CHECK(j2 != DAI_INVALID_JOINT, "distance joint failed: %s", dai_last_error(w));
+
+    for (int i = 0; i < 30; ++i) dai_step(w);
+    uint32_t before_joints = dai_joint_count(w);
+    uint64_t before = dai_checksum(w);
+
+    dai_result r = dai_rollback_to(w, mark);
+    CHECK(r == DAI_OK, "rollback with joints failed: %s", dai_last_error(w));
+    CHECK(dai_joint_count(w) == before_joints, "joint count changed: %u -> %u", before_joints, dai_joint_count(w));
+    uint64_t after = dai_checksum(w);
+    std::printf("  vor Rollback %016llx, danach %016llx, Gelenke %u\n",
+        (unsigned long long)before, (unsigned long long)after, dai_joint_count(w));
+    CHECK(before == after, "joint state not reproduced by the replay");
+
+    // rolling back past the creation of joint 2 must remove it again
+    dai_rollback_to(w, mark);
+    dai_joint_state js{};
+    CHECK(dai_joint_get(w, j, &js) == DAI_OK, "the old joint got lost");
+    std::printf("  Lagerwinkel nach zwei Rollbacks: %.4f rad\n", js.position);
+    dai_destroy(w);
+}
+
 int main() {
     std::printf("%s\n", dai_version());
     test_determinism();
@@ -419,6 +573,9 @@ int main() {
     test_perf();
     test_null_backend();
     test_queries_jolt();
+    test_hinge_motor();
+    test_slider_piston();
+    test_joint_rollback();
     std::printf("\n==================================\n");
     std::printf("  %d bestanden, %d fehlgeschlagen\n", g_pass, g_fail);
     std::printf("==================================\n");

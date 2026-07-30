@@ -19,6 +19,11 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
 
 #include <algorithm>
 #include <cmath>
@@ -70,9 +75,20 @@ inline dai_vec3 DVR(RVec3Arg v) { return dai_vec3{ (float)v.GetX(), (float)v.Get
 inline Quat  Q(const dai_quat &q) { Quat r(q.x, q.y, q.z, q.w); return r.IsNormalized() ? r : Quat::sIdentity(); }
 inline dai_quat DQ(QuatArg q) { return dai_quat{ q.GetX(), q.GetY(), q.GetZ(), q.GetW() }; }
 
+struct JointSlot {
+    bool            alive = false;
+    int             type  = 0;
+    Ref<Constraint> c;
+    // Hinge/slider axis expressed in body 1's local frame. Needed to report a
+    // joint speed: the world space axis rotates with body 1, and assuming a
+    // fixed axis silently reports zero the moment the body turns.
+    Vec3            axis_local1 = Vec3::sAxisY();
+};
+
 struct Slot {
     bool     alive = false;
     BodyID   id;
+    Body    *body = nullptr;
     float    mu_static = 0.6f, mu_kinetic = 0.6f;
     bool     sliding = false;
     bool     dynamic = false;
@@ -93,6 +109,7 @@ public:
 class JoltBackend final : public IPhysicsBackend {
 public:
     ~JoltBackend() override {
+        for (uint32_t i = 0; i < joints.size(); ++i) if (joints[i].alive) destroy_joint(i);
         for (uint32_t i = 0; i < slots.size(); ++i) if (slots[i].alive) destroy_body(i);
         delete jobs; delete temp;
     }
@@ -122,6 +139,7 @@ public:
         ps.SetContactListener(&listener);
         ps.SetGravity(Vec3(0, -9.81f, 0));
         slots.resize(cfg.max_bodies);
+        joints.resize(512);
         (void)err; (void)err_len;
         return true;
     }
@@ -159,7 +177,7 @@ public:
         bi.AddBody(b->GetID(), mt == EMotionType::Static ? EActivation::DontActivate : EActivation::Activate);
 
         Slot &s = slots[slot];
-        s.alive = true; s.id = b->GetID();
+        s.alive = true; s.id = b->GetID(); s.body = b;
         s.mu_static = d.friction_static; s.mu_kinetic = d.friction_kinetic;
         s.sliding = false; s.dynamic = (mt == EMotionType::Dynamic);
         return true;
@@ -245,6 +263,131 @@ public:
         return n;
     }
 
+    bool create_joint(uint32_t slot, const dai_joint_desc &d, uint32_t sa, uint32_t sb) override {
+        if (slot >= joints.size()) joints.resize(slot + 64);
+        if (joints[slot].alive) return false;
+        Body *ba = (sa < slots.size() && slots[sa].alive) ? slots[sa].body : nullptr;
+        Body *bb = (sb < slots.size() && slots[sb].alive) ? slots[sb].body : &Body::sFixedToWorld;
+        if (!ba || !bb) return false;
+
+        RVec3 anchor = RV(d.anchor);
+        Vec3  axis   = V(d.axis);
+        if (axis.LengthSq() < 1e-12f) axis = Vec3::sAxisY(); else axis = axis.Normalized();
+        Vec3  normal = V(d.normal_axis);
+        if (normal.LengthSq() < 1e-12f || fabsf(normal.Dot(axis)) > 0.99f)
+            normal = axis.GetNormalizedPerpendicular();
+        else
+            normal = (normal - axis * normal.Dot(axis)).Normalized();
+
+        Ref<Constraint> c;
+        switch (d.type) {
+        case DAI_JOINT_HINGE: {
+            HingeConstraintSettings st;
+            st.mSpace = EConstraintSpace::WorldSpace;
+            st.mPoint1 = st.mPoint2 = anchor;
+            st.mHingeAxis1 = st.mHingeAxis2 = axis;
+            st.mNormalAxis1 = st.mNormalAxis2 = normal;
+            if (d.enable_limits) { st.mLimitsMin = d.limit_min; st.mLimitsMax = d.limit_max; }
+            st.mMaxFrictionTorque = d.max_friction;
+            if (d.max_motor_force > 0.0f) st.mMotorSettings.SetTorqueLimit(d.max_motor_force);
+            c = st.Create(*ba, *bb);
+            break;
+        }
+        case DAI_JOINT_SLIDER: {
+            SliderConstraintSettings st;
+            st.mSpace = EConstraintSpace::WorldSpace;
+            st.mPoint1 = st.mPoint2 = anchor;
+            st.mSliderAxis1 = st.mSliderAxis2 = axis;
+            st.mNormalAxis1 = st.mNormalAxis2 = normal;
+            if (d.enable_limits) { st.mLimitsMin = d.limit_min; st.mLimitsMax = d.limit_max; }
+            st.mMaxFrictionForce = d.max_friction;
+            if (d.max_motor_force > 0.0f) st.mMotorSettings.SetForceLimit(d.max_motor_force);
+            c = st.Create(*ba, *bb);
+            break;
+        }
+        case DAI_JOINT_POINT: {
+            PointConstraintSettings st;
+            st.mSpace = EConstraintSpace::WorldSpace;
+            st.mPoint1 = st.mPoint2 = anchor;
+            c = st.Create(*ba, *bb);
+            break;
+        }
+        case DAI_JOINT_DISTANCE: {
+            DistanceConstraintSettings st;
+            st.mSpace = EConstraintSpace::WorldSpace;
+            st.mPoint1 = anchor;
+            st.mPoint2 = RV(d.normal_axis);   // second anchor rides in normal_axis
+            st.mMinDistance = d.min_distance;
+            st.mMaxDistance = d.max_distance;
+            c = st.Create(*ba, *bb);
+            break;
+        }
+        default: {
+            FixedConstraintSettings st;
+            st.mSpace = EConstraintSpace::WorldSpace;
+            st.mAutoDetectPoint = true;
+            c = st.Create(*ba, *bb);
+            break;
+        }
+        }
+        if (c == nullptr) return false;
+        ps.AddConstraint(c);
+        joints[slot].alive = true;
+        joints[slot].type  = d.type;
+        joints[slot].c     = c;
+        joints[slot].axis_local1 = ba->GetRotation().Conjugated() * axis;
+        return true;
+    }
+
+    void destroy_joint(uint32_t slot) override {
+        if (slot >= joints.size() || !joints[slot].alive) return;
+        ps.RemoveConstraint(joints[slot].c);
+        joints[slot].c = nullptr;
+        joints[slot].alive = false;
+    }
+
+    void set_motor(uint32_t slot, int state, float target) override {
+        if (slot >= joints.size() || !joints[slot].alive) return;
+        EMotorState ms = state == DAI_MOTOR_VELOCITY ? EMotorState::Velocity
+                       : state == DAI_MOTOR_POSITION ? EMotorState::Position : EMotorState::Off;
+        if (joints[slot].type == DAI_JOINT_HINGE) {
+            HingeConstraint *h = static_cast<HingeConstraint *>(joints[slot].c.GetPtr());
+            if (ms != EMotorState::Off && !h->GetMotorSettings().IsValid()) return;
+            h->SetMotorState(ms);
+            if (ms == EMotorState::Velocity) h->SetTargetAngularVelocity(target);
+            else if (ms == EMotorState::Position) h->SetTargetAngle(target);
+        } else if (joints[slot].type == DAI_JOINT_SLIDER) {
+            SliderConstraint *sl = static_cast<SliderConstraint *>(joints[slot].c.GetPtr());
+            if (ms != EMotorState::Off && !sl->GetMotorSettings().IsValid()) return;
+            sl->SetMotorState(ms);
+            if (ms == EMotorState::Velocity) sl->SetTargetVelocity(target);
+            else if (ms == EMotorState::Position) sl->SetTargetPosition(target);
+        }
+    }
+
+    bool get_joint_state(uint32_t slot, float &position, float &speed) const override {
+        position = 0.0f; speed = 0.0f;
+        if (slot >= joints.size() || !joints[slot].alive) return false;
+        const JointSlot &j = joints[slot];
+        if (j.type == DAI_JOINT_HINGE) {
+            const HingeConstraint *h = static_cast<const HingeConstraint *>(j.c.GetPtr());
+            position = h->GetCurrentAngle();
+            const Body &b1 = *h->GetBody1(); const Body &b2 = *h->GetBody2();
+            Vec3 axis = b1.GetRotation() * j.axis_local1;
+            speed = (b1.GetAngularVelocity() - b2.GetAngularVelocity()).Dot(axis);
+            return true;
+        }
+        if (j.type == DAI_JOINT_SLIDER) {
+            const SliderConstraint *s = static_cast<const SliderConstraint *>(j.c.GetPtr());
+            position = s->GetCurrentPosition();
+            const Body &b1 = *s->GetBody1(); const Body &b2 = *s->GetBody2();
+            Vec3 axis = b1.GetRotation() * j.axis_local1;
+            speed = (b1.GetLinearVelocity() - b2.GetLinearVelocity()).Dot(axis);
+            return true;
+        }
+        return true;
+    }
+
     bool save_state(std::string &out) const override {
         StateRecorderImpl rec;
         ps.SaveState(rec);
@@ -303,7 +446,8 @@ private:
     Listener             listener;
     TempAllocatorImpl   *temp = nullptr;
     JobSystemThreadPool *jobs = nullptr;
-    std::vector<Slot>    slots;
+    std::vector<Slot>       slots;
+    std::vector<JointSlot>  joints;
     std::vector<ContactEvent> contacts;
     std::mutex           mtx;
 };

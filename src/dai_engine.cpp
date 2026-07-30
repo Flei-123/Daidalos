@@ -33,9 +33,13 @@ struct dai_world {
     std::vector<BodySlot> slots;
     uint32_t              live_bodies = 0;
 
+    std::vector<JointSlot> jslots;
+    uint32_t               live_joints = 0;
+
     std::vector<Command>       cmds;          // append only, sorted by tick
     std::vector<dai_body_desc> cmd_descs;
     std::vector<std::vector<dai_compound_part>> cmd_parts;
+    std::vector<dai_joint_desc> cmd_jdescs;
 
     struct InputRec { dai_input in{}; bool set = false; dai_tick tick = UINT64_MAX; };
     std::vector<InputRec> inputs;
@@ -72,6 +76,8 @@ inline dai_body pack(uint32_t slot, uint32_t gen) { return (slot + 1) | (gen << 
 inline uint32_t slot_of(dai_body b) { return (b & 0x00ffffffu) - 1; }
 inline uint32_t gen_of(dai_body b) { return b >> 24; }
 
+JointSlot *resolve_joint(dai_world *w, dai_joint j);
+
 BodySlot *resolve(dai_world *w, dai_body b) {
     if (b == DAI_INVALID_BODY) return nullptr;
     uint32_t s = slot_of(b);
@@ -79,6 +85,30 @@ BodySlot *resolve(dai_world *w, dai_body b) {
     BodySlot &sl = w->slots[s];
     if (!sl.alive || sl.generation != gen_of(b)) return nullptr;
     return &sl;
+}
+
+JointSlot *resolve_joint(dai_world *w, dai_joint j) {
+    if (j == DAI_INVALID_JOINT) return nullptr;
+    uint32_t s = (j & 0x00ffffffu) - 1;
+    if (s >= w->jslots.size()) return nullptr;
+    JointSlot &sl = w->jslots[s];
+    if (!sl.alive || sl.generation != (j >> 24)) return nullptr;
+    return &sl;
+}
+
+bool spawn_joint(dai_world *w, uint32_t slot) {
+    JointSlot &j = w->jslots[slot];
+    if (!w->phys->create_joint(slot, j.desc, j.slot_a, j.slot_b)) return false;
+    j.alive = true;
+    return true;
+}
+
+void despawn_joint(dai_world *w, uint32_t slot) {
+    JointSlot &j = w->jslots[slot];
+    if (!j.alive) return;
+    w->phys->destroy_joint(slot);
+    j.alive = false;
+    j.generation++;
 }
 
 void refresh_transform(dai_world *w, uint32_t i) {
@@ -158,6 +188,28 @@ void apply_cmds_for_tick(dai_world *w, dai_tick t) {
         case CmdType::Gravity:
             w->phys->set_gravity(c.a);
             break;
+        case CmdType::CreateJoint:
+            if (c.slot < w->jslots.size() && !w->jslots[c.slot].alive && c.desc_index >= 0) {
+                JointSlot &j = w->jslots[c.slot];
+                j.desc   = w->cmd_jdescs[(size_t)c.desc_index];
+                j.slot_a = (uint32_t)c.a.x;
+                j.slot_b = (uint32_t)c.a.y;
+                j.created_tick = t;
+                j.destroyed_tick = UINT64_MAX;
+                if (spawn_joint(w, c.slot)) w->live_joints++;
+            }
+            break;
+        case CmdType::DestroyJoint:
+            if (c.slot < w->jslots.size() && w->jslots[c.slot].alive) {
+                w->jslots[c.slot].destroyed_tick = t;
+                despawn_joint(w, c.slot);
+                w->live_joints--;
+            }
+            break;
+        case CmdType::Motor:
+            if (c.slot < w->jslots.size() && w->jslots[c.slot].alive)
+                w->phys->set_motor(c.slot, (int)c.a.x, c.a.y);
+            break;
         }
     }
 }
@@ -205,6 +257,7 @@ dai_result dai_create(const dai_config *cfg_in, dai_world **out) {
     }
 
     w->slots.resize(w->cfg.max_bodies);
+    w->jslots.resize(512);
     w->snaps.resize(w->snap_ring);
     w->inputs.resize((size_t)w->input_ring * DAI_MAX_PLAYERS);
 
@@ -222,6 +275,7 @@ dai_result dai_create(const dai_config *cfg_in, dai_world **out) {
 
 void dai_destroy(dai_world *w) {
     if (!w) return;
+    for (uint32_t i = 0; i < w->jslots.size(); ++i) if (w->jslots[i].alive) despawn_joint(w, i);
     for (uint32_t i = 0; i < w->slots.size(); ++i) if (w->slots[i].alive) despawn(w, i);
     if (w->audio_be) dai_audio_close(w->audio_be);
     delete w->phys;
@@ -322,6 +376,78 @@ dai_result dai_body_get(dai_world *w, dai_body b, dai_transform *out) {
     out->user_data = s->desc.user_data;
     return DAI_OK;
 }
+
+// ---- joints ---------------------------------------------------------------
+
+dai_joint dai_joint_create(dai_world *w, const dai_joint_desc *desc_in) {
+    if (!w || !desc_in) return DAI_INVALID_JOINT;
+    BodySlot *ba = resolve(w, desc_in->a);
+    if (!ba) { set_err(w, "joint body a is invalid"); return DAI_INVALID_JOINT; }
+    uint32_t sa = slot_of(desc_in->a);
+    uint32_t sb = UINT32_MAX;
+    if (desc_in->b != DAI_INVALID_BODY) {
+        if (!resolve(w, desc_in->b)) { set_err(w, "joint body b is invalid"); return DAI_INVALID_JOINT; }
+        sb = slot_of(desc_in->b);
+    }
+
+    uint32_t slot = UINT32_MAX;
+    for (uint32_t i = 0; i < w->jslots.size(); ++i)
+        if (!w->jslots[i].alive) { slot = i; break; }
+    if (slot == UINT32_MAX) { set_err(w, "joint limit reached"); return DAI_INVALID_JOINT; }
+
+    JointSlot &j = w->jslots[slot];
+    j.desc   = *desc_in;
+    j.slot_a = sa;
+    j.slot_b = sb;
+    j.created_tick = w->tick;
+    j.destroyed_tick = UINT64_MAX;
+    if (!spawn_joint(w, slot)) { set_err(w, "joint could not be created"); return DAI_INVALID_JOINT; }
+    w->live_joints++;
+
+    if (!w->replaying && !w->in_callback) {
+        Command c; c.tick = w->tick; c.type = CmdType::CreateJoint; c.slot = slot;
+        c.a = dai_vec3{ (float)sa, (float)sb, 0.0f };
+        w->cmd_jdescs.push_back(j.desc);
+        c.desc_index = (int32_t)w->cmd_jdescs.size() - 1;
+        log_cmd(w, c);
+    }
+    return (slot + 1) | (j.generation << 24);
+}
+
+dai_result dai_joint_destroy(dai_world *w, dai_joint jh) {
+    if (!w) return DAI_ERR_INVALID_ARG;
+    JointSlot *j = resolve_joint(w, jh);
+    if (!j) return DAI_ERR_NOT_FOUND;
+    uint32_t slot = (jh & 0x00ffffffu) - 1;
+    j->destroyed_tick = w->tick;
+    despawn_joint(w, slot);
+    w->live_joints--;
+    Command c; c.tick = w->tick; c.type = CmdType::DestroyJoint; c.slot = slot;
+    log_cmd(w, c);
+    return DAI_OK;
+}
+
+dai_result dai_joint_set_motor(dai_world *w, dai_joint jh, int motor_state, float target) {
+    if (!w) return DAI_ERR_INVALID_ARG;
+    if (!resolve_joint(w, jh)) return DAI_ERR_NOT_FOUND;
+    uint32_t slot = (jh & 0x00ffffffu) - 1;
+    w->phys->set_motor(slot, motor_state, target);
+    Command c; c.tick = w->tick; c.type = CmdType::Motor; c.slot = slot;
+    c.a = dai_vec3{ (float)motor_state, target, 0.0f };
+    log_cmd(w, c);
+    return DAI_OK;
+}
+
+dai_result dai_joint_get(dai_world *w, dai_joint jh, dai_joint_state *out) {
+    if (!w || !out) return DAI_ERR_INVALID_ARG;
+    if (!resolve_joint(w, jh)) return DAI_ERR_NOT_FOUND;
+    uint32_t slot = (jh & 0x00ffffffu) - 1;
+    if (!w->phys->get_joint_state(slot, out->position, out->speed)) return DAI_ERR_NOT_FOUND;
+    return DAI_OK;
+}
+
+int      dai_joint_valid(dai_world *w, dai_joint jh) { return (w && resolve_joint(w, jh)) ? 1 : 0; }
+uint32_t dai_joint_count(dai_world *w) { return w ? w->live_joints : 0; }
 
 // ---- queries --------------------------------------------------------------
 
@@ -445,6 +571,12 @@ uint64_t dai_checksum(dai_world *w) {
         h.f32(av.x); h.f32(av.y); h.f32(av.z);
         uint8_t sl = w->phys->is_sliding(i) ? 1 : 0; h.val(sl);
     }
+    for (uint32_t i = 0; i < w->jslots.size(); ++i) {
+        if (!w->jslots[i].alive) continue;
+        float pos = 0.0f, spd = 0.0f;
+        w->phys->get_joint_state(i, pos, spd);
+        h.val(i); h.f32(pos); h.f32(spd);
+    }
     return h.h;
 }
 
@@ -466,7 +598,12 @@ dai_result dai_rollback_to(dai_world *w, dai_tick target) {
 
     const dai_tick resume_at = w->tick;
 
-    // 1. restore the SET of bodies to what it was at the start of `target`.
+    // 1a. joints created inside the window go first - a constraint must never
+    //     outlive a body it references.
+    for (uint32_t i = 0; i < w->jslots.size(); ++i)
+        if (w->jslots[i].alive && w->jslots[i].created_tick >= target) { despawn_joint(w, i); w->live_joints--; }
+
+    // 1b. restore the SET of bodies to what it was at the start of `target`.
     //    Undo destroys first, then undo creates, so a body that was created
     //    and destroyed inside the window ends up gone.
     for (uint32_t i = 0; i < w->slots.size(); ++i) {
@@ -480,6 +617,16 @@ dai_result dai_rollback_to(dai_world *w, dai_tick target) {
     for (uint32_t i = 0; i < w->slots.size(); ++i) {
         BodySlot &sl = w->slots[i];
         if (sl.alive && sl.created_tick >= target) { despawn(w, i); w->live_bodies--; }
+    }
+
+    // 1c. joints destroyed inside the window come back, now that their bodies exist
+    for (uint32_t i = 0; i < w->jslots.size(); ++i) {
+        JointSlot &j = w->jslots[i];
+        if (!j.alive && j.destroyed_tick != UINT64_MAX && j.destroyed_tick >= target && j.created_tick < target) {
+            j.destroyed_tick = UINT64_MAX;
+            j.generation--;
+            if (spawn_joint(w, i)) w->live_joints++;
+        }
     }
 
     // 2. restore the backend state

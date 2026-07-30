@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
     std::vector<dai_render_instance> inst(1024);
 
     for (int fi = 0; fi < frames; ++fi) {
-        for (int i = 0; i < 40; ++i) dai_step(w);
+        for (int i = 0; i < (fi == 0 ? 12 : 25); ++i) dai_step(w);
 
         uint32_t n = dai_get_transforms(w, tr.data(), (uint32_t)tr.size(), 0.0f);
         for (uint32_t i = 0; i < n; ++i) {
@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
             default: inst[i].half_extent = { 30.0f, 0.5f, 30.0f }; inst[i].color = { 0.20f, 0.22f, 0.24f }; break;
             }
         }
-        dai_render_camera(r, dai_vec3{ 12, 8, 14 }, dai_vec3{ 0, 2, -1 }, dai_vec3{ 0, 1, 0 }, 50.0f, 0.1f, 400.0f);
+        dai_render_camera(r, dai_vec3{ 7.5f, 4.5f, 9.0f }, dai_vec3{ -1.0f, 2.2f, -1.5f }, dai_vec3{ 0, 1, 0 }, 55.0f, 0.1f, 400.0f);
         if (dai_render_frame(r, inst.data(), n) != DAI_OK) { std::printf("render failed\n"); break; }
 
         char path[512];

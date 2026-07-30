@@ -14,6 +14,14 @@
 namespace dai {
 namespace {
 
+struct NJoint {
+    bool  alive = false;
+    int   type = 0;
+    int   motor_state = 0;
+    float target = 0.0f;
+    float position = 0.0f;
+};
+
 struct NSlot {
     bool     alive = false;
     bool     dynamic = false;
@@ -30,6 +38,7 @@ public:
 
     bool init(const dai_config &cfg, char *, size_t) override {
         slots.resize(cfg.max_bodies ? cfg.max_bodies : 8192);
+        joints.resize(512);
         gravity = dai_vec3{ 0.0f, -9.81f, 0.0f };
         return true;
     }
@@ -64,6 +73,8 @@ public:
 
     void step(float dt) override {
         contacts.clear();
+        for (NJoint &j : joints)
+            if (j.alive && j.motor_state == DAI_MOTOR_VELOCITY) j.position += j.target * dt;
         for (uint32_t i = 0; i < slots.size(); ++i) {
             NSlot &s = slots[i];
             if (!s.alive || !s.dynamic) continue;
@@ -120,13 +131,42 @@ public:
         return n;
     }
 
+    // Joints exist here only so that gameplay code compiles and runs. The
+    // null backend enforces nothing - that is the honest behaviour for a
+    // backend that has no solver, and it keeps the leak test meaningful.
+    bool create_joint(uint32_t slot, const dai_joint_desc &d, uint32_t, uint32_t) override {
+        if (slot >= joints.size()) joints.resize(slot + 64);
+        joints[slot].alive = true;
+        joints[slot].type = d.type;
+        joints[slot].motor_state = DAI_MOTOR_OFF;
+        joints[slot].target = 0.0f;
+        joints[slot].position = 0.0f;
+        return true;
+    }
+    void destroy_joint(uint32_t slot) override { if (slot < joints.size()) joints[slot].alive = false; }
+    void set_motor(uint32_t slot, int state, float target) override {
+        if (slot >= joints.size() || !joints[slot].alive) return;
+        joints[slot].motor_state = state;
+        joints[slot].target = target;
+    }
+    bool get_joint_state(uint32_t slot, float &position, float &speed) const override {
+        position = 0.0f; speed = 0.0f;
+        if (slot >= joints.size() || !joints[slot].alive) return false;
+        position = joints[slot].position;
+        speed = joints[slot].motor_state == DAI_MOTOR_VELOCITY ? joints[slot].target : 0.0f;
+        return true;
+    }
+
     bool save_state(std::string &out) const override {
         out.assign((const char *)slots.data(), slots.size() * sizeof(NSlot));
+        out.append((const char *)joints.data(), joints.size() * sizeof(NJoint));
         return true;
     }
     bool restore_state(const std::string &in) override {
-        if (in.size() != slots.size() * sizeof(NSlot)) return false;
-        std::memcpy(slots.data(), in.data(), in.size());
+        size_t nb = slots.size() * sizeof(NSlot), nj = joints.size() * sizeof(NJoint);
+        if (in.size() != nb + nj) return false;
+        std::memcpy(slots.data(), in.data(), nb);
+        std::memcpy(joints.data(), in.data() + nb, nj);
         return true;
     }
     uint32_t active_bodies() const override {
@@ -136,7 +176,8 @@ public:
     }
 
 private:
-    std::vector<NSlot> slots;
+    std::vector<NSlot>  slots;
+    std::vector<NJoint> joints;
     std::vector<ContactEvent> contacts;
     dai_vec3 gravity{};
 };

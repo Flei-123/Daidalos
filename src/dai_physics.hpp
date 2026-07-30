@@ -73,6 +73,14 @@ public:
     // Snapshot of everything the backend owns. Opaque to the engine on
     // purpose - what is inside is backend specific and does not survive a
     // backend change. That is a documented limitation, not a bug.
+    // Joints. Addressed by their own slot index, same reproducibility rule
+    // as bodies. slot_b == UINT32_MAX means "anchored to the world".
+    virtual bool create_joint(uint32_t slot, const dai_joint_desc &desc,
+                              uint32_t slot_a, uint32_t slot_b) = 0;
+    virtual void destroy_joint(uint32_t slot) = 0;
+    virtual void set_motor(uint32_t slot, int motor_state, float target) = 0;
+    virtual bool get_joint_state(uint32_t slot, float &position, float &speed) const = 0;
+
     virtual bool save_state(std::string &out) const = 0;
     virtual bool restore_state(const std::string &in) = 0;
 

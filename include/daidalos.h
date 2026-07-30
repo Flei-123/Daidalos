@@ -134,6 +134,58 @@ typedef struct dai_body_desc {
     uint32_t                 part_count;
 } dai_body_desc;
 
+/* ---- joints ------------------------------------------------------------ */
+
+/* Bearings and pistons, i.e. the two things a construction game is made of.
+ * Joints are tick stamped commands like everything else, so they survive a
+ * rollback: created, destroyed and motor changes are all replayed. */
+typedef uint32_t dai_joint;
+#define DAI_INVALID_JOINT ((dai_joint)0)
+
+typedef enum dai_joint_type {
+    DAI_JOINT_FIXED = 0,   /* weld. Prefer merging into one compound body when
+                              you can - a weld still costs solver time. */
+    DAI_JOINT_HINGE,       /* bearing: 1 rotational DOF, optional limits + motor */
+    DAI_JOINT_SLIDER,      /* piston: 1 translational DOF, optional limits + motor */
+    DAI_JOINT_POINT,       /* ball joint: 3 rotational DOF */
+    DAI_JOINT_DISTANCE     /* rope / spring between two points */
+} dai_joint_type;
+
+typedef enum dai_motor_state {
+    DAI_MOTOR_OFF = 0,
+    DAI_MOTOR_VELOCITY,    /* target is rad/s (hinge) or m/s (slider) */
+    DAI_MOTOR_POSITION     /* target is rad (hinge) or m (slider)     */
+} dai_motor_state;
+
+typedef struct dai_joint_desc {
+    int      type;             /* dai_joint_type                              */
+    dai_body a;                /* required                                    */
+    dai_body b;                /* DAI_INVALID_BODY -> anchored to the world   */
+    dai_vec3 anchor;           /* world space pivot                           */
+    dai_vec3 axis;             /* hinge/slider axis, world space              */
+    dai_vec3 normal_axis;      /* reference axis perpendicular to `axis`      */
+    int      enable_limits;
+    float    limit_min;        /* hinge: rad in [-pi,0]; slider: metres <= 0  */
+    float    limit_max;        /* hinge: rad in [0,pi];  slider: metres >= 0  */
+    float    max_motor_force;  /* hinge: N*m, slider: N. 0 -> no motor        */
+    float    max_friction;     /* joint friction, same units as above         */
+    float    min_distance;     /* DAI_JOINT_DISTANCE, negative -> current     */
+    float    max_distance;
+    uint32_t user_data;
+} dai_joint_desc;
+
+typedef struct dai_joint_state {
+    float position;   /* hinge: current angle in rad, slider: metres */
+    float speed;      /* rad/s or m/s                                */
+} dai_joint_state;
+
+DAI_API dai_joint  dai_joint_create(dai_world *w, const dai_joint_desc *desc);
+DAI_API dai_result dai_joint_destroy(dai_world *w, dai_joint j);
+DAI_API dai_result dai_joint_set_motor(dai_world *w, dai_joint j, int motor_state, float target);
+DAI_API dai_result dai_joint_get(dai_world *w, dai_joint j, dai_joint_state *out);
+DAI_API int        dai_joint_valid(dai_world *w, dai_joint j);
+DAI_API uint32_t   dai_joint_count(dai_world *w);
+
 /* ---- input ------------------------------------------------------------- */
 
 /* One fixed size input record per player per tick. Fixed size on purpose:

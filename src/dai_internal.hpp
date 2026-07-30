@@ -61,7 +61,19 @@ struct BodySlot {
     dai_quat      prev_rot{ 0, 0, 0, 1 }, cur_rot{ 0, 0, 0, 1 };
 };
 
-enum class CmdType : uint8_t { Create, Destroy, Impulse, SetVelocity, Gravity };
+struct JointSlot {
+    bool           alive = false;
+    uint32_t       generation = 0;
+    dai_joint_desc desc{};
+    uint32_t       slot_a = UINT32_MAX, slot_b = UINT32_MAX;
+    dai_tick       created_tick = 0;
+    dai_tick       destroyed_tick = UINT64_MAX;
+};
+
+enum class CmdType : uint8_t {
+    Create, Destroy, Impulse, SetVelocity, Gravity,
+    CreateJoint, DestroyJoint, Motor
+};
 
 struct Command {
     dai_tick  tick = 0;
