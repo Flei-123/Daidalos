@@ -153,7 +153,7 @@ int main(int argc, char **argv) {
     for (int fi = 0; fi < frames; ++fi) {
         for (int i = 0; i < 20; ++i) dai_step(w);
 
-        cam.yaw = 0.55f + fi * 0.09f;          // slow orbit
+        cam.yaw = 0.75f + fi * 0.16f;          // slow orbit
         dai_vec3 eye = dai_camera_eye(&cam);
         dai_render_camera(r, eye, cam.target, dai_vec3{ 0,1,0 }, cam.fov, cam.znear, cam.zfar);
 

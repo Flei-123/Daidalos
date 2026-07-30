@@ -79,6 +79,60 @@ DAI_API dai_mesh dai_render_mesh_load_obj(dai_renderer *r, const char *path);
 DAI_API uint32_t dai_render_mesh_count(dai_renderer *r);
 DAI_API uint32_t dai_render_mesh_tris(dai_renderer *r, dai_mesh m);
 
+/* ---- textures and materials -------------------------------------------- */
+
+/* A texture handle. 0 is a 1x1 white texture that always exists, so a material
+ * with no maps is still valid. */
+typedef uint32_t dai_texture;
+
+/* A material handle. 0 is the default: white, matte, no maps. */
+typedef uint32_t dai_material;
+
+/* srgb = 1 for anything the artist picked by eye (base colour, emissive),
+ * 0 for data (normal, roughness, metallic, occlusion, height). Getting this
+ * backwards is the single most common texture bug there is. */
+DAI_API dai_texture dai_render_texture_create(dai_renderer *r, const uint8_t *rgba,
+                                              uint32_t w, uint32_t h, int srgb);
+DAI_API dai_texture dai_render_texture_load(dai_renderer *r, const char *path, int srgb);
+DAI_API uint32_t    dai_render_texture_count(dai_renderer *r);
+
+/* One material model, glTF 2.0 metallic-roughness. Four maps, no node graph:
+ *
+ *   base_color_tex   sRGB   albedo, alpha in A
+ *   orm_tex          linear R = ambient occlusion, G = roughness, B = metallic
+ *   normal_tex       linear tangent space normal map
+ *   emissive_tex     sRGB   glow
+ *
+ * That is exactly what Blender's Principled BSDF exports through glTF, so the
+ * round trip needs no shader graph and no baking - see docs/MATERIALS.md.
+ * Scalars multiply their map, so a material can be pure numbers, pure
+ * textures, or both. */
+typedef struct dai_material_desc {
+    dai_vec3    base_color;      /* multiplies base_color_tex, default 1,1,1   */
+    float       metallic;        /* multiplies orm.b, default 0                */
+    float       roughness;       /* multiplies orm.g, default 1                */
+    dai_vec3    emissive;        /* multiplies emissive_tex, default 0         */
+    float       normal_strength; /* 0 -> 1                                     */
+    float       occlusion;       /* how much of orm.r is applied, 0 -> 1       */
+    float       alpha_cutoff;    /* >0 enables alpha testing                   */
+    float       uv_scale;        /* tiling, 0 -> 1                             */
+    dai_texture base_color_tex;
+    dai_texture orm_tex;
+    dai_texture normal_tex;
+    dai_texture emissive_tex;
+    uint32_t    flags;           /* dai_material_flags                          */
+    const char *name;
+} dai_material_desc;
+
+typedef enum dai_material_flags {
+    DAI_MAT_TRIPLANAR = 1 << 0,  /* reserved */
+    DAI_MAT_CHECKER   = 1 << 1   /* procedural checker, needs no texture at all */
+} dai_material_flags;
+
+DAI_API dai_material_desc dai_material_desc_default(void);
+DAI_API dai_material      dai_render_material_create(dai_renderer *r, const dai_material_desc *desc);
+DAI_API uint32_t          dai_render_material_count(dai_renderer *r);
+
 /* ---- what to draw ------------------------------------------------------ */
 
 typedef struct dai_render_instance {
@@ -88,9 +142,10 @@ typedef struct dai_render_instance {
     dai_vec3 color;        /* linear albedo, 0..1                            */
     uint32_t mesh;         /* dai_mesh                                       */
     float    param;        /* capsule: half height of the shaft              */
-    float    roughness;    /* 0 = mirror-ish highlight, 1 = matte (default 1) */
+    float    roughness;    /* multiplies the material roughness (default 1)  */
     float    emissive;     /* 0..1, lifts the object out of the lighting      */
     uint32_t flags;        /* dai_render_flags                                */
+    uint32_t material;     /* dai_material, 0 = default                       */
 } dai_render_instance;
 
 typedef enum dai_render_flags {

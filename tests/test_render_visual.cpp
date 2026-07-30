@@ -449,6 +449,86 @@ int main(int argc, char **argv) {
         CHECK(detail > 0.0015f, "detail measure %.4f - the frame is nearly featureless", detail);
     }
 
+    // ---------------------------------------------------------------- 14
+    // Textures and materials. A 2x2 texture drawn on a quad has to show four
+    // distinct colours in the right corners (catches flipped UVs), sRGB has to
+    // be decoded (a 0.5 grey sRGB texture must render darker than a linear
+    // one), and metal must look different from dielectric.
+    {
+        std::printf("[14] textures and materials\n");
+        dai_render_sky(r, 0);
+        dai_render_clear_color(r, 0, 0, 0);
+        dai_render_light(r, dai_vec3{ 0.0f, 0.0f, 1.0f });
+        dai_render_ambient(r, dai_vec3{ 0.5f, 0.5f, 0.5f }, dai_vec3{ 0.5f, 0.5f, 0.5f }, 0.5f);
+        dai_render_exposure(r, 1.0f);
+
+        const uint8_t quad_px[16] = {
+            255,0,0,255,     0,255,0,255,      // top row:    red,  green
+            0,0,255,255,     255,255,0,255     // bottom row: blue, yellow
+        };
+        dai_texture tex = dai_render_texture_create(r, quad_px, 2, 2, 0);
+        dai_material_desc md = dai_material_desc_default();
+        md.base_color_tex = tex;
+        md.roughness = 1.0f;
+        md.name = "test_quad";
+        dai_material mat = dai_render_material_create(r, &md);
+        CHECK(mat != 0, "material creation failed: %s", dai_render_last_error(r));
+
+        dai_render_instance in = dai_render_instance_default();
+        in.mesh = DAI_MESH_PLANE;            // XZ quad, UV (0,0)..(1,1)
+        in.scale = { 3, 1, 3 };
+        in.material = mat;
+        // straight above, +Z pointing down the screen
+        dai_render_camera(r, dai_vec3{ 0, 8, 0.001f }, dai_vec3{ 0,0,0 }, dai_vec3{ 0,0,-1 }, 45.0f, 0.1f, 100.0f);
+        dai_render_frame(r, &in, 1);
+        Frame f = grab(r); save(r, "vis_14_texture.ppm");
+        // sample the four quadrants
+        char q[4] = { f.hue(f.w/4, f.h/4), f.hue(f.w*3/4, f.h/4), f.hue(f.w/4, f.h*3/4), f.hue(f.w*3/4, f.h*3/4) };
+        int distinct = 0;
+        for (int i = 0; i < 4; ++i) { bool seen = false; for (int j = 0; j < i; ++j) if (q[j] == q[i]) seen = true; if (!seen && q[i] != '.') ++distinct; }
+        CHECK(distinct >= 3, "textured quad shows %d distinct colours (%c%c%c%c) - UVs or sampling are wrong",
+              distinct, q[0], q[1], q[2], q[3]);
+
+        // sRGB vs linear: same bytes, different decode
+        const uint8_t grey[4] = { 128, 128, 128, 255 };
+        dai_texture t_lin = dai_render_texture_create(r, grey, 1, 1, 0);
+        dai_texture t_srgb = dai_render_texture_create(r, grey, 1, 1, 1);
+        dai_material_desc a = dai_material_desc_default(); a.base_color_tex = t_lin;
+        dai_material_desc b = dai_material_desc_default(); b.base_color_tex = t_srgb;
+        dai_material m_lin = dai_render_material_create(r, &a);
+        dai_material m_srgb = dai_render_material_create(r, &b);
+        dai_render_camera(r, dai_vec3{ 0, 0, 6 }, dai_vec3{ 0,0,0 }, dai_vec3{ 0,1,0 }, 45.0f, 0.1f, 100.0f);
+        in = dai_render_instance_default();
+        in.scale = { 2,2,2 }; in.material = m_lin;
+        dai_render_frame(r, &in, 1);
+        float lin = grab(r).lum(f.w/2, f.h/2);
+        in.material = m_srgb;
+        dai_render_frame(r, &in, 1);
+        float srgb = grab(r).lum(f.w/2, f.h/2);
+        CHECK(srgb < lin - 0.05f,
+              "sRGB texture (%.3f) is not darker than the same bytes read as linear (%.3f) - colour space is ignored",
+              srgb, lin);
+
+        // metal vs dielectric under the same light
+        dai_material_desc mm = dai_material_desc_default(); mm.metallic = 1.0f; mm.roughness = 0.25f;
+        dai_material_desc dd = dai_material_desc_default(); dd.metallic = 0.0f; dd.roughness = 0.25f;
+        dai_material m_metal = dai_render_material_create(r, &mm);
+        dai_material m_diel = dai_render_material_create(r, &dd);
+        in = dai_render_instance_default();
+        in.mesh = DAI_MESH_SPHERE; in.scale = { 2,2,2 }; in.color = { 0.8f, 0.8f, 0.8f };
+        in.material = m_metal;
+        dai_render_frame(r, &in, 1);
+        float metal = grab(r).lum(f.w/2, (uint32_t)(f.h * 0.62f));
+        in.material = m_diel;
+        dai_render_frame(r, &in, 1);
+        Frame fd = grab(r); save(r, "vis_14_dielectric.ppm");
+        float diel = fd.lum(fd.w/2, (uint32_t)(fd.h * 0.62f));
+        CHECK(fabsf(metal - diel) > 0.03f,
+              "metallic (%.3f) and dielectric (%.3f) render the same - the metallic term does nothing", metal, diel);
+        std::printf("     texture count %u, materials %u\n", dai_render_texture_count(r), dai_render_material_count(r));
+        dai_render_exposure(r, 1.2f);
+    }
+
     dai_render_destroy(r);
     std::printf("\n%d checks passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

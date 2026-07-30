@@ -35,6 +35,14 @@ layout(location = 1) out vec3 vColor;
 layout(location = 2) out vec3 vWorld;
 layout(location = 3) out vec2 vMat;          // roughness, emissive
 layout(location = 4) flat out uint vFlags;
+layout(location = 5) out vec2 vUV;
+
+layout(push_constant) uniform Mat {
+    vec4 base_color;
+    vec4 emissive;
+    vec4 scalars;      // metallic, roughness, normal strength, uv scale
+    vec4 extra;
+} M;
 
 vec3 rotq(vec4 q, vec3 v) {
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
@@ -51,6 +59,7 @@ void main() {
     vWorld  = world;
     vMat    = iMat.yz;
     vFlags  = iFlags;
+    vUV     = inUV * M.scalars.w;
 
     gl_Position = F.viewproj * vec4(world, 1.0);
 }

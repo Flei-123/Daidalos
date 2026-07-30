@@ -32,7 +32,7 @@ bool ensure_instances(dai_renderer *r, uint32_t count) {
     return true;
 }
 
-struct Range { uint32_t mesh, first, count; };
+struct Range { uint32_t mesh, material, first, count; };
 
 void set_vp(VkCommandBuffer cb, uint32_t w, uint32_t h) {
     VkViewport vp{ 0, 0, (float)w, (float)h, 0.0f, 1.0f };
@@ -52,10 +52,14 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     // ---- 1. sort: shadow casters first, then by mesh
     std::vector<uint32_t> order(count);
     for (uint32_t i = 0; i < count; ++i) order[i] = i;
+    // sort by (casts shadow, material, mesh): shadow casters form a prefix the
+    // depth pass can draw without touching materials, and inside that every
+    // material/mesh pair becomes exactly one draw call
     auto key = [&](uint32_t i) {
         uint32_t m = inst[i].mesh < r->meshes.size() ? inst[i].mesh : (uint32_t)DAI_MESH_BOX;
-        uint32_t caster = (inst[i].flags & DAI_RI_NO_SHADOW) ? 1u : 0u;
-        return (uint64_t)caster << 32 | m;
+        uint32_t mat = inst[i].material < r->materials.size() ? inst[i].material : 0u;
+        uint64_t caster = (inst[i].flags & DAI_RI_NO_SHADOW) ? 1u : 0u;
+        return (caster << 40) | ((uint64_t)mat << 20) | m;
     };
     std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return key(a) < key(b); });
 
@@ -67,9 +71,11 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         if (v.mesh >= r->meshes.size()) v.mesh = DAI_MESH_BOX;
         if (v.roughness <= 0.0f) v.roughness = 1.0f;
         dst[i] = v;
+        if (v.material >= r->materials.size()) v.material = 0;
         if (!(v.flags & DAI_RI_NO_SHADOW)) casters = i + 1;
-        if (!ranges.empty() && ranges.back().mesh == v.mesh) ranges.back().count++;
-        else ranges.push_back({ v.mesh, i, 1 });
+        if (!ranges.empty() && ranges.back().mesh == v.mesh && ranges.back().material == v.material)
+            ranges.back().count++;
+        else ranges.push_back({ v.mesh, v.material, i, 1 });
     }
 
     // ---- 2. uniforms
@@ -138,6 +144,8 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         if (r->shadows && casters) {
             vkCmdBindPipeline(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipe_shadow);
             vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->dset, 0, nullptr);
+            vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 1, 1,
+                                    &r->materials[0].set, 0, nullptr);
             set_vp(r->cmd, ss, ss);
             vkCmdBindVertexBuffers(r->cmd, 0, 2, bufs, off);
             vkCmdBindIndexBuffer(r->cmd, r->ibo.buf, 0, VK_INDEX_TYPE_UINT32);
@@ -202,7 +210,15 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         vkCmdBindPipeline(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipe_mesh);
         vkCmdBindVertexBuffers(r->cmd, 0, 2, bufs, off);
         vkCmdBindIndexBuffer(r->cmd, r->ibo.buf, 0, VK_INDEX_TYPE_UINT32);
+        uint32_t bound_material = 0xFFFFFFFFu;
         for (const Range &g : ranges) {
+            if (g.material != bound_material) {
+                const MaterialEntry &mat = r->materials[g.material];
+                vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 1, 1, &mat.set, 0, nullptr);
+                vkCmdPushConstants(r->cmd, r->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(MaterialPush), &mat.p);
+                bound_material = g.material;
+            }
             const MeshEntry &me = r->meshes[g.mesh];
             vkCmdDrawIndexed(r->cmd, me.index_count, g.count, me.first_index, me.vertex_offset, g.first);
         }

@@ -38,6 +38,31 @@ struct FrameUBO {
     float cam_pos[4];       // xyz, w = shadows enabled
 };
 
+#define DAI_MAX_MATERIALS 512
+
+struct TextureEntry {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    uint32_t width = 0, height = 0, mips = 1;
+};
+
+// Push constant block, must match the shaders. 64 bytes: well inside the
+// 128 byte guarantee, so no uniform buffer traffic per material switch.
+struct MaterialPush {
+    float base_color[4];   // rgb + alpha cutoff
+    float emissive[4];     // rgb + flags as float
+    float scalars[4];      // metallic, roughness, normal strength, uv scale
+    float extra[4];        // occlusion, has_maps, has_normal_map, unused
+};
+
+struct MaterialEntry {
+    MaterialPush p{};
+    uint32_t base_tex = 0, orm_tex = 0, normal_tex = 0, emissive_tex = 0;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    char name[48] = {0};
+};
+
 struct MeshEntry {
     uint32_t first_index = 0;
     uint32_t index_count = 0;
@@ -81,6 +106,12 @@ struct dai_renderer {
     uint32_t vtx_used = 0, idx_used = 0, inst_capacity = 0;
 
     std::vector<MeshEntry> meshes;
+    std::vector<TextureEntry> textures;
+    std::vector<MaterialEntry> materials;
+
+    VkDescriptorSetLayout mat_dsl = VK_NULL_HANDLE;
+    VkDescriptorPool mat_pool = VK_NULL_HANDLE;
+    VkSampler tex_sampler = VK_NULL_HANDLE;
 
     VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
     VkDescriptorPool dpool = VK_NULL_HANDLE;
@@ -110,6 +141,8 @@ struct dai_renderer {
     uint32_t last_draws = 0;
     bool have_frame = false;
 };
+
+bool vk_init_default_material(dai_renderer *r);
 
 uint32_t vk_find_mem(VkPhysicalDevice p, uint32_t bits, VkMemoryPropertyFlags want);
 bool vk_make_buffer(dai_renderer *r, VkDeviceSize size, VkBufferUsageFlags usage,

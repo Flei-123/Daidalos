@@ -451,6 +451,36 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[1].pImageInfo = &dii;
     vkUpdateDescriptorSets(r->dev, 2, wr, 0, nullptr);
 
+    // ---- material descriptors: 4 samplers per material, parameters go in
+    //      push constants so switching material is one bind and no upload
+    VkDescriptorSetLayoutBinding mb[4]{};
+    for (int i = 0; i < 4; ++i) {
+        mb[i].binding = (uint32_t)i;
+        mb[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        mb[i].descriptorCount = 1;
+        mb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo mlc{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    mlc.bindingCount = 4; mlc.pBindings = mb;
+    if (vkCreateDescriptorSetLayout(r->dev, &mlc, nullptr, &r->mat_dsl) != VK_SUCCESS)
+        { dai_render_destroy(r); return fail("material descriptor layout failed"); }
+    VkDescriptorPoolSize mps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * DAI_MAX_MATERIALS };
+    VkDescriptorPoolCreateInfo mpc{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+    mpc.maxSets = DAI_MAX_MATERIALS; mpc.poolSizeCount = 1; mpc.pPoolSizes = &mps;
+    if (vkCreateDescriptorPool(r->dev, &mpc, nullptr, &r->mat_pool) != VK_SUCCESS)
+        { dai_render_destroy(r); return fail("material descriptor pool failed"); }
+
+    VkPhysicalDeviceFeatures feats{};
+    vkGetPhysicalDeviceFeatures(r->phys, &feats);
+    VkSamplerCreateInfo tsi{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+    tsi.magFilter = tsi.minFilter = VK_FILTER_LINEAR;
+    tsi.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    tsi.addressModeU = tsi.addressModeV = tsi.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    tsi.maxLod = VK_LOD_CLAMP_NONE;
+    tsi.anisotropyEnable = VK_FALSE;      // requested feature is optional, keep it simple
+    if (vkCreateSampler(r->dev, &tsi, nullptr, &r->tex_sampler) != VK_SUCCESS)
+        { dai_render_destroy(r); return fail("texture sampler failed"); }
+
     // ---- pipelines
     bool ok = true;
     VkShaderModule vs_mesh = load_module(r, "mesh.vert.spv", &ok);
@@ -460,8 +490,13 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     VkShaderModule fs_sky = load_module(r, "sky.frag.spv", &ok);
     if (!ok) { dai_render_destroy(r); return fail("SPIR-V shaders not found (set DAI_SHADER_DIR)"); }
 
+    VkDescriptorSetLayout sets[2] = { r->dsl, r->mat_dsl };
+    VkPushConstantRange pcr{};
+    pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pcr.size = sizeof(MaterialPush);
     VkPipelineLayoutCreateInfo plci{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-    plci.setLayoutCount = 1; plci.pSetLayouts = &r->dsl;
+    plci.setLayoutCount = 2; plci.pSetLayouts = sets;
+    plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pcr;
     vkCreatePipelineLayout(r->dev, &plci, nullptr, &r->layout);
 
     VertexLayout vl;
@@ -560,6 +595,8 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
         dai_render_mesh_create(r, gen[i].verts.data(), (uint32_t)gen[i].verts.size(),
                                gen[i].idx.data(), (uint32_t)gen[i].idx.size());
 
+    if (!vk_init_default_material(r)) { dai_render_destroy(r); return fail("default material failed"); }
+
     return r;
 }
 
@@ -576,6 +613,14 @@ void dai_render_destroy(dai_renderer *r) {
         vk_free_buffer(r, &r->vbo); vk_free_buffer(r, &r->ibo);
         vk_free_buffer(r, &r->inst); vk_free_buffer(r, &r->ubo); vk_free_buffer(r, &r->readback);
         if (r->shadow_sampler) vkDestroySampler(r->dev, r->shadow_sampler, nullptr);
+        if (r->tex_sampler) vkDestroySampler(r->dev, r->tex_sampler, nullptr);
+        if (r->mat_pool) vkDestroyDescriptorPool(r->dev, r->mat_pool, nullptr);
+        if (r->mat_dsl) vkDestroyDescriptorSetLayout(r->dev, r->mat_dsl, nullptr);
+        for (TextureEntry &t : r->textures) {
+            if (t.view) vkDestroyImageView(r->dev, t.view, nullptr);
+            if (t.image) vkDestroyImage(r->dev, t.image, nullptr);
+            if (t.mem) vkFreeMemory(r->dev, t.mem, nullptr);
+        }
         for (auto v : { r->color_ms_view, r->color_rt_view, r->depth_view, r->shadow_view })
             if (v) vkDestroyImageView(r->dev, v, nullptr);
         if (r->color_ms) { vkDestroyImage(r->dev, r->color_ms, nullptr); vkFreeMemory(r->dev, r->color_ms_mem, nullptr); }

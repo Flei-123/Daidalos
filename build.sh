@@ -64,10 +64,12 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     echo "-- renderer: vulkan 1.3"
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan.cpp       -o build/rhi_vulkan.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_frame.cpp -o build/rhi_vulkan_frame.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_texture.cpp -o build/rhi_vulkan_texture.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_meshgen.cpp      -o build/dai_meshgen.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_image.cpp        -o build/dai_image.o
-    ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o \
-           build/dai_meshgen.o build/dai_image.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_inflate.cpp      -o build/dai_inflate.o
+    ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
+           build/dai_meshgen.o build/dai_image.o build/dai_inflate.o
     VK_OK=1
 else
     echo "-- renderer: skipped (no vulkan headers)"
@@ -76,8 +78,38 @@ fi
 LIBS="build/libdaidalos.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lpthread -lm"
 VKLIBS="build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lvulkan -lpthread -lm"
 
+# --- backend leak tests -------------------------------------------------
+# Same idea as the Jolt one, for the renderer: the RHI must be swappable for
+# D3D12/Metal/an emitter into someone else's engine by replacing rhi_*.cpp.
+echo "-- leak test: no Vulkan outside src/rhi_vulkan*"
+if grep -l "vulkan/vulkan.h\|VkDevice\|vkCmd" src/*.cpp src/*.hpp include/*.h 2>/dev/null | grep -v "^src/rhi_vulkan"; then
+    echo "   !! a Vulkan type escaped the backend (files listed above)"; exit 1
+fi
+echo "-- leak test: engine + scene link without a renderer"
+cat > build/_norender.cpp <<'EOT'
+#include "daidalos.h"
+#include "dai_scene.h"
+int main() {
+    dai_config c{}; dai_world *w = nullptr;
+    if (dai_create(&c, &w) != DAI_OK) return 1;
+    dai_scene *s = dai_scene_create(w);
+    dai_entity_desc d = dai_entity_desc_default();
+    d.body.shape = DAI_SHAPE_SPHERE; d.body.motion = DAI_DYNAMIC; d.body.half_extent = { 1,0,0 };
+    dai_scene_spawn(s, &d);
+    dai_step(w);
+    dai_render_instance inst[8];
+    uint32_t n = dai_scene_instances(s, inst, 8, 0.0f);
+    dai_scene_destroy(s); dai_destroy(w);
+    return n == 1 ? 0 : 2;
+}
+EOT
+g++ $FLAGS $ARCH -Iinclude build/_norender.cpp $LIBS -o build/_norender    # note: no -lvulkan
+./build/_norender || { echo "   !! scene layer cannot run without a renderer"; exit 1; }
+rm -f build/_norender build/_norender.cpp
+
 echo "-- tests"
 g++ $FLAGS $ARCH -Iinclude tests/test_daidalos.cpp $LIBS -o build/test_daidalos
+g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_image.cpp src/dai_inflate.cpp -o build/test_image
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
 fi
