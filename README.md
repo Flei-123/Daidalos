@@ -34,7 +34,9 @@ MIT licensed.
 ./build.sh noaudio             # without Aulos
 
 ./build/test_daidalos                                    # 48 simulation assertions
-DAI_SHADER_DIR=shaders ./build/test_render_visual /tmp   # 29 visual assertions
+DAI_SHADER_DIR=shaders ./build/test_render_visual /tmp   # 33 visual assertions
+./build/test_image /tmp/pngfix                           #  9 PNG/DEFLATE assertions
+DAI_SHADER_DIR=shaders ./build/test_gltf assets/test /tmp # 15 import assertions
 DAI_SHADER_DIR=shaders ./build/sandbox_demo 6 /tmp       # general sandbox scene
 DAI_SHADER_DIR=shaders ./build/vehicle_demo  6 /tmp      # machine built from joints
 ```
@@ -42,6 +44,18 @@ DAI_SHADER_DIR=shaders ./build/vehicle_demo  6 /tmp      # machine built from jo
 `build.sh` compiles `dai_engine.cpp` **without the Jolt include path**. If a
 Jolt header ever leaks into the engine core, the build breaks. That is the
 entire point of `src/dai_physics.hpp`.
+
+The same trick guards the renderer: the build fails if any Vulkan symbol
+appears outside `src/rhi_vulkan*`, and it links and runs a program that uses
+the engine and the scene layer **without `-lvulkan`**. Swapping in D3D12, Metal
+or a bridge into someone else's engine means writing one `rhi_*.cpp`.
+
+### Dependencies, in full
+
+Jolt (physics) and Aulos (audio) are vendored. Vulkan is an API, not a library
+that does work for us. Everything else - matrix maths, mesh generation, OBJ,
+PNG **encode and decode**, DEFLATE, JSON, glTF, base64, the whole renderer - is
+written here. No stb, no zlib, no libpng, no GLM, no tinygltf, no VMA.
 
 ---
 
@@ -71,6 +85,22 @@ orbit, exponential follow, frame-a-bounding-sphere.
 Without this layer every demo grows a `switch (user_data)` that guesses sizes -
 which is exactly how "why does that crate look like a plank" happens.
 
+### Asset import - `include/dai_gltf.h`
+
+glTF 2.0 / GLB, written from scratch: own JSON parser, own base64, own PNG and
+DEFLATE decoder. Meshes, metallic-roughness materials, embedded or external PNG
+textures, the node hierarchy flattened to world space TRS.
+
+```bash
+DAI_SHADER_DIR=shaders ./build/model_viewer scene.glb 4 /tmp
+```
+
+The test loads a GLB that **Blender 4.5 exported on a real machine** (five
+objects, five materials, a packed colour grid texture, a 12x scaled ground
+plane) and checks geometry, materials, the Z-up to Y-up conversion and the
+matrix decomposition. See `docs/MATERIALS.md` for why the material model is
+four maps and no node graph.
+
 ### Renderer - `include/dai_render.h`
 
 Vulkan 1.3 with dynamic rendering: no `VkRenderPass`, no `VkFramebuffer`.
@@ -82,7 +112,12 @@ lavapipe, on a GPU through the identical code path).
   for Wavefront OBJ. Instances are sorted by mesh, one draw call per mesh.
 - **capsules**: one mesh serves every proportion - the caps are pushed apart in
   the vertex stage by the instance's `param`.
-- **materials**: albedo, roughness, emissive, checkerboard flag, no-shadow flag.
+- **materials**: glTF 2.0 metallic-roughness - base colour, ORM (occlusion /
+  roughness / metallic packed), tangent space normal map, emissive, alpha
+  cutoff, uv scale. Cook-Torrance GGX. Tangent frame from screen space
+  derivatives, so assets never need baked tangents.
+- **textures**: PNG loaded by the engine's own DEFLATE decoder, full mip chains
+  built on the GPU, sRGB vs linear decided by the slot rather than the artist.
 - **lighting**: directional sun, hemisphere ambient, Blinn-Phong specular,
   2048² shadow map with 3×3 PCF, squared distance fog, procedural sky with a
   sun disc, ACES tonemapping, 4× MSAA.

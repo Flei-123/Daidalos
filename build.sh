@@ -68,15 +68,17 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_meshgen.cpp      -o build/dai_meshgen.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_image.cpp        -o build/dai_image.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_inflate.cpp      -o build/dai_inflate.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_json.cpp         -o build/dai_json.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf.cpp         -o build/dai_gltf.o
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
-           build/dai_meshgen.o build/dai_image.o build/dai_inflate.o
+           build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o build/dai_gltf.o
     VK_OK=1
 else
     echo "-- renderer: skipped (no vulkan headers)"
 fi
 
 LIBS="build/libdaidalos.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lpthread -lm"
-VKLIBS="build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lvulkan -lpthread -lm"
+VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lvulkan -lpthread -lm"
 
 # --- backend leak tests -------------------------------------------------
 # Same idea as the Jolt one, for the renderer: the RHI must be swappable for
@@ -112,12 +114,13 @@ g++ $FLAGS $ARCH -Iinclude tests/test_daidalos.cpp $LIBS -o build/test_daidalos
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_image.cpp src/dai_inflate.cpp -o build/test_image
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
+    g++ $FLAGS $ARCH -Iinclude tests/test_gltf.cpp $VKLIBS -o build/test_gltf
 fi
 
 echo "-- examples"
 g++ $FLAGS $ARCH -Iinclude examples/hello_daidalos.cpp $LIBS -o build/hello_daidalos
 if [ "$VK_OK" = "1" ]; then
-    for ex in sandbox_demo vehicle_demo render_demo; do
+    for ex in sandbox_demo vehicle_demo model_viewer; do
         [ -f "examples/$ex.cpp" ] || continue
         g++ $FLAGS $ARCH -Iinclude "examples/$ex.cpp" $VKLIBS -o "build/$ex"
     done
