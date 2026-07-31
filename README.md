@@ -35,6 +35,7 @@ MIT licensed.
 
 ./build/test_daidalos                                    # 48 simulation assertions
 ./build/test_merge                                       # 45 merge/split assertions
+./build/test_font                                        # 16 font assertions
 DAI_SHADER_DIR=shaders ./build/test_particles /tmp       # 16 particle assertions
 DAI_SHADER_DIR=shaders ./build/test_skinning assets/test # 14 skinning assertions
 DAI_SHADER_DIR=shaders ./build/test_render_visual /tmp   # 33 visual assertions
@@ -165,6 +166,29 @@ matrices in a storage buffer, and the same pipeline draws rigid and skinned
 meshes (a vertex with no weights keeps an identity matrix). Rigid nodes of an
 animated file follow their animated parents, so a swinging door is just a node.
 
+### Fonts - `include/dai_font.h`
+
+TrueType parsing and rasterisation, from scratch like everything else: cmap
+(formats 4 and 12), simple and composite glyphs, quadratic beziers flattened
+adaptively, scanline fill with the non zero winding rule and 4x vertical
+supersampling, packed into one atlas.
+
+Not FreeType, because FreeType is 200k lines and a build dependency on every
+platform, while the part a game needs - outline, metrics, atlas - is a few
+hundred.
+
+```c
+dai_font *f = dai_font_load("DejaVuSans.ttf", 32.0f, NULL, 0, err, sizeof(err));
+const uint8_t *rgba = dai_font_atlas_rgba(f, &w, &h);   // upload as a texture
+const dai_glyph *g = dai_font_glyph(f, codepoint);      // uv rect + offsets + advance
+```
+
+`tests/test_font.cpp` checks the things that are true of any correct renderer
+rather than a reference image: space has advance but no ink, 'M' is wider than
+'i', a composite glyph (a-umlaut) is not empty, UTF-8 decodes surrogate free,
+and - the one that catches a wrong winding rule - **the middle of an 'o' is
+empty while its edge is solid**.
+
 ### Particles - `include/dai_particles.h`
 
 Presentation, not simulation - deliberately. Sparks and smoke would otherwise
@@ -286,8 +310,11 @@ and shading when a test fails and you need to know which half is lying.
 
 ## What is still missing
 
-- No morph targets, no animation blending or state machine yet (one clip at a
-  time, sampled by hand).
+- Fonts rasterise and measure, but there is no UI layer drawing them yet:
+  no text pass in the renderer, no widgets.
+- No point or spot lights - one directional sun only.
+- No frustum culling: every instance goes through the pipeline.
+- No morph targets and no animation state machine (blending exists).
 - Particle atlases are one texture per frame, not per emitter.
 - The Win32 backend is cross compiled with mingw-w64 but has never been run on
   Windows from here: no Windows machine in this setup has a compiler and a
