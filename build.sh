@@ -46,9 +46,10 @@ g++ $FLAGS $ARCH $AUDIO_FLAGS -Iinclude -Isrc -c src/dai_audio.cpp -o build/dai_
 
 echo "-- scene layer"
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_scene.cpp -o build/dai_scene.o
+g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_input.cpp -o build/dai_input.o
 
 ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o \
-       build/dai_audio.o build/dai_scene.o
+       build/dai_audio.o build/dai_scene.o build/dai_input.o
 
 echo "-- shaders"
 if command -v glslangValidator >/dev/null 2>&1; then
@@ -160,6 +161,7 @@ g++ $FLAGS $ARCH -Iinclude tests/test_daidalos.cpp $LIBS -o build/test_daidalos
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_image.cpp src/dai_inflate.cpp -o build/test_image
 g++ $FLAGS $ARCH -Iinclude tests/test_merge.cpp $LIBS -o build/test_merge
 g++ $FLAGS $ARCH -Iinclude tests/test_save.cpp $LIBS -o build/test_save
+g++ $FLAGS $ARCH -Iinclude tests/test_input.cpp $LIBS -o build/test_input
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/test_font
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
