@@ -116,6 +116,40 @@ DAI_API dai_result dai_editor_delete_selection(dai_editor *e);
 /* Copies the selection (and its children) and selects the copies. */
 DAI_API uint32_t   dai_editor_duplicate_selection(dai_editor *e);
 
+/* ---- play mode --------------------------------------------------------- */
+
+/* Edit -> Play -> Stop returns the world exactly as it was, because the
+ * document never changed while the simulation ran. Keeping a result is an
+ * explicit step (dai_editor_apply_sim), not the default - losing a carefully
+ * placed scene because you pressed play is the classic editor disaster. */
+typedef enum dai_editor_state {
+    DAI_EDITOR_EDIT = 0,
+    DAI_EDITOR_PLAY,
+    DAI_EDITOR_PAUSED
+} dai_editor_state;
+
+DAI_API void dai_editor_play(dai_editor *e);
+DAI_API void dai_editor_pause(dai_editor *e);
+DAI_API void dai_editor_stop(dai_editor *e);
+DAI_API int  dai_editor_state_get(const dai_editor *e);
+/* Advances the world when playing. Returns the number of ticks stepped. Does
+ * nothing while editing or paused, so a frontend can call it unconditionally. */
+DAI_API uint32_t dai_editor_advance(dai_editor *e, double real_seconds, float *out_alpha);
+/* Writes the simulated transforms back into the document as one undo step. */
+DAI_API uint32_t dai_editor_apply_sim(dai_editor *e);
+
+/* ---- timeline ---------------------------------------------------------- */
+
+/* Scrubbing rides the engine's snapshot ring: going back is a rollback, going
+ * forward is a deterministic replay of the recorded inputs. Both directions
+ * land on bit identical state, which is the whole point of the fixed tick. */
+DAI_API dai_tick dai_editor_timeline_first(const dai_editor *e);
+DAI_API dai_tick dai_editor_timeline_last(const dai_editor *e);
+DAI_API dai_tick dai_editor_timeline_tick(const dai_editor *e);
+/* Returns 0 when the tick is outside the ring - say so rather than silently
+ * landing somewhere else. */
+DAI_API int      dai_editor_scrub(dai_editor *e, dai_tick tick);
+
 /* ---- undo (forwarded to the document) ---------------------------------- */
 
 DAI_API int         dai_editor_undo(dai_editor *e);

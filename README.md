@@ -162,6 +162,21 @@ fields written, floats at the shortest precision that reads back bit identical.
 That diffs and merges per property instead of per brace, which matters when a
 scene file lives in version control.
 
+### Editor - `include/dai_editor.h`, `include/dai_editor_ui.h`
+
+Two layers on purpose. `dai_editor` is the core: picking, selection, gizmo
+maths, drags, play mode, timeline scrubbing - no UI dependency at all, so a web
+viewer or a Qt shell can drive it. `dai_editor_ui` is the one file that knows
+about both the editor and `dai_ui`, and draws the hierarchy, inspector, toolbar
+and timeline.
+
+Play mode never touches the document, so Stop is exact: the sync layer is told
+that everything it believes about the world is stale and rewrites it. Keeping a
+simulated result is an explicit button, not the default. Scrubbing rides the
+engine's snapshot ring - `dai_seek_to` restores a snapshot going back and
+replays recorded commands going forward, which lands on bit identical state
+either way.
+
 ### Scene layer - `include/dai_scene.h`
 
 The glue between "a body exists" and "here is what it looks like". Spawn an
@@ -375,6 +390,15 @@ and shading when a test fails and you need to know which half is lying.
   and solid crates looked like open shells. Tests 4 and 9 pin it now - and test
   4 had to be rewritten, because comparing against the corner pixel let it pass
   while the camera was staring at a wall.
+- **the leaking layout row**: `dai_ui_row` had no end, and `panel_end` did not
+  clear it. A toolbar that finished with a row left every later panel laying its
+  widgets out sideways, so the inspector looked empty - its fields were stacked
+  off the right edge. Found by a panel test that could not click a field that
+  was plainly visible in the screenshot.
+- **scrubbing to tick zero**: a snapshot holds the state at the *start* of its
+  tick, before that tick's commands. The bodies created by the first sync belong
+  to that tick, so seeking to it deleted the entire scene. The timeline now
+  starts one tick later.
 - **the sun pointing the wrong way**: `dai_render_sun` takes the direction
   *towards* the sun; the first gizmo screenshot passed the direction the light
   travels. Every visible face then fell back to ambient only and the scene came
@@ -388,7 +412,7 @@ and shading when a test fails and you need to know which half is lying.
 
 ## What is still missing
 
-- UI has no text input widget, no scrolling and no clip stack yet.
+- UI text input has no caret movement or selection - typing and backspace only.
 - No point or spot lights - one directional sun only.
 - No frustum culling: every instance goes through the pipeline.
 - No morph targets and no animation state machine (blending exists).

@@ -156,6 +156,11 @@ DAI_API uint32_t      dai_doc_sync_apply(dai_doc_sync *s);
  * and keep the result" needs. Returns the number of nodes written. */
 DAI_API uint32_t      dai_doc_sync_pull(dai_doc_sync *s, const char *undo_name);
 
+/* Forget what the live world currently looks like and write the document over
+ * all of it on the next apply, velocities zeroed. This is what "stop play mode"
+ * needs: the simulation has moved everything, and no revision changed. */
+DAI_API void dai_doc_sync_reset(dai_doc_sync *s);
+
 DAI_API dai_entity dai_doc_sync_entity(const dai_doc_sync *s, dai_node n);
 DAI_API dai_node   dai_doc_sync_node(const dai_doc_sync *s, dai_entity e);
 DAI_API dai_node   dai_doc_sync_node_of_body(const dai_doc_sync *s, dai_body b);

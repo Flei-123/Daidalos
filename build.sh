@@ -123,9 +123,11 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_particles.cpp    -o build/dai_particles.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_font.cpp          -o build/dai_font.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_ui.cpp            -o build/dai_ui.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor_ui.cpp     -o build/dai_editor_ui.o
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
            $WINDOW_OBJ build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
-           build/dai_gltf.o build/dai_particles.o build/dai_font.o build/dai_ui.o
+           build/dai_gltf.o build/dai_particles.o build/dai_font.o build/dai_ui.o \
+           build/dai_editor_ui.o
     VK_OK=1
 else
     echo "-- renderer: skipped (no vulkan headers)"
@@ -182,6 +184,7 @@ g++ $FLAGS $ARCH -Iinclude tests/test_save.cpp $LIBS -o build/test_save
 g++ $FLAGS $ARCH -Iinclude tests/test_input.cpp $LIBS -o build/test_input
 g++ $FLAGS $ARCH -Iinclude tests/test_editor.cpp $LIBS -o build/test_editor
 g++ $FLAGS $ARCH -Iinclude tests/test_doc.cpp $LIBS -o build/test_doc
+g++ $FLAGS $ARCH -Iinclude tests/test_play.cpp $LIBS -o build/test_play
 if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_script.cpp $SCRIPT_LIB $VKLIBS -o build/test_script
 fi
@@ -192,12 +195,14 @@ if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_particles.cpp $VKLIBS -o build/test_particles
     g++ $FLAGS $ARCH -Iinclude tests/test_skinning.cpp $VKLIBS -o build/test_skinning
     g++ $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui
+    g++ $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
 fi
 
 echo "-- diagnostics"
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tools/gizmo_shot.cpp $VKLIBS -o build/gizmo_shot
+    g++ $FLAGS $ARCH -Iinclude tools/editor_shot.cpp $VKLIBS -o build/editor_shot
 fi
 
 echo "-- examples"

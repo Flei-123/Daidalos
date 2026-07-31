@@ -1,0 +1,175 @@
+// Play mode and timeline scrubbing.
+//
+//   ./build/test_play
+//
+// The promise being tested: pressing play and stopping again leaves the scene
+// exactly as it was, and scrubbing lands on bit identical state in both
+// directions.
+
+#include "dai_editor.h"
+#include <cstdio>
+#include <cmath>
+#include <cstring>
+#include <vector>
+
+static int g_fail = 0, g_pass = 0;
+#define CHECK(cond, ...) do { \
+    if (cond) { ++g_pass; } \
+    else { ++g_fail; std::printf("  FAIL "); std::printf(__VA_ARGS__); std::printf("\n"); } \
+} while (0)
+
+static bool near3(dai_vec3 a, dai_vec3 b, float eps = 1e-3f) {
+    return std::fabs(a.x - b.x) < eps && std::fabs(a.y - b.y) < eps && std::fabs(a.z - b.z) < eps;
+}
+// dai_advance deliberately caps catch-up at 8 ticks so a hitch cannot become
+// a death spiral, so a host loop calls it once per frame. Do the same here.
+static uint32_t run_for(dai_editor *ed, int frames) {
+    uint32_t total = 0;
+    float alpha = 0.0f;
+    for (int i = 0; i < frames; ++i) total += dai_editor_advance(ed, 1.0 / 60.0, &alpha);
+    return total;
+}
+
+static dai_vec3 world_of(dai_doc *d, dai_node n) {
+    dai_vec3 p{};
+    dai_doc_world_transform(d, n, &p, nullptr, nullptr);
+    return p;
+}
+
+int main() {
+    dai_config cfg{};
+    cfg.tick_hz = 60; cfg.max_bodies = 128; cfg.physics_threads = 1;
+    cfg.snapshot_ring = 64; cfg.seed = 11;
+    dai_world *w = nullptr;
+    if (dai_create(&cfg, &w) != DAI_OK) { std::printf("world creation failed\n"); return 1; }
+    dai_scene *sc = dai_scene_create(w);
+    dai_doc *doc = dai_doc_create();
+    dai_doc_sync *sync = dai_doc_sync_create(doc, sc);
+    dai_editor *ed = dai_editor_create(doc, sync);
+    std::printf("play mode\n");
+
+    dai_node_desc g = dai_node_desc_default();
+    std::snprintf(g.name, sizeof(g.name), "Ground");
+    g.motion = DAI_STATIC;
+    g.half_extent = { 20, 0.5f, 20 };
+    g.position = { 0, -0.5f, 0 };
+    dai_doc_add(doc, &g);
+
+    dai_node_desc b = dai_node_desc_default();
+    std::snprintf(b.name, sizeof(b.name), "Faller");
+    b.motion = DAI_DYNAMIC;
+    b.position = { 0, 8, 0 };
+    dai_node faller = dai_doc_add(doc, &b);
+    dai_doc_sync_apply(sync);
+
+    dai_vec3 authored = world_of(doc, faller);
+    CHECK(dai_editor_state_get(ed) == DAI_EDITOR_EDIT, "a fresh editor should be in edit mode");
+
+    // ---- 1. editing does not simulate ------------------------------------
+    CHECK(run_for(ed, 30) == 0, "the world advanced while editing");
+    CHECK(near3(world_of(doc, faller), authored), "the document moved while editing");
+
+    // ---- 2. play runs the simulation, the document stays put -------------
+    dai_editor_play(ed);
+    CHECK(dai_editor_state_get(ed) == DAI_EDITOR_PLAY, "play did not take");
+    uint32_t ticks = run_for(ed, 30);
+    CHECK(ticks >= 29, "30 frames at 60Hz stepped only %u ticks", ticks);
+
+    dai_transform t{};
+    dai_body body = dai_scene_body(sc, dai_doc_sync_entity(sync, faller));
+    dai_body_get(w, body, &t);
+    CHECK(t.position.y < authored.y - 0.5f, "the body did not fall (y %.3f)", t.position.y);
+    CHECK(near3(world_of(doc, faller), authored),
+          "playing changed the document - it must stay the authored scene");
+
+    // ---- 3. scrubbing back and forward lands on identical state ----------
+    dai_editor_pause(ed);
+    CHECK(dai_editor_state_get(ed) == DAI_EDITOR_PAUSED, "pause did not take");
+    dai_tick last = dai_editor_timeline_last(ed);
+    dai_tick first = dai_editor_timeline_first(ed);
+    CHECK(last > first, "the timeline is empty (%llu..%llu)",
+          (unsigned long long)first, (unsigned long long)last);
+
+    uint64_t sum_at_last = dai_checksum(w);
+    dai_tick middle = first + (last - first) / 2;
+    CHECK(dai_editor_scrub(ed, middle) == 1, "scrubbing to the middle failed");
+    CHECK(dai_editor_timeline_tick(ed) == middle, "the scrub landed on the wrong tick");
+    dai_body_get(w, body, &t);
+    float y_middle = t.position.y;
+    uint64_t sum_middle = dai_checksum(w);
+
+    CHECK(dai_editor_scrub(ed, last) == 1, "scrubbing forward again failed");
+    CHECK(dai_checksum(w) == sum_at_last,
+          "replaying forward did not reproduce the same state - determinism is broken");
+
+    CHECK(dai_editor_scrub(ed, middle) == 1, "second scrub back failed");
+    CHECK(dai_checksum(w) == sum_middle, "scrubbing back twice gave a different state");
+    dai_body_get(w, body, &t);
+    CHECK(std::fabs(t.position.y - y_middle) < 1e-5f, "the body is not where it was at that tick");
+
+    // the very first tick of the run must be reachable and must still have the
+    // scene in it - a snapshot holds the state *before* its tick's commands,
+    // so an off by one here deletes everything that was spawned that tick
+    CHECK(dai_editor_scrub(ed, first) == 1, "scrubbing to the first tick failed");
+    CHECK(dai_scene_body(sc, dai_doc_sync_entity(sync, faller)) != DAI_INVALID_BODY,
+          "scrubbing to the start of the run deleted the scene");
+    dai_body_get(w, dai_scene_body(sc, dai_doc_sync_entity(sync, faller)), &t);
+    CHECK(t.position.y > authored.y - 0.2f,
+          "at the first tick the body should barely have moved, y is %.3f", t.position.y);
+
+    // out of range is refused, not clamped silently
+    CHECK(first == 0 || dai_editor_scrub(ed, first - 1) == 0,
+          "scrubbing before the start of the run was accepted");
+
+    // ---- 4. stop restores the authored scene exactly ----------------------
+    dai_editor_scrub(ed, last);
+    dai_editor_stop(ed);
+    CHECK(dai_editor_state_get(ed) == DAI_EDITOR_EDIT, "stop did not return to edit mode");
+    dai_body_get(w, dai_scene_body(sc, dai_doc_sync_entity(sync, faller)), &t);
+    CHECK(near3(t.position, authored, 1e-3f),
+          "stop left the body at (%.3f %.3f %.3f), expected the authored (%.3f %.3f %.3f)",
+          t.position.x, t.position.y, t.position.z, authored.x, authored.y, authored.z);
+    dai_vec3 lin{ 1, 1, 1 }, ang{ 1, 1, 1 };
+    dai_body_get_velocity(w, dai_scene_body(sc, dai_doc_sync_entity(sync, faller)), &lin, &ang);
+    CHECK(near3(lin, dai_vec3{ 0, 0, 0 }, 1e-3f),
+          "stop left the body moving (%.3f %.3f %.3f) - it will drift on the next play",
+          lin.x, lin.y, lin.z);
+
+    // ---- 5. keeping a result is explicit ---------------------------------
+    uint32_t undo_before = dai_editor_undo_depth(ed);
+    dai_editor_play(ed);
+    run_for(ed, 30);
+    CHECK(dai_editor_undo_depth(ed) == undo_before, "playing pushed an undo step by itself");
+    uint32_t written = dai_editor_apply_sim(ed);
+    CHECK(written > 0, "apply_sim wrote nothing back");
+    CHECK(dai_editor_undo_depth(ed) == undo_before + 1, "apply_sim should be exactly one undo step");
+    CHECK(world_of(doc, faller).y < authored.y - 0.5f, "apply_sim did not move the document");
+    dai_editor_stop(ed);
+
+    // undo puts the authored scene back
+    CHECK(dai_editor_undo(ed) == 1, "undo of apply_sim failed");
+    CHECK(near3(world_of(doc, faller), authored), "undo did not restore the authored position");
+    dai_body_get(w, dai_scene_body(sc, dai_doc_sync_entity(sync, faller)), &t);
+    CHECK(near3(t.position, authored, 1e-3f), "undo did not put the body back too");
+
+    // ---- 6. a drag in progress does not survive pressing play -------------
+    dai_editor_select(ed, faller, 0);
+    dai_editor_camera(ed, dai_vec3{ 0, 5, 14 }, dai_vec3{ 0, 4, 0 }, dai_vec3{ 0, 1, 0 },
+                      60.0f, 0.1f, 200.0f, 800.0f, 600.0f);
+    dai_editor_drag_begin(ed, DAI_AXIS_X, 400, 300);
+    dai_editor_drag_update(ed, 500, 300);
+    dai_editor_play(ed);
+    CHECK(!dai_editor_dragging(ed), "the drag survived pressing play");
+    CHECK(near3(world_of(doc, faller), authored),
+          "the abandoned drag was left in the document");
+    dai_editor_stop(ed);
+
+    dai_editor_destroy(ed);
+    dai_doc_sync_destroy(sync);
+    dai_doc_destroy(doc);
+    dai_scene_destroy(sc);
+    dai_destroy(w);
+
+    std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
+    return g_fail ? 1 : 0;
+}

@@ -336,6 +336,12 @@ DAI_API uint64_t   dai_checksum(dai_world *w);
  * Returns DAI_ERR_TOO_OLD if the tick fell out of the snapshot ring. */
 DAI_API dai_result dai_rollback_to(dai_world *w, dai_tick tick);
 
+/* Moves to `tick` and STAYS there - backwards restores a snapshot, forwards
+ * replays the recorded commands. This is the difference between netcode and a
+ * timeline: dai_rollback_to always ends up back on the tick you were on, which
+ * makes it useless for scrubbing. Same ring limits apply. */
+DAI_API dai_result dai_seek_to(dai_world *w, dai_tick tick);
+
 /* Late input from a remote peer. If it differs from what was predicted for an
  * already simulated tick, this rolls back and re-simulates by itself.
  * Returns the number of ticks that had to be re-simulated (0 = nothing to do). */

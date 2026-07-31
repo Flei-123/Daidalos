@@ -969,7 +969,11 @@ dai_tick dai_oldest_snapshot(const dai_world *w) {
     return w->tick > w->snap_ring - 1 ? w->tick - (w->snap_ring - 1) : 0;
 }
 
-dai_result dai_rollback_to(dai_world *w, dai_tick target) {
+// Restores the world to the START of `target` and leaves it there. Shared by
+// dai_rollback_to (which then replays forward) and dai_seek_to (which does
+// not). Splitting the two is what makes a timeline scrubber possible: netcode
+// wants to end up back where it was, an editor wants to stay in the past.
+static dai_result restore_to(dai_world *w, dai_tick target) {
     if (!w) return DAI_ERR_INVALID_ARG;
     if (target > w->tick) return DAI_ERR_INVALID_ARG;
     if (target == w->tick) return DAI_OK;
@@ -977,8 +981,6 @@ dai_result dai_rollback_to(dai_world *w, dai_tick target) {
 
     Snapshot &s = w->snaps[target % w->snap_ring];
     if (!s.valid || s.tick != target) { set_err(w, "snapshot slot was overwritten"); return DAI_ERR_TOO_OLD; }
-
-    const dai_tick resume_at = w->tick;
 
     // 1a. joints created inside the window go first - a constraint must never
     //     outlive a body it references.
@@ -1030,10 +1032,38 @@ dai_result dai_rollback_to(dai_world *w, dai_tick target) {
     w->audio.erase(std::remove_if(w->audio.begin(), w->audio.end(),
         [&](const PendingAudio &p) { return !p.played && p.ev.tick >= target; }), w->audio.end());
 
-    // 4. re-simulate
+    return DAI_OK;
+}
+
+dai_result dai_rollback_to(dai_world *w, dai_tick target) {
+    if (!w) return DAI_ERR_INVALID_ARG;
+    const dai_tick resume_at = w->tick;
+    dai_result r = restore_to(w, target);
+    if (r != DAI_OK) return r;
+
+    // re-simulate back up to where we were, replaying the recorded commands
     w->rollbacks++;
     w->replaying = true;
     while (w->tick < resume_at) dai_step(w);
+    w->replaying = false;
+    return DAI_OK;
+}
+
+dai_result dai_seek_to(dai_world *w, dai_tick target) {
+    if (!w) return DAI_ERR_INVALID_ARG;
+    if (target == w->tick) return DAI_OK;
+    if (target < w->tick) {
+        w->rollbacks++;
+        return restore_to(w, target);
+    }
+    // Forward is a replay, not fresh simulation: the commands for those ticks
+    // are still in the log, and applying them again is what reproduces the
+    // exact state the scrubber is being dragged towards.
+    w->replaying = true;
+    while (w->tick < target) {
+        dai_result r = dai_step(w);
+        if (r != DAI_OK) { w->replaying = false; return r; }
+    }
     w->replaying = false;
     return DAI_OK;
 }

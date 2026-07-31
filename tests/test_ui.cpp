@@ -203,8 +203,39 @@ int main(int argc, char **argv) {
         }
     }
 
+    // ---- a row must not leak into the next panel -------------------------
+    {
+        dai_ui_input in{};
+        dai_ui_begin(ui, 800, 600, &in);
+        dai_ui_panel_begin(ui, 0, 0, 400, 60, nullptr);
+        dai_ui_row(ui, 24.0f);
+        dai_ui_button(ui, "A");
+        dai_ui_button(ui, "B");
+        dai_ui_panel_end(ui);
+        dai_ui_panel_begin(ui, 0, 100, 200, 300, nullptr);
+        dai_ui_label(ui, "one");
+        dai_ui_label(ui, "two");
+        dai_ui_label(ui, "three");
+        dai_ui_panel_end(ui);
+        dai_ui_end(ui);
+        // The three labels stack downwards, so the tallest vertex must be well
+        // below the second panel's top edge. If the row leaked they would sit
+        // side by side and run off the right of a 200px panel instead.
+        const dai_ui_draw *d = nullptr;
+        uint32_t nb = dai_ui_draws(ui, &d);
+        float maxy = 0, maxx = 0;
+        for (uint32_t i = 0; i < nb; ++i)
+            for (uint32_t v = 0; v < d[i].count; ++v) {
+                if (d[i].vertices[v].y > maxy) maxy = d[i].vertices[v].y;
+                if (d[i].vertices[v].x > maxx) maxx = d[i].vertices[v].x;
+            }
+        CHECK(maxy > 150.0f, "labels after a row did not stack downwards (max y %.1f)", maxy);
+        CHECK(maxx < 420.0f, "a widget ran past the panels (max x %.1f)", maxx);
+    }
+
     dai_ui_destroy(ui);
     dai_font_free(font);
+
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

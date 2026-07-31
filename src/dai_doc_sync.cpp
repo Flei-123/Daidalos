@@ -45,6 +45,7 @@ struct dai_doc_sync {
     std::unordered_map<dai_node, Live>   live;
     std::unordered_map<dai_entity, dai_node> by_entity;
     std::unordered_map<dai_body, dai_node>   by_body;
+    bool zero_velocities = false;
 };
 
 namespace {
@@ -193,6 +194,8 @@ uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
             dai_quat wr{ 0, 0, 0, 1 };
             dai_doc_world_transform(s->doc, n, &wp, &wr, &ws);
             dai_body_set_transform(s->world, l.body, wp, wr);
+            if (s->zero_velocities)
+                dai_body_set_velocity(s->world, l.body, dai_vec3{ 0,0,0 }, dai_vec3{ 0,0,0 });
             dai_scene_set_color(s->scene, l.entity, r.color);
             dai_scene_set_visible(s->scene, l.entity, !r.hidden);
             dai_scene_set_render(s->scene, l.entity, r.mesh, r.roughness, r.emissive, r.render_flags);
@@ -209,7 +212,14 @@ uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
         if (!dai_doc_valid(s->doc, kv.first)) dead.push_back(kv.first);
     for (dai_node n : dead) { forget(s, n); ++changed; }
 
+    s->zero_velocities = false;
     return changed;
+}
+
+void dai_doc_sync_reset(dai_doc_sync *s) {
+    if (!s) return;
+    for (auto &kv : s->live) kv.second.rev = 0;   // 0 never matches a real revision
+    s->zero_velocities = true;
 }
 
 uint32_t dai_doc_sync_pull(dai_doc_sync *s, const char *undo_name) {

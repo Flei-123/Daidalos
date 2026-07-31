@@ -72,6 +72,9 @@ DAI_API void dai_ui_end(dai_ui *ui);
 DAI_API uint32_t dai_ui_draws(dai_ui *ui, const dai_ui_draw **out);
 /* True when the pointer is over UI, so the game can ignore that click. */
 DAI_API int dai_ui_wants_mouse(const dai_ui *ui);
+/* The pointer state this frame, for code that draws its own interactive
+ * widgets (the editor timeline) instead of using the ones above. */
+DAI_API void dai_ui_mouse(const dai_ui *ui, float *x, float *y, int *down, int *pressed);
 
 /* ---- layout ------------------------------------------------------------ */
 
@@ -98,6 +101,31 @@ DAI_API void dai_ui_image(dai_ui *ui, dai_texture tex, float w, float h,
 /* A sprite that reacts to clicks - icon buttons, inventory slots. */
 DAI_API int  dai_ui_image_button(dai_ui *ui, dai_texture tex, float w, float h,
                                  float u0, float v0, float u1, float v1);
+
+/* Cycles through `items` on click - a real dropdown needs an overlay layer and
+ * this is an editor field with four options, not a font picker. Returns 1 when
+ * the value changed. */
+DAI_API int  dai_ui_option(dai_ui *ui, const char *label, int *value,
+                           const char *const *items, int count);
+
+/* Drag to change, the way every 3D editor does it: no keyboard, no modal state,
+ * and it works on a laptop trackpad. `step` is world units per pixel. */
+DAI_API int  dai_ui_drag_float(dai_ui *ui, const char *label, float *value, float step);
+/* Three of the above on one line, labelled X/Y/Z. */
+DAI_API int  dai_ui_drag_vec3(dai_ui *ui, const char *label, float *xyz, float step);
+/* Editable text. Returns 1 on every change. Uses dai_ui_input::text and
+ * key_backspace, which the host fills from its window backend. */
+DAI_API int  dai_ui_input_text(dai_ui *ui, const char *label, char *buf, size_t buf_size);
+
+/* One row of a hierarchy. `depth` indents, `open` is the caller's fold state
+ * (pass NULL for a leaf). Returns 1 when the row itself was clicked. */
+DAI_API int  dai_ui_tree_item(dai_ui *ui, const char *label, int depth,
+                              int has_children, int *open, int selected);
+
+/* A clipped, scrollable region inside a panel. Everything drawn between the
+ * two calls is cut to the region and moves with the wheel. */
+DAI_API void dai_ui_scroll_begin(dai_ui *ui, const char *id, float height);
+DAI_API void dai_ui_scroll_end(dai_ui *ui);
 
 /* ---- direct drawing, for HUDs that are not widgets --------------------- */
 

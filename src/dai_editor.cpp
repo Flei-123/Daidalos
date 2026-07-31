@@ -101,6 +101,9 @@ struct dai_editor {
     float gizmo_pixels = 90.0f;
     int hover_axis = DAI_AXIS_NONE;
 
+    int  state = DAI_EDITOR_EDIT;
+    dai_tick play_start_tick = 0;
+
     bool dragging = false;
     bool drag_screen_rotate = false;   // ring seen edge-on, fall back to screen angle
     float drag_screen_start = 0.0f;
@@ -694,6 +697,92 @@ uint32_t dai_editor_duplicate_selection(dai_editor *e) {
     }
     resync(e);
     return (uint32_t)copies.size();
+}
+
+// -------------------------------------------------------------- play mode
+
+namespace {
+dai_world *editor_world(const dai_editor *e) {
+    dai_scene *sc = e->sync ? dai_doc_sync_scene(e->sync) : nullptr;
+    return sc ? dai_scene_world(sc) : nullptr;
+}
+} // namespace
+
+void dai_editor_play(dai_editor *e) {
+    if (!e || e->state == DAI_EDITOR_PLAY) return;
+    dai_world *w = editor_world(e);
+    if (!w) return;
+    if (e->state == DAI_EDITOR_EDIT) {
+        if (e->dragging) dai_editor_drag_cancel(e);
+        resync(e);                       // start from what the document says
+        // +1 on purpose. A snapshot holds the state at the START of its tick,
+        // before that tick's commands run - and the bodies the resync just
+        // created belong to the current tick. Seeking to it would therefore
+        // land before they existed and wipe the scene.
+        e->play_start_tick = dai_current_tick(w) + 1;
+    }
+    e->state = DAI_EDITOR_PLAY;
+}
+
+void dai_editor_pause(dai_editor *e) {
+    if (e && e->state == DAI_EDITOR_PLAY) e->state = DAI_EDITOR_PAUSED;
+}
+
+void dai_editor_stop(dai_editor *e) {
+    if (!e || e->state == DAI_EDITOR_EDIT) return;
+    e->state = DAI_EDITOR_EDIT;
+    // The document is untouched, so putting the world back is just a matter of
+    // telling the sync layer that everything it believes is stale.
+    if (e->sync) {
+        dai_doc_sync_reset(e->sync);
+        dai_doc_sync_apply(e->sync);
+    }
+}
+
+int dai_editor_state_get(const dai_editor *e) { return e ? e->state : DAI_EDITOR_EDIT; }
+
+uint32_t dai_editor_advance(dai_editor *e, double real_seconds, float *out_alpha) {
+    if (out_alpha) *out_alpha = 1.0f;
+    if (!e || e->state != DAI_EDITOR_PLAY) return 0;
+    dai_world *w = editor_world(e);
+    if (!w) return 0;
+    return dai_advance(w, real_seconds, out_alpha);
+}
+
+uint32_t dai_editor_apply_sim(dai_editor *e) {
+    if (!e || !e->sync) return 0;
+    return dai_doc_sync_pull(e->sync, "Apply simulation");
+}
+
+// --------------------------------------------------------------- timeline
+
+dai_tick dai_editor_timeline_first(const dai_editor *e) {
+    dai_world *w = editor_world(e);
+    if (!w) return 0;
+    dai_tick oldest = dai_oldest_snapshot(w);
+    // Never offer to scrub back past the moment play started: before that the
+    // ring holds ticks from a previous run, and landing there would look like
+    // the editor undid an edit.
+    return oldest > e->play_start_tick ? oldest : e->play_start_tick;
+}
+
+dai_tick dai_editor_timeline_last(const dai_editor *e) {
+    dai_world *w = editor_world(e);
+    return w ? dai_current_tick(w) : 0;
+}
+
+dai_tick dai_editor_timeline_tick(const dai_editor *e) {
+    return dai_editor_timeline_last(e);
+}
+
+int dai_editor_scrub(dai_editor *e, dai_tick tick) {
+    if (!e || e->state == DAI_EDITOR_EDIT) return 0;
+    dai_world *w = editor_world(e);
+    if (!w) return 0;
+    dai_tick now = dai_current_tick(w);
+    if (tick == now) return 1;
+    if (tick < dai_editor_timeline_first(e)) return 0;
+    return dai_seek_to(w, tick) == DAI_OK ? 1 : 0;
 }
 
 // ------------------------------------------------------------------- undo
