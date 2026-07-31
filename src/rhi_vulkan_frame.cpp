@@ -326,6 +326,14 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     // scene, and must not write depth
     if (r->particle_count && r->pipe_particle) {
         vkCmdBindPipeline(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipe_particle);
+        const MaterialEntry &pm = r->materials[r->particle_material < r->materials.size() ? r->particle_material : 0];
+        vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 1, 1, &pm.set, 0, nullptr);
+        MaterialPush pc{};
+        pc.base_color[0] = r->particle_atlas[0];   // atlas columns
+        pc.base_color[1] = r->particle_atlas[1];   // atlas rows
+        pc.base_color[2] = r->particle_atlas[2];   // 1 = sample the atlas
+        vkCmdPushConstants(r->cmd, r->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(MaterialPush), &pc);
         VkDeviceSize poff = 0;
         vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->particles.buf, &poff);
         vkCmdDraw(r->cmd, 6, r->particle_count, 0, 0);

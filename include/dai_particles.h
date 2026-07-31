@@ -53,6 +53,9 @@ typedef struct dai_emitter_desc {
     float    spin;             /* radians per second                        */
     int      blend;            /* dai_particle_blend                        */
     uint32_t max_particles;    /* 0 -> derived from rate * lifetime         */
+    uint32_t atlas_frames;     /* 0/1 -> no atlas animation                 */
+    int      atlas_animate;    /* 1 -> walk the frames over the lifetime,
+                                  0 -> one random frame per particle        */
     uint32_t seed;
     int      inherit_velocity; /* 1 -> new particles start with emitter velocity */
 } dai_emitter_desc;

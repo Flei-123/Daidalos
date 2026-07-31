@@ -670,17 +670,18 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     // particles: instanced billboards, premultiplied alpha, depth tested but
     // not depth writing, no culling (a billboard has no back)
     VkVertexInputBindingDescription pbind{ 0, sizeof(dai_particle), VK_VERTEX_INPUT_RATE_INSTANCE };
-    VkVertexInputAttributeDescription pattr[6] = {
+    VkVertexInputAttributeDescription pattr[7] = {
         { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(dai_particle, position) },
         { 1, 0, VK_FORMAT_R32_SFLOAT,       offsetof(dai_particle, size) },
         { 2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(dai_particle, color) },
         { 3, 0, VK_FORMAT_R32_SFLOAT,       offsetof(dai_particle, alpha) },
         { 4, 0, VK_FORMAT_R32_SFLOAT,       offsetof(dai_particle, rotation) },
         { 5, 0, VK_FORMAT_R32_UINT,         offsetof(dai_particle, blend) },
+        { 6, 0, VK_FORMAT_R32_UINT,         offsetof(dai_particle, frame) },
     };
     VkPipelineVertexInputStateCreateInfo pvi{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
     pvi.vertexBindingDescriptionCount = 1; pvi.pVertexBindingDescriptions = &pbind;
-    pvi.vertexAttributeDescriptionCount = 6; pvi.pVertexAttributeDescriptions = pattr;
+    pvi.vertexAttributeDescriptionCount = 7; pvi.pVertexAttributeDescriptions = pattr;
 
     VkPipelineDepthStencilStateCreateInfo ds_par{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
     ds_par.depthTestEnable = VK_TRUE; ds_par.depthWriteEnable = VK_FALSE;

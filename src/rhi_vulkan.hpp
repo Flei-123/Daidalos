@@ -135,6 +135,9 @@ struct dai_renderer {
     GpuBuffer particles;
     uint32_t particle_capacity = 0, particle_count = 0;
 
+    dai_material particle_material = 0;   // holds the atlas texture
+    float particle_atlas[4] = { 1, 1, 0, 0 };  // cols, rows, has_texture, unused
+
     GpuBuffer joints;                 // storage buffer of mat4, all characters
     uint32_t joint_capacity = 0, joint_count = 0;
 

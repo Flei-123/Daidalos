@@ -167,7 +167,11 @@ the audio layer consumes, so a rolled back explosion cancels its sound and its
 sparks together.
 
 Emitters are data (rate, lifetime, cone, gravity, drag, size and colour curves,
-blend mode), each with its own seeded RNG so a replay looks identical. Drawn as
+blend mode, texture atlas), each with its own seeded RNG so a replay looks
+identical. `dai_render_particle_atlas` points the pass at a cols x rows sprite
+sheet; emitters either pick a random cell per particle or walk the cells as a
+flipbook over the particle's life. With no atlas the shader draws its own soft
+dot, so nothing needs a texture to look right. Drawn as
 instanced camera facing billboards after the opaque pass: depth tested, no
 depth write, premultiplied alpha so alpha and additive share one pipeline.
 
@@ -275,7 +279,7 @@ and shading when a test fails and you need to know which half is lying.
 
 - No morph targets, no animation blending or state machine yet (one clip at a
   time, sampled by hand).
-- Particles are untextured soft sprites; no texture atlas or animation frames.
+- Particle atlases are one texture per frame, not per emitter.
 - Window backend is X11 only (Win32/Wayland would be the same file again).
 - Shadow cascades are fitted per frame with no caching, so a very large scene
   re-renders all three every frame.

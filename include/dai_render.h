@@ -182,7 +182,14 @@ typedef struct dai_particle {
     float    alpha;       /* 0..1; with DAI_BLEND_ADD it is the intensity    */
     float    rotation;    /* radians                                         */
     uint32_t blend;       /* dai_particle_blend: 0 = alpha, 1 = additive     */
+    uint32_t frame;       /* atlas cell, row major; ignored without an atlas  */
 } dai_particle;
+
+/* Points the particle pass at a texture atlas: `cols` x `rows` cells, indexed
+ * row major by dai_particle.frame. Pass texture 0 to go back to the built in
+ * soft dot. One atlas per frame - particles are the one place where a texture
+ * switch per effect would cost more than it buys. */
+DAI_API void dai_render_particle_atlas(dai_renderer *r, dai_texture tex, uint32_t cols, uint32_t rows);
 
 /* Hands the renderer the particles for the NEXT dai_render_frame call. The
  * pointer is copied, not retained. Pass count 0 to clear. */

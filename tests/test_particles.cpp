@@ -202,6 +202,87 @@ int main(int argc, char **argv) {
         }
     }
 
+    // ---- 7. texture atlas: four coloured cells, each frame must show its own
+    {
+        std::printf("  atlas\n");
+        char err[256] = {0};
+        dai_render_desc rd{}; rd.width = 256; rd.height = 256; rd.msaa = 1; rd.shadow_size = -1;
+        dai_renderer *r = dai_render_create(&rd, err, sizeof(err));
+        if (!r) { std::printf("  renderer unavailable, skipping\n"); }
+        else {
+            dai_render_sky(r, 0);
+            dai_render_clear_color(r, 0, 0, 0);
+            dai_render_fog(r, 0.0f, dai_vec3{0,0,0});
+            dai_render_exposure(r, 1.0f);
+            dai_render_camera(r, dai_vec3{ 0, 0, 6 }, dai_vec3{ 0,0,0 }, dai_vec3{ 0,1,0 }, 55.0f, 0.1f, 100.0f);
+
+            // 2x2 atlas: red, green, blue, white - opaque, so alpha comes from the texture
+            const uint8_t atlas[4 * 4] = {
+                255,0,0,255,   0,255,0,255,
+                0,0,255,255,   255,255,255,255,
+            };
+            dai_texture tex = dai_render_texture_create(r, atlas, 2, 2, 0);
+            dai_render_particle_atlas(r, tex, 2, 2);
+
+            float lum[4] = {0};
+            int hue[4] = {0};
+            std::vector<uint8_t> px((size_t)256 * 256 * 4);
+            for (uint32_t f = 0; f < 4; ++f) {
+                dai_particle q{};
+                q.position = { 0, 0, 0 }; q.size = 3.0f; q.color = { 1, 1, 1 };
+                q.alpha = 1.0f; q.rotation = 0.0f; q.blend = DAI_BLEND_ALPHA; q.frame = f;
+                dai_render_particles(r, &q, 1);
+                dai_render_frame(r, nullptr, 0);
+                dai_render_readback(r, px.data(), px.size());
+                const uint8_t *c = &px[((size_t)128 * 256 + 128) * 4];
+                lum[f] = (0.2126f*c[0] + 0.7152f*c[1] + 0.0722f*c[2]) / 255.0f;
+                hue[f] = (c[0] > c[1] + 20 && c[0] > c[2] + 20) ? 0 :
+                         (c[1] > c[0] + 20 && c[1] > c[2] + 20) ? 1 :
+                         (c[2] > c[0] + 20 && c[2] > c[1] + 20) ? 2 : 3;
+                char path[256];
+                std::snprintf(path, sizeof(path), "%s/particles_atlas_%u.png", outdir, f);
+                dai_render_write_png(r, path);
+            }
+            std::printf("  atlas cells -> hues %d %d %d %d (0=r 1=g 2=b 3=white)\n", hue[0], hue[1], hue[2], hue[3]);
+            CHECK(hue[0] == 0 && hue[1] == 1 && hue[2] == 2 && hue[3] == 3,
+                  "atlas frames map to the wrong cells: %d %d %d %d", hue[0], hue[1], hue[2], hue[3]);
+            for (int f = 0; f < 4; ++f) CHECK(lum[f] > 0.02f, "atlas frame %d rendered black", f);
+
+            // and back to the built in dot
+            dai_render_particle_atlas(r, 0, 1, 1);
+            dai_particle q{};
+            q.position = { 0,0,0 }; q.size = 3.0f; q.color = { 1,1,1 }; q.alpha = 1.0f;
+            dai_render_particles(r, &q, 1);
+            dai_render_frame(r, nullptr, 0);
+            dai_render_readback(r, px.data(), px.size());
+            const uint8_t *c = &px[((size_t)128 * 256 + 128) * 4];
+            CHECK(c[0] > 60 && c[1] > 60 && c[2] > 60, "turning the atlas off did not restore the soft dot");
+            dai_render_destroy(r);
+        }
+    }
+
+    // ---- 8. flipbook: the frame index has to walk over the lifetime
+    {
+        dai_particles *p = dai_particles_create(64);
+        dai_emitter_desc d = dai_emitter_desc_default();
+        d.rate = 0.0f; d.lifetime = 1.0f; d.lifetime_jitter = 0.0f;
+        d.speed = 0.0f; d.gravity = 0.0f; d.drag = 0.0f;
+        d.atlas_frames = 4; d.atlas_animate = 1;
+        dai_emitter e = dai_particles_add(p, &d);
+        dai_particles_burst(p, e, 1);
+        uint32_t seen[4] = {0};
+        for (int i = 0; i < 55; ++i) {
+            dai_particle out[4];
+            if (dai_particles_fill(p, out, 4, dai_vec3{0,0,10}) && out[0].frame < 4) seen[out[0].frame]++;
+            dai_particles_update(p, 1.0f / 60.0f);
+        }
+        int distinct = 0;
+        for (int i = 0; i < 4; ++i) if (seen[i]) ++distinct;
+        CHECK(distinct >= 3, "flipbook only reached %d of 4 frames (%u/%u/%u/%u)",
+              distinct, seen[0], seen[1], seen[2], seen[3]);
+        dai_particles_destroy(p);
+    }
+
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

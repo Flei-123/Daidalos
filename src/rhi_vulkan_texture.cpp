@@ -210,6 +210,24 @@ dai_material dai_render_material_create(dai_renderer *r, const dai_material_desc
     return (dai_material)(r->materials.size() - 1);
 }
 
+void dai_render_particle_atlas(dai_renderer *r, dai_texture tex, uint32_t cols, uint32_t rows) {
+    if (!r) return;
+    if (!tex || tex >= r->textures.size()) {
+        r->particle_material = 0;
+        r->particle_atlas[0] = r->particle_atlas[1] = 1.0f;
+        r->particle_atlas[2] = 0.0f;
+        return;
+    }
+    dai_material_desc d = dai_material_desc_default();
+    d.base_color_tex = tex;
+    d.name = "particle_atlas";
+    dai_material m = dai_render_material_create(r, &d);
+    r->particle_material = m;
+    r->particle_atlas[0] = cols ? (float)cols : 1.0f;
+    r->particle_atlas[1] = rows ? (float)rows : 1.0f;
+    r->particle_atlas[2] = 1.0f;
+}
+
 } // extern "C"
 
 // Called once during renderer creation: a 1x1 white texture, a flat normal

@@ -28,6 +28,7 @@ struct Rng {
 };
 
 struct Particle {
+    uint32_t frame0;
     float px, py, pz;
     float vx, vy, vz;
     float age, life;
@@ -158,6 +159,7 @@ static void spawn_one(dai_particles *p, Emitter &e, uint32_t emitter_index) {
     q.rot = e.rng.unit() * 6.2831853f;
     q.spin = e.d.spin * e.rng.sym();
     q.emitter = emitter_index;
+    q.frame0 = e.d.atlas_frames > 1 ? (e.rng.next() % e.d.atlas_frames) : 0;
     p->live.push_back(q);
 }
 
@@ -246,6 +248,11 @@ uint32_t dai_particles_fill(dai_particles *p, dai_particle *out, uint32_t max, d
         o.alpha = d.alpha_start + (d.alpha_end - d.alpha_start) * t;
         o.rotation = q.rot;
         o.blend = (uint32_t)d.blend;
+        if (d.atlas_frames > 1) {
+            o.frame = d.atlas_animate
+                    ? (uint32_t)((float)d.atlas_frames * t) % d.atlas_frames   // walk the flipbook
+                    : q.frame0;                                               // one cell, chosen at birth
+        } else o.frame = 0;
     }
     return n;
 }

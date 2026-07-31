@@ -9,6 +9,7 @@ layout(location = 2) in vec3  iColor;
 layout(location = 3) in float iAlpha;
 layout(location = 4) in float iRot;
 layout(location = 5) in uint  iBlend;
+layout(location = 6) in uint  iFrame;
 
 layout(set = 0, binding = 0) uniform Frame {
     mat4 viewproj;
@@ -30,6 +31,13 @@ layout(location = 1) out vec3 vColor;
 layout(location = 2) out float vAlpha;
 layout(location = 3) flat out uint vBlend;
 
+layout(push_constant) uniform Atlas {
+    vec4 grid;      // cols, rows, has_texture, unused
+    vec4 pad1;
+    vec4 pad2;
+    vec4 pad3;
+} A;
+
 void main() {
     vec2 c[6] = vec2[6](vec2(-1,-1), vec2(1,-1), vec2(1,1),
                         vec2(-1,-1), vec2(1,1), vec2(-1,1));
@@ -40,7 +48,12 @@ void main() {
     vec3 world = iPos + (F.cam_right.xyz * r.x + F.cam_up.xyz * r.y) * (iSize * 0.5);
     gl_Position = F.viewproj * vec4(world, 1.0);
 
-    vUV = q * 0.5 + 0.5;
+    // atlas cell, row major. Without a texture the grid is 1x1 and this is
+    // the identity, so the same shader serves both cases.
+    vec2 cell = vec2(A.grid.x, A.grid.y);
+    float idx = float(iFrame);
+    vec2 offset = vec2(mod(idx, cell.x), floor(idx / cell.x));
+    vUV = ((q * 0.5 + 0.5) + offset) / cell;
     vColor = iColor;
     vAlpha = iAlpha;
     vBlend = iBlend;
