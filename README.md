@@ -44,6 +44,14 @@ DAI_SHADER_DIR=shaders ./build/test_gltf assets/test /tmp # 15 import assertions
 # a real window, on a machine without a display:
 Xvfb :77 -screen 0 1280x720x24 &
 DISPLAY=:77 DAI_SHADER_DIR=shaders ./build/test_window
+
+# the same test against a Wayland compositor, also headless:
+mkdir -p /tmp/wl && chmod 700 /tmp/wl
+XDG_RUNTIME_DIR=/tmp/wl weston --backend=headless-backend.so --socket=wl-daidalos &
+DAI_WINDOW=wayland ./build.sh
+XDG_RUNTIME_DIR=/tmp/wl WAYLAND_DISPLAY=wl-daidalos DAI_SHADER_DIR=shaders ./build/test_window
+
+DAI_WINDOW=win32 ./build.sh     # cross compile check with mingw-w64
 DISPLAY=:77 DAI_SHADER_DIR=shaders ./build/window_demo
 DAI_SHADER_DIR=shaders ./build/sandbox_demo 6 /tmp       # general sandbox scene
 DAI_SHADER_DIR=shaders ./build/vehicle_demo  6 /tmp      # machine built from joints
@@ -200,9 +208,10 @@ lavapipe, on a GPU through the identical code path).
   **3 cascaded shadow maps** (2048² each, 3×3 PCF, texel snapped so edges do
   not crawl), squared distance fog, procedural sky with a sun disc, ACES
   tonemapping, 4× MSAA.
-- **window**: X11 + `VK_KHR_swapchain`. Presenting is a blit of the finished
-  offscreen frame, so the headless tests and the on screen build run identical
-  code and a Win32/Wayland port is one file.
+- **window**: three backends behind the same four functions - **X11**,
+  **Wayland** (xdg-shell) and **Win32** - selected with `DAI_WINDOW=`.
+  Presenting is a blit of the finished offscreen frame, so the headless tests
+  and the on screen build run identical code.
 - **output**: `dai_render_write_png` (no zlib dependency) and `write_ppm`.
 
 Conventions, pinned down by the visual tests: right handed, +Y up, +X right on
@@ -280,7 +289,9 @@ and shading when a test fails and you need to know which half is lying.
 - No morph targets, no animation blending or state machine yet (one clip at a
   time, sampled by hand).
 - Particle atlases are one texture per frame, not per emitter.
-- Window backend is X11 only (Win32/Wayland would be the same file again).
+- The Win32 backend is cross compiled with mingw-w64 but has never been run on
+  Windows from here: no Windows machine in this setup has a compiler and a
+  Vulkan loader. X11 and Wayland are both tested headless.
 - Shadow cascades are fitted per frame with no caching, so a very large scene
   re-renders all three every frame.
 - Contact impulses are not filled in yet; snapshots store the full blob per tick.

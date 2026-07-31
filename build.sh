@@ -65,15 +65,42 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan.cpp       -o build/rhi_vulkan.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_frame.cpp -o build/rhi_vulkan_frame.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_texture.cpp -o build/rhi_vulkan_texture.o
+    # Window backend: DAI_WINDOW=x11|wayland|none (default: x11 if available).
+    # Exactly one is linked - they define the same four entry points, which is
+    # the same "one .cpp per platform" rule the renderer itself follows.
     WINDOW_OBJ=""
-    if [ -f /usr/include/X11/Xlib.h ]; then
+    X11_LIB=""
+    DAI_WINDOW=${DAI_WINDOW:-auto}
+    if [ "$DAI_WINDOW" = "auto" ]; then
+        if [ -f /usr/include/X11/Xlib.h ]; then DAI_WINDOW=x11; else DAI_WINDOW=none; fi
+    fi
+    case "$DAI_WINDOW" in
+    x11)
+        echo "-- window backend: X11"
         g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_window.cpp -o build/rhi_vulkan_window.o
         WINDOW_OBJ=build/rhi_vulkan_window.o
         X11_LIB="-lX11"
-    else
-        echo "   no X11 headers - building headless only"
-        X11_LIB=""
-    fi
+        ;;
+    wayland)
+        echo "-- window backend: Wayland"
+        gcc $ARCH -O2 -Iinclude -Isrc -c src/generated/xdg-shell-protocol.c -o build/xdg-shell-protocol.o
+        g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_window_wayland.cpp -o build/rhi_vulkan_window.o
+        WINDOW_OBJ="build/rhi_vulkan_window.o build/xdg-shell-protocol.o"
+        X11_LIB="-lwayland-client"
+        ;;
+    win32)
+        # Cross compiled with mingw-w64 to prove it BUILDS; it has not been run
+        # on Windows from here. Produces an object file, not a linked binary.
+        echo "-- window backend: win32 (cross compile check only)"
+        mkdir -p /tmp/vkinc && cp -r /usr/include/vulkan /tmp/vkinc/ 2>/dev/null || true
+        x86_64-w64-mingw32-g++ -std=c++17 -O2 -fno-rtti -fno-exceptions \
+            -Iinclude -Isrc -I/tmp/vkinc -c src/rhi_vulkan_window_win32.cpp -o build/rhi_vulkan_window_win32.o
+        echo "   ok: build/rhi_vulkan_window_win32.o"
+        ;;
+    *)
+        echo "-- window backend: none (headless only)"
+        ;;
+    esac
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_meshgen.cpp      -o build/dai_meshgen.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_image.cpp        -o build/dai_image.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_inflate.cpp      -o build/dai_inflate.o

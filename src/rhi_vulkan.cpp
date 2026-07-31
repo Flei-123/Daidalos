@@ -333,11 +333,18 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
         for (const auto &e : exts) if (!std::strcmp(e.extensionName, name)) return true;
         return false;
     };
+    // Ask for every platform surface the loader knows about. Which window
+    // backend is actually linked is a build choice; the instance simply has to
+    // be capable of whichever one it is.
     std::vector<const char *> want;
-    if (have_ext("VK_KHR_surface") && have_ext("VK_KHR_xlib_surface")) {
+    if (have_ext("VK_KHR_surface")) {
+        bool any = false;
         want.push_back("VK_KHR_surface");
-        want.push_back("VK_KHR_xlib_surface");
-        r->has_surface_ext = true;
+        if (have_ext("VK_KHR_xlib_surface")) { want.push_back("VK_KHR_xlib_surface"); any = true; }
+        if (have_ext("VK_KHR_wayland_surface")) { want.push_back("VK_KHR_wayland_surface"); any = true; }
+        if (have_ext("VK_KHR_win32_surface")) { want.push_back("VK_KHR_win32_surface"); any = true; }
+        if (any) r->has_surface_ext = true;
+        else want.clear();
     }
     ici.enabledExtensionCount = (uint32_t)want.size();
     ici.ppEnabledExtensionNames = want.empty() ? nullptr : want.data();

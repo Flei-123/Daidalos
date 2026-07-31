@@ -11,7 +11,7 @@
 #include <vector>
 
 int main() {
-    if (!std::getenv("DISPLAY")) { std::printf("no DISPLAY, skipped\n"); return 0; }
+    if (!std::getenv("DISPLAY") && !std::getenv("WAYLAND_DISPLAY")) { std::printf("no display server, skipped\n"); return 0; }
 
     char err[256] = {0};
     dai_render_desc rd{}; rd.width = 640; rd.height = 400; rd.msaa = 4;
