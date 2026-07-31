@@ -168,6 +168,9 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     u.ground_color[3] = r->fog_density;
     u.fog_color[3] = r->exposure;
     u.cam_pos[3] = (r->shadows && casters) ? 1.0f : 0.0f;
+    // billboard basis: the view matrix rows are the camera axes in world space
+    u.cam_right[0] = view.m[0]; u.cam_right[1] = view.m[4]; u.cam_right[2] = view.m[8];
+    u.cam_up[0] = view.m[1];    u.cam_up[1] = view.m[5];    u.cam_up[2] = view.m[9];
     if (u.cam_pos[3] > 0.0f && getenv("DAI_DEBUG_SHADOW")) u.cam_pos[3] = 2.0f;
     std::memcpy(r->ubo.mapped, &u, sizeof(u));
 
@@ -286,6 +289,14 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
             const MeshEntry &me = r->meshes[g.mesh];
             vkCmdDrawIndexed(r->cmd, me.index_count, g.count, me.first_index, me.vertex_offset, g.first);
         }
+    }
+    // particles last: they are transparent, depth tested against the opaque
+    // scene, and must not write depth
+    if (r->particle_count && r->pipe_particle) {
+        vkCmdBindPipeline(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipe_particle);
+        VkDeviceSize poff = 0;
+        vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->particles.buf, &poff);
+        vkCmdDraw(r->cmd, 6, r->particle_count, 0, 0);
     }
     vkCmdEndRendering(r->cmd);
 

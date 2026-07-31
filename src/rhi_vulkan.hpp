@@ -39,6 +39,8 @@ struct FrameUBO {
     float ground_color[4];  // rgb, w = fog density
     float fog_color[4];     // rgb, w = exposure
     float cam_pos[4];       // xyz, w = shadows enabled
+    float cam_right[4];     // billboard basis
+    float cam_up[4];
 };
 
 #define DAI_MAX_MATERIALS 512
@@ -125,6 +127,9 @@ struct dai_renderer {
     VkDescriptorSet dset = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkPipeline pipe_mesh = VK_NULL_HANDLE, pipe_shadow = VK_NULL_HANDLE, pipe_sky = VK_NULL_HANDLE;
+    VkPipeline pipe_particle = VK_NULL_HANDLE;
+    GpuBuffer particles;
+    uint32_t particle_capacity = 0, particle_count = 0;
 
     // state the host sets
     float eye[3] = { 8, 6, 12 }, target[3] = { 0, 1, 0 }, up[3] = { 0, 1, 0 };

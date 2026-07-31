@@ -29,6 +29,8 @@ layout(set = 0, binding = 0) uniform Frame {
     vec4 ground_color;
     vec4 fog_color;
     vec4 cam_pos;
+    vec4 cam_right;
+    vec4 cam_up;
 } F;
 
 layout(location = 0) out vec3 vNormal;

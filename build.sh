@@ -52,7 +52,7 @@ ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics
 
 echo "-- shaders"
 if command -v glslangValidator >/dev/null 2>&1; then
-    for s in mesh.vert mesh.frag shadow.vert sky.vert sky.frag; do
+    for s in mesh.vert mesh.frag shadow.vert sky.vert sky.frag particle.vert particle.frag; do
         glslangValidator -V "shaders/$s" -o "shaders/$s.spv" >/dev/null
     done
 else
@@ -79,8 +79,10 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_inflate.cpp      -o build/dai_inflate.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_json.cpp         -o build/dai_json.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf.cpp         -o build/dai_gltf.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_particles.cpp    -o build/dai_particles.o
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
-           $WINDOW_OBJ build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o build/dai_gltf.o
+           $WINDOW_OBJ build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
+           build/dai_gltf.o build/dai_particles.o
     VK_OK=1
 else
     echo "-- renderer: skipped (no vulkan headers)"
@@ -125,13 +127,14 @@ g++ $FLAGS $ARCH -Iinclude tests/test_merge.cpp $LIBS -o build/test_merge
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
     g++ $FLAGS $ARCH -Iinclude tests/test_gltf.cpp $VKLIBS -o build/test_gltf
+    g++ $FLAGS $ARCH -Iinclude tests/test_particles.cpp $VKLIBS -o build/test_particles
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
 fi
 
 echo "-- examples"
 g++ $FLAGS $ARCH -Iinclude examples/hello_daidalos.cpp $LIBS -o build/hello_daidalos
 if [ "$VK_OK" = "1" ]; then
-    for ex in sandbox_demo vehicle_demo model_viewer window_demo; do
+    for ex in sandbox_demo vehicle_demo model_viewer window_demo particles_demo; do
         [ -f "examples/$ex.cpp" ] || continue
         g++ $FLAGS $ARCH -Iinclude "examples/$ex.cpp" $VKLIBS -o "build/$ex"
     done

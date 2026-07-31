@@ -159,6 +159,25 @@ typedef enum dai_render_flags {
  * nothing and a zero quaternion is not a rotation. */
 DAI_API dai_render_instance dai_render_instance_default(void);
 
+/* ---- particles --------------------------------------------------------- */
+
+/* What the renderer needs per particle. Filled by dai_particles_fill (see
+ * dai_particles.h) or by hand - the renderer does not care where they come
+ * from. Drawn as camera facing billboards after the opaque pass, depth tested
+ * against the scene but not writing depth. */
+typedef struct dai_particle {
+    dai_vec3 position;
+    float    size;        /* world units, diameter                          */
+    dai_vec3 color;       /* linear                                          */
+    float    alpha;       /* 0..1; with DAI_BLEND_ADD it is the intensity    */
+    float    rotation;    /* radians                                         */
+    uint32_t blend;       /* dai_particle_blend: 0 = alpha, 1 = additive     */
+} dai_particle;
+
+/* Hands the renderer the particles for the NEXT dai_render_frame call. The
+ * pointer is copied, not retained. Pass count 0 to clear. */
+DAI_API void dai_render_particles(dai_renderer *r, const dai_particle *particles, uint32_t count);
+
 /* ---- camera, sun, sky -------------------------------------------------- */
 
 DAI_API void dai_render_camera(dai_renderer *r, dai_vec3 eye, dai_vec3 target, dai_vec3 up,

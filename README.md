@@ -35,6 +35,7 @@ MIT licensed.
 
 ./build/test_daidalos                                    # 48 simulation assertions
 ./build/test_merge                                       # 45 merge/split assertions
+DAI_SHADER_DIR=shaders ./build/test_particles /tmp       # 16 particle assertions
 DAI_SHADER_DIR=shaders ./build/test_render_visual /tmp   # 33 visual assertions
 ./build/test_image /tmp/pngfix                           #  9 PNG/DEFLATE assertions
 DAI_SHADER_DIR=shaders ./build/test_gltf assets/test /tmp # 15 import assertions
@@ -106,6 +107,24 @@ objects, five materials, a packed colour grid texture, a 12x scaled ground
 plane) and checks geometry, materials, the Z-up to Y-up conversion and the
 matrix decomposition. See `docs/MATERIALS.md` for why the material model is
 four maps and no node graph.
+
+### Particles - `include/dai_particles.h`
+
+Presentation, not simulation - deliberately. Sparks and smoke would otherwise
+have to be snapshotted, rolled back and re-simulated, multiplying the cost of
+every rollback by the number of pretty effects on screen, and giving an effect
+the ability to desync a multiplayer session. They are fed by the same events
+the audio layer consumes, so a rolled back explosion cancels its sound and its
+sparks together.
+
+Emitters are data (rate, lifetime, cone, gravity, drag, size and colour curves,
+blend mode), each with its own seeded RNG so a replay looks identical. Drawn as
+instanced camera facing billboards after the opaque pass: depth tested, no
+depth write, premultiplied alpha so alpha and additive share one pipeline.
+
+```bash
+DAI_SHADER_DIR=shaders ./build/particles_demo 6 /tmp
+```
 
 ### Renderer - `include/dai_render.h`
 
@@ -205,8 +224,8 @@ and shading when a test fails and you need to know which half is lying.
 
 ## What is still missing
 
-- No particle system yet.
 - No skinning, no animation system.
+- Particles are untextured soft sprites; no texture atlas or animation frames.
 - Window backend is X11 only (Win32/Wayland would be the same file again).
 - Shadow cascades are fitted per frame with no caching, so a very large scene
   re-renders all three every frame.
