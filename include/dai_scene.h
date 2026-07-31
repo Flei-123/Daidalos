@@ -59,6 +59,11 @@ DAI_API dai_entity dai_scene_find(dai_scene *s, const char *name);
 DAI_API uint32_t   dai_scene_count(dai_scene *s);
 DAI_API dai_result dai_scene_set_color(dai_scene *s, dai_entity e, dai_vec3 color);
 DAI_API dai_result dai_scene_set_visible(dai_scene *s, dai_entity e, int visible);
+/* Graphics side only - shape and size stay with the body. mesh 0xFFFFFFFF
+ * keeps the current mesh. */
+DAI_API dai_result dai_scene_set_render(dai_scene *s, dai_entity e, uint32_t mesh,
+                                        float roughness, float emissive, uint32_t flags);
+DAI_API dai_result dai_scene_set_name(dai_scene *s, dai_entity e, const char *name);
 
 /* Fills `out` with everything visible, interpolated by alpha (0..1) between
  * the last two ticks. Returns the number written. Purely presentation: safe

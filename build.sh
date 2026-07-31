@@ -49,8 +49,14 @@ g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_scene.cpp -o build/dai_scene.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_input.cpp -o build/dai_input.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor.cpp -o build/dai_editor.o
 
+echo "-- scene document (editor truth: stable ids, generic undo)"
+g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc.cpp -o build/dai_doc.o
+g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_text.cpp -o build/dai_doc_text.o
+g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_sync.cpp -o build/dai_doc_sync.o
+
 ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o \
-       build/dai_audio.o build/dai_scene.o build/dai_input.o build/dai_editor.o
+       build/dai_audio.o build/dai_scene.o build/dai_input.o build/dai_editor.o \
+       build/dai_doc.o build/dai_doc_text.o build/dai_doc_sync.o
 
 echo "-- shaders"
 if command -v glslangValidator >/dev/null 2>&1; then
@@ -175,6 +181,7 @@ g++ $FLAGS $ARCH -Iinclude tests/test_merge.cpp $LIBS -o build/test_merge
 g++ $FLAGS $ARCH -Iinclude tests/test_save.cpp $LIBS -o build/test_save
 g++ $FLAGS $ARCH -Iinclude tests/test_input.cpp $LIBS -o build/test_input
 g++ $FLAGS $ARCH -Iinclude tests/test_editor.cpp $LIBS -o build/test_editor
+g++ $FLAGS $ARCH -Iinclude tests/test_doc.cpp $LIBS -o build/test_doc
 if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_script.cpp $SCRIPT_LIB $VKLIBS -o build/test_script
 fi
@@ -186,6 +193,11 @@ if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_skinning.cpp $VKLIBS -o build/test_skinning
     g++ $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
+fi
+
+echo "-- diagnostics"
+if [ "$VK_OK" = "1" ]; then
+    g++ $FLAGS $ARCH -Iinclude tools/gizmo_shot.cpp $VKLIBS -o build/gizmo_shot
 fi
 
 echo "-- examples"

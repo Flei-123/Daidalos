@@ -81,6 +81,11 @@ struct dai_scene {
     std::vector<Renderable> ents;                       // index 0 unused
     std::unordered_map<uint32_t, uint32_t> by_body;     // body handle -> index
     std::vector<dai_transform> scratch;
+    // Slots of removed entities, reused by the next attach. Without this an
+    // editor session that rebuilds a body on every drag frame grows this
+    // vector without bound. Entity ids are therefore NOT unique over time -
+    // only the scene document's node ids are.
+    std::vector<uint32_t> free_slots;
 };
 
 extern "C" {
@@ -144,8 +149,16 @@ dai_entity dai_scene_attach(dai_scene *s, dai_body b, const dai_entity_desc *des
     if (desc->body.shape == DAI_SHAPE_COMPOUND && desc->body.parts && desc->body.part_count)
         r.parts.assign(desc->body.parts, desc->body.parts + desc->body.part_count);
 
-    s->ents.push_back(r);
-    uint32_t idx = (uint32_t)s->ents.size() - 1;
+    uint32_t idx;
+    if (!s->free_slots.empty()) {
+        idx = s->free_slots.back();
+        s->free_slots.pop_back();
+        if (is_zero(desc->color)) r.color = auto_color(idx);
+        s->ents[idx] = r;
+    } else {
+        s->ents.push_back(r);
+        idx = (uint32_t)s->ents.size() - 1;
+    }
     s->by_body[b] = idx;
     return idx;
 }
@@ -163,6 +176,9 @@ dai_result dai_scene_remove(dai_scene *s, dai_entity e) {
     dai_body_destroy(s->world, r.body);
     s->by_body.erase(r.body);
     r.alive = false;
+    r.parts.clear();
+    r.name.clear();
+    s->free_slots.push_back(e);
     return DAI_OK;
 }
 
@@ -187,6 +203,23 @@ dai_result dai_scene_set_color(dai_scene *s, dai_entity e, dai_vec3 c) {
 dai_result dai_scene_set_visible(dai_scene *s, dai_entity e, int visible) {
     if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
     s->ents[e].visible = visible != 0;
+    return DAI_OK;
+}
+
+dai_result dai_scene_set_render(dai_scene *s, dai_entity e, uint32_t mesh,
+                                float roughness, float emissive, uint32_t flags) {
+    if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
+    Renderable &r = s->ents[e];
+    if (mesh != 0xFFFFFFFFu) r.mesh = mesh;
+    r.roughness = roughness > 0.0f ? roughness : 1.0f;
+    r.emissive = emissive;
+    r.flags = flags;
+    return DAI_OK;
+}
+
+dai_result dai_scene_set_name(dai_scene *s, dai_entity e, const char *name) {
+    if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
+    s->ents[e].name = name ? name : "";
     return DAI_OK;
 }
 

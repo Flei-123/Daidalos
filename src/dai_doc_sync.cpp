@@ -1,0 +1,244 @@
+// Reconciles a live scene against the document. See include/dai_doc.h.
+//
+// The document is the truth; this file makes the running world agree with it
+// again, touching as little as possible. "As little as possible" is the whole
+// point: a full rebuild every frame would reset physics constantly and make
+// play mode useless, so each node carries a revision and only nodes whose
+// revision moved are re-applied.
+
+#include "dai_doc.h"
+#include "dai_doc_internal.hpp"
+
+#include <cmath>
+#include <cstring>
+#include <unordered_map>
+#include <vector>
+
+using namespace daidoc;
+
+namespace {
+
+struct Live {
+    dai_entity    entity = DAI_INVALID_ENTITY;
+    dai_body      body = DAI_INVALID_BODY;
+    uint64_t      rev = 0;
+    dai_node_desc built{};      // the record the body was created from
+};
+
+// Changing any of these means the rigid body itself is wrong, not just its
+// pose - Jolt shapes are immutable once created, so the body is rebuilt.
+bool needs_rebuild(const dai_node_desc &a, const dai_node_desc &b) {
+    return a.shape != b.shape || a.motion != b.motion || a.no_body != b.no_body ||
+           a.no_sleeping != b.no_sleeping ||
+           std::memcmp(&a.half_extent, &b.half_extent, sizeof(dai_vec3)) != 0 ||
+           std::memcmp(&a.scale, &b.scale, sizeof(dai_vec3)) != 0 ||
+           a.density != b.density || a.friction != b.friction ||
+           a.restitution != b.restitution;
+}
+
+} // namespace
+
+struct dai_doc_sync {
+    dai_doc   *doc = nullptr;
+    dai_scene *scene = nullptr;
+    dai_world *world = nullptr;
+    std::unordered_map<dai_node, Live>   live;
+    std::unordered_map<dai_entity, dai_node> by_entity;
+    std::unordered_map<dai_body, dai_node>   by_body;
+};
+
+namespace {
+
+void forget(dai_doc_sync *s, dai_node n) {
+    auto it = s->live.find(n);
+    if (it == s->live.end()) return;
+    if (it->second.entity) {
+        s->by_entity.erase(it->second.entity);
+        s->by_body.erase(it->second.body);
+        dai_scene_remove(s->scene, it->second.entity);
+    }
+    s->live.erase(it);
+}
+
+// World scale multiplies the collision shape, so a box scaled in the editor
+// collides the way it looks. A sphere has one radius, so a non uniform scale
+// on it can only follow one axis - x wins, and that is documented rather than
+// silently producing an ellipsoid the physics does not have.
+dai_vec3 scaled_extent(const dai_node_desc &r, dai_vec3 ws) {
+    dai_vec3 he = r.half_extent;
+    switch (r.shape) {
+    case DAI_SHAPE_SPHERE:  return { he.x * std::fabs(ws.x), he.y, he.z };
+    case DAI_SHAPE_CAPSULE: return { he.x * std::fabs(ws.x), he.y * std::fabs(ws.y), he.z };
+    default:                return { he.x * std::fabs(ws.x), he.y * std::fabs(ws.y),
+                                     he.z * std::fabs(ws.z) };
+    }
+}
+
+bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
+    if (r.no_body) {                       // group / marker: nothing to simulate
+        Live l;
+        l.rev = 0;
+        l.built = r;
+        s->live[n] = l;
+        return true;
+    }
+    dai_vec3 wp{}, ws{ 1, 1, 1 };
+    dai_quat wr{ 0, 0, 0, 1 };
+    dai_doc_world_transform(s->doc, n, &wp, &wr, &ws);
+
+    dai_entity_desc d = dai_entity_desc_default();
+    d.body.shape = r.shape;
+    d.body.motion = r.motion;
+    d.body.half_extent = scaled_extent(r, ws);
+    d.body.position = wp;
+    d.body.rotation = wr;
+    d.body.density = r.density;
+    d.body.friction_static = r.friction;
+    d.body.restitution = r.restitution;
+    d.body.no_sleeping = r.no_sleeping;
+    d.body.user_data = r.user_data;
+    d.mesh = r.mesh;
+    d.color = r.color;
+    d.roughness = r.roughness;
+    d.emissive = r.emissive;
+    d.render_flags = r.render_flags;
+    d.invisible = r.hidden;
+    d.name = r.name[0] ? r.name : nullptr;
+
+    dai_entity e = dai_scene_spawn(s->scene, &d);
+    if (e == DAI_INVALID_ENTITY) return false;
+
+    Live l;
+    l.entity = e;
+    l.body = dai_scene_body(s->scene, e);
+    l.built = r;
+    s->live[n] = l;
+    s->by_entity[e] = n;
+    s->by_body[l.body] = n;
+    return true;
+}
+
+} // namespace
+
+extern "C" {
+
+dai_doc_sync *dai_doc_sync_create(dai_doc *d, dai_scene *scene) {
+    if (!d || !scene) return nullptr;
+    dai_doc_sync *s = new dai_doc_sync();
+    s->doc = d;
+    s->scene = scene;
+    s->world = dai_scene_world(scene);
+    return s;
+}
+
+void dai_doc_sync_destroy(dai_doc_sync *s) { delete s; }
+
+dai_scene *dai_doc_sync_scene(const dai_doc_sync *s) { return s ? s->scene : nullptr; }
+dai_doc   *dai_doc_sync_doc(const dai_doc_sync *s) { return s ? s->doc : nullptr; }
+
+dai_entity dai_doc_sync_entity(const dai_doc_sync *s, dai_node n) {
+    if (!s) return DAI_INVALID_ENTITY;
+    auto it = s->live.find(n);
+    return it == s->live.end() ? DAI_INVALID_ENTITY : it->second.entity;
+}
+
+dai_node dai_doc_sync_node(const dai_doc_sync *s, dai_entity e) {
+    if (!s) return DAI_INVALID_NODE;
+    auto it = s->by_entity.find(e);
+    return it == s->by_entity.end() ? DAI_INVALID_NODE : it->second;
+}
+
+dai_node dai_doc_sync_node_of_body(const dai_doc_sync *s, dai_body b) {
+    if (!s) return DAI_INVALID_NODE;
+    auto it = s->by_body.find(b);
+    return it == s->by_body.end() ? DAI_INVALID_NODE : it->second;
+}
+
+uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
+    if (!s) return 0;
+    uint32_t changed = 0;
+
+    uint32_t count = dai_doc_count(s->doc);
+    std::vector<dai_node> ids(count);
+    if (count) dai_doc_nodes(s->doc, ids.data(), count);
+
+    // Parents first, so a child's world transform is computed against a parent
+    // that already exists in this pass.
+    for (dai_node n : ids) {
+        dai_node_desc r{};
+        if (dai_doc_get(s->doc, n, &r) != DAI_OK) continue;
+        const Node *doc_node = find(s->doc, n);
+        uint64_t rev = doc_node ? doc_node->rev : 0;
+
+        auto it = s->live.find(n);
+        if (it == s->live.end()) {
+            if (spawn(s, n, r)) { s->live[n].rev = rev; ++changed; }
+            continue;
+        }
+        Live &l = it->second;
+        if (l.rev == rev) continue;                 // untouched: leave physics alone
+
+        if (needs_rebuild(l.built, r)) {
+            // The body is thrown away and recreated - handles change, the node
+            // id does not. Nothing outside this file stores a body handle, so
+            // this is invisible to the editor and to undo.
+            forget(s, n);
+            if (spawn(s, n, r)) s->live[n].rev = rev;
+            ++changed;
+            continue;
+        }
+
+        if (l.entity) {
+            dai_vec3 wp{}, ws{ 1, 1, 1 };
+            dai_quat wr{ 0, 0, 0, 1 };
+            dai_doc_world_transform(s->doc, n, &wp, &wr, &ws);
+            dai_body_set_transform(s->world, l.body, wp, wr);
+            dai_scene_set_color(s->scene, l.entity, r.color);
+            dai_scene_set_visible(s->scene, l.entity, !r.hidden);
+            dai_scene_set_render(s->scene, l.entity, r.mesh, r.roughness, r.emissive, r.render_flags);
+            dai_scene_set_name(s->scene, l.entity, r.name);
+        }
+        l.built = r;
+        l.rev = rev;
+        ++changed;
+    }
+
+    // Anything live that the document no longer has.
+    std::vector<dai_node> dead;
+    for (const auto &kv : s->live)
+        if (!dai_doc_valid(s->doc, kv.first)) dead.push_back(kv.first);
+    for (dai_node n : dead) { forget(s, n); ++changed; }
+
+    return changed;
+}
+
+uint32_t dai_doc_sync_pull(dai_doc_sync *s, const char *undo_name) {
+    if (!s) return 0;
+    uint32_t written = 0;
+    dai_doc_begin(s->doc, undo_name ? undo_name : "Apply simulation");
+    // Parents before children: a child's local transform is derived from its
+    // parent's world transform, so the parent has to be settled first.
+    uint32_t count = dai_doc_count(s->doc);
+    std::vector<dai_node> ids(count);
+    if (count) dai_doc_nodes(s->doc, ids.data(), count);
+
+    for (dai_node n : ids) {
+        auto it = s->live.find(n);
+        if (it == s->live.end() || !it->second.entity) continue;
+        dai_transform t{};
+        if (dai_body_get(s->world, it->second.body, &t) != DAI_OK) continue;
+        dai_doc_set_world_position(s->doc, n, t.position);
+        dai_doc_set_world_rotation(s->doc, n, t.rotation);
+        ++written;
+    }
+    dai_doc_commit(s->doc);
+
+    // The world already looks like this, so do not schedule a write back.
+    for (auto &kv : s->live) {
+        const Node *node = find(s->doc, kv.first);
+        if (node) kv.second.rev = node->rev;
+    }
+    return written;
+}
+
+} // extern "C"

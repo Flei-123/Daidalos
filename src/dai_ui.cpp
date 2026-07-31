@@ -68,6 +68,18 @@ struct dai_ui {
         };
         b.verts.insert(b.verts.end(), v, v + 6);
     }
+
+    // Four arbitrary corners, wound a-b-c-d. Needed for anything that is not
+    // axis aligned - gizmo arms, graph lines, debug overlays.
+    void quad4(dai_texture tex, float ax, float ay, float bx, float by,
+               float cx, float cy, float dx, float dy, uint32_t col) {
+        Batch &b = batch(tex);
+        dai_ui_vertex v[6] = {
+            { ax, ay, 0, 0, col }, { bx, by, 0, 0, col }, { cx, cy, 0, 0, col },
+            { ax, ay, 0, 0, col }, { cx, cy, 0, 0, col }, { dx, dy, 0, 0, col },
+        };
+        b.verts.insert(b.verts.end(), v, v + 6);
+    }
 };
 
 namespace {
@@ -171,6 +183,20 @@ void dai_ui_rect_outline(dai_ui *ui, float x, float y, float w, float h, float t
     dai_ui_rect(ui, x, y + h - t, w, t, color);
     dai_ui_rect(ui, x, y, t, h, color);
     dai_ui_rect(ui, x + w - t, y, t, h, color);
+}
+
+void dai_ui_line(dai_ui *ui, float x0, float y0, float x1, float y1,
+                 float thickness, uint32_t color) {
+    if (!ui) return;
+    float dx = x1 - x0, dy = y1 - y0;
+    float len = std::sqrt(dx*dx + dy*dy);
+    if (len < 1e-4f) return;
+    if (thickness < 0.5f) thickness = 0.5f;
+    // Perpendicular offset, half the thickness each way.
+    float nx = -dy / len * thickness * 0.5f;
+    float ny =  dx / len * thickness * 0.5f;
+    ui->quad4(ui->font_tex, x0 + nx, y0 + ny, x1 + nx, y1 + ny,
+              x1 - nx, y1 - ny, x0 - nx, y0 - ny, color);
 }
 
 void dai_ui_text(dai_ui *ui, float x, float y, const char *utf8, uint32_t color) {

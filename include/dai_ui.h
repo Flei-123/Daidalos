@@ -103,6 +103,9 @@ DAI_API int  dai_ui_image_button(dai_ui *ui, dai_texture tex, float w, float h,
 
 DAI_API void dai_ui_rect(dai_ui *ui, float x, float y, float w, float h, uint32_t color);
 DAI_API void dai_ui_rect_outline(dai_ui *ui, float x, float y, float w, float h, float thickness, uint32_t color);
+/* Any angle, given thickness. The gizmo overlay is built from these. */
+DAI_API void dai_ui_line(dai_ui *ui, float x0, float y0, float x1, float y1,
+                         float thickness, uint32_t color);
 DAI_API void dai_ui_text(dai_ui *ui, float x, float y, const char *utf8, uint32_t color);
 DAI_API float dai_ui_text_width(dai_ui *ui, const char *utf8);
 

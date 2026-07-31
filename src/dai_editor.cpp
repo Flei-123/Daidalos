@@ -1,29 +1,21 @@
 // Editor core. See include/dai_editor.h.
 //
 // No renderer, no UI, no Vulkan: this turns pixels into rays, rays into
-// selections and edits into undoable commands. The native editor and any other
-// frontend share it.
+// selections and drags into document edits. Undo lives in dai_doc, because the
+// document is what is being edited - see the header comment there for why that
+// is the difference between "undo delete works" and "undo delete is a TODO".
 
 #include "dai_editor.h"
 
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
 
-struct Snapshot {              // one entity's transform, before and after
-    dai_entity entity;
-    dai_body   body;
-    dai_vec3   pos_before, pos_after;
-    dai_quat   rot_before, rot_after;
-};
-
-struct Command {
-    std::string name;
-    std::vector<Snapshot> items;
-};
+const float PI = 3.14159265358979f;
 
 dai_vec3 sub(dai_vec3 a, dai_vec3 b) { return { a.x - b.x, a.y - b.y, a.z - b.z }; }
 dai_vec3 add(dai_vec3 a, dai_vec3 b) { return { a.x + b.x, a.y + b.y, a.z + b.z }; }
@@ -32,9 +24,29 @@ float dot(dai_vec3 a, dai_vec3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
 dai_vec3 cross(dai_vec3 a, dai_vec3 b) {
     return { a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x };
 }
+float length(dai_vec3 v) { return std::sqrt(dot(v, v)); }
 dai_vec3 norm(dai_vec3 v) {
-    float l = std::sqrt(dot(v, v));
+    float l = length(v);
     return l > 1e-8f ? mul(v, 1.0f / l) : dai_vec3{ 0, 0, 0 };
+}
+dai_quat qmul(dai_quat a, dai_quat b) {
+    return { a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
+             a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+             a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
+             a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z };
+}
+dai_quat qaxis(dai_vec3 axis, float angle) {
+    dai_vec3 a = norm(axis);
+    float s = std::sin(angle * 0.5f);
+    return { a.x*s, a.y*s, a.z*s, std::cos(angle * 0.5f) };
+}
+dai_vec3 qrot(dai_quat q, dai_vec3 v) {
+    dai_vec3 u{ q.x, q.y, q.z };
+    dai_vec3 uv = cross(u, v);
+    dai_vec3 uuv = cross(u, uv);
+    return { v.x + 2.0f*(q.w*uv.x + uuv.x),
+             v.y + 2.0f*(q.w*uv.y + uuv.y),
+             v.z + 2.0f*(q.w*uv.z + uuv.z) };
 }
 float snap_to(float v, float step) { return step > 0.0f ? std::round(v / step) * step : v; }
 
@@ -46,34 +58,64 @@ dai_vec3 axis_vector(int axis) {
     default: return { 0, 0, 0 };
     }
 }
+dai_vec3 axis_color(int axis) {
+    switch (axis) {
+    case DAI_AXIS_X:  return { 0.90f, 0.25f, 0.25f };
+    case DAI_AXIS_Y:  return { 0.35f, 0.85f, 0.30f };
+    case DAI_AXIS_Z:  return { 0.30f, 0.50f, 0.95f };
+    case DAI_AXIS_XY: return { 0.85f, 0.85f, 0.30f };
+    case DAI_AXIS_XZ: return { 0.85f, 0.40f, 0.85f };
+    case DAI_AXIS_YZ: return { 0.30f, 0.85f, 0.85f };
+    default:          return { 0.90f, 0.90f, 0.90f };
+    }
+}
+// The two in-plane axes of a plane handle.
+void plane_axes(int axis, dai_vec3 *u, dai_vec3 *v) {
+    switch (axis) {
+    case DAI_AXIS_XY: *u = { 1, 0, 0 }; *v = { 0, 1, 0 }; break;
+    case DAI_AXIS_XZ: *u = { 1, 0, 0 }; *v = { 0, 0, 1 }; break;
+    default:          *u = { 0, 1, 0 }; *v = { 0, 0, 1 }; break;   // YZ
+    }
+}
+
+struct DragItem {
+    dai_node n;
+    dai_vec3 wpos;
+    dai_quat wrot;
+    dai_vec3 scale;      // local
+};
 
 } // namespace
 
 struct dai_editor {
-    dai_scene *scene = nullptr;
-    dai_world *world = nullptr;
+    dai_doc      *doc = nullptr;
+    dai_doc_sync *sync = nullptr;
 
     dai_vec3 eye{ 0, 5, 10 }, target{ 0, 0, 0 }, up{ 0, 1, 0 };
     float fov = 55.0f, znear = 0.1f, zfar = 500.0f;
     float vw = 1280.0f, vh = 720.0f;
 
-    std::vector<dai_entity> selection;
+    std::vector<dai_node> selection;
     int mode = DAI_GIZMO_TRANSLATE;
-    float snap_translate = 0.0f, snap_rotate = 0.0f;
+    float snap_translate = 0.0f, snap_rotate = 0.0f, snap_scale = 0.0f;
+    float gizmo_pixels = 90.0f;
+    int hover_axis = DAI_AXIS_NONE;
 
-    // drag state
     bool dragging = false;
-    int drag_axis = DAI_AXIS_NONE;
+    bool drag_screen_rotate = false;   // ring seen edge-on, fall back to screen angle
+    float drag_screen_start = 0.0f;
+    float drag_screen_sign = 1.0f;
+    int  drag_axis = DAI_AXIS_NONE;
     dai_vec3 drag_start_point{};
     dai_vec3 drag_plane_normal{};
-    std::vector<Snapshot> drag_items;
-
-    std::vector<Command> undo_stack, redo_stack;
+    dai_vec3 drag_center{};
+    float    drag_gizmo_len = 1.0f;
+    std::vector<DragItem> drag_items;
 };
 
 namespace {
 
-// where a ray meets a plane; false when they are parallel
+// where a ray meets a plane; false when they are parallel or it is behind us
 bool ray_plane(dai_vec3 o, dai_vec3 d, dai_vec3 p, dai_vec3 n, dai_vec3 *out) {
     float denom = dot(d, n);
     if (std::fabs(denom) < 1e-6f) return false;
@@ -83,55 +125,83 @@ bool ray_plane(dai_vec3 o, dai_vec3 d, dai_vec3 p, dai_vec3 n, dai_vec3 *out) {
     return true;
 }
 
-void capture(dai_editor *e, std::vector<Snapshot> &out) {
+void camera_basis(const dai_editor *e, dai_vec3 *fwd, dai_vec3 *right, dai_vec3 *upv) {
+    *fwd = norm(sub(e->target, e->eye));
+    *right = norm(cross(*fwd, e->up));
+    *upv = cross(*right, *fwd);
+}
+
+void resync(dai_editor *e) { if (e->sync) dai_doc_sync_apply(e->sync); }
+
+// Distance in pixels from p to the segment ab, all in screen space.
+float seg_distance(float px, float py, float ax, float ay, float bx, float by) {
+    float dx = bx - ax, dy = by - ay;
+    float len2 = dx*dx + dy*dy;
+    float t = len2 > 1e-6f ? ((px - ax)*dx + (py - ay)*dy) / len2 : 0.0f;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    float cx = ax + dx*t, cy = ay + dy*t;
+    return std::sqrt((px - cx)*(px - cx) + (py - cy)*(py - cy));
+}
+
+bool point_in_quad(float px, float py, const float *qx, const float *qy) {
+    // Convex quad, consistent winding test. The projected handle stays convex
+    // for any camera, so this is exact rather than an approximation.
+    int sign = 0;
+    for (int i = 0; i < 4; ++i) {
+        int j = (i + 1) & 3;
+        float cross_z = (qx[j] - qx[i]) * (py - qy[i]) - (qy[j] - qy[i]) * (px - qx[i]);
+        int s = (cross_z > 0) ? 1 : (cross_z < 0 ? -1 : 0);
+        if (!s) continue;
+        if (!sign) sign = s;
+        else if (sign != s) return false;
+    }
+    return sign != 0;
+}
+
+void capture(dai_editor *e, std::vector<DragItem> &out) {
     out.clear();
-    for (dai_entity ent : e->selection) {
-        dai_body b = dai_scene_body(e->scene, ent);
-        if (!b) continue;
-        dai_transform t{};
-        if (dai_body_get(e->world, b, &t) != DAI_OK) continue;
-        Snapshot s{};
-        s.entity = ent; s.body = b;
-        s.pos_before = s.pos_after = t.position;
-        s.rot_before = s.rot_after = t.rotation;
-        out.push_back(s);
+    for (dai_node n : e->selection) {
+        dai_node_desc rec{};
+        if (dai_doc_get(e->doc, n, &rec) != DAI_OK) continue;
+        DragItem it{};
+        it.n = n;
+        it.scale = rec.scale;
+        dai_doc_world_transform(e->doc, n, &it.wpos, &it.wrot, nullptr);
+        out.push_back(it);
     }
 }
 
-void push_command(dai_editor *e, const char *name, const std::vector<Snapshot> &items) {
-    bool changed = false;
-    for (const Snapshot &s : items) {
-        if (std::fabs(s.pos_after.x - s.pos_before.x) > 1e-6f ||
-            std::fabs(s.pos_after.y - s.pos_before.y) > 1e-6f ||
-            std::fabs(s.pos_after.z - s.pos_before.z) > 1e-6f) { changed = true; break; }
+// A node whose ancestor is also selected must not be moved twice: the ancestor
+// already carries it. Without this, dragging a parent and child together moves
+// the child at double speed - a classic editor bug.
+bool ancestor_selected(const dai_editor *e, dai_node n) {
+    dai_node_desc rec{};
+    if (dai_doc_get(e->doc, n, &rec) != DAI_OK) return false;
+    dai_node p = rec.parent;
+    uint32_t guard = dai_doc_count(e->doc) + 1;
+    while (p && guard--) {
+        if (dai_editor_is_selected(e, p)) return true;
+        if (dai_doc_get(e->doc, p, &rec) != DAI_OK) break;
+        p = rec.parent;
     }
-    if (!changed) return;                     // a click that moved nothing is not an undo step
-    Command c;
-    c.name = name;
-    c.items = items;
-    e->undo_stack.push_back(std::move(c));
-    e->redo_stack.clear();                    // the classic rule: editing forks the future
-}
-
-void apply(dai_editor *e, const Snapshot &s, bool after) {
-    dai_body_set_transform(e->world, s.body, after ? s.pos_after : s.pos_before,
-                           after ? s.rot_after : s.rot_before);
-    dai_body_set_velocity(e->world, s.body, dai_vec3{ 0,0,0 }, dai_vec3{ 0,0,0 });
+    return false;
 }
 
 } // namespace
 
 extern "C" {
 
-dai_editor *dai_editor_create(dai_scene *scene) {
-    if (!scene) return nullptr;
+dai_editor *dai_editor_create(dai_doc *doc, dai_doc_sync *sync) {
+    if (!doc) return nullptr;
     dai_editor *e = new dai_editor();
-    e->scene = scene;
-    e->world = dai_scene_world(scene);
+    e->doc = doc;
+    e->sync = sync;
     return e;
 }
 
 void dai_editor_destroy(dai_editor *e) { delete e; }
+dai_doc *dai_editor_doc(const dai_editor *e) { return e ? e->doc : nullptr; }
 
 void dai_editor_camera(dai_editor *e, dai_vec3 eye, dai_vec3 target, dai_vec3 up,
                        float fov, float znear, float zfar, float vw, float vh) {
@@ -144,13 +214,11 @@ void dai_editor_camera(dai_editor *e, dai_vec3 eye, dai_vec3 target, dai_vec3 up
 
 void dai_editor_ray(const dai_editor *e, float mx, float my, dai_vec3 *origin, dai_vec3 *dir) {
     if (!e) return;
-    // forward/right/up of the camera, then offset by the pixel's angle. No
-    // matrix inverse needed, and it cannot disagree with the renderer as long
-    // as both use the same fov convention (vertical).
-    dai_vec3 fwd = norm(sub(e->target, e->eye));
-    dai_vec3 right = norm(cross(fwd, e->up));
-    dai_vec3 upv = cross(right, fwd);
-    float t = std::tan(e->fov * 3.14159265f / 360.0f);
+    // Camera basis plus the pixel's angle. No matrix inverse, and it cannot
+    // disagree with dai_editor_project below, which uses the same basis.
+    dai_vec3 fwd, right, upv;
+    camera_basis(e, &fwd, &right, &upv);
+    float t = std::tan(e->fov * PI / 360.0f);
     float aspect = e->vw / (e->vh > 0 ? e->vh : 1.0f);
     float ndc_x = (2.0f * mx / e->vw) - 1.0f;
     float ndc_y = 1.0f - (2.0f * my / e->vh);          // pixels grow downwards
@@ -159,40 +227,58 @@ void dai_editor_ray(const dai_editor *e, float mx, float my, dai_vec3 *origin, d
     if (dir) *dir = d;
 }
 
-dai_entity dai_editor_pick(dai_editor *e, float mx, float my) {
-    if (!e) return DAI_INVALID_ENTITY;
+int dai_editor_project(const dai_editor *e, dai_vec3 world, float *out_x, float *out_y) {
+    if (!e) return 0;
+    dai_vec3 fwd, right, upv;
+    camera_basis(e, &fwd, &right, &upv);
+    dai_vec3 v = sub(world, e->eye);
+    float z = dot(v, fwd);
+    if (z <= e->znear) return 0;                       // behind the camera
+    float t = std::tan(e->fov * PI / 360.0f);
+    float aspect = e->vw / (e->vh > 0 ? e->vh : 1.0f);
+    float ndc_x = dot(v, right) / (z * t * aspect);
+    float ndc_y = dot(v, upv) / (z * t);
+    if (out_x) *out_x = (ndc_x + 1.0f) * 0.5f * e->vw;
+    if (out_y) *out_y = (1.0f - ndc_y) * 0.5f * e->vh;
+    return 1;
+}
+
+// ------------------------------------------------------------- selection
+
+dai_node dai_editor_pick(dai_editor *e, float mx, float my) {
+    if (!e || !e->sync) return DAI_INVALID_NODE;
+    dai_scene *scene = dai_doc_sync_scene(e->sync);
+    dai_world *world = scene ? dai_scene_world(scene) : nullptr;
+    if (!world) return DAI_INVALID_NODE;
     dai_vec3 o, d;
     dai_editor_ray(e, mx, my, &o, &d);
     dai_ray_hit hit{};
-    if (!dai_raycast(e->world, o, d, e->zfar, &hit)) return DAI_INVALID_ENTITY;
-    // the scene knows which entity owns a body; walk it rather than storing a
-    // second map that could go stale
-    uint32_t count = dai_scene_count(e->scene) + 8;
-    for (uint32_t i = 1; i <= count; ++i)
-        if (dai_scene_body(e->scene, i) == hit.body) return i;
-    return DAI_INVALID_ENTITY;
+    if (!dai_raycast(world, o, d, e->zfar, &hit)) return DAI_INVALID_NODE;
+    return dai_doc_sync_node_of_body(e->sync, hit.body);
 }
 
-void dai_editor_select(dai_editor *e, dai_entity ent, int additive) {
+void dai_editor_select(dai_editor *e, dai_node n, int additive) {
     if (!e) return;
     if (!additive) e->selection.clear();
-    if (ent == DAI_INVALID_ENTITY) return;
+    if (n == DAI_INVALID_NODE) return;
     for (size_t i = 0; i < e->selection.size(); ++i)
-        if (e->selection[i] == ent) {
+        if (e->selection[i] == n) {
             if (additive) e->selection.erase(e->selection.begin() + (long)i);   // toggle
             return;
         }
-    e->selection.push_back(ent);
+    e->selection.push_back(n);
 }
 
 void dai_editor_deselect_all(dai_editor *e) { if (e) e->selection.clear(); }
-uint32_t dai_editor_selection_count(const dai_editor *e) { return e ? (uint32_t)e->selection.size() : 0; }
-dai_entity dai_editor_selected(const dai_editor *e, uint32_t i) {
-    return (e && i < e->selection.size()) ? e->selection[i] : DAI_INVALID_ENTITY;
+uint32_t dai_editor_selection_count(const dai_editor *e) {
+    return e ? (uint32_t)e->selection.size() : 0;
 }
-int dai_editor_is_selected(const dai_editor *e, dai_entity ent) {
+dai_node dai_editor_selected(const dai_editor *e, uint32_t i) {
+    return (e && i < e->selection.size()) ? e->selection[i] : DAI_INVALID_NODE;
+}
+int dai_editor_is_selected(const dai_editor *e, dai_node n) {
     if (!e) return 0;
-    for (dai_entity s : e->selection) if (s == ent) return 1;
+    for (dai_node s : e->selection) if (s == n) return 1;
     return 0;
 }
 
@@ -200,23 +286,176 @@ dai_vec3 dai_editor_selection_center(const dai_editor *e) {
     dai_vec3 c{ 0, 0, 0 };
     if (!e || e->selection.empty()) return c;
     uint32_t n = 0;
-    for (dai_entity ent : e->selection) {
-        dai_body b = dai_scene_body(e->scene, ent);
-        dai_transform t{};
-        if (b && dai_body_get(e->world, b, &t) == DAI_OK) { c = add(c, t.position); ++n; }
+    for (dai_node id : e->selection) {
+        dai_vec3 p{};
+        if (dai_doc_world_transform(e->doc, id, &p, nullptr, nullptr) == DAI_OK) {
+            c = add(c, p); ++n;
+        }
     }
     return n ? mul(c, 1.0f / (float)n) : c;
 }
 
+// ----------------------------------------------------------------- gizmo
+
 void dai_editor_gizmo_mode(dai_editor *e, int mode) { if (e) e->mode = mode; }
 int  dai_editor_gizmo_mode_get(const dai_editor *e) { return e ? e->mode : 0; }
-void dai_editor_snap(dai_editor *e, float t, float r) {
+
+void dai_editor_snap(dai_editor *e, float t, float r, float sc) {
     if (!e) return;
-    e->snap_translate = t; e->snap_rotate = r;
+    e->snap_translate = t; e->snap_rotate = r; e->snap_scale = sc;
 }
 
+void dai_editor_gizmo_size(dai_editor *e, float pixels) {
+    if (e && pixels > 1.0f) e->gizmo_pixels = pixels;
+}
+
+float dai_editor_gizmo_scale(const dai_editor *e) {
+    if (!e || e->selection.empty()) return 0.0f;
+    dai_vec3 c = dai_editor_selection_center(e);
+    dai_vec3 fwd, right, upv;
+    camera_basis(e, &fwd, &right, &upv);
+    // Depth along the view direction, not straight line distance: using the
+    // latter makes the gizmo shrink as it moves towards the screen edges.
+    float depth = dot(sub(c, e->eye), fwd);
+    if (depth < e->znear) depth = e->znear;
+    float world_per_pixel = 2.0f * depth * std::tan(e->fov * PI / 360.0f) / (e->vh > 0 ? e->vh : 1.0f);
+    return e->gizmo_pixels * world_per_pixel;
+}
+
+uint32_t dai_editor_gizmo_lines(const dai_editor *e, dai_gizmo_line *out, uint32_t max) {
+    if (!e || e->selection.empty()) return 0;
+    dai_vec3 c = dai_editor_selection_center(e);
+    float len = dai_editor_gizmo_scale(e);
+    if (len <= 0.0f) return 0;
+    int active = e->dragging ? e->drag_axis : e->hover_axis;
+
+    uint32_t w = 0;
+    auto emit = [&](dai_vec3 a, dai_vec3 b, int axis) {
+        if (out && w < max) {
+            dai_gizmo_line &l = out[w];
+            l.a = a; l.b = b;
+            l.axis = axis;
+            l.highlighted = (axis == active) ? 1 : 0;
+            l.color = axis_color(axis);
+            if (l.highlighted) l.color = { 1.0f, 0.85f, 0.20f };
+        }
+        ++w;
+    };
+
+    if (e->mode == DAI_GIZMO_ROTATE) {
+        // Three rings. Segments rather than an analytic circle so the frontend
+        // only ever needs to draw lines - one primitive for the whole gizmo.
+        const int SEG = 32;
+        for (int a = DAI_AXIS_X; a <= DAI_AXIS_Z; ++a) {
+            dai_vec3 n = axis_vector(a);
+            dai_vec3 u = norm(cross(n, std::fabs(n.y) > 0.9f ? dai_vec3{ 1, 0, 0 } : dai_vec3{ 0, 1, 0 }));
+            dai_vec3 v = cross(n, u);
+            for (int i = 0; i < SEG; ++i) {
+                float t0 = 2.0f * PI * i / SEG, t1 = 2.0f * PI * (i + 1) / SEG;
+                dai_vec3 p0 = add(c, add(mul(u, std::cos(t0) * len), mul(v, std::sin(t0) * len)));
+                dai_vec3 p1 = add(c, add(mul(u, std::cos(t1) * len), mul(v, std::sin(t1) * len)));
+                emit(p0, p1, a);
+            }
+        }
+        return out ? (w < max ? w : max) : w;
+    }
+
+    for (int a = DAI_AXIS_X; a <= DAI_AXIS_Z; ++a) {
+        dai_vec3 dir = axis_vector(a);
+        dai_vec3 tip = add(c, mul(dir, len));
+        emit(c, tip, a);
+        if (e->mode == DAI_GIZMO_SCALE) {
+            // A little box at the tip, so translate and scale never look alike.
+            dai_vec3 u, v;
+            plane_axes(a == DAI_AXIS_X ? DAI_AXIS_YZ : (a == DAI_AXIS_Y ? DAI_AXIS_XZ : DAI_AXIS_XY), &u, &v);
+            float k = len * 0.06f;
+            dai_vec3 p00 = add(tip, add(mul(u, -k), mul(v, -k)));
+            dai_vec3 p10 = add(tip, add(mul(u,  k), mul(v, -k)));
+            dai_vec3 p11 = add(tip, add(mul(u,  k), mul(v,  k)));
+            dai_vec3 p01 = add(tip, add(mul(u, -k), mul(v,  k)));
+            emit(p00, p10, a); emit(p10, p11, a); emit(p11, p01, a); emit(p01, p00, a);
+        } else {
+            // Arrow head: two short back-swept lines, cheap and readable.
+            dai_vec3 u, v;
+            plane_axes(a == DAI_AXIS_X ? DAI_AXIS_YZ : (a == DAI_AXIS_Y ? DAI_AXIS_XZ : DAI_AXIS_XY), &u, &v);
+            dai_vec3 back = add(c, mul(dir, len * 0.85f));
+            emit(tip, add(back, mul(u, len * 0.05f)), a);
+            emit(tip, add(back, mul(u, len * -0.05f)), a);
+            emit(tip, add(back, mul(v, len * 0.05f)), a);
+            emit(tip, add(back, mul(v, len * -0.05f)), a);
+        }
+    }
+
+    // Plane handles: small squares in the corner between two axes.
+    for (int a = DAI_AXIS_XY; a <= DAI_AXIS_YZ; ++a) {
+        dai_vec3 u, v;
+        plane_axes(a, &u, &v);
+        float in = len * 0.25f, out_ = len * 0.50f;
+        dai_vec3 p00 = add(c, add(mul(u, in),   mul(v, in)));
+        dai_vec3 p10 = add(c, add(mul(u, out_), mul(v, in)));
+        dai_vec3 p11 = add(c, add(mul(u, out_), mul(v, out_)));
+        dai_vec3 p01 = add(c, add(mul(u, in),   mul(v, out_)));
+        emit(p00, p10, a); emit(p10, p11, a); emit(p11, p01, a); emit(p01, p00, a);
+    }
+    return out ? (w < max ? w : max) : w;
+}
+
+int dai_editor_gizmo_hit(const dai_editor *e, float mx, float my) {
+    if (!e || e->selection.empty()) return DAI_AXIS_NONE;
+    dai_vec3 c = dai_editor_selection_center(e);
+    float len = dai_editor_gizmo_scale(e);
+    if (len <= 0.0f) return DAI_AXIS_NONE;
+
+    // Plane handles first: they sit between the axes and are the smaller
+    // target, so an axis line crossing them must not steal the click.
+    if (e->mode != DAI_GIZMO_ROTATE) {
+        for (int a = DAI_AXIS_XY; a <= DAI_AXIS_YZ; ++a) {
+            dai_vec3 u, v;
+            plane_axes(a, &u, &v);
+            float in = len * 0.25f, out_ = len * 0.50f;
+            dai_vec3 corner[4] = {
+                add(c, add(mul(u, in),   mul(v, in))),
+                add(c, add(mul(u, out_), mul(v, in))),
+                add(c, add(mul(u, out_), mul(v, out_))),
+                add(c, add(mul(u, in),   mul(v, out_))),
+            };
+            float qx[4], qy[4];
+            bool ok = true;
+            for (int i = 0; i < 4 && ok; ++i) ok = dai_editor_project(e, corner[i], &qx[i], &qy[i]) != 0;
+            if (ok && point_in_quad(mx, my, qx, qy)) return a;
+        }
+    }
+
+    // Then the nearest line, using exactly the geometry the frontend draws -
+    // hit test and picture cannot drift apart this way.
+    uint32_t n = dai_editor_gizmo_lines(e, nullptr, 0);
+    std::vector<dai_gizmo_line> lines(n);
+    if (n) dai_editor_gizmo_lines(e, lines.data(), n);
+
+    const float TOL = 9.0f;
+    float best = TOL;
+    int best_axis = DAI_AXIS_NONE;
+    for (const dai_gizmo_line &l : lines) {
+        if (l.axis >= DAI_AXIS_XY && l.axis <= DAI_AXIS_YZ) continue;   // handled above
+        float ax, ay, bx, by;
+        if (!dai_editor_project(e, l.a, &ax, &ay)) continue;
+        if (!dai_editor_project(e, l.b, &bx, &by)) continue;
+        float d = seg_distance(mx, my, ax, ay, bx, by);
+        if (d < best) { best = d; best_axis = l.axis; }
+    }
+    return best_axis;
+}
+
+void dai_editor_gizmo_hover(dai_editor *e, float mx, float my) {
+    if (!e || e->dragging) return;
+    e->hover_axis = dai_editor_gizmo_hit(e, mx, my);
+}
+int dai_editor_gizmo_hovered(const dai_editor *e) { return e ? e->hover_axis : DAI_AXIS_NONE; }
+
+// ---------------------------------------------------------------- editing
+
 void dai_editor_drag_begin(dai_editor *e, int axis, float mx, float my) {
-    if (!e || e->selection.empty() || axis == DAI_AXIS_NONE) return;
+    if (!e || e->selection.empty() || axis == DAI_AXIS_NONE || e->dragging) return;
     capture(e, e->drag_items);
     if (e->drag_items.empty()) return;
 
@@ -224,32 +463,138 @@ void dai_editor_drag_begin(dai_editor *e, int axis, float mx, float my) {
     dai_vec3 o, d;
     dai_editor_ray(e, mx, my, &o, &d);
 
-    // Drag plane: contains the axis and faces the camera as much as possible.
-    // Picking the plane naively (say, always XZ) makes a Y drag useless when
-    // the camera looks down it.
     dai_vec3 a = axis_vector(axis);
     dai_vec3 to_cam = norm(sub(e->eye, centre));
-    dai_vec3 n = (axis <= DAI_AXIS_Z) ? norm(cross(a, cross(to_cam, a))) : a;
-    if (axis == DAI_AXIS_XZ) n = { 0, 1, 0 };
-    if (axis == DAI_AXIS_XY) n = { 0, 0, 1 };
-    if (axis == DAI_AXIS_YZ) n = { 1, 0, 0 };
-    if (axis == DAI_AXIS_ALL) n = to_cam;
+    dai_vec3 n;
+    if (e->mode == DAI_GIZMO_ROTATE && axis <= DAI_AXIS_Z) {
+        n = a;                                   // spin in the plane of the ring
+    } else if (axis <= DAI_AXIS_Z) {
+        // Contains the axis and faces the camera as much as possible. Picking
+        // a fixed plane instead makes a Y drag useless when you look along it.
+        n = norm(cross(a, cross(to_cam, a)));
+    } else if (axis == DAI_AXIS_XY) { n = { 0, 0, 1 };
+    } else if (axis == DAI_AXIS_XZ) { n = { 0, 1, 0 };
+    } else if (axis == DAI_AXIS_YZ) { n = { 1, 0, 0 };
+    } else { n = to_cam; }
     if (dot(n, n) < 1e-8f) n = to_cam;
 
-    dai_vec3 hit;
-    if (!ray_plane(o, d, centre, n, &hit)) return;
+    // A ring seen exactly edge-on has no usable drag plane - the ray never
+    // meets it. Refusing to rotate would be correct and useless, so fall back
+    // to the angle the cursor sweeps around the gizmo on screen, which is what
+    // the user is aiming at anyway.
+    e->drag_screen_rotate = false;
+    if (e->mode == DAI_GIZMO_ROTATE && std::fabs(dot(d, n)) < 0.12f) {
+        float cx, cy;
+        if (!dai_editor_project(e, centre, &cx, &cy)) return;
+        e->drag_screen_rotate = true;
+        e->drag_screen_start = std::atan2(my - cy, mx - cx);
+        // Screen y grows downwards, so a positive turn about an axis pointing
+        // at the camera reads as a *decreasing* atan2.
+        e->drag_screen_sign = (dot(n, to_cam) >= 0.0f) ? -1.0f : 1.0f;
+    }
+
+    dai_vec3 hit{};
+    if (!e->drag_screen_rotate && !ray_plane(o, d, centre, n, &hit)) return;
+
     e->dragging = true;
     e->drag_axis = axis;
     e->drag_plane_normal = n;
     e->drag_start_point = hit;
+    e->drag_center = centre;
+    e->drag_gizmo_len = dai_editor_gizmo_scale(e);
+    if (e->drag_gizmo_len <= 1e-4f) e->drag_gizmo_len = 1.0f;
+
+    const char *name = e->mode == DAI_GIZMO_ROTATE ? "Rotate"
+                     : e->mode == DAI_GIZMO_SCALE  ? "Scale" : "Move";
+    dai_doc_begin(e->doc, name);   // everything until drag_end is one undo step
 }
 
 void dai_editor_drag_update(dai_editor *e, float mx, float my) {
     if (!e || !e->dragging) return;
-    dai_vec3 centre = dai_editor_selection_center(e);
+
+    if (e->drag_screen_rotate) {
+        float cx, cy;
+        if (!dai_editor_project(e, e->drag_center, &cx, &cy)) return;
+        float angle = (std::atan2(my - cy, mx - cx) - e->drag_screen_start) * e->drag_screen_sign;
+        if (e->snap_rotate > 0.0f) angle = snap_to(angle, e->snap_rotate * PI / 180.0f);
+        dai_vec3 axis = e->drag_axis <= DAI_AXIS_Z ? axis_vector(e->drag_axis)
+                                                   : e->drag_plane_normal;
+        dai_quat q = qaxis(axis, angle);
+        for (const DragItem &it : e->drag_items) {
+            if (ancestor_selected(e, it.n)) continue;
+            dai_vec3 rel = qrot(q, sub(it.wpos, e->drag_center));
+            dai_doc_set_world_position(e->doc, it.n, add(e->drag_center, rel));
+            dai_doc_set_world_rotation(e->doc, it.n, qmul(q, it.wrot));
+        }
+        return;
+    }
+
     dai_vec3 o, d, hit;
     dai_editor_ray(e, mx, my, &o, &d);
-    if (!ray_plane(o, d, centre, e->drag_plane_normal, &hit)) return;
+    if (!ray_plane(o, d, e->drag_center, e->drag_plane_normal, &hit)) return;
+
+    // Everything is computed from the captured start state, never accumulated
+    // from the previous frame: accumulation drifts, and a slow drag would end
+    // up somewhere a fast one did not.
+    if (e->mode == DAI_GIZMO_ROTATE) {
+        dai_vec3 axis = e->drag_axis <= DAI_AXIS_Z ? axis_vector(e->drag_axis)
+                                                   : e->drag_plane_normal;
+        dai_vec3 v0 = sub(e->drag_start_point, e->drag_center);
+        dai_vec3 v1 = sub(hit, e->drag_center);
+        if (length(v0) < 1e-5f || length(v1) < 1e-5f) return;
+        float angle = std::atan2(dot(cross(v0, v1), axis), dot(v0, v1));
+        if (e->snap_rotate > 0.0f)
+            angle = snap_to(angle, e->snap_rotate * PI / 180.0f);
+        dai_quat q = qaxis(axis, angle);
+        for (const DragItem &it : e->drag_items) {
+            if (ancestor_selected(e, it.n)) continue;
+            dai_vec3 rel = qrot(q, sub(it.wpos, e->drag_center));
+            dai_doc_set_world_position(e->doc, it.n, add(e->drag_center, rel));
+            dai_doc_set_world_rotation(e->doc, it.n, qmul(q, it.wrot));
+        }
+        return;
+    }
+
+    if (e->mode == DAI_GIZMO_SCALE) {
+        float factor;
+        if (e->drag_axis <= DAI_AXIS_Z) {
+            dai_vec3 a = axis_vector(e->drag_axis);
+            float d0 = dot(sub(e->drag_start_point, e->drag_center), a);
+            float d1 = dot(sub(hit, e->drag_center), a);
+            // Difference over gizmo length, not d1/d0: grabbing the handle near
+            // the centre would divide by almost zero and fling the object.
+            factor = 1.0f + (d1 - d0) / e->drag_gizmo_len;
+        } else {
+            float l0 = length(sub(e->drag_start_point, e->drag_center));
+            float l1 = length(sub(hit, e->drag_center));
+            factor = 1.0f + (l1 - l0) / e->drag_gizmo_len;
+        }
+        if (e->snap_scale > 0.0f) factor = snap_to(factor, e->snap_scale);
+        if (factor < 0.01f) factor = 0.01f;
+
+        dai_vec3 mask{ 1, 1, 1 };
+        if (e->drag_axis <= DAI_AXIS_Z) {
+            dai_vec3 a = axis_vector(e->drag_axis);
+            mask = { 1.0f + (factor - 1.0f) * a.x,
+                     1.0f + (factor - 1.0f) * a.y,
+                     1.0f + (factor - 1.0f) * a.z };
+        } else {
+            mask = { factor, factor, factor };
+        }
+        for (const DragItem &it : e->drag_items) {
+            if (ancestor_selected(e, it.n)) continue;
+            dai_node_desc rec{};
+            if (dai_doc_get(e->doc, it.n, &rec) != DAI_OK) continue;
+            rec.scale = { it.scale.x * mask.x, it.scale.y * mask.y, it.scale.z * mask.z };
+            dai_doc_set(e->doc, it.n, &rec);
+            // Multiple objects scale away from the shared centre; a single one
+            // stays put because it *is* the centre.
+            dai_vec3 rel = sub(it.wpos, e->drag_center);
+            dai_doc_set_world_position(e->doc, it.n,
+                add(e->drag_center, dai_vec3{ rel.x * mask.x, rel.y * mask.y, rel.z * mask.z }));
+        }
+        return;
+    }
 
     dai_vec3 delta = sub(hit, e->drag_start_point);
     if (e->drag_axis <= DAI_AXIS_Z) {
@@ -261,9 +606,9 @@ void dai_editor_drag_update(dai_editor *e, float mx, float my) {
         delta.y = snap_to(delta.y, e->snap_translate);
         delta.z = snap_to(delta.z, e->snap_translate);
     }
-    for (Snapshot &s : e->drag_items) {
-        s.pos_after = add(s.pos_before, delta);
-        apply(e, s, true);
+    for (const DragItem &it : e->drag_items) {
+        if (ancestor_selected(e, it.n)) continue;
+        dai_doc_set_world_position(e->doc, it.n, add(it.wpos, delta));
     }
 }
 
@@ -271,57 +616,110 @@ void dai_editor_drag_end(dai_editor *e) {
     if (!e || !e->dragging) return;
     e->dragging = false;
     e->drag_axis = DAI_AXIS_NONE;
-    push_command(e, "Move", e->drag_items);
+    e->drag_screen_rotate = false;
     e->drag_items.clear();
+    dai_doc_commit(e->doc);        // drops the step entirely if nothing moved
+    resync(e);
+}
+
+void dai_editor_drag_cancel(dai_editor *e) {
+    if (!e || !e->dragging) return;
+    e->dragging = false;
+    e->drag_axis = DAI_AXIS_NONE;
+    e->drag_screen_rotate = false;
+    e->drag_items.clear();
+    dai_doc_abort(e->doc);         // restores the state captured at drag_begin
+    resync(e);
 }
 
 int dai_editor_dragging(const dai_editor *e) { return (e && e->dragging) ? 1 : 0; }
 
 void dai_editor_move_selection(dai_editor *e, dai_vec3 delta) {
     if (!e || e->selection.empty()) return;
-    std::vector<Snapshot> items;
-    capture(e, items);
-    for (Snapshot &s : items) {
-        s.pos_after = add(s.pos_before, delta);
-        apply(e, s, true);
+    dai_doc_begin(e->doc, "Move");
+    for (dai_node n : e->selection) {
+        if (ancestor_selected(e, n)) continue;
+        dai_vec3 p{};
+        if (dai_doc_world_transform(e->doc, n, &p, nullptr, nullptr) != DAI_OK) continue;
+        dai_doc_set_world_position(e->doc, n, add(p, delta));
     }
-    push_command(e, "Move", items);
+    dai_doc_commit(e->doc);
+    resync(e);
 }
 
 dai_result dai_editor_delete_selection(dai_editor *e) {
     if (!e || e->selection.empty()) return DAI_ERR_NOT_FOUND;
-    // Deleting is deliberately NOT undoable yet: bringing a body back means
-    // recreating it with the same handle, which the scene layer cannot promise
-    // today. Saying so beats a broken undo.
-    for (dai_entity ent : e->selection) dai_scene_remove(e->scene, ent);
+    dai_doc_begin(e->doc, "Delete");
+    for (dai_node n : e->selection) dai_doc_remove(e->doc, n);   // children go too
+    dai_doc_commit(e->doc);
     e->selection.clear();
-    e->undo_stack.clear();
-    e->redo_stack.clear();
+    resync(e);
     return DAI_OK;
 }
 
+uint32_t dai_editor_duplicate_selection(dai_editor *e) {
+    if (!e || e->selection.empty()) return 0;
+
+    // Collect the selection plus every descendant, parents first, so a copied
+    // child can be reparented onto its copied parent instead of the original.
+    std::vector<dai_node> roots;
+    for (dai_node n : e->selection) if (!ancestor_selected(e, n)) roots.push_back(n);
+    std::vector<dai_node> all = roots;
+    for (size_t i = 0; i < all.size(); ++i) {
+        uint32_t cn = dai_doc_children(e->doc, all[i], nullptr, 0);
+        std::vector<dai_node> kids(cn);
+        if (cn) dai_doc_children(e->doc, all[i], kids.data(), cn);
+        for (dai_node k : kids) all.push_back(k);
+    }
+
+    dai_doc_begin(e->doc, "Duplicate");
+    std::unordered_map<dai_node, dai_node> map;
+    std::vector<dai_node> copies;
+    for (dai_node n : all) {
+        dai_node_desc rec{};
+        if (dai_doc_get(e->doc, n, &rec) != DAI_OK) continue;
+        auto it = map.find(rec.parent);
+        if (it != map.end()) rec.parent = it->second;
+        dai_node c = dai_doc_add(e->doc, &rec);
+        if (!c) continue;
+        map[n] = c;
+        copies.push_back(c);
+    }
+    dai_doc_commit(e->doc);
+
+    e->selection.clear();
+    for (dai_node n : roots) {
+        auto it = map.find(n);
+        if (it != map.end()) e->selection.push_back(it->second);
+    }
+    resync(e);
+    return (uint32_t)copies.size();
+}
+
+// ------------------------------------------------------------------- undo
+
 int dai_editor_undo(dai_editor *e) {
-    if (!e || e->undo_stack.empty()) return 0;
-    Command c = e->undo_stack.back();
-    e->undo_stack.pop_back();
-    for (const Snapshot &s : c.items) apply(e, s, false);
-    e->redo_stack.push_back(c);
+    if (!e || !dai_doc_undo(e->doc)) return 0;
+    // A node that came back has a new entity behind it, so anything the
+    // frontend cached is stale - resync before the next frame draws.
+    resync(e);
+    for (size_t i = e->selection.size(); i-- > 0; )
+        if (!dai_doc_valid(e->doc, e->selection[i]))
+            e->selection.erase(e->selection.begin() + (long)i);
     return 1;
 }
 
 int dai_editor_redo(dai_editor *e) {
-    if (!e || e->redo_stack.empty()) return 0;
-    Command c = e->redo_stack.back();
-    e->redo_stack.pop_back();
-    for (const Snapshot &s : c.items) apply(e, s, true);
-    e->undo_stack.push_back(c);
+    if (!e || !dai_doc_redo(e->doc)) return 0;
+    resync(e);
+    for (size_t i = e->selection.size(); i-- > 0; )
+        if (!dai_doc_valid(e->doc, e->selection[i]))
+            e->selection.erase(e->selection.begin() + (long)i);
     return 1;
 }
 
-uint32_t dai_editor_undo_depth(const dai_editor *e) { return e ? (uint32_t)e->undo_stack.size() : 0; }
-uint32_t dai_editor_redo_depth(const dai_editor *e) { return e ? (uint32_t)e->redo_stack.size() : 0; }
-const char *dai_editor_undo_name(const dai_editor *e) {
-    return (e && !e->undo_stack.empty()) ? e->undo_stack.back().name.c_str() : "";
-}
+uint32_t dai_editor_undo_depth(const dai_editor *e) { return e ? dai_doc_undo_depth(e->doc) : 0; }
+uint32_t dai_editor_redo_depth(const dai_editor *e) { return e ? dai_doc_redo_depth(e->doc) : 0; }
+const char *dai_editor_undo_name(const dai_editor *e) { return e ? dai_doc_undo_name(e->doc) : ""; }
 
 } // extern "C"
