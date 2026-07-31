@@ -426,14 +426,34 @@ and shading when a test fails and you need to know which half is lying.
 
 ## What is still missing
 
-- UI text input has no caret movement or selection - typing and backspace only.
-- No point or spot lights - one directional sun only.
-- No frustum culling: every instance goes through the pipeline.
-- No morph targets and no animation state machine (blending exists).
-- Particle atlases are one texture per frame, not per emitter.
+Kept honest: things listed here are genuinely absent, and things that got built
+have been struck from the list rather than left in to look modest.
+
+**The big one - assets are not in the scene file.** A node stores a mesh *index*,
+not a reference to anything on disk, so a scene with imported glTF models cannot
+be saved and reopened: the index points somewhere else next run. What is needed
+is a path based asset reference (mesh, texture, material) and a library that
+resolves it. Until then the editor can only author primitives.
+
+Editor:
+- No box select; multi-selection is click by click.
+- Joints and compound bodies are deliberately not serialised (see dai_doc.h).
+- No prefab or instance concept - a hundred identical crates are a hundred
+  independent copies.
+- No copy/paste between scenes.
+- The text field has no caret movement and no selection - typing and backspace.
+
+Engine:
+- `dai_contact::impulse` is always 0. The contact point and normal are real, the
+  strength is not, so "how hard did that hit" cannot be answered yet.
+- No morph targets and no animation state machine (pose blending exists).
+- Snapshots store the full physics blob per tick, so a large scene pays for the
+  rollback ring in memory whether it needs it or not.
+- No network transport. Rollback and tick stamped input exist; the wire does not.
+- Particle atlases are one texture for the whole pass, not one per emitter.
 - The Win32 backend is cross compiled with mingw-w64 but has never been run on
   Windows from here: no Windows machine in this setup has a compiler and a
   Vulkan loader. X11 and Wayland are both tested headless.
-- Shadow cascades are fitted per frame with no caching, so a very large scene
-  re-renders all three every frame.
-- Contact impulses are not filled in yet; snapshots store the full blob per tick.
+
+Absent entirely: terrain, navmesh/AI, audio authoring in the editor, an asset
+browser, and any way to export a finished scene as a standalone game.
