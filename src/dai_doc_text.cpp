@@ -3,8 +3,8 @@
 // Line based, one key per line, only non default fields written. Chosen over
 // JSON because a scene file lives in version control: this diffs per property
 // instead of per brace, and a three way merge of two people editing different
-// objects actually resolves. Round trip is exact - floats print with %.9g,
-// which is the shortest form that reads back bit identical.
+// objects actually resolves. Round trip is exact - floats print at the shortest
+// precision that still reads back bit identical (see fstr below).
 
 #include "dai_doc.h"
 #include "dai_doc_internal.hpp"
@@ -34,12 +34,25 @@ void put(std::string &s, const char *fmt, ...) {
     s += buf;
 }
 
+// Shortest representation that still reads back bit identical. %.9g is always
+// exact but writes 1.20000005 for a scale of 1.2, which makes a hand written
+// scene file look broken and a diff unreadable.
+std::string fstr(float v) {
+    char buf[40];
+    for (int prec = 6; prec < 9; ++prec) {
+        snprintf(buf, sizeof(buf), "%.*g", prec, (double)v);
+        if ((float)strtod(buf, nullptr) == v) return buf;
+    }
+    snprintf(buf, sizeof(buf), "%.9g", (double)v);
+    return buf;
+}
+
 bool feq(float a, float b) { return a == b; }
 bool v3eq(dai_vec3 a, dai_vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
 bool qeq(dai_quat a, dai_quat b) { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; }
 
 void write_v3(std::string &s, const char *key, dai_vec3 v) {
-    put(s, "  %s %.9g %.9g %.9g\n", key, (double)v.x, (double)v.y, (double)v.z);
+    put(s, "  %s %s %s %s\n", key, fstr(v.x).c_str(), fstr(v.y).c_str(), fstr(v.z).c_str());
 }
 
 // ---- parsing helpers ----------------------------------------------------
@@ -133,21 +146,21 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
         if (r.parent)                       put(s, "  parent %u\n", (unsigned)r.parent);
         if (!v3eq(r.position, def.position))    write_v3(s, "pos", r.position);
         if (!qeq(r.rotation, def.rotation))
-            put(s, "  rot %.9g %.9g %.9g %.9g\n", (double)r.rotation.x, (double)r.rotation.y,
-                (double)r.rotation.z, (double)r.rotation.w);
+            put(s, "  rot %s %s %s %s\n", fstr(r.rotation.x).c_str(), fstr(r.rotation.y).c_str(),
+                fstr(r.rotation.z).c_str(), fstr(r.rotation.w).c_str());
         if (!v3eq(r.scale, def.scale))          write_v3(s, "scale", r.scale);
         if (r.shape != def.shape)           put(s, "  shape %d\n", r.shape);
         if (r.motion != def.motion)         put(s, "  motion %d\n", r.motion);
         if (!v3eq(r.half_extent, def.half_extent)) write_v3(s, "extent", r.half_extent);
-        if (!feq(r.density, def.density))       put(s, "  density %.9g\n", (double)r.density);
-        if (!feq(r.friction, def.friction))     put(s, "  friction %.9g\n", (double)r.friction);
-        if (!feq(r.restitution, def.restitution)) put(s, "  restitution %.9g\n", (double)r.restitution);
+        if (!feq(r.density, def.density))       put(s, "  density %s\n", fstr(r.density).c_str());
+        if (!feq(r.friction, def.friction))     put(s, "  friction %s\n", fstr(r.friction).c_str());
+        if (!feq(r.restitution, def.restitution)) put(s, "  restitution %s\n", fstr(r.restitution).c_str());
         if (r.no_sleeping != def.no_sleeping)   put(s, "  nosleep %d\n", r.no_sleeping);
         if (r.no_body != def.no_body)           put(s, "  nobody %d\n", r.no_body);
         if (r.mesh != def.mesh)             put(s, "  mesh %u\n", (unsigned)r.mesh);
         if (!v3eq(r.color, def.color))          write_v3(s, "color", r.color);
-        if (!feq(r.roughness, def.roughness))   put(s, "  roughness %.9g\n", (double)r.roughness);
-        if (!feq(r.emissive, def.emissive))     put(s, "  emissive %.9g\n", (double)r.emissive);
+        if (!feq(r.roughness, def.roughness))   put(s, "  roughness %s\n", fstr(r.roughness).c_str());
+        if (!feq(r.emissive, def.emissive))     put(s, "  emissive %s\n", fstr(r.emissive).c_str());
         if (r.render_flags != def.render_flags) put(s, "  rflags %u\n", (unsigned)r.render_flags);
         if (r.hidden != def.hidden)             put(s, "  hidden %d\n", r.hidden);
         if (r.user_data != def.user_data)       put(s, "  user %u\n", (unsigned)r.user_data);

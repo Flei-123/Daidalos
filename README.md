@@ -141,6 +141,27 @@ implementations: `physics_jolt.cpp` (the only file in the project that includes
 Jolt) and `physics_null.cpp` (gravity and a floor - it exists so the abstraction
 can be proven, not assumed).
 
+### Scene document - `include/dai_doc.h`
+
+What the editor edits. Plain records with stable ids that are never reused, a
+parent/child hierarchy, and an undo stack built from before/after snapshots of
+whole records - one `Change` covers create, modify and delete, so undo works for
+everything without a command class per property.
+
+This layer exists because of one problem: an editor that mutates the live world
+can only undo what it can put back, and a destroyed physics body cannot come
+back under its old handle. So "undo delete" ends up broken or missing. The fix
+is the same one Unity and Godot use - edit the document, then reconcile the
+runtime against it. `dai_doc_sync_apply` does that incrementally, keyed on a per
+node revision, so untouched nodes are left alone and physics keeps running while
+you edit. `dai_doc_sync_pull` goes the other way: stop play mode, keep the
+result.
+
+Scenes save as a line based text format, one property per line, only non default
+fields written, floats at the shortest precision that reads back bit identical.
+That diffs and merges per property instead of per brace, which matters when a
+scene file lives in version control.
+
 ### Scene layer - `include/dai_scene.h`
 
 The glue between "a body exists" and "here is what it looks like". Spawn an
@@ -354,6 +375,11 @@ and shading when a test fails and you need to know which half is lying.
   and solid crates looked like open shells. Tests 4 and 9 pin it now - and test
   4 had to be rewritten, because comparing against the corner pixel let it pass
   while the camera was staring at a wall.
+- **the sun pointing the wrong way**: `dai_render_sun` takes the direction
+  *towards* the sun; the first gizmo screenshot passed the direction the light
+  travels. Every visible face then fell back to ambient only and the scene came
+  out flat and lifeless. Nothing asserted on it - only looking at the picture
+  found it.
 - **grey soup**: Reinhard tonemapping plus a heavy ambient term produced frames
   with no black, no white and almost no colour. Now ACES, lower ambient, and
   test 13 to keep it that way.
