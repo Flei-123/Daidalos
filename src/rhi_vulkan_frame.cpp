@@ -186,12 +186,43 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
 
     // --- shadow passes: one per cascade (always runs, so the image ends up in
     //     the layout the descriptor set expects even with nothing to draw)
+    // NOTE: DEPTH_READ_ONLY -> DEPTH_ATTACHMENT (not UNDEFINED): the layers we
+    // skip this frame must keep their contents
     vk_barrier(r->cmd, r->shadow_img, VK_IMAGE_ASPECT_DEPTH_BIT,
-               VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-               VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0,
+               r->shadow_valid ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+               VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+               VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                r->cascades);
+    // Cascade caching: the distant cascades cover tens of metres and their
+    // light matrix is texel snapped, so it only changes when the camera has
+    // actually moved far enough. Re-rendering an identical cascade is pure
+    // waste - and in a fixed camera shot it is ALL of the shadow cost.
+    // A cascade may only be reused if NOTHING that casts into it moved. Hashing
+    // the caster instances is ~10 us for a thousand of them and is the
+    // difference between a fast shadow and a wrong one.
+    uint64_t caster_hash = 1469598103934665603ULL;
+    {
+        const uint8_t *bytes = (const uint8_t *)dst;
+        size_t n = (size_t)casters * sizeof(dai_render_instance);
+        for (size_t i = 0; i < n; ++i) { caster_hash ^= bytes[i]; caster_hash *= 1099511628211ULL; }
+    }
+
+    bool redraw[DAI_SHADOW_CASCADES];
     for (uint32_t c = 0; c < r->cascades; ++c) {
+        bool same = r->shadow_valid && casters == r->last_casters && caster_hash == r->last_caster_hash;
+        if (same)
+            for (int i = 0; i < 16 && same; ++i)
+                if (fabsf(lightvp[c].m[i] - r->last_lightvp[c].m[i]) > 1e-6f) same = false;
+        redraw[c] = !same;
+        r->last_lightvp[c] = lightvp[c];
+    }
+    r->last_casters = casters;
+    r->last_caster_hash = caster_hash;
+    uint32_t cascades_drawn = 0;
+    for (uint32_t c = 0; c < r->cascades; ++c) {
+        if (!redraw[c]) continue;
+        ++cascades_drawn;
         uint32_t ss = r->shadows ? r->shadow_size : 1;
         VkRenderingAttachmentInfo da{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
         da.imageView = r->shadow_layer[c]; da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
@@ -224,6 +255,7 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         }
         vkCmdEndRendering(r->cmd);
     }
+    r->shadow_valid = true;
     vk_barrier(r->cmd, r->shadow_img, VK_IMAGE_ASPECT_DEPTH_BIT,
                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
@@ -318,7 +350,7 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
 
     r->last_ms = std::chrono::duration<double, std::milli>(
         std::chrono::high_resolution_clock::now() - t0).count();
-    r->last_draws = (uint32_t)ranges.size();
+    r->last_draws = (uint32_t)ranges.size() + cascades_drawn;
     r->have_frame = true;
     return DAI_OK;
 }

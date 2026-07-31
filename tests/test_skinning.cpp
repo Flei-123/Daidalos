@@ -120,6 +120,52 @@ int main(int argc, char **argv) {
     CHECK(covered > 1.0, "the skinned mesh is not visible (%.2f%% coverage)", covered);
     CHECK(moved_px > 0.5, "posing the model changed only %.2f%% of the frame - the GPU is not skinning", moved_px);
 
+    // ---- the same path against a file BLENDER exported (armature, automatic
+    //      weights, three bones, an action) - the hand written fixture cannot
+    //      prove that a real exporter's conventions are handled
+    {
+        char e2[256] = {0};
+        dai_model *bm = dai_gltf_load(r, (dir + "/blender_anim.glb").c_str(), e2, sizeof(e2));
+        if (!bm) {
+            std::printf("  (blender_anim.glb missing, skipping the Blender half)\n");
+        } else {
+            dai_model_info bi = dai_model_get_info(bm);
+            std::printf("  blender: skins %u joints %u anims %u tris %u\n",
+                        bi.skins, bi.joints, bi.animations, bi.triangles);
+            CHECK(bi.skins == 1 && bi.joints == 3, "expected 1 skin with 3 joints, got %u/%u", bi.skins, bi.joints);
+            CHECK(bi.animations == 1, "expected 1 animation, got %u", bi.animations);
+            CHECK(bi.bounds_max.y > 3.5f && bi.bounds_max.y < 4.5f,
+                  "limb is %.2f m tall, expected 4 - the Z-up conversion is wrong", bi.bounds_max.y);
+
+            std::vector<float> ja(64 * 16, 0.0f), jb(64 * 16, 0.0f);
+            uint32_t na = dai_model_pose(bm, 0, 0.0f, ja.data(), 64);
+            uint32_t nb = dai_model_pose(bm, 0, 0.4f, jb.data(), 64);
+            double delta = 0;
+            for (size_t i = 0; i < ja.size(); ++i) delta += fabs(ja[i] - jb[i]);
+            CHECK(na == 3 && nb == 3, "pose wrote %u/%u matrices", na, nb);
+            CHECK(delta > 0.5, "posing the Blender rig changed nothing (delta %.3f)", delta);
+
+            // blending must sit strictly between the two poses it mixes
+            std::vector<float> mid(64 * 16, 0.0f);
+            dai_model_pose_blend(bm, 0, 0.0f, 0, 0.4f, 0.5f, mid.data(), 64);
+            double to_a = 0, to_b = 0;
+            for (size_t i = 0; i < mid.size(); ++i) { to_a += fabs(mid[i] - ja[i]); to_b += fabs(mid[i] - jb[i]); }
+            CHECK(to_a > 1e-4 && to_b > 1e-4 && to_a < delta && to_b < delta,
+                  "a 50%% blend is not between the two poses (%.3f / %.3f, full delta %.3f)", to_a, to_b, delta);
+
+            // weight 0 and 1 must reproduce the endpoints exactly
+            std::vector<float> w0(64 * 16, 0.0f), w1(64 * 16, 0.0f);
+            dai_model_pose_blend(bm, 0, 0.0f, 0, 0.4f, 0.0f, w0.data(), 64);
+            dai_model_pose_blend(bm, 0, 0.0f, 0, 0.4f, 1.0f, w1.data(), 64);
+            double d0 = 0, d1 = 0;
+            for (size_t i = 0; i < w0.size(); ++i) { d0 += fabs(w0[i] - ja[i]); d1 += fabs(w1[i] - jb[i]); }
+            CHECK(d0 < 1e-3, "blend weight 0 does not reproduce clip A (delta %.5f)", d0);
+            CHECK(d1 < 1e-3, "blend weight 1 does not reproduce clip B (delta %.5f)", d1);
+            std::printf("  blend: |mid-a| %.3f |mid-b| %.3f, endpoints exact\n", to_a, to_b);
+            dai_model_free(bm);
+        }
+    }
+
     dai_model_free(m);
     dai_render_destroy(r);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);

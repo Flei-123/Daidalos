@@ -83,6 +83,14 @@ DAI_API dai_animation_info dai_model_animation_at(const dai_model *m, uint32_t i
 DAI_API uint32_t dai_model_pose(dai_model *m, int animation, float time,
                                 float *joints, uint32_t max_joints);
 
+/* Cross fades two clips. weight 0 = a, 1 = b; translations and scales are
+ * linear, rotations slerp. This is what makes a walk turn into a run without
+ * the character snapping - and it is the smallest useful blend: everything
+ * else (state machines, layers, additive) is built out of repeated calls. */
+DAI_API uint32_t dai_model_pose_blend(dai_model *m, int anim_a, float time_a,
+                                      int anim_b, float time_b, float weight,
+                                      float *joints, uint32_t max_joints);
+
 /* Fills render instances for the whole model, transformed by an offset,
  * a uniform scale and a rotation. Returns how many were written. */
 DAI_API uint32_t dai_model_instances(const dai_model *m, dai_render_instance *out, uint32_t max,

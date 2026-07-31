@@ -110,6 +110,10 @@ struct dai_renderer {
     VkImageView shadow_layer[DAI_SHADOW_CASCADES] = {};             // per cascade, for rendering
     VkSampler shadow_sampler = VK_NULL_HANDLE;
     uint32_t cascades = DAI_SHADOW_CASCADES;
+    Mat4 last_lightvp[DAI_SHADOW_CASCADES] = {};   // for skipping unchanged cascades
+    uint32_t last_casters = 0;
+    uint64_t last_caster_hash = 0;
+    bool shadow_valid = false;   // false until the first full shadow render
 
     GpuBuffer vbo, ibo, inst, ubo, readback;
     uint32_t vtx_used = 0, idx_used = 0, inst_capacity = 0;

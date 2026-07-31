@@ -844,6 +844,57 @@ void sample_channel(const Channel &c, float t, float *out, int comps) {
 
 } // namespace
 
+namespace {
+
+// Samples one clip into a copy of the rest hierarchy.
+void apply_clip(dai_model *m, std::vector<RawNode> &posed, int animation, float time);
+
+void blend_nodes(std::vector<RawNode> &dst, const std::vector<RawNode> &b, float w) {
+    for (size_t i = 0; i < dst.size() && i < b.size(); ++i) {
+        RawNode &a = dst[i];
+        const RawNode &bb = b[i];
+        for (int k = 0; k < 3; ++k) {
+            a.t[k] += (bb.t[k] - a.t[k]) * w;
+            a.s[k] += (bb.s[k] - a.s[k]) * w;
+        }
+        // rotations: shortest arc, normalised - a linear mix of quaternions
+        // shortens the bone, which reads as a limb that shrinks mid stride
+        float dot = a.r[0]*bb.r[0] + a.r[1]*bb.r[1] + a.r[2]*bb.r[2] + a.r[3]*bb.r[3];
+        float sign = dot < 0.0f ? -1.0f : 1.0f;
+        dot = fabsf(dot);
+        float k0, k1;
+        if (dot > 0.9995f) { k0 = 1.0f - w; k1 = w; }
+        else {
+            float theta = acosf(dot), st = sinf(theta);
+            k0 = sinf((1.0f - w) * theta) / st;
+            k1 = sinf(w * theta) / st;
+        }
+        float len = 0.0f;
+        for (int k = 0; k < 4; ++k) { a.r[k] = k0 * a.r[k] + k1 * sign * bb.r[k]; len += a.r[k] * a.r[k]; }
+        len = sqrtf(len);
+        if (len > 1e-8f) for (int k = 0; k < 4; ++k) a.r[k] /= len;
+    }
+}
+
+// Turns a posed hierarchy into joint matrices (and moves the rigid pieces).
+uint32_t finish_pose(dai_model *m, std::vector<RawNode> &posed, float *joints, uint32_t max_joints);
+
+} // namespace
+
+uint32_t dai_model_pose_blend(dai_model *m, int anim_a, float time_a,
+                              int anim_b, float time_b, float weight,
+                              float *joints, uint32_t max_joints) {
+    if (!m) return 0;
+    std::vector<RawNode> a = m->raw;
+    apply_clip(m, a, anim_a, time_a);
+    if (weight > 0.0f && anim_b >= 0) {
+        std::vector<RawNode> b = m->raw;
+        apply_clip(m, b, anim_b, time_b);
+        blend_nodes(a, b, weight > 1.0f ? 1.0f : weight);
+    }
+    return finish_pose(m, a, joints, max_joints);
+}
+
 uint32_t dai_model_pose(dai_model *m, int animation, float time, float *joints, uint32_t max_joints) {
     if (!m) return 0;
 
@@ -862,6 +913,27 @@ uint32_t dai_model_pose(dai_model *m, int animation, float time, float *joints, 
         }
     }
 
+    return finish_pose(m, posed, joints, max_joints);
+}
+
+namespace {
+
+void apply_clip(dai_model *m, std::vector<RawNode> &posed, int animation, float time) {
+    if (animation < 0 || (size_t)animation >= m->anims.size()) return;
+    const Animation &a = m->anims[(size_t)animation];
+    float t = a.duration > 0.0f ? fmodf(time, a.duration) : 0.0f;
+    if (t < 0.0f) t += a.duration;
+    for (const Channel &c : a.channels) {
+        if (c.node < 0 || (size_t)c.node >= posed.size()) continue;
+        RawNode &n = posed[(size_t)c.node];
+        n.has_matrix = false;
+        if (c.path == 0) sample_channel(c, t, n.t, 3);
+        else if (c.path == 1) sample_channel(c, t, n.r, 4);
+        else sample_channel(c, t, n.s, 3);
+    }
+}
+
+uint32_t finish_pose(dai_model *m, std::vector<RawNode> &posed, float *joints, uint32_t max_joints) {
     // world transforms, parents before children
     m->world.assign(posed.size(), m4_identity());
     std::vector<char> done(posed.size(), 0);
@@ -910,6 +982,8 @@ uint32_t dai_model_pose(dai_model *m, int animation, float time, float *joints, 
     }
     return written;
 }
+
+} // namespace
 
 uint32_t dai_model_instances(const dai_model *m, dai_render_instance *out, uint32_t max,
                              dai_vec3 offset, dai_quat rot, float scale) {
