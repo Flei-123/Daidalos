@@ -47,9 +47,10 @@ g++ $FLAGS $ARCH $AUDIO_FLAGS -Iinclude -Isrc -c src/dai_audio.cpp -o build/dai_
 echo "-- scene layer"
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_scene.cpp -o build/dai_scene.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_input.cpp -o build/dai_input.o
+g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor.cpp -o build/dai_editor.o
 
 ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o \
-       build/dai_audio.o build/dai_scene.o build/dai_input.o
+       build/dai_audio.o build/dai_scene.o build/dai_input.o build/dai_editor.o
 
 echo "-- shaders"
 if command -v glslangValidator >/dev/null 2>&1; then
@@ -173,6 +174,7 @@ g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_image.cpp src/dai_inflate.cpp -o bui
 g++ $FLAGS $ARCH -Iinclude tests/test_merge.cpp $LIBS -o build/test_merge
 g++ $FLAGS $ARCH -Iinclude tests/test_save.cpp $LIBS -o build/test_save
 g++ $FLAGS $ARCH -Iinclude tests/test_input.cpp $LIBS -o build/test_input
+g++ $FLAGS $ARCH -Iinclude tests/test_editor.cpp $LIBS -o build/test_editor
 if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_script.cpp $SCRIPT_LIB $VKLIBS -o build/test_script
 fi

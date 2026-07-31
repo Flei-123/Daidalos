@@ -558,8 +558,14 @@ dai_result dai_body_add_impulse(dai_world *w, dai_body b, dai_vec3 imp) {
 
 dai_result dai_body_set_transform(dai_world *w, dai_body b, dai_vec3 pos, dai_quat rot) {
     if (!w) return DAI_ERR_INVALID_ARG;
-    if (!resolve(w, b)) return DAI_ERR_NOT_FOUND;
+    BodySlot *s = resolve(w, b);
+    if (!s) return DAI_ERR_NOT_FOUND;
     w->phys->set_transform(slot_of(b), pos, rot);
+    // The presentation transform is only refreshed by dai_step, so without this
+    // a teleport is invisible until the next tick - and an editor that moves a
+    // body reads back the old position, which is how this was found.
+    s->cur_pos = pos; s->cur_rot = rot;
+    s->prev_pos = pos; s->prev_rot = rot;
     return DAI_OK;
 }
 

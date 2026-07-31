@@ -236,7 +236,12 @@ public:
     void set_transform(uint32_t slot, dai_vec3 p, dai_quat r) override {
         if (slot >= slots.size() || !slots[slot].alive) return;
         BodyInterface &bi = ps.GetBodyInterface();
-        bi.SetPositionAndRotation(slots[slot].id, RV(p), Q(r), EActivation::Activate);
+        // A static body cannot be "activated", and asking Jolt to do so makes
+        // the move a no-op - which is exactly what an editor does all day.
+        EMotionType mt = bi.GetMotionType(slots[slot].id);
+        bi.SetPositionAndRotation(slots[slot].id, RV(p), Q(r),
+                                  mt == EMotionType::Static ? EActivation::DontActivate
+                                                            : EActivation::Activate);
     }
     void get_velocity(uint32_t slot, dai_vec3 &l, dai_vec3 &a) const override {
         if (slot >= slots.size() || !slots[slot].alive) { l = {}; a = {}; return; }
