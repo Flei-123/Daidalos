@@ -97,6 +97,24 @@ binary of the same sources. That is the prerequisite for a browser client
 sharing a rollback session with a native one, and it is only true because the
 tick never reads the clock, the renderer or an unseeded random number.
 
+`./build_web.sh` produces three things: the headless self check above, a
+**library build** (`daidalos.js` + `.wasm`, MODULARIZE'd, flat C exports) and
+**generated TypeScript declarations** (`daidalos.d.ts`) so a TS client gets
+completions and type errors instead of `any`. Transforms are read straight out
+of `HEAPF32` - 9 floats per body, no copy per frame:
+
+```ts
+const n = M._dai_web_transforms(world, 1.0);
+const view = new Float32Array(M.HEAPF32.buffer, M._dai_web_transform_ptr(), n * 9);
+// [handle, userData, x, y, z, qx, qy, qz, qw] per body
+```
+
+`tests/test_web.mjs` runs that path under node. One thing it makes explicit:
+determinism is a property of the SIMULATION, not of building a scene in another
+language - JS computes `-4 + (i % 8) * 1.1` in double and rounds on the way
+into a float parameter, C++ does it in float throughout, so the two builds
+start microns apart. Feed both sides bit identical inputs and they agree.
+
 40 KB of wasm for engine + scene + particles. `DAI_NO_JOLT` drops the physics
 backend from the link, which is also a stricter version of the leak test: the
 engine has to be complete without it.
