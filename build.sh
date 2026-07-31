@@ -52,7 +52,7 @@ ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics
 
 echo "-- shaders"
 if command -v glslangValidator >/dev/null 2>&1; then
-    for s in mesh.vert mesh.frag shadow.vert sky.vert sky.frag particle.vert particle.frag; do
+    for s in mesh.vert mesh.frag shadow.vert sky.vert sky.frag particle.vert particle.frag ui.vert ui.frag; do
         glslangValidator -V "shaders/$s" -o "shaders/$s.spv" >/dev/null
     done
 else
@@ -107,9 +107,11 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_json.cpp         -o build/dai_json.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf.cpp         -o build/dai_gltf.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_particles.cpp    -o build/dai_particles.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_font.cpp          -o build/dai_font.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_ui.cpp            -o build/dai_ui.o
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
            $WINDOW_OBJ build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
-           build/dai_gltf.o build/dai_particles.o
+           build/dai_gltf.o build/dai_particles.o build/dai_font.o build/dai_ui.o
     VK_OK=1
 else
     echo "-- renderer: skipped (no vulkan headers)"
@@ -157,6 +159,7 @@ if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_gltf.cpp $VKLIBS -o build/test_gltf
     g++ $FLAGS $ARCH -Iinclude tests/test_particles.cpp $VKLIBS -o build/test_particles
     g++ $FLAGS $ARCH -Iinclude tests/test_skinning.cpp $VKLIBS -o build/test_skinning
+    g++ $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
 fi
 

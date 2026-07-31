@@ -584,6 +584,8 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     VkShaderModule fs_sky = load_module(r, "sky.frag.spv", &ok);
     VkShaderModule vs_par = load_module(r, "particle.vert.spv", &ok);
     VkShaderModule fs_par = load_module(r, "particle.frag.spv", &ok);
+    VkShaderModule vs_ui = load_module(r, "ui.vert.spv", &ok);
+    VkShaderModule fs_ui = load_module(r, "ui.frag.spv", &ok);
     if (!ok) { dai_render_destroy(r); return fail("SPIR-V shaders not found (set DAI_SHADER_DIR)"); }
 
     VkDescriptorSetLayout sets[2] = { r->dsl, r->mat_dsl };
@@ -713,7 +715,41 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     gpar.pColorBlendState = &cb_par;
     VkResult par = vkCreateGraphicsPipelines(r->dev, VK_NULL_HANDLE, 1, &gpar, nullptr, &r->pipe_particle);
 
-    for (VkShaderModule m : { vs_mesh, fs_mesh, vs_shadow, vs_sky, fs_sky, vs_par, fs_par })
+    // UI: screen space triangles, no depth at all, premultiplied alpha
+    struct UIVert { float x, y, u, v; uint32_t col; };
+    VkVertexInputBindingDescription ubind{ 0, sizeof(UIVert), VK_VERTEX_INPUT_RATE_VERTEX };
+    VkVertexInputAttributeDescription uattr[3] = {
+        { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 },
+        { 1, 0, VK_FORMAT_R32G32_SFLOAT, 8 },
+        { 2, 0, VK_FORMAT_R8G8B8A8_UNORM, 16 },
+    };
+    VkPipelineVertexInputStateCreateInfo uvi{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+    uvi.vertexBindingDescriptionCount = 1; uvi.pVertexBindingDescriptions = &ubind;
+    uvi.vertexAttributeDescriptionCount = 3; uvi.pVertexAttributeDescriptions = uattr;
+    VkPipelineDepthStencilStateCreateInfo ds_ui{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+    ds_ui.depthTestEnable = VK_FALSE; ds_ui.depthWriteEnable = VK_FALSE;
+    VkPipelineRasterizationStateCreateInfo rs_ui = rs; rs_ui.cullMode = VK_CULL_MODE_NONE;
+    VkPipelineColorBlendAttachmentState cba_ui{};
+    cba_ui.blendEnable = VK_TRUE;
+    cba_ui.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba_ui.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba_ui.colorBlendOp = VK_BLEND_OP_ADD;
+    cba_ui.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba_ui.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba_ui.alphaBlendOp = VK_BLEND_OP_ADD;
+    cba_ui.colorWriteMask = 0xf;
+    VkPipelineColorBlendStateCreateInfo cb_ui{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+    cb_ui.attachmentCount = 1; cb_ui.pAttachments = &cba_ui;
+    VkPipelineShaderStageCreateInfo st_ui[2] = { stage(VK_SHADER_STAGE_VERTEX_BIT, vs_ui),
+                                                 stage(VK_SHADER_STAGE_FRAGMENT_BIT, fs_ui) };
+    VkGraphicsPipelineCreateInfo gui = gp;
+    gui.pStages = st_ui; gui.pVertexInputState = &uvi;
+    gui.pDepthStencilState = &ds_ui; gui.pRasterizationState = &rs_ui;
+    gui.pColorBlendState = &cb_ui;
+    VkResult uir = vkCreateGraphicsPipelines(r->dev, VK_NULL_HANDLE, 1, &gui, nullptr, &r->pipe_ui);
+    if (uir != VK_SUCCESS) pr = uir;
+
+    for (VkShaderModule m : { vs_mesh, fs_mesh, vs_shadow, vs_sky, fs_sky, vs_par, fs_par, vs_ui, fs_ui })
         vkDestroyShaderModule(r->dev, m, nullptr);
     if (pr != VK_SUCCESS || sr != VK_SUCCESS || hr != VK_SUCCESS || par != VK_SUCCESS)
         { dai_render_destroy(r); return fail("vkCreateGraphicsPipelines failed"); }
@@ -743,6 +779,8 @@ void dai_render_destroy(dai_renderer *r) {
         if (r->pipe_sky) vkDestroyPipeline(r->dev, r->pipe_sky, nullptr);
         if (r->pipe_shadow) vkDestroyPipeline(r->dev, r->pipe_shadow, nullptr);
         if (r->pipe_particle) vkDestroyPipeline(r->dev, r->pipe_particle, nullptr);
+        if (r->pipe_ui) vkDestroyPipeline(r->dev, r->pipe_ui, nullptr);
+        vk_free_buffer(r, &r->ui_verts);
         vk_free_buffer(r, &r->particles);
         if (r->layout) vkDestroyPipelineLayout(r->dev, r->layout, nullptr);
         if (r->dpool) vkDestroyDescriptorPool(r->dev, r->dpool, nullptr);
@@ -827,6 +865,35 @@ void dai_render_joints(dai_renderer *r, const float *matrices, uint32_t count) {
 }
 
 uint32_t dai_render_max_joints(dai_renderer *r) { return r ? r->joint_capacity : 0; }
+
+void dai_render_ui(dai_renderer *r, const void *vertices, uint32_t vertex_count,
+                   const uint32_t *counts, const uint32_t *textures, uint32_t batches) {
+    if (!r) return;
+    r->ui_batch_counts.clear();
+    r->ui_batch_textures.clear();
+    r->ui_vertex_count = 0;
+    if (!vertices || !vertex_count || !batches) return;
+
+    const uint32_t stride = 20;                 // vec2 pos + vec2 uv + rgba8
+    if (vertex_count > r->ui_capacity) {
+        uint32_t cap = r->ui_capacity ? r->ui_capacity : 4096;
+        while (cap < vertex_count) cap *= 2;
+        GpuBuffer nb{};
+        if (!vk_make_buffer(r, (VkDeviceSize)cap * stride, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                            &nb, true)) return;
+        vkDeviceWaitIdle(r->dev);
+        vk_free_buffer(r, &r->ui_verts);
+        r->ui_verts = nb;
+        r->ui_capacity = cap;
+    }
+    std::memcpy(r->ui_verts.mapped, vertices, (size_t)vertex_count * stride);
+    r->ui_vertex_count = vertex_count;
+    for (uint32_t i = 0; i < batches; ++i) {
+        r->ui_batch_counts.push_back(counts[i]);
+        r->ui_batch_textures.push_back(textures[i]);
+    }
+}
 
 void dai_render_particles(dai_renderer *r, const dai_particle *particles, uint32_t count) {
     if (!r) return;

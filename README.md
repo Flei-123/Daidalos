@@ -36,6 +36,7 @@ MIT licensed.
 ./build/test_daidalos                                    # 48 simulation assertions
 ./build/test_merge                                       # 45 merge/split assertions
 ./build/test_font                                        # 16 font assertions
+DAI_SHADER_DIR=shaders ./build/test_ui /tmp              # 19 UI assertions
 DAI_SHADER_DIR=shaders ./build/test_particles /tmp       # 16 particle assertions
 DAI_SHADER_DIR=shaders ./build/test_skinning assets/test # 14 skinning assertions
 DAI_SHADER_DIR=shaders ./build/test_render_visual /tmp   # 33 visual assertions
@@ -189,6 +190,39 @@ rather than a reference image: space has advance but no ink, 'M' is wider than
 and - the one that catches a wrong winding rule - **the middle of an 'o' is
 empty while its edge is solid**.
 
+### UI - `include/dai_ui.h`
+
+Immediate mode: no widget tree, no retained state, no callbacks. A button is an
+`if`. The reason is the same one the whole engine is built on - the simulation
+is a pure function of state and input, and a retained UI tree would be a second
+source of truth that can disagree with it (menus showing stale values after a
+rollback is exactly that bug). Here the interface is rebuilt from the state
+every frame, so it cannot drift.
+
+```c
+dai_ui_begin(ui, w, h, &input);
+dai_ui_panel_begin(ui, 24, 24, 320, 180, "Daidalos");
+dai_ui_label_fmt(ui, "%u bodies, %.1f ms", stats.bodies, stats.avg_step_ms);
+if (dai_ui_button(ui, "Restart")) restart();
+dai_ui_slider(ui, "Volume", &volume, 0.0f, 1.0f);
+dai_ui_image(ui, icons, 32, 32, 0.0f, 0.0f, 0.25f, 0.25f, 0xFFFFFFFF);   // sprite
+dai_ui_panel_end(ui);
+dai_ui_end(ui);
+```
+
+The UI emits **vertices, not draw calls**: `dai_ui_draws()` returns batches of
+triangles with a texture each, and `dai_render_ui()` draws them in one screen
+space pass. Text and sprites are the same geometry - glyphs are white with
+coverage in alpha, sprites bring their own colour, the vertex colour tints
+both. A texture change starts a new batch, so an icon atlas costs one batch no
+matter how many icons come out of it.
+
+`tests/test_ui.cpp` covers the interaction rules that are easy to get subtly
+wrong: a click fires **on release, over the widget, exactly once**; pressing
+inside and releasing outside does **not** fire; a slider clamps when dragged
+past its ends; a sprite in the middle of a panel splits the batches; and the
+finished frame really does contain lit glyph pixels.
+
 ### Particles - `include/dai_particles.h`
 
 Presentation, not simulation - deliberately. Sparks and smoke would otherwise
@@ -310,8 +344,7 @@ and shading when a test fails and you need to know which half is lying.
 
 ## What is still missing
 
-- Fonts rasterise and measure, but there is no UI layer drawing them yet:
-  no text pass in the renderer, no widgets.
+- UI has no text input widget, no scrolling and no clip stack yet.
 - No point or spot lights - one directional sun only.
 - No frustum culling: every instance goes through the pipeline.
 - No morph targets and no animation state machine (blending exists).

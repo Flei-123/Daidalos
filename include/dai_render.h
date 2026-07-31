@@ -195,6 +195,16 @@ DAI_API void dai_render_particle_atlas(dai_renderer *r, dai_texture tex, uint32_
  * pointer is copied, not retained. Pass count 0 to clear. */
 DAI_API void dai_render_particles(dai_renderer *r, const dai_particle *particles, uint32_t count);
 
+/* ---- UI overlay -------------------------------------------------------- */
+
+/* Hands the renderer the UI batches for the NEXT frame; drawn last, in screen
+ * space, with no depth test. Pass count 0 to clear. The vertex layout is
+ * dai_ui_vertex from dai_ui.h, but the renderer does not include that header -
+ * it takes raw floats, so a host with its own UI can feed this too. */
+DAI_API void dai_render_ui(dai_renderer *r, const void *vertices, uint32_t vertex_count,
+                           const uint32_t *batch_counts, const uint32_t *batch_textures,
+                           uint32_t batch_count);
+
 /* ---- camera, sun, sky -------------------------------------------------- */
 
 DAI_API void dai_render_camera(dai_renderer *r, dai_vec3 eye, dai_vec3 target, dai_vec3 up,

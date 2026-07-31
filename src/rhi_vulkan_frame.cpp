@@ -338,6 +338,30 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->particles.buf, &poff);
         vkCmdDraw(r->cmd, 6, r->particle_count, 0, 0);
     }
+    // UI last of all: screen space, no depth, one batch per texture
+    if (r->ui_vertex_count && r->pipe_ui) {
+        vkCmdBindPipeline(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipe_ui);
+        MaterialPush pc{};
+        pc.base_color[0] = (float)r->width;
+        pc.base_color[1] = (float)r->height;
+        vkCmdPushConstants(r->cmd, r->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(MaterialPush), &pc);
+        VkDeviceSize uoff = 0;
+        vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->ui_verts.buf, &uoff);
+        uint32_t first = 0;
+        for (size_t i = 0; i < r->ui_batch_counts.size(); ++i) {
+            uint32_t tex = r->ui_batch_textures[i];
+            // the UI names a TEXTURE; the pipeline needs a descriptor set, so
+            // materials double as texture bindings here
+            uint32_t mat = 0;
+            for (uint32_t m = 0; m < r->materials.size(); ++m)
+                if (r->materials[m].base_tex == tex) { mat = m; break; }
+            vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 1, 1,
+                                    &r->materials[mat].set, 0, nullptr);
+            vkCmdDraw(r->cmd, r->ui_batch_counts[i], 1, first, 0);
+            first += r->ui_batch_counts[i];
+        }
+    }
     vkCmdEndRendering(r->cmd);
 
     vk_barrier(r->cmd, r->color_rt, VK_IMAGE_ASPECT_COLOR_BIT,

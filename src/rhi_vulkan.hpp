@@ -138,6 +138,11 @@ struct dai_renderer {
     dai_material particle_material = 0;   // holds the atlas texture
     float particle_atlas[4] = { 1, 1, 0, 0 };  // cols, rows, has_texture, unused
 
+    VkPipeline pipe_ui = VK_NULL_HANDLE;
+    GpuBuffer ui_verts;
+    uint32_t ui_capacity = 0, ui_vertex_count = 0;
+    std::vector<uint32_t> ui_batch_counts, ui_batch_textures;
+
     GpuBuffer joints;                 // storage buffer of mat4, all characters
     uint32_t joint_capacity = 0, joint_count = 0;
 
