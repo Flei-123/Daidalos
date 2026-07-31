@@ -23,6 +23,7 @@ struct Renderable {
     float    roughness = 1.0f;
     float    emissive = 0.0f;
     uint32_t flags = 0;
+    uint32_t material = 0;
     bool     visible = true;
     bool     alive = false;
     std::string name;
@@ -137,6 +138,7 @@ dai_entity dai_scene_attach(dai_scene *s, dai_body b, const dai_entity_desc *des
     r.roughness = desc->roughness > 0.0f ? desc->roughness : 1.0f;
     r.emissive = desc->emissive;
     r.flags = desc->render_flags;
+    r.material = desc->material;
     if (desc->name) r.name = desc->name;
 
     uint32_t mesh; dai_vec3 scale; float param;
@@ -217,6 +219,12 @@ dai_result dai_scene_set_render(dai_scene *s, dai_entity e, uint32_t mesh,
     return DAI_OK;
 }
 
+dai_result dai_scene_set_material(dai_scene *s, dai_entity e, uint32_t material) {
+    if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
+    s->ents[e].material = material;
+    return DAI_OK;
+}
+
 dai_result dai_scene_set_name(dai_scene *s, dai_entity e, const char *name) {
     if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
     s->ents[e].name = name ? name : "";
@@ -249,6 +257,7 @@ uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t ma
             o.roughness = r.roughness;
             o.emissive = r.emissive;
             o.flags = r.flags;
+            o.material = r.material;
         } else {
             for (const dai_compound_part &p : r.parts) {
                 if (w >= max) break;
@@ -267,6 +276,7 @@ uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t ma
                 o.roughness = r.roughness;
                 o.emissive = r.emissive;
                 o.flags = r.flags;
+                o.material = r.material;
             }
         }
     }

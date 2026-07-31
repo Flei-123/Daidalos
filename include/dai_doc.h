@@ -69,6 +69,11 @@ typedef struct dai_node_desc {
 
     /* graphics */
     uint32_t mesh;              /* 0xFFFFFFFF -> derive from shape              */
+    /* Asset reference BY PATH - "models/crate.glb". The path is the identity
+     * (see Mnemosyne), a bare index would point somewhere else on the next
+     * run. When set it wins over `mesh`; how a path becomes a mesh is the
+     * sync layer's resolver, so the document stays engine free. */
+    char     asset[96];
     dai_vec3 color;             /* 0,0,0 -> stable colour from the id           */
     float    roughness;         /* 0 -> 1 (matte)                               */
     float    emissive;
@@ -149,6 +154,14 @@ DAI_API size_t     dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size)
  * revision has not moved is left alone, so physics keeps running underneath
  * instead of being reset to the document every frame. */
 DAI_API dai_doc_sync *dai_doc_sync_create(dai_doc *d, dai_scene *scene);
+
+/* Turns an asset path into render data. Return 1 and fill the outputs, or 0
+ * when the asset cannot be resolved (the node then falls back to its shape
+ * mesh, visibly, instead of disappearing). Runs on the sync thread. */
+typedef int (*dai_asset_resolve_fn)(const char *path, uint32_t *out_mesh,
+                                    uint32_t *out_material, dai_vec3 *out_render_scale,
+                                    void *user);
+DAI_API void dai_doc_sync_resolver(dai_doc_sync *s, dai_asset_resolve_fn fn, void *user);
 DAI_API void          dai_doc_sync_destroy(dai_doc_sync *s);
 /* Returns how many nodes were created, updated or destroyed. 0 = nothing to do. */
 DAI_API uint32_t      dai_doc_sync_apply(dai_doc_sync *s);

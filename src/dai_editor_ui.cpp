@@ -38,6 +38,8 @@ struct dai_editor_ui {
 
     char     name_buf[DAI_NODE_NAME_MAX] = { 0 };
     dai_node name_buf_node = DAI_INVALID_NODE;
+    char     asset_buf[96] = { 0 };
+    dai_node asset_buf_node = DAI_INVALID_NODE;
 
     // viewport interaction
     bool viewport_dragging = false;
@@ -182,6 +184,14 @@ void dai_editor_ui_inspector(dai_editor_ui *p, float x, float y, float w, float 
     }
     if (dai_ui_input_text(p->ui, "Name", p->name_buf, sizeof(p->name_buf))) {
         std::snprintf(r.name, sizeof(r.name), "%s", p->name_buf);
+    }
+
+    if (p->asset_buf_node != n) {
+        std::snprintf(p->asset_buf, sizeof(p->asset_buf), "%s", r.asset);
+        p->asset_buf_node = n;
+    }
+    if (dai_ui_input_text(p->ui, "Asset", p->asset_buf, sizeof(p->asset_buf))) {
+        std::snprintf(r.asset, sizeof(r.asset), "%s", p->asset_buf);
     }
 
     dai_ui_separator(p->ui);

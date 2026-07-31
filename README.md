@@ -429,11 +429,11 @@ and shading when a test fails and you need to know which half is lying.
 Kept honest: things listed here are genuinely absent, and things that got built
 have been struck from the list rather than left in to look modest.
 
-**The big one - assets are not in the scene file.** A node stores a mesh *index*,
-not a reference to anything on disk, so a scene with imported glTF models cannot
-be saved and reopened: the index points somewhere else next run. What is needed
-is a path based asset reference (mesh, texture, material) and a library that
-resolves it. Until then the editor can only author primitives.
+Assets are referenced by path now (`asset models/crate.glb` in the scene file)
+and resolved through a callback, so a scene with imported models saves and
+reopens. What is *not* here yet is the resolver itself wired to Mnemosyne and
+the glTF importer - the document and sync layers are ready for it, the glue is
+not written.
 
 Editor:
 - No box select; multi-selection is click by click.

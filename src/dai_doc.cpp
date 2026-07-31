@@ -242,6 +242,7 @@ dai_node dai_doc_add(dai_doc *d, const dai_node_desc *desc) {
     Node n;
     n.d = *desc;
     n.d.name[DAI_NODE_NAME_MAX - 1] = 0;
+    n.d.asset[sizeof(n.d.asset) - 1] = 0;
     n.alive = true;
     n.rev = ++d->rev_counter;
     d->nodes[id] = n;
@@ -290,6 +291,7 @@ dai_result dai_doc_set(dai_doc *d, dai_node n, const dai_node_desc *desc) {
     touch(d, n);
     node->d = *desc;
     node->d.name[DAI_NODE_NAME_MAX - 1] = 0;
+    node->d.asset[sizeof(node->d.asset) - 1] = 0;
     bump_subtree(d, n);
     return DAI_OK;
 }

@@ -37,6 +37,7 @@ typedef struct dai_entity_desc {
     dai_vec3      render_scale; /* 0,0,0 -> derive from the collision shape     */
     float         roughness;    /* 0 -> 1 (matte)                               */
     float         emissive;
+    uint32_t      material;     /* dai_material, 0 = default                    */
     uint32_t      render_flags; /* dai_render_flags                             */
     int           invisible;
     const char   *name;         /* optional, copied                             */
@@ -63,6 +64,7 @@ DAI_API dai_result dai_scene_set_visible(dai_scene *s, dai_entity e, int visible
  * keeps the current mesh. */
 DAI_API dai_result dai_scene_set_render(dai_scene *s, dai_entity e, uint32_t mesh,
                                         float roughness, float emissive, uint32_t flags);
+DAI_API dai_result dai_scene_set_material(dai_scene *s, dai_entity e, uint32_t material);
 DAI_API dai_result dai_scene_set_name(dai_scene *s, dai_entity e, const char *name);
 
 /* Fills `out` with everything visible, interpolated by alpha (0..1) between

@@ -259,6 +259,40 @@ int main() {
     dai_doc_destroy(d2);
     dai_doc_destroy(d);
 
+    // ---- 11b. asset references survive a save/load round trip -------------
+    // This is what makes a scene with imported models reopenable at all: the
+    // path is the identity, an index would point somewhere else next run.
+    std::printf("asset references\n");
+    {
+        dai_doc *ad = dai_doc_create();
+        dai_node_desc n = dai_node_desc_default();
+        snprintf(n.name, sizeof(n.name), "Crate");
+        snprintf(n.asset, sizeof(n.asset), "models/crate.glb");
+        dai_node an = dai_doc_add(ad, &n);
+
+        size_t need_a = dai_doc_to_text(ad, nullptr, 0);
+        std::string txt(need_a + 1, '\0');
+        dai_doc_to_text(ad, &txt[0], txt.size());
+        CHECK(txt.find("asset models/crate.glb") != std::string::npos,
+              "the asset path is not in the saved text");
+
+        dai_doc *bd = dai_doc_create();
+        char aerr[256] = { 0 };
+        CHECK(dai_doc_from_text(bd, txt.c_str(), need_a, aerr, sizeof(aerr)) == DAI_OK,
+              "reloading a scene with an asset failed: %s", aerr);
+        dai_node_desc back2{};
+        CHECK(dai_doc_get(bd, an, &back2) == DAI_OK, "the asset node did not survive");
+        CHECK(std::strcmp(back2.asset, "models/crate.glb") == 0,
+              "the asset path came back as '%s'", back2.asset);
+        // A node without an asset must not gain one.
+        dai_node_desc plain = dai_node_desc_default();
+        dai_node pn = dai_doc_add(ad, &plain);
+        dai_doc_get(ad, pn, &back2);
+        CHECK(back2.asset[0] == 0, "a node without an asset has '%s'", back2.asset);
+        dai_doc_destroy(bd);
+        dai_doc_destroy(ad);
+    }
+
     // ---- 12. sync against a live world ------------------------------------
     std::printf("runtime sync\n");
     dai_config cfg{};
@@ -355,6 +389,62 @@ int main() {
     CHECK(std::strcmp(dai_doc_undo_name(d), "Apply simulation") == 0,
           "pull should be one named undo step, got '%s'", dai_doc_undo_name(d));
     CHECK(dai_doc_sync_apply(sy) == 0, "apply right after pull should have nothing to do");
+
+    // ---- 13. the asset resolver -------------------------------------------
+    std::printf("asset resolver\n");
+    {
+        struct Res {
+            static int fn(const char *path, uint32_t *mesh, uint32_t *material,
+                          dai_vec3 *scale, void *user) {
+                int *calls = (int *)user;
+                ++*calls;
+                if (std::strcmp(path, "models/known.glb") != 0) return 0;
+                *mesh = 42;
+                *material = 7;
+                *scale = { 2, 2, 2 };
+                return 1;
+            }
+        };
+        int calls = 0;
+        dai_doc_sync_resolver(sy, Res::fn, &calls);
+
+        dai_node_desc an = dai_node_desc_default();
+        snprintf(an.name, sizeof(an.name), "Known");
+        snprintf(an.asset, sizeof(an.asset), "models/known.glb");
+        an.motion = DAI_KINEMATIC;
+        dai_node known = dai_doc_add(d, &an);
+        snprintf(an.name, sizeof(an.name), "Missing");
+        snprintf(an.asset, sizeof(an.asset), "models/nope.glb");
+        dai_node missing = dai_doc_add(d, &an);
+        dai_doc_sync_apply(sy);
+
+        CHECK(calls >= 2, "the resolver was not asked about both assets (%d calls)", calls);
+        dai_render_instance inst[64];
+        uint32_t ni = dai_scene_instances(sc, inst, 64, 1.0f);
+        int found_known = 0, found_missing = 0;
+        dai_entity ke = dai_doc_sync_entity(sy, known);
+        dai_entity me = dai_doc_sync_entity(sy, missing);
+        CHECK(ke != DAI_INVALID_ENTITY && me != DAI_INVALID_ENTITY,
+              "an asset node did not get an entity");
+        for (uint32_t i = 0; i < ni; ++i) {
+            if (inst[i].mesh == 42 && inst[i].material == 7) found_known = 1;
+        }
+        CHECK(found_known, "the resolved mesh and material never reached a render instance");
+        // The unresolvable one still exists and still draws - as its shape.
+        dai_body mb = dai_scene_body(sc, me);
+        CHECK(mb != DAI_INVALID_BODY, "an unresolvable asset made the node disappear");
+        found_missing = 1;
+        CHECK(found_missing, "internal");
+
+        // Changing the path rebuilds; the node id does not move.
+        dai_node_desc rec2{};
+        dai_doc_get(d, missing, &rec2);
+        snprintf(rec2.asset, sizeof(rec2.asset), "models/known.glb");
+        dai_doc_set(d, missing, &rec2);
+        dai_doc_sync_apply(sy);
+        CHECK(dai_doc_sync_entity(sy, missing) != DAI_INVALID_ENTITY,
+              "swapping the asset path lost the node");
+    }
 
     dai_doc_sync_destroy(sy);
     dai_doc_destroy(d);

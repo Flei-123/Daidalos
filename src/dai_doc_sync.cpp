@@ -28,6 +28,7 @@ struct Live {
 // Changing any of these means the rigid body itself is wrong, not just its
 // pose - Jolt shapes are immutable once created, so the body is rebuilt.
 bool needs_rebuild(const dai_node_desc &a, const dai_node_desc &b) {
+    if (std::strcmp(a.asset, b.asset) != 0) return true;   // different model entirely
     return a.shape != b.shape || a.motion != b.motion || a.no_body != b.no_body ||
            a.no_sleeping != b.no_sleeping ||
            std::memcmp(&a.half_extent, &b.half_extent, sizeof(dai_vec3)) != 0 ||
@@ -42,6 +43,8 @@ struct dai_doc_sync {
     dai_doc   *doc = nullptr;
     dai_scene *scene = nullptr;
     dai_world *world = nullptr;
+    dai_asset_resolve_fn resolve_asset = nullptr;
+    void                *resolve_user = nullptr;
     std::unordered_map<dai_node, Live>   live;
     std::unordered_map<dai_entity, dai_node> by_entity;
     std::unordered_map<dai_body, dai_node>   by_body;
@@ -99,6 +102,19 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
     d.body.no_sleeping = r.no_sleeping;
     d.body.user_data = r.user_data;
     d.mesh = r.mesh;
+    // An asset path wins over the mesh index. Failing to resolve is deliberately
+    // NOT fatal: the node keeps its collision shape and draws as that shape, so
+    // a missing file looks obviously wrong instead of silently vanishing.
+    if (r.asset[0] && s->resolve_asset) {
+        uint32_t am = 0xFFFFFFFFu, amat = 0;
+        dai_vec3 ascale{ 0, 0, 0 };
+        if (s->resolve_asset(r.asset, &am, &amat, &ascale, s->resolve_user)) {
+            if (am != 0xFFFFFFFFu) d.mesh = am;
+            d.material = amat;
+            if (ascale.x != 0.0f || ascale.y != 0.0f || ascale.z != 0.0f)
+                d.render_scale = { ascale.x * ws.x, ascale.y * ws.y, ascale.z * ws.z };
+        }
+    }
     d.color = r.color;
     d.roughness = r.roughness;
     d.emissive = r.emissive;
@@ -133,6 +149,15 @@ dai_doc_sync *dai_doc_sync_create(dai_doc *d, dai_scene *scene) {
 }
 
 void dai_doc_sync_destroy(dai_doc_sync *s) { delete s; }
+
+void dai_doc_sync_resolver(dai_doc_sync *s, dai_asset_resolve_fn fn, void *user) {
+    if (!s) return;
+    s->resolve_asset = fn;
+    s->resolve_user = user;
+    // Everything already built may have been drawn with the wrong (or no) asset,
+    // so force a full pass rather than leaving stale geometry on screen.
+    for (auto &kv : s->live) kv.second.rev = 0;
+}
 
 dai_scene *dai_doc_sync_scene(const dai_doc_sync *s) { return s ? s->scene : nullptr; }
 dai_doc   *dai_doc_sync_doc(const dai_doc_sync *s) { return s ? s->doc : nullptr; }

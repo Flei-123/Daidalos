@@ -158,6 +158,7 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
         if (r.no_sleeping != def.no_sleeping)   put(s, "  nosleep %d\n", r.no_sleeping);
         if (r.no_body != def.no_body)           put(s, "  nobody %d\n", r.no_body);
         if (r.mesh != def.mesh)             put(s, "  mesh %u\n", (unsigned)r.mesh);
+        if (r.asset[0])                     put(s, "  asset %s\n", r.asset);
         if (!v3eq(r.color, def.color))          write_v3(s, "color", r.color);
         if (!feq(r.roughness, def.roughness))   put(s, "  roughness %s\n", fstr(r.roughness).c_str());
         if (!feq(r.emissive, def.emissive))     put(s, "  emissive %s\n", fstr(r.emissive).c_str());
@@ -258,6 +259,8 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "nosleep")     { ok = parse_i32(after, &rec.no_sleeping); }
         else if (key == "nobody")      { ok = parse_i32(after, &rec.no_body); }
         else if (key == "mesh")   { ok = parse_u32(after, &rec.mesh); }
+        else if (key == "asset")  { std::string v = rest_of_line(after);
+                                    snprintf(rec.asset, sizeof(rec.asset), "%s", v.c_str()); }
         else if (key == "color")  { ok = parse_floats(after, &rec.color.x, 3); }
         else if (key == "roughness") { ok = parse_floats(after, &rec.roughness, 1); }
         else if (key == "emissive")  { ok = parse_floats(after, &rec.emissive, 1); }
