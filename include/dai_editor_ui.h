@@ -44,6 +44,11 @@ DAI_API void dai_editor_ui_gizmo(dai_editor_ui *p);
 DAI_API int dai_editor_ui_viewport_input(dai_editor_ui *p, float mouse_x, float mouse_y,
                                          int mouse_down);
 
+/* Everything the viewport does in one call: camera first (Unity bindings, see
+ * dai_editor.h), then selection and gizmo with the left button. Returns 1 if
+ * the viewport used the input. Prefer this over the two calls above. */
+DAI_API int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in);
+
 /* Number of rows the hierarchy currently shows - folded subtrees excluded. */
 DAI_API uint32_t dai_editor_ui_visible_rows(const dai_editor_ui *p);
 

@@ -390,6 +390,36 @@ int dai_editor_ui_viewport_input(dai_editor_ui *p, float mx, float my, int mouse
     return 0;
 }
 
+int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in) {
+    if (!p || !in) return 0;
+
+    // A camera gesture that started in the viewport keeps going even when the
+    // pointer wanders over a panel - releasing the button outside should not
+    // leave the camera stuck mid-orbit.
+    bool over_ui = dai_ui_wants_mouse(p->ui) != 0;
+    dai_editor_cam_input ci = *in;
+    if (over_ui && !dai_editor_cam_active(p->ed)) {
+        ci.mouse_right = 0;
+        ci.mouse_middle = 0;
+        ci.wheel = 0.0f;
+        if (ci.key_alt) ci.mouse_left = 0;
+    }
+    int cam_used = dai_editor_cam_update(p->ed, &ci);
+    if (cam_used) {
+        // Cancel a half finished object drag rather than letting the camera and
+        // the gizmo fight over the same pointer.
+        if (p->viewport_dragging) {
+            dai_editor_drag_cancel(p->ed);
+            p->viewport_dragging = false;
+        }
+        p->prev_viewport_down = 0;
+        return 1;
+    }
+    // Alt is the camera's modifier; a left click with it held is never a pick.
+    int left = (in->key_alt) ? 0 : in->mouse_left;
+    return dai_editor_ui_viewport_input(p, in->mouse_x, in->mouse_y, left);
+}
+
 // ------------------------------------------------------------------ frame
 
 void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {

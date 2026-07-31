@@ -30,6 +30,7 @@
 
 struct dai_window {
     dai_renderer *r = nullptr;
+    float wheel = 0.0f;
 
     wl_display *display = nullptr;
     wl_registry *registry = nullptr;
@@ -112,7 +113,12 @@ void pt_button(void *data, wl_pointer *, uint32_t, uint32_t, uint32_t button, ui
     uint32_t bit = 1u << (button == BTN_LEFT ? 1 : button == BTN_MIDDLE ? 2 : 3);
     if (state) w->buttons |= bit; else w->buttons &= ~bit;
 }
-void pt_axis(void *, wl_pointer *, uint32_t, uint32_t, wl_fixed_t) {}
+void pt_axis(void *data, wl_pointer *, uint32_t, uint32_t axis, wl_fixed_t value) {
+    // Vertical axis only; wl_fixed is 1/256th and a notch is ~10 units.
+    if (axis != 0) return;
+    dai_window *w = (dai_window *)data;
+    if (w) w->wheel -= (float)wl_fixed_to_double(value) / 10.0f;
+}
 void pt_frame(void *, wl_pointer *) {}
 void pt_axis_source(void *, wl_pointer *, uint32_t) {}
 void pt_axis_stop(void *, wl_pointer *, uint32_t, uint32_t) {}
@@ -371,6 +377,13 @@ dai_result dai_window_present(dai_window *w) {
 }
 
 int dai_window_key_down(dai_window *w, uint32_t keysym) { return (w && w->keys[key_slot(keysym)]) ? 1 : 0; }
+
+float dai_window_wheel(dai_window *w) {
+    if (!w) return 0.0f;
+    float v = w->wheel;
+    w->wheel = 0.0f;
+    return v;
+}
 
 int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {
     if (!w) return 0;

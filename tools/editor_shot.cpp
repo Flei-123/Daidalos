@@ -144,6 +144,36 @@ int main(int argc, char **argv) {
     dai_editor_pause(ed);
     shot("playing", 640, 360);
 
+    // Camera bindings, so the shots also prove the viewport camera moves.
+    dai_editor_stop(ed);
+    dai_editor_cam_input ci{};
+    ci.dt = 1.0f / 60.0f;
+    ci.mouse_x = 640; ci.mouse_y = 360; ci.mouse_right = 1;
+    dai_editor_cam_update(ed, &ci);
+    for (int i = 0; i < 22; ++i) { ci.key_w = 1; dai_editor_cam_update(ed, &ci); }
+    ci.mouse_x = 760;                       // look right while flying
+    dai_editor_cam_update(ed, &ci);
+    {
+        dai_vec3 o, d;
+        dai_editor_ray(ed, (float)W * 0.5f, (float)H * 0.5f, &o, &d);
+        dai_render_camera(r, o, dai_vec3{ o.x + d.x, o.y + d.y, o.z + d.z },
+                          dai_vec3{ 0, 1, 0 }, 55.0f, 0.1f, 200.0f);
+    }
+    shot("flythrough", 640, 360);
+
+    dai_editor_select(ed, target, 0);
+    ci.mouse_right = 0; ci.key_w = 0;
+    dai_editor_cam_update(ed, &ci);
+    ci.key_focus = 1;
+    dai_editor_cam_update(ed, &ci);         // F
+    {
+        dai_vec3 o, d;
+        dai_editor_ray(ed, (float)W * 0.5f, (float)H * 0.5f, &o, &d);
+        dai_render_camera(r, o, dai_vec3{ o.x + d.x, o.y + d.y, o.z + d.z },
+                          dai_vec3{ 0, 1, 0 }, 55.0f, 0.1f, 200.0f);
+    }
+    shot("focus", 640, 360);
+
     dai_editor_ui_destroy(panels);
     dai_editor_destroy(ed);
     dai_ui_destroy(ui);

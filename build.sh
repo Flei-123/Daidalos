@@ -185,6 +185,7 @@ g++ $FLAGS $ARCH -Iinclude tests/test_input.cpp $LIBS -o build/test_input
 g++ $FLAGS $ARCH -Iinclude tests/test_editor.cpp $LIBS -o build/test_editor
 g++ $FLAGS $ARCH -Iinclude tests/test_doc.cpp $LIBS -o build/test_doc
 g++ $FLAGS $ARCH -Iinclude tests/test_play.cpp $LIBS -o build/test_play
+g++ $FLAGS $ARCH -Iinclude tests/test_cam.cpp $LIBS -o build/test_cam
 if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_script.cpp $SCRIPT_LIB $VKLIBS -o build/test_script
 fi
@@ -208,7 +209,7 @@ fi
 echo "-- examples"
 g++ $FLAGS $ARCH -Iinclude examples/hello_daidalos.cpp $LIBS -o build/hello_daidalos
 if [ "$VK_OK" = "1" ]; then
-    for ex in sandbox_demo vehicle_demo model_viewer window_demo particles_demo; do
+    for ex in sandbox_demo vehicle_demo model_viewer window_demo particles_demo editor_demo; do
         [ -f "examples/$ex.cpp" ] || continue
         g++ $FLAGS $ARCH -Iinclude "examples/$ex.cpp" $VKLIBS -o "build/$ex"
     done

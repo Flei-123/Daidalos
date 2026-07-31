@@ -95,6 +95,17 @@ struct dai_editor {
     float fov = 55.0f, znear = 0.1f, zfar = 500.0f;
     float vw = 1280.0f, vh = 720.0f;
 
+    // Camera orientation is kept as yaw/pitch, not as a target point. Storing a
+    // target and rotating it drifts: repeated look-around would slowly change
+    // the distance to it, and the roll would creep away from level.
+    float cam_yaw = 0.0f, cam_pitch = 0.0f;
+    float cam_pivot_dist = 10.0f;      // where orbit and dolly aim
+    float cam_speed = 6.0f;
+    bool  cam_angles_valid = false;
+    int   cam_mode = 0;                // 0 none, 1 look, 2 pan, 3 orbit, 4 dolly
+    float cam_last_x = 0, cam_last_y = 0;
+    bool  cam_prev_focus = false;
+
     std::vector<dai_node> selection;
     int mode = DAI_GIZMO_TRANSLATE;
     float snap_translate = 0.0f, snap_rotate = 0.0f, snap_scale = 0.0f;
@@ -213,6 +224,17 @@ void dai_editor_camera(dai_editor *e, dai_vec3 eye, dai_vec3 target, dai_vec3 up
     e->fov = fov; e->znear = znear; e->zfar = zfar;
     if (vw > 0) e->vw = vw;
     if (vh > 0) e->vh = vh;
+    // Setting the camera from outside has to update the angles too, or the
+    // first look-around would snap back to wherever the camera used to point.
+    dai_vec3 d = sub(target, eye);
+    float len = length(d);
+    if (len > 1e-5f) {
+        e->cam_pivot_dist = len;
+        d = mul(d, 1.0f / len);
+        e->cam_yaw = std::atan2(d.x, -d.z);
+        e->cam_pitch = std::asin(d.y < -1.0f ? -1.0f : (d.y > 1.0f ? 1.0f : d.y));
+        e->cam_angles_valid = true;
+    }
 }
 
 void dai_editor_ray(const dai_editor *e, float mx, float my, dai_vec3 *origin, dai_vec3 *dir) {
@@ -698,6 +720,219 @@ uint32_t dai_editor_duplicate_selection(dai_editor *e) {
     resync(e);
     return (uint32_t)copies.size();
 }
+
+} // extern "C"
+
+// ------------------------------------------------------- viewport camera
+
+namespace {
+
+const float PITCH_LIMIT = 1.5533f;      // 89 degrees; at 90 the basis degenerates
+
+void cam_apply(dai_editor *e) {
+    // Rebuild the look-at target from the angles. up stays world up, so the
+    // horizon never rolls - which is what Unity does and what people expect.
+    float cp = std::cos(e->cam_pitch), sp = std::sin(e->cam_pitch);
+    dai_vec3 fwd{ std::sin(e->cam_yaw) * cp, sp, -std::cos(e->cam_yaw) * cp };
+    e->target = add(e->eye, mul(fwd, e->cam_pivot_dist));
+}
+
+void cam_ensure_angles(dai_editor *e) {
+    if (e->cam_angles_valid) return;
+    dai_vec3 d = sub(e->target, e->eye);
+    float len = length(d);
+    if (len > 1e-5f) {
+        e->cam_pivot_dist = len;
+        d = mul(d, 1.0f / len);
+        e->cam_yaw = std::atan2(d.x, -d.z);
+        e->cam_pitch = std::asin(d.y < -1.0f ? -1.0f : (d.y > 1.0f ? 1.0f : d.y));
+    }
+    e->cam_angles_valid = true;
+}
+
+void cam_basis(const dai_editor *e, dai_vec3 *fwd, dai_vec3 *right, dai_vec3 *upv) {
+    float cp = std::cos(e->cam_pitch), sp = std::sin(e->cam_pitch);
+    *fwd = dai_vec3{ std::sin(e->cam_yaw) * cp, sp, -std::cos(e->cam_yaw) * cp };
+    *right = norm(cross(*fwd, dai_vec3{ 0, 1, 0 }));
+    *upv = cross(*right, *fwd);
+}
+
+// Rough world size of the selection, so F frames it instead of ending up
+// inside it or a hundred metres away.
+float selection_radius(const dai_editor *e, dai_vec3 centre) {
+    float r = 0.0f;
+    for (dai_node n : e->selection) {
+        dai_node_desc rec{};
+        if (dai_doc_get(e->doc, n, &rec) != DAI_OK) continue;
+        dai_vec3 p{}, sc{ 1, 1, 1 };
+        dai_doc_world_transform(e->doc, n, &p, nullptr, &sc);
+        float ext = std::fabs(rec.half_extent.x * sc.x);
+        ext = std::fmax(ext, std::fabs(rec.half_extent.y * sc.y));
+        ext = std::fmax(ext, std::fabs(rec.half_extent.z * sc.z));
+        float d = length(sub(p, centre)) + ext;
+        if (d > r) r = d;
+    }
+    return r;
+}
+
+} // namespace
+
+extern "C" {
+
+void dai_editor_cam_speed(dai_editor *e, float s) {
+    if (e && s > 0.0f) e->cam_speed = s;
+}
+float dai_editor_cam_speed_get(const dai_editor *e) { return e ? e->cam_speed : 0.0f; }
+int dai_editor_cam_active(const dai_editor *e) { return (e && e->cam_mode != 0) ? 1 : 0; }
+
+dai_vec3 dai_editor_cam_pivot(const dai_editor *e) {
+    if (!e) return dai_vec3{ 0, 0, 0 };
+    dai_vec3 fwd, right, upv;
+    cam_basis(e, &fwd, &right, &upv);
+    return add(e->eye, mul(fwd, e->cam_pivot_dist));
+}
+
+void dai_editor_cam_focus(dai_editor *e) {
+    if (!e) return;
+    cam_ensure_angles(e);
+
+    dai_vec3 centre{ 0, 0, 0 };
+    float radius = 2.0f;
+    if (dai_editor_selection_count(e) > 0) {
+        centre = dai_editor_selection_center(e);
+        radius = selection_radius(e, centre);
+    } else {
+        // Nothing selected: frame the whole document, the way F does with an
+        // empty selection.
+        uint32_t n = dai_doc_count(e->doc);
+        std::vector<dai_node> all(n);
+        if (n) dai_doc_nodes(e->doc, all.data(), n);
+        dai_vec3 lo{ 1e9f, 1e9f, 1e9f }, hi{ -1e9f, -1e9f, -1e9f };
+        uint32_t counted = 0;
+        for (dai_node id : all) {
+            dai_node_desc rec{};
+            if (dai_doc_get(e->doc, id, &rec) != DAI_OK || rec.no_body) continue;
+            dai_vec3 p{};
+            dai_doc_world_transform(e->doc, id, &p, nullptr, nullptr);
+            lo = { std::fmin(lo.x, p.x), std::fmin(lo.y, p.y), std::fmin(lo.z, p.z) };
+            hi = { std::fmax(hi.x, p.x), std::fmax(hi.y, p.y), std::fmax(hi.z, p.z) };
+            ++counted;
+        }
+        if (counted) {
+            centre = mul(add(lo, hi), 0.5f);
+            radius = length(sub(hi, lo)) * 0.5f;
+        }
+    }
+    if (radius < 0.5f) radius = 0.5f;
+
+    // Distance that fits the sphere in the vertical fov, with a little air.
+    float half = e->fov * PI / 360.0f;
+    float dist = radius / std::fmax(0.05f, std::sin(half)) * 1.15f;
+    dai_vec3 fwd, right, upv;
+    cam_basis(e, &fwd, &right, &upv);
+    e->cam_pivot_dist = dist;
+    e->eye = sub(centre, mul(fwd, dist));
+    cam_apply(e);
+}
+
+int dai_editor_cam_update(dai_editor *e, const dai_editor_cam_input *in) {
+    if (!e || !in) return 0;
+    cam_ensure_angles(e);
+
+    float dt = in->dt > 0.0f ? in->dt : 1.0f / 60.0f;
+    if (dt > 0.1f) dt = 0.1f;              // a hitch must not teleport the camera
+
+    if (in->key_focus && !e->cam_prev_focus) dai_editor_cam_focus(e);
+    e->cam_prev_focus = in->key_focus != 0;
+
+    // Which mode a press starts. Checked in Unity's precedence: alt combos
+    // first, then plain right for flythrough, then middle for pan.
+    int mode = 0;
+    if (in->key_alt && in->mouse_left)        mode = 3;   // orbit
+    else if (in->key_alt && in->mouse_right)  mode = 4;   // dolly by dragging
+    else if (in->mouse_right)                 mode = 1;   // look around
+    else if (in->mouse_middle)                mode = 2;   // pan
+
+    // Any change of mode re-anchors the drag origin. Only checking "pressed
+    // while idle" leaves the old mode running when the user switches buttons
+    // without releasing - alt+left after a middle drag would keep panning, and
+    // the first frame would jump by the whole distance between the two presses.
+    if (mode != e->cam_mode) {
+        e->cam_mode = mode;
+        e->cam_last_x = in->mouse_x;
+        e->cam_last_y = in->mouse_y;
+    }
+
+    float dx = in->mouse_x - e->cam_last_x;
+    float dy = in->mouse_y - e->cam_last_y;
+    e->cam_last_x = in->mouse_x;
+    e->cam_last_y = in->mouse_y;
+
+    dai_vec3 fwd, right, upv;
+    cam_basis(e, &fwd, &right, &upv);
+    const float LOOK = 0.005f;             // radians per pixel
+
+    if (e->cam_mode == 1) {                // look around, position unchanged
+        e->cam_yaw += dx * LOOK;
+        e->cam_pitch -= dy * LOOK;
+    } else if (e->cam_mode == 3) {         // orbit around the pivot
+        dai_vec3 pivot = add(e->eye, mul(fwd, e->cam_pivot_dist));
+        e->cam_yaw += dx * LOOK;
+        e->cam_pitch -= dy * LOOK;
+        if (e->cam_pitch > PITCH_LIMIT) e->cam_pitch = PITCH_LIMIT;
+        if (e->cam_pitch < -PITCH_LIMIT) e->cam_pitch = -PITCH_LIMIT;
+        cam_basis(e, &fwd, &right, &upv);
+        e->eye = sub(pivot, mul(fwd, e->cam_pivot_dist));
+    } else if (e->cam_mode == 2) {         // pan in the screen plane
+        // Scale by distance so the point under the cursor keeps up regardless
+        // of how far away the scene is.
+        float k = e->cam_pivot_dist * std::tan(e->fov * PI / 360.0f) * 2.0f / (e->vh > 0 ? e->vh : 1.0f);
+        e->eye = add(e->eye, mul(right, -dx * k));
+        e->eye = add(e->eye, mul(upv, dy * k));
+    } else if (e->cam_mode == 4) {         // alt+right drag = dolly
+        float k = (dx + -dy) * 0.01f * std::fmax(1.0f, e->cam_pivot_dist);
+        e->eye = add(e->eye, mul(fwd, k));
+    }
+
+    if (e->cam_pitch > PITCH_LIMIT) e->cam_pitch = PITCH_LIMIT;
+    if (e->cam_pitch < -PITCH_LIMIT) e->cam_pitch = -PITCH_LIMIT;
+    cam_basis(e, &fwd, &right, &upv);
+
+    if (e->cam_mode == 1) {
+        // Flythrough movement. Q down, E up - Unity's way round.
+        float speed = e->cam_speed * (in->key_shift ? 3.0f : 1.0f);
+        dai_vec3 move{ 0, 0, 0 };
+        if (in->key_w) move = add(move, fwd);
+        if (in->key_s) move = sub(move, fwd);
+        if (in->key_d) move = add(move, right);
+        if (in->key_a) move = sub(move, right);
+        if (in->key_e) move = add(move, dai_vec3{ 0, 1, 0 });
+        if (in->key_q) move = sub(move, dai_vec3{ 0, 1, 0 });
+        if (dot(move, move) > 1e-8f) e->eye = add(e->eye, mul(norm(move), speed * dt));
+
+        // While flying, the wheel sets the speed instead of moving - this is
+        // the binding people miss most when a clone gets it wrong.
+        if (in->wheel != 0.0f) {
+            e->cam_speed *= std::pow(1.2f, in->wheel);
+            if (e->cam_speed < 0.05f) e->cam_speed = 0.05f;
+            if (e->cam_speed > 500.0f) e->cam_speed = 500.0f;
+        }
+    } else if (in->wheel != 0.0f) {
+        // Dolly. Proportional to distance, so approaching something never
+        // overshoots past it in one notch.
+        float step = in->wheel * 0.12f * std::fmax(0.5f, e->cam_pivot_dist);
+        e->eye = add(e->eye, mul(fwd, step));
+        e->cam_pivot_dist -= step;
+        if (e->cam_pivot_dist < 0.5f) e->cam_pivot_dist = 0.5f;
+    }
+
+    cam_apply(e);
+    return e->cam_mode != 0 ? 1 : 0;
+}
+
+} // extern "C"
+
+extern "C" {
 
 // -------------------------------------------------------------- play mode
 

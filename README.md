@@ -170,6 +170,12 @@ viewer or a Qt shell can drive it. `dai_editor_ui` is the one file that knows
 about both the editor and `dai_ui`, and draws the hierarchy, inspector, toolbar
 and timeline.
 
+The viewport camera uses Unity's bindings, not Blender's: right mouse to look
+around with WASD/QE flying while it is held, wheel for speed while flying and
+dolly otherwise, middle to pan, alt+left to orbit, F to frame the selection.
+The bindings live in `dai_editor_cam_update` so a frontend fills one input
+struct instead of scattering them.
+
 Play mode never touches the document, so Stop is exact: the sync layer is told
 that everything it believes about the world is stale and rewrites it. Keeping a
 simulated result is an explicit button, not the default. Scrubbing rides the
@@ -390,6 +396,14 @@ and shading when a test fails and you need to know which half is lying.
   and solid crates looked like open shells. Tests 4 and 9 pin it now - and test
   4 had to be rewritten, because comparing against the corner pixel let it pass
   while the camera was staring at a wall.
+- **the camera gesture that never ended**: changing mouse button mid-drag (middle
+  to alt+left, say) only re-anchored on "pressed while idle", so the old mode
+  kept running and the first frame jumped by the distance between the two
+  presses. Any mode change now re-anchors.
+- **X11 wheel buttons in the button mask**: X reports the wheel as buttons 4 and
+  5, which meant every scroll looked like a middle-button drag. They now feed a
+  wheel accumulator instead - polling a bit could never work anyway, since a
+  wheel click presses and releases inside one frame.
 - **the leaking layout row**: `dai_ui_row` had no end, and `panel_end` did not
   clear it. A toolbar that finished with a row left every later panel laying its
   widgets out sideways, so the inspector looked empty - its fields were stacked

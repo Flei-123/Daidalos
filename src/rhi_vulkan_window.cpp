@@ -43,6 +43,7 @@ struct dai_window {
     bool keys[256] = {};                 // hashed keysym -> down
     int mouse_x = 0, mouse_y = 0;
     uint32_t buttons = 0;
+    float    wheel = 0.0f;
 };
 
 namespace {
@@ -194,8 +195,17 @@ int dai_window_poll(dai_window *w) {
             if (e.type == KeyPress && ks == XK_Escape) w->open = false;
             break;
         }
-        case ButtonPress:   w->buttons |= (1u << e.xbutton.button); break;
-        case ButtonRelease: w->buttons &= ~(1u << e.xbutton.button); break;
+        case ButtonPress:
+            // X11 reports the wheel as buttons 4 and 5. They must not land in
+            // the button mask, or "middle drag" would trigger on every scroll.
+            if (e.xbutton.button == 4) w->wheel += 1.0f;
+            else if (e.xbutton.button == 5) w->wheel -= 1.0f;
+            else w->buttons |= (1u << e.xbutton.button);
+            break;
+        case ButtonRelease:
+            if (e.xbutton.button != 4 && e.xbutton.button != 5)
+                w->buttons &= ~(1u << e.xbutton.button);
+            break;
         case MotionNotify:  w->mouse_x = e.xmotion.x; w->mouse_y = e.xmotion.y; break;
         case ConfigureNotify:
             if ((uint32_t)e.xconfigure.width != w->width || (uint32_t)e.xconfigure.height != w->height) {
@@ -275,6 +285,13 @@ dai_result dai_window_present(dai_window *w) {
 
 int dai_window_key_down(dai_window *w, uint32_t keysym) {
     return (w && w->keys[key_slot(keysym)]) ? 1 : 0;
+}
+
+float dai_window_wheel(dai_window *w) {
+    if (!w) return 0.0f;
+    float v = w->wheel;
+    w->wheel = 0.0f;
+    return v;
 }
 
 int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {

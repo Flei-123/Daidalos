@@ -285,6 +285,10 @@ DAI_API dai_result dai_window_present(dai_window *w);
  * translation table has to exist before the engine is useful. */
 DAI_API int dai_window_key_down(dai_window *w, uint32_t keysym);
 DAI_API int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons);
+/* Wheel notches accumulated since the last call, and resets. Polling a button
+ * bit cannot work: a wheel click is a press and a release in the same frame,
+ * so a frame that is even slightly late misses it entirely. */
+DAI_API float dai_window_wheel(dai_window *w);
 DAI_API void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height);
 
 /* ---- frame ------------------------------------------------------------- */

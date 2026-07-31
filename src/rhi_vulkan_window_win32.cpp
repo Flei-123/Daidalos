@@ -25,6 +25,7 @@
 
 struct dai_window {
     dai_renderer *r = nullptr;
+    float wheel = 0.0f;
     HINSTANCE inst = nullptr;
     HWND hwnd = nullptr;
     bool open = true;
@@ -73,6 +74,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MBUTTONUP:   w->buttons &= ~(1u << 2); return 0;
     case WM_RBUTTONDOWN: w->buttons |= 1u << 3; return 0;
     case WM_RBUTTONUP:   w->buttons &= ~(1u << 3); return 0;
+    case WM_MOUSEWHEEL:  w->wheel += (float)GET_WHEEL_DELTA_WPARAM(wp) / (float)WHEEL_DELTA; return 0;
     default: break;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -283,6 +285,13 @@ dai_result dai_window_present(dai_window *w) {
 }
 
 int dai_window_key_down(dai_window *w, uint32_t code) { return (w && w->keys[key_slot(code)]) ? 1 : 0; }
+
+float dai_window_wheel(dai_window *w) {
+    if (!w) return 0.0f;
+    float v = w->wheel;
+    w->wheel = 0.0f;
+    return v;
+}
 
 int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {
     if (!w) return 0;

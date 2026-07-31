@@ -56,6 +56,47 @@ DAI_API void dai_editor_ray(const dai_editor *e, float mouse_x, float mouse_y,
 DAI_API int  dai_editor_project(const dai_editor *e, dai_vec3 world,
                                 float *out_x, float *out_y);
 
+/* ---- viewport camera (Unity bindings) ---------------------------------- */
+
+/*
+ * Deliberately Unity's scheme, not Blender's:
+ *
+ *   right mouse held      look around in place (flythrough), and while it is
+ *                         held WASD moves, Q/E go down/up, shift is the boost,
+ *                         and the wheel changes the move SPEED rather than the
+ *                         position - that last one is the detail people notice
+ *                         is missing.
+ *   wheel (nothing held)  dolly along the view direction
+ *   middle mouse held     pan in the screen plane
+ *   alt + left            orbit the pivot
+ *   alt + right           dolly by dragging
+ *   F                     frame the selection and put the pivot on it
+ *
+ * The host fills this every frame from its own window backend, so the bindings
+ * live in one place instead of being scattered through the frontend.
+ */
+typedef struct dai_editor_cam_input {
+    float mouse_x, mouse_y;
+    int   mouse_left, mouse_right, mouse_middle;
+    float wheel;                 /* notches, positive = away from the user */
+    int   key_w, key_a, key_s, key_d, key_q, key_e;
+    int   key_shift, key_alt;
+    int   key_focus;             /* F - edge triggered, held does not repeat */
+    float dt;                    /* seconds since the last call */
+} dai_editor_cam_input;
+
+/* Returns 1 while the camera is using the pointer, so the caller knows not to
+ * pick or drag a gizmo with the same click. */
+DAI_API int  dai_editor_cam_update(dai_editor *e, const dai_editor_cam_input *in);
+DAI_API int  dai_editor_cam_active(const dai_editor *e);
+/* Base metres per second; shift multiplies it. Default 6. */
+DAI_API void dai_editor_cam_speed(dai_editor *e, float units_per_second);
+DAI_API float dai_editor_cam_speed_get(const dai_editor *e);
+/* Frames the selection (or the whole scene when nothing is selected) and moves
+ * the orbit pivot onto it - what F does in Unity. */
+DAI_API void dai_editor_cam_focus(dai_editor *e);
+DAI_API dai_vec3 dai_editor_cam_pivot(const dai_editor *e);
+
 /* ---- selection --------------------------------------------------------- */
 
 /* The node under the pixel, or DAI_INVALID_NODE. */
