@@ -123,6 +123,7 @@ bool spawn(dai_world *w, uint32_t slot) {
     if (!w->phys->create_body(slot, s.desc, s.parts)) return false;
     s.alive = true;
     w->phys->get_transform(slot, s.cur_pos, s.cur_rot);
+    s.spawn_pos = s.cur_pos;          // see BodySlot::spawn_pos
     s.prev_pos = s.cur_pos;
     s.prev_rot = s.cur_rot;
     return true;
@@ -746,6 +747,175 @@ uint32_t dai_advance(dai_world *w, double real_seconds, float *out_alpha) {
     if (w->accumulator >= step) w->accumulator = 0.0;
     if (out_alpha) *out_alpha = (float)(w->accumulator / step);
     return n;
+}
+
+// ---------------------------------------------------------------- save files
+
+namespace {
+
+// A save file is a flat, versioned dump. No pointers, no backend blob, no
+// std::string: the same bytes have to load in a build compiled a year later,
+// on another machine, possibly with a different physics backend.
+struct SaveHeader {
+    char     magic[8];       // "DAIDALOS"
+    uint32_t version;
+    uint32_t tick_hz;
+    uint64_t tick;
+    uint64_t rng_state, rng_inc;
+    uint32_t body_count;
+    uint32_t joint_count;
+    uint32_t max_bodies;
+    uint32_t reserved;
+};
+
+struct SavedBody {
+    uint32_t slot;
+    uint32_t generation;
+    dai_body_desc desc;      // parts pointer inside is ignored, parts follow
+    uint32_t part_count;
+    dai_vec3 position;
+    dai_quat rotation;
+    dai_vec3 linear, angular;
+};
+
+struct SavedJoint {
+    uint32_t slot;
+    uint32_t generation;
+    dai_joint_desc desc;
+    int      motor_state;     // 0 when the backend does not expose one
+    float    motor_target;
+};
+
+// plain functions, not templates: this block lives inside extern "C"
+bool wr_bytes(FILE *f, const void *p, size_t n) { return std::fwrite(p, 1, n, f) == n; }
+bool rd_bytes(FILE *f, void *p, size_t n) { return std::fread(p, 1, n, f) == n; }
+
+} // namespace
+
+uint32_t dai_save_version(void) { return 1; }
+
+dai_result dai_world_save(dai_world *w, const char *path) {
+    if (!w || !path) return DAI_ERR_INVALID_ARG;
+    FILE *f = std::fopen(path, "wb");
+    if (!f) return DAI_ERR_FILE;
+
+    SaveHeader h{};
+    std::memcpy(h.magic, "DAIDALOS", 8);
+    h.version = dai_save_version();
+    h.tick_hz = w->cfg.tick_hz;
+    h.tick = w->tick;
+    h.rng_state = w->rng.state;
+    h.rng_inc = w->rng.inc;
+    h.max_bodies = w->cfg.max_bodies;
+    for (const BodySlot &s : w->slots) if (s.alive) h.body_count++;
+    for (const JointSlot &j : w->jslots) if (j.alive) h.joint_count++;
+    if (!wr_bytes(f, &h, sizeof(h))) { std::fclose(f); return DAI_ERR_FILE; }
+
+    for (uint32_t i = 0; i < w->slots.size(); ++i) {
+        const BodySlot &s = w->slots[i];
+        if (!s.alive) continue;
+        SavedBody b{};
+        b.slot = i;
+        b.generation = s.generation;
+        b.desc = s.desc;
+        b.desc.parts = nullptr;              // never write a pointer
+        b.part_count = (uint32_t)s.parts.size();
+        w->phys->get_transform(i, b.position, b.rotation);
+        w->phys->get_velocity(i, b.linear, b.angular);
+        // A compound's reported transform is its centre of mass, while
+        // create_body takes the ORIGIN. Round tripping the reported position
+        // therefore walks the body by the centre of mass offset every save.
+        // Store the delta the body has moved since creation instead.
+        if (!s.parts.empty()) {
+            b.position.x = s.desc.position.x + (b.position.x - s.spawn_pos.x);
+            b.position.y = s.desc.position.y + (b.position.y - s.spawn_pos.y);
+            b.position.z = s.desc.position.z + (b.position.z - s.spawn_pos.z);
+        }
+        if (!wr_bytes(f, &b, sizeof(b))) { std::fclose(f); return DAI_ERR_FILE; }
+        if (b.part_count &&
+            std::fwrite(s.parts.data(), sizeof(dai_compound_part), b.part_count, f) != b.part_count)
+            { std::fclose(f); return DAI_ERR_FILE; }
+    }
+
+    for (uint32_t i = 0; i < w->jslots.size(); ++i) {
+        const JointSlot &j = w->jslots[i];
+        if (!j.alive) continue;
+        SavedJoint sj{};
+        sj.slot = i;
+        sj.generation = j.generation;
+        sj.desc = j.desc;
+        sj.motor_state = 0;       // motors are re-issued by the tick callback,
+        sj.motor_target = 0.0f;   // which is where gameplay drives them anyway
+        if (!wr_bytes(f, &sj, sizeof(sj))) { std::fclose(f); return DAI_ERR_FILE; }
+    }
+
+    std::fclose(f);
+    return DAI_OK;
+}
+
+dai_result dai_world_load(const dai_config *cfg, const char *path, dai_world **out) {
+    if (!cfg || !path || !out) return DAI_ERR_INVALID_ARG;
+    FILE *f = std::fopen(path, "rb");
+    if (!f) return DAI_ERR_FILE;
+
+    SaveHeader h{};
+    if (!rd_bytes(f, &h, sizeof(h)) || std::memcmp(h.magic, "DAIDALOS", 8) != 0) { std::fclose(f); return DAI_ERR_FILE; }
+    if (h.version != dai_save_version()) { std::fclose(f); return DAI_ERR_FILE; }
+
+    dai_config c = *cfg;
+    if (!c.tick_hz) c.tick_hz = h.tick_hz;
+    if (c.max_bodies < h.max_bodies) c.max_bodies = h.max_bodies;
+    dai_world *w = nullptr;
+    if (dai_create(&c, &w) != DAI_OK) { std::fclose(f); return DAI_ERR_STATE; }
+
+    for (uint32_t i = 0; i < h.body_count; ++i) {
+        SavedBody b{};
+        if (!rd_bytes(f, &b, sizeof(b)) || b.slot >= w->slots.size()) { dai_destroy(w); std::fclose(f); return DAI_ERR_FILE; }
+        std::vector<dai_compound_part> parts(b.part_count);
+        if (b.part_count &&
+            std::fread(parts.data(), sizeof(dai_compound_part), b.part_count, f) != b.part_count)
+            { dai_destroy(w); std::fclose(f); return DAI_ERR_FILE; }
+
+        // restore into the exact slot the body had, so saved handles stay valid
+        BodySlot &s = w->slots[b.slot];
+        s.parts = parts;
+        s.desc = b.desc;
+        s.desc.parts = s.parts.empty() ? nullptr : s.parts.data();
+        s.desc.part_count = (uint32_t)s.parts.size();
+        s.desc.position = b.position;
+        s.desc.rotation = b.rotation;
+        s.desc.linear_velocity = b.linear;
+        s.desc.angular_velocity = b.angular;
+        s.generation = b.generation;
+        s.created_tick = 0;
+        s.destroyed_tick = UINT64_MAX;
+        if (spawn(w, b.slot)) w->live_bodies++;
+        w->phys->set_velocity(b.slot, b.linear, b.angular);
+    }
+
+    for (uint32_t i = 0; i < h.joint_count; ++i) {
+        SavedJoint sj{};
+        if (!rd_bytes(f, &sj, sizeof(sj)) || sj.slot >= w->jslots.size()) { dai_destroy(w); std::fclose(f); return DAI_ERR_FILE; }
+        JointSlot &j = w->jslots[sj.slot];
+        j.desc = sj.desc;
+        j.generation = sj.generation;
+        j.created_tick = 0;
+        j.destroyed_tick = UINT64_MAX;
+        if (spawn_joint(w, sj.slot)) w->live_joints++;
+    }
+
+    std::fclose(f);
+    w->tick = h.tick;
+    w->rng.state = h.rng_state;
+    w->rng.inc = h.rng_inc;
+    for (uint32_t i = 0; i < w->slots.size(); ++i)
+        if (w->slots[i].alive) {
+            w->phys->get_transform(i, w->slots[i].cur_pos, w->slots[i].cur_rot);
+            w->slots[i].prev_pos = w->slots[i].cur_pos;
+            w->slots[i].prev_rot = w->slots[i].cur_rot;
+        }
+    *out = w;
+    return DAI_OK;
 }
 
 void dai_set_tick_callback(dai_world *w, dai_tick_fn fn, void *user) {

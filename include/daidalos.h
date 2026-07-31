@@ -268,6 +268,29 @@ DAI_API uint32_t dai_body_part_count(dai_world *w, dai_body b);
 DAI_API dai_result dai_body_get_velocity(dai_world *w, dai_body b, dai_vec3 *linear, dai_vec3 *angular);
 
 
+/* ---- saving and loading ------------------------------------------------ */
+
+/* Writes the whole world to a file: every body's description and its current
+ * transform and velocity, every joint, the RNG state and the tick number.
+ *
+ * This is NOT the snapshot ring. Snapshots are the rollback mechanism - they
+ * live in memory, hold the backend's opaque state blob and are only valid for
+ * the process that made them. A save file is portable, versioned and readable
+ * by a build that was compiled later. Mixing the two up is how engines end up
+ * with save files that break every time the physics library is updated.
+ *
+ * Returns DAI_OK, or DAI_ERR_FILE if the file cannot be written. */
+DAI_API dai_result dai_world_save(dai_world *w, const char *path);
+
+/* Loads a world written by dai_world_save. The world is recreated from the
+ * given config (backend, tick rate, thread count are the host's choice, not
+ * the file's) and then filled from the file. Body handles are stable: a body
+ * that was handle X when saved is handle X after loading. */
+DAI_API dai_result dai_world_load(const dai_config *cfg, const char *path, dai_world **out_world);
+
+/* Version of the save format this build writes and can read. */
+DAI_API uint32_t dai_save_version(void);
+
 /* ---- gameplay hook ----------------------------------------------------- */
 
 /* The ONE place gameplay code is allowed to mutate the world. It is called at

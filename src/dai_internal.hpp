@@ -56,6 +56,11 @@ struct BodySlot {
     dai_tick      created_tick   = 0;
     dai_tick      destroyed_tick = UINT64_MAX;
 
+    // where the backend reported this body right after creation. For compound
+    // shapes that is the centre of mass, which differs from desc.position -
+    // saving needs the difference to round trip exactly.
+    dai_vec3      spawn_pos{};
+
     // presentation only, never fed back into the simulation
     dai_vec3      prev_pos{}, cur_pos{};
     dai_quat      prev_rot{ 0, 0, 0, 1 }, cur_rot{ 0, 0, 0, 1 };
