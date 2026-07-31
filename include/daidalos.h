@@ -234,6 +234,9 @@ DAI_API dai_body   dai_body_create(dai_world *w, const dai_body_desc *desc);
 DAI_API dai_result dai_body_destroy(dai_world *w, dai_body b);
 DAI_API dai_result dai_body_add_impulse(dai_world *w, dai_body b, dai_vec3 impulse);
 DAI_API dai_result dai_body_set_velocity(dai_world *w, dai_body b, dai_vec3 linear, dai_vec3 angular);
+/* Teleport. Not tick stamped: call it from the tick callback if it has to
+ * survive a rollback, exactly like every other gameplay mutation. */
+DAI_API dai_result dai_body_set_transform(dai_world *w, dai_body b, dai_vec3 position, dai_quat rotation);
 DAI_API int        dai_body_valid(dai_world *w, dai_body b);
 DAI_API dai_result dai_body_get(dai_world *w, dai_body b, dai_transform *out);
 DAI_API dai_result dai_set_gravity(dai_world *w, dai_vec3 g);

@@ -226,8 +226,17 @@ public:
     void get_transform(uint32_t slot, dai_vec3 &p, dai_quat &r) const override {
         if (slot >= slots.size() || !slots[slot].alive) { p = {}; r = { 0,0,0,1 }; return; }
         const BodyInterface &bi = ps.GetBodyInterface();
-        p = DVR(bi.GetCenterOfMassPosition(slots[slot].id));
+        // GetPosition, not GetCenterOfMassPosition: create_body takes the body
+        // ORIGIN, so reporting the centre of mass makes the two disagree for
+        // compound shapes - the round trip through a save file then walks the
+        // body a little further every time, and compound parts render offset.
+        p = DVR(bi.GetPosition(slots[slot].id));
         r = DQ(bi.GetRotation(slots[slot].id));
+    }
+    void set_transform(uint32_t slot, dai_vec3 p, dai_quat r) override {
+        if (slot >= slots.size() || !slots[slot].alive) return;
+        BodyInterface &bi = ps.GetBodyInterface();
+        bi.SetPositionAndRotation(slots[slot].id, RV(p), Q(r), EActivation::Activate);
     }
     void get_velocity(uint32_t slot, dai_vec3 &l, dai_vec3 &a) const override {
         if (slot >= slots.size() || !slots[slot].alive) { l = {}; a = {}; return; }

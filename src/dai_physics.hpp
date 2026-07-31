@@ -59,6 +59,10 @@ public:
     virtual void step(float dt) = 0;
 
     virtual void get_transform(uint32_t slot, dai_vec3 &pos, dai_quat &rot) const = 0;
+    // Teleporting. Also what a save file needs on load: recreating a body from
+    // its stored description puts it at the spawn position, and only this can
+    // move it to where it actually was.
+    virtual void set_transform(uint32_t slot, dai_vec3 pos, dai_quat rot) = 0;
     virtual void get_velocity(uint32_t slot, dai_vec3 &lin, dai_vec3 &ang) const = 0;
     virtual bool is_sliding(uint32_t slot) const = 0;
 

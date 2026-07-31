@@ -106,6 +106,12 @@ public:
         if (slot >= slots.size() || !slots[slot].alive) { p = {}; r = { 0,0,0,1 }; return; }
         p = slots[slot].pos; r = slots[slot].rot;
     }
+
+    void set_transform(uint32_t slot, dai_vec3 p, dai_quat r) override {
+        if (slot >= slots.size() || !slots[slot].alive) return;
+        slots[slot].pos = p;
+        slots[slot].rot = r;
+    }
     void get_velocity(uint32_t slot, dai_vec3 &l, dai_vec3 &a) const override {
         if (slot >= slots.size() || !slots[slot].alive) { l = {}; a = {}; return; }
         l = slots[slot].vel; a = slots[slot].ang;

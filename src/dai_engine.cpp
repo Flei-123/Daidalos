@@ -556,6 +556,13 @@ dai_result dai_body_add_impulse(dai_world *w, dai_body b, dai_vec3 imp) {
     return DAI_OK;
 }
 
+dai_result dai_body_set_transform(dai_world *w, dai_body b, dai_vec3 pos, dai_quat rot) {
+    if (!w) return DAI_ERR_INVALID_ARG;
+    if (!resolve(w, b)) return DAI_ERR_NOT_FOUND;
+    w->phys->set_transform(slot_of(b), pos, rot);
+    return DAI_OK;
+}
+
 dai_result dai_body_set_velocity(dai_world *w, dai_body b, dai_vec3 lin, dai_vec3 ang) {
     if (!w) return DAI_ERR_INVALID_ARG;
     if (!resolve(w, b)) return DAI_ERR_NOT_FOUND;
@@ -822,15 +829,7 @@ dai_result dai_world_save(dai_world *w, const char *path) {
         b.part_count = (uint32_t)s.parts.size();
         w->phys->get_transform(i, b.position, b.rotation);
         w->phys->get_velocity(i, b.linear, b.angular);
-        // A compound's reported transform is its centre of mass, while
-        // create_body takes the ORIGIN. Round tripping the reported position
-        // therefore walks the body by the centre of mass offset every save.
-        // Store the delta the body has moved since creation instead.
-        if (!s.parts.empty()) {
-            b.position.x = s.desc.position.x + (b.position.x - s.spawn_pos.x);
-            b.position.y = s.desc.position.y + (b.position.y - s.spawn_pos.y);
-            b.position.z = s.desc.position.z + (b.position.z - s.spawn_pos.z);
-        }
+
         if (!wr_bytes(f, &b, sizeof(b))) { std::fclose(f); return DAI_ERR_FILE; }
         if (b.part_count &&
             std::fwrite(s.parts.data(), sizeof(dai_compound_part), b.part_count, f) != b.part_count)
@@ -890,6 +889,7 @@ dai_result dai_world_load(const dai_config *cfg, const char *path, dai_world **o
         s.created_tick = 0;
         s.destroyed_tick = UINT64_MAX;
         if (spawn(w, b.slot)) w->live_bodies++;
+        w->phys->set_transform(b.slot, b.position, b.rotation);
         w->phys->set_velocity(b.slot, b.linear, b.angular);
     }
 
