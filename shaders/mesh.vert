@@ -17,6 +17,9 @@ layout(location = 6) in vec3  iScale;
 layout(location = 7) in vec3  iColor;
 layout(location = 8) in vec3  iMat;     // capsule param, roughness, emissive
 layout(location = 9) in uint  iFlags;
+layout(location = 10) in uvec4 inJoints;
+layout(location = 11) in vec4  inWeights;
+layout(location = 12) in uvec2 iSkin;      // x = first joint matrix, y = joint count
 
 layout(set = 0, binding = 0) uniform Frame {
     mat4 viewproj;
@@ -47,16 +50,35 @@ layout(push_constant) uniform Mat {
     vec4 extra;
 } M;
 
+layout(set = 0, binding = 2) readonly buffer Joints { mat4 joint[]; } J;
+
+// Linear blend skinning. Four influences, weights normalised by the exporter.
+// A vertex with no weights leaves the matrix at identity, so skinned and rigid
+// meshes share one pipeline.
+mat4 skin_matrix() {
+    if (iSkin.y == 0u) return mat4(1.0);
+    float w = inWeights.x + inWeights.y + inWeights.z + inWeights.w;
+    if (w <= 0.0001) return mat4(1.0);
+    mat4 m = J.joint[iSkin.x + min(inJoints.x, iSkin.y - 1u)] * inWeights.x
+           + J.joint[iSkin.x + min(inJoints.y, iSkin.y - 1u)] * inWeights.y
+           + J.joint[iSkin.x + min(inJoints.z, iSkin.y - 1u)] * inWeights.z
+           + J.joint[iSkin.x + min(inJoints.w, iSkin.y - 1u)] * inWeights.w;
+    return m / w;
+}
+
 vec3 rotq(vec4 q, vec3 v) {
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
 }
 
 void main() {
-    vec3 local = inPos * iScale + vec3(0.0, inCap * iMat.x, 0.0);
+    mat4 skin = skin_matrix();
+    vec3 posed = (skin * vec4(inPos, 1.0)).xyz;
+    vec3 local = posed * iScale + vec3(0.0, inCap * iMat.x, 0.0);
     vec3 world = rotq(iRot, local) + iPos;
 
     // normals must not be scaled like positions - divide by the scale
-    vec3 n = inNrm / max(abs(iScale), vec3(1e-6));
+    vec3 skinned_n = (iSkin.y == 0u) ? inNrm : mat3(skin) * inNrm;
+    vec3 n = skinned_n / max(abs(iScale), vec3(1e-6));
     vNormal = normalize(rotq(iRot, n));
     vColor  = iColor;
     vWorld  = world;

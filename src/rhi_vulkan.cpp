@@ -206,7 +206,7 @@ VkShaderModule load_module(dai_renderer *r, const char *name, bool *ok) {
 // vertex layout shared by the mesh and shadow pipelines
 struct VertexLayout {
     VkVertexInputBindingDescription binds[2];
-    VkVertexInputAttributeDescription attrs[10];
+    VkVertexInputAttributeDescription attrs[13];
     VkPipelineVertexInputStateCreateInfo vi{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
     VertexLayout() {
         binds[0] = { 0, sizeof(dai_vertex), VK_VERTEX_INPUT_RATE_VERTEX };
@@ -221,8 +221,11 @@ struct VertexLayout {
         attrs[7] = { 7, 1, VK_FORMAT_R32G32B32_SFLOAT,    offsetof(dai_render_instance, color) };
         attrs[8] = { 8, 1, VK_FORMAT_R32G32B32_SFLOAT,    offsetof(dai_render_instance, param) };
         attrs[9] = { 9, 1, VK_FORMAT_R32_UINT,            offsetof(dai_render_instance, flags) };
+        attrs[10] = { 10, 0, VK_FORMAT_R8G8B8A8_UINT,     offsetof(dai_vertex, joints) };
+        attrs[11] = { 11, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(dai_vertex, weights) };
+        attrs[12] = { 12, 1, VK_FORMAT_R32G32_UINT,       offsetof(dai_render_instance, joint_offset) };
         vi.vertexBindingDescriptionCount = 2; vi.pVertexBindingDescriptions = binds;
-        vi.vertexAttributeDescriptionCount = 10; vi.pVertexAttributeDescriptions = attrs;
+        vi.vertexAttributeDescriptionCount = 13; vi.pVertexAttributeDescriptions = attrs;
     }
 };
 
@@ -483,19 +486,22 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
         { dai_render_destroy(r); return fail("instance buffer failed"); }
 
     // ---- descriptors
-    VkDescriptorSetLayoutBinding lb[2]{};
+    VkDescriptorSetLayoutBinding lb[3]{};
     lb[0].binding = 0; lb[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; lb[0].descriptorCount = 1;
     lb[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     lb[1].binding = 1; lb[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; lb[1].descriptorCount = 1;
     lb[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    lb[2].binding = 2; lb[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; lb[2].descriptorCount = 1;
+    lb[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     VkDescriptorSetLayoutCreateInfo dlc{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    dlc.bindingCount = 2; dlc.pBindings = lb;
+    dlc.bindingCount = 3; dlc.pBindings = lb;
     if (vkCreateDescriptorSetLayout(r->dev, &dlc, nullptr, &r->dsl) != VK_SUCCESS)
         { dai_render_destroy(r); return fail("descriptor layout failed"); }
-    VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
-                                   { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 } };
+    VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
+                                   { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 },
+                                   { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 } };
     VkDescriptorPoolCreateInfo dpc{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-    dpc.maxSets = 1; dpc.poolSizeCount = 2; dpc.pPoolSizes = ps;
+    dpc.maxSets = 1; dpc.poolSizeCount = 3; dpc.pPoolSizes = ps;
     if (vkCreateDescriptorPool(r->dev, &dpc, nullptr, &r->dpool) != VK_SUCCESS)
         { dai_render_destroy(r); return fail("descriptor pool failed"); }
     VkDescriptorSetAllocateInfo dsa{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
@@ -503,16 +509,34 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     if (vkAllocateDescriptorSets(r->dev, &dsa, &r->dset) != VK_SUCCESS)
         { dai_render_destroy(r); return fail("descriptor set failed"); }
 
+    // joint matrices: one storage buffer for every skinned character in the
+    // frame. 1024 joints is ~64 KB and covers a crowd of typical rigs.
+    r->joint_capacity = 1024;
+    if (!vk_make_buffer(r, (VkDeviceSize)r->joint_capacity * 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        host, &r->joints, true))
+        { dai_render_destroy(r); return fail("joint buffer failed"); }
+    {   // identity so an unskinned draw through a skinned pipeline is harmless
+        float *m = (float *)r->joints.mapped;
+        for (uint32_t i = 0; i < r->joint_capacity; ++i) {
+            std::memset(m + i * 16, 0, 64);
+            m[i*16 + 0] = m[i*16 + 5] = m[i*16 + 10] = m[i*16 + 15] = 1.0f;
+        }
+    }
+
     VkDescriptorBufferInfo dbi{ r->ubo.buf, 0, sizeof(FrameUBO) };
+    VkDescriptorBufferInfo jbi{ r->joints.buf, 0, VK_WHOLE_SIZE };
     VkDescriptorImageInfo dii{ r->shadow_sampler, r->shadow_view, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL };
-    VkWriteDescriptorSet wr[2]{};
+    VkWriteDescriptorSet wr[3]{};
     wr[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     wr[0].dstSet = r->dset; wr[0].dstBinding = 0; wr[0].descriptorCount = 1;
     wr[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; wr[0].pBufferInfo = &dbi;
     wr[1] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     wr[1].dstSet = r->dset; wr[1].dstBinding = 1; wr[1].descriptorCount = 1;
     wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[1].pImageInfo = &dii;
-    vkUpdateDescriptorSets(r->dev, 2, wr, 0, nullptr);
+    wr[2] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+    wr[2].dstSet = r->dset; wr[2].dstBinding = 2; wr[2].descriptorCount = 1;
+    wr[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; wr[2].pBufferInfo = &jbi;
+    vkUpdateDescriptorSets(r->dev, 3, wr, 0, nullptr);
 
     // ---- material descriptors: 4 samplers per material, parameters go in
     //      push constants so switching material is one bind and no upload
@@ -717,6 +741,7 @@ void dai_render_destroy(dai_renderer *r) {
         if (r->dsl) vkDestroyDescriptorSetLayout(r->dev, r->dsl, nullptr);
         vk_free_buffer(r, &r->vbo); vk_free_buffer(r, &r->ibo);
         vk_free_buffer(r, &r->inst); vk_free_buffer(r, &r->ubo); vk_free_buffer(r, &r->readback);
+        vk_free_buffer(r, &r->joints);
         if (r->shadow_sampler) vkDestroySampler(r->dev, r->shadow_sampler, nullptr);
         if (r->tex_sampler) vkDestroySampler(r->dev, r->tex_sampler, nullptr);
         if (r->mat_pool) vkDestroyDescriptorPool(r->dev, r->mat_pool, nullptr);
@@ -784,6 +809,16 @@ void dai_render_clear_color(dai_renderer *r, float rr, float gg, float bb) {
 }
 
 void dai_render_sky(dai_renderer *r, int enabled) { if (r) r->sky_enabled = enabled; }
+
+void dai_render_joints(dai_renderer *r, const float *matrices, uint32_t count) {
+    if (!r || !r->joints.mapped) return;
+    if (!matrices || !count) { r->joint_count = 0; return; }
+    if (count > r->joint_capacity) count = r->joint_capacity;   // clamp, never overrun
+    std::memcpy(r->joints.mapped, matrices, (size_t)count * 64);
+    r->joint_count = count;
+}
+
+uint32_t dai_render_max_joints(dai_renderer *r) { return r ? r->joint_capacity : 0; }
 
 void dai_render_particles(dai_renderer *r, const dai_particle *particles, uint32_t count) {
     if (!r) return;

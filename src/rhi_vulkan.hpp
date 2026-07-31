@@ -131,6 +131,9 @@ struct dai_renderer {
     GpuBuffer particles;
     uint32_t particle_capacity = 0, particle_count = 0;
 
+    GpuBuffer joints;                 // storage buffer of mat4, all characters
+    uint32_t joint_capacity = 0, joint_count = 0;
+
     // state the host sets
     float eye[3] = { 8, 6, 12 }, target[3] = { 0, 1, 0 }, up[3] = { 0, 1, 0 };
     float fov = 55.0f, znear = 0.1f, zfar = 500.0f;

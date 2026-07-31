@@ -38,6 +38,12 @@ typedef struct dai_model_node {
     char         name[64];
 } dai_model_node;
 
+typedef struct dai_animation_info {
+    char  name[64];
+    float duration;      /* seconds */
+    uint32_t channels;
+} dai_animation_info;
+
 typedef struct dai_model_info {
     uint32_t nodes;
     uint32_t meshes;
@@ -45,6 +51,9 @@ typedef struct dai_model_info {
     uint32_t textures;
     uint32_t triangles;
     uint32_t vertices;
+    uint32_t animations;
+    uint32_t skins;
+    uint32_t joints;      /* total joint matrices the model needs */
     dai_vec3 bounds_min;
     dai_vec3 bounds_max;
 } dai_model_info;
@@ -59,6 +68,20 @@ DAI_API dai_model_info        dai_model_get_info(const dai_model *m);
 DAI_API uint32_t              dai_model_node_count(const dai_model *m);
 DAI_API const dai_model_node *dai_model_node_at(const dai_model *m, uint32_t index);
 DAI_API const dai_model_node *dai_model_find(const dai_model *m, const char *name);
+
+/* ---- animation ---------------------------------------------------------- */
+
+DAI_API uint32_t           dai_model_animation_count(const dai_model *m);
+DAI_API dai_animation_info dai_model_animation_at(const dai_model *m, uint32_t index);
+
+/* Poses the model: samples the animation at `time` (looping), recomputes the
+ * node hierarchy and writes the joint matrices for every skin into `joints`
+ * as column major 4x4 floats. Returns how many matrices were written.
+ *
+ * Pass animation = -1 for the bind pose. Feed the result to
+ * dai_render_joints(); dai_model_instances then references it automatically. */
+DAI_API uint32_t dai_model_pose(dai_model *m, int animation, float time,
+                                float *joints, uint32_t max_joints);
 
 /* Fills render instances for the whole model, transformed by an offset,
  * a uniform scale and a rotation. Returns how many were written. */

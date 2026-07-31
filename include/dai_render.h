@@ -64,7 +64,9 @@ typedef struct dai_vertex {
     dai_vec3 position;
     dai_vec3 normal;
     float    cap;          /* capsule shaft offset along Y, 0 for normal meshes */
-    float    u, v;         /* texture coordinates, currently used for the checker floor */
+    float    u, v;         /* texture coordinates                             */
+    uint8_t  joints[4];    /* skinning: which joints influence this vertex    */
+    float    weights[4];   /* their weights; all zero = not skinned           */
 } dai_vertex;
 
 /* Uploads a mesh. Indices may be NULL for a non indexed triangle list.
@@ -146,7 +148,15 @@ typedef struct dai_render_instance {
     float    emissive;     /* 0..1, lifts the object out of the lighting      */
     uint32_t flags;        /* dai_render_flags                                */
     uint32_t material;     /* dai_material, 0 = default                       */
+    uint32_t joint_offset; /* first joint matrix for this instance            */
+    uint32_t joint_count;  /* 0 = not skinned                                 */
 } dai_render_instance;
+
+/* Uploads joint matrices for the NEXT frame. Instances index into this array
+ * through joint_offset; one buffer holds every skinned character in the frame,
+ * so skinning costs one upload rather than one per character. */
+DAI_API void dai_render_joints(dai_renderer *r, const float *matrices4x4, uint32_t count);
+DAI_API uint32_t dai_render_max_joints(dai_renderer *r);
 
 typedef enum dai_render_flags {
     DAI_RI_NO_SHADOW   = 1 << 0,   /* does not cast a shadow                 */

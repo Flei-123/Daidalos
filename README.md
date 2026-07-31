@@ -36,6 +36,7 @@ MIT licensed.
 ./build/test_daidalos                                    # 48 simulation assertions
 ./build/test_merge                                       # 45 merge/split assertions
 DAI_SHADER_DIR=shaders ./build/test_particles /tmp       # 16 particle assertions
+DAI_SHADER_DIR=shaders ./build/test_skinning assets/test # 14 skinning assertions
 DAI_SHADER_DIR=shaders ./build/test_render_visual /tmp   # 33 visual assertions
 ./build/test_image /tmp/pngfix                           #  9 PNG/DEFLATE assertions
 DAI_SHADER_DIR=shaders ./build/test_gltf assets/test /tmp # 15 import assertions
@@ -107,6 +108,24 @@ objects, five materials, a packed colour grid texture, a 12x scaled ground
 plane) and checks geometry, materials, the Z-up to Y-up conversion and the
 matrix decomposition. See `docs/MATERIALS.md` for why the material model is
 four maps and no node graph.
+
+### Skinning and animation
+
+glTF skins and animations import with the rest of the file: joint hierarchies,
+inverse bind matrices, and translation/rotation/scale channels with LINEAR,
+STEP and CUBICSPLINE interpolation (rotations slerp along the shortest arc).
+
+```c
+float joints[64 * 16];
+uint32_t n = dai_model_pose(model, 0, time_seconds, joints, 64);
+dai_render_joints(renderer, joints, n);            // one upload for every character
+uint32_t count = dai_model_instances(model, inst, 256, offset, rot, scale);
+```
+
+Skinning happens in the vertex stage: four influences per vertex, joint
+matrices in a storage buffer, and the same pipeline draws rigid and skinned
+meshes (a vertex with no weights keeps an identity matrix). Rigid nodes of an
+animated file follow their animated parents, so a swinging door is just a node.
 
 ### Particles - `include/dai_particles.h`
 
@@ -224,7 +243,8 @@ and shading when a test fails and you need to know which half is lying.
 
 ## What is still missing
 
-- No skinning, no animation system.
+- No morph targets, no animation blending or state machine yet (one clip at a
+  time, sampled by hand).
 - Particles are untextured soft sprites; no texture atlas or animation frames.
 - Window backend is X11 only (Win32/Wayland would be the same file again).
 - Shadow cascades are fitted per frame with no caching, so a very large scene

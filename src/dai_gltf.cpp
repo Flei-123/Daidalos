@@ -208,7 +208,12 @@ struct Loader {
         std::string type = a->str_at("type", "SCALAR");
         bool normalized = false;
         if (const Value *n = a->get("normalized")) normalized = n->boolean;
-        int type_comps = type == "SCALAR" ? 1 : type == "VEC2" ? 2 : type == "VEC3" ? 3 : type == "VEC4" ? 4 : 0;
+        int type_comps = type == "SCALAR" ? 1 : type == "VEC2" ? 2 : type == "VEC3" ? 3 :
+                         type == "VEC4" ? 4 : type == "MAT2" ? 4 : type == "MAT3" ? 9 :
+                         type == "MAT4" ? 16 : 0;
+        // MAT4 matters: inverse bind matrices are stored that way, and treating
+        // them as unsupported silently leaves every joint at identity - the mesh
+        // then renders in bind pose no matter what the animation does
         if (!type_comps) return fail("accessor type %s not supported", type.c_str());
 
         int view = a->int_at("bufferView", -1);
@@ -282,8 +287,46 @@ struct Loader {
 
 // ---------------------------------------------------------------- model
 
+// Everything below the drawable nodes: the hierarchy has to survive the import
+// or animation is impossible - you cannot pose a scene you flattened away.
+struct RawNode {
+    float t[3] = { 0, 0, 0 };
+    float r[4] = { 0, 0, 0, 1 };
+    float s[3] = { 1, 1, 1 };
+    int mesh = -1, skin = -1;
+    std::vector<int> children;
+    bool has_matrix = false;
+    M4 matrix{};
+};
+
+struct Skin {
+    std::vector<int> joints;          // node indices
+    std::vector<M4>  inverse_bind;
+    uint32_t offset = 0;              // where this skin's matrices start
+};
+
+struct Channel {
+    int node = -1;
+    int path = 0;                     // 0 = translation, 1 = rotation, 2 = scale
+    int interpolation = 0;            // 0 = linear, 1 = step, 2 = cubic spline
+    std::vector<float> times;
+    std::vector<float> values;        // 3 or 4 floats per key (x3 for cubic)
+};
+
+struct Animation {
+    std::string name;
+    float duration = 0.0f;
+    std::vector<Channel> channels;
+};
+
 struct dai_model {
-    std::vector<dai_model_node> nodes;
+    std::vector<dai_model_node> nodes;      // drawable pieces
+    std::vector<int> node_of_draw;          // which RawNode each piece came from
+    std::vector<int> skin_of_draw;          // and which skin, -1 for rigid
+    std::vector<RawNode> raw;
+    std::vector<Skin> skins;
+    std::vector<Animation> anims;
+    std::vector<M4> world;                  // scratch, one per raw node
     dai_model_info info{};
 };
 
@@ -444,7 +487,8 @@ dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t er
     }
 
     // ---- meshes: one renderer mesh per primitive
-    struct Prim { dai_mesh mesh; dai_material material; uint32_t tris; uint32_t verts; };
+    struct Prim { dai_mesh mesh; dai_material material; uint32_t tris; uint32_t verts;
+                  float lo[3]; float hi[3]; };   // local AABB, for real bounds
     std::vector<std::vector<Prim>> mesh_prims;
     uint32_t total_tris = 0, total_verts = 0;
     if (const Value *meshes = ld.root->get("meshes")) {
@@ -460,13 +504,19 @@ dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t er
                 int a_pos = attrs->int_at("POSITION", -1);
                 int a_nrm = attrs->int_at("NORMAL", -1);
                 int a_uv  = attrs->int_at("TEXCOORD_0", -1);
+                int a_jnt = attrs->int_at("JOINTS_0", -1);
+                int a_wgt = attrs->int_at("WEIGHTS_0", -1);
                 if (a_pos < 0) continue;
 
-                std::vector<float> pos, nrm, uv;
+                std::vector<float> pos, nrm, uv, jnt, wgt;
                 size_t vcount = 0;
                 if (!ld.read_accessor_float(a_pos, 3, pos, &vcount)) return nullptr;
                 if (a_nrm >= 0) ld.read_accessor_float(a_nrm, 3, nrm, nullptr);
                 if (a_uv  >= 0) ld.read_accessor_float(a_uv,  2, uv,  nullptr);
+                // joints arrive as unsigned bytes or shorts, weights as floats or
+                // normalised integers; read_accessor_float handles both
+                if (a_jnt >= 0) ld.read_accessor_float(a_jnt, 4, jnt, nullptr);
+                if (a_wgt >= 0) ld.read_accessor_float(a_wgt, 4, wgt, nullptr);
 
                 std::vector<uint32_t> idx;
                 int a_idx = prim->int_at("indices", -1);
@@ -480,6 +530,18 @@ dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t er
                     verts[v].cap = 0.0f;
                     verts[v].u = uv.size() ? uv[v*2] : 0.0f;
                     verts[v].v = uv.size() ? uv[v*2+1] : 0.0f;
+                    if (jnt.size() >= (v + 1) * 4 && wgt.size() >= (v + 1) * 4) {
+                        float sum = 0.0f;
+                        for (int k = 0; k < 4; ++k) {
+                            int idx = (int)(jnt[v*4 + (size_t)k] + 0.5f);
+                            verts[v].joints[k] = (uint8_t)(idx < 0 ? 0 : (idx > 255 ? 255 : idx));
+                            verts[v].weights[k] = wgt[v*4 + (size_t)k];
+                            sum += verts[v].weights[k];
+                        }
+                        // exporters are not always exact; the shader divides by the
+                        // sum anyway, but normalising here keeps the data honest
+                        if (sum > 1e-6f) for (int k = 0; k < 4; ++k) verts[v].weights[k] /= sum;
+                    }
                 }
                 // no normals in the file: flat shade from the triangles
                 if (nrm.empty()) {
@@ -495,6 +557,12 @@ dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t er
                 }
 
                 Prim pr{};
+                pr.lo[0] = pr.lo[1] = pr.lo[2] = 1e30f;
+                pr.hi[0] = pr.hi[1] = pr.hi[2] = -1e30f;
+                for (size_t v = 0; v < vcount; ++v) {
+                    const float *q = &pos[v * 3];
+                    for (int k = 0; k < 3; ++k) { if (q[k] < pr.lo[k]) pr.lo[k] = q[k]; if (q[k] > pr.hi[k]) pr.hi[k] = q[k]; }
+                }
                 pr.mesh = dai_render_mesh_create(r, verts.data(), (uint32_t)verts.size(), idx.data(), (uint32_t)idx.size());
                 int mat = prim->int_at("material", -1);
                 pr.material = (mat >= 0 && (size_t)mat < materials.size()) ? materials[(size_t)mat] : 0;
@@ -510,6 +578,89 @@ dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t er
 
     // ---- nodes, flattened to world space
     dai_model *model = new dai_model();
+
+    // raw hierarchy first: animation needs it, and the flattening below only
+    // produces the initial pose
+    if (const Value *nlist = ld.root->get("nodes")) {
+        model->raw.resize(nlist->size());
+        for (size_t i = 0; i < nlist->size(); ++i) {
+            const Value *n = nlist->at(i);
+            RawNode &rn = model->raw[i];
+            rn.mesh = n->int_at("mesh", -1);
+            rn.skin = n->int_at("skin", -1);
+            if (const Value *m = n->get("matrix")) {
+                rn.has_matrix = true;
+                for (int k = 0; k < 16; ++k) rn.matrix.m[k] = (float)m->at((size_t)k)->num(0);
+            } else {
+                if (const Value *v = n->get("translation")) for (int k = 0; k < 3; ++k) rn.t[k] = (float)v->at((size_t)k)->num(0);
+                if (const Value *v = n->get("rotation")) for (int k = 0; k < 4; ++k) rn.r[k] = (float)v->at((size_t)k)->num(k == 3 ? 1 : 0);
+                if (const Value *v = n->get("scale")) for (int k = 0; k < 3; ++k) rn.s[k] = (float)v->at((size_t)k)->num(1);
+            }
+            if (const Value *ch = n->get("children"))
+                for (size_t k = 0; k < ch->size(); ++k) rn.children.push_back(ch->at(k)->integer(-1));
+        }
+    }
+
+    // ---- skins
+    if (const Value *skins = ld.root->get("skins")) {
+        uint32_t offset = 0;
+        for (size_t i = 0; i < skins->size(); ++i) {
+            const Value *sk = skins->at(i);
+            Skin s{};
+            if (const Value *j = sk->get("joints"))
+                for (size_t k = 0; k < j->size(); ++k) s.joints.push_back(j->at(k)->integer(-1));
+            int ibm = sk->int_at("inverseBindMatrices", -1);
+            s.inverse_bind.resize(s.joints.size());
+            for (M4 &m : s.inverse_bind) m = m4_identity();
+            if (ibm >= 0) {
+                std::vector<float> raw16;
+                size_t count = 0;
+                if (ld.read_accessor_float(ibm, 16, raw16, &count)) {
+                    for (size_t k = 0; k < s.joints.size() && k < count; ++k)
+                        for (int e = 0; e < 16; ++e) s.inverse_bind[k].m[e] = raw16[k * 16 + (size_t)e];
+                }
+            }
+            s.offset = offset;
+            offset += (uint32_t)s.joints.size();
+            model->skins.push_back(std::move(s));
+        }
+        model->info.joints = offset;
+    }
+
+    // ---- animations
+    if (const Value *anims = ld.root->get("animations")) {
+        for (size_t i = 0; i < anims->size(); ++i) {
+            const Value *a = anims->at(i);
+            Animation an;
+            an.name = a->str_at("name", "");
+            const Value *samplers = a->get("samplers");
+            const Value *channels = a->get("channels");
+            for (size_t c = 0; channels && c < channels->size(); ++c) {
+                const Value *ch = channels->at(c);
+                const Value *target = ch->get("target");
+                if (!target) continue;
+                Channel out;
+                out.node = target->int_at("node", -1);
+                std::string path = target->str_at("path", "");
+                if (path == "translation") out.path = 0;
+                else if (path == "rotation") out.path = 1;
+                else if (path == "scale") out.path = 2;
+                else continue;                       // weights (morph targets) not supported
+                int si = ch->int_at("sampler", -1);
+                const Value *sm = samplers ? samplers->at((size_t)si) : nullptr;
+                if (!sm) continue;
+                std::string interp = sm->str_at("interpolation", "LINEAR");
+                out.interpolation = interp == "STEP" ? 1 : interp == "CUBICSPLINE" ? 2 : 0;
+                size_t nkeys = 0;
+                if (!ld.read_accessor_float(sm->int_at("input", -1), 1, out.times, &nkeys)) continue;
+                int comps = out.path == 1 ? 4 : 3;
+                if (!ld.read_accessor_float(sm->int_at("output", -1), comps, out.values, nullptr)) continue;
+                if (!out.times.empty()) an.duration = fmaxf(an.duration, out.times.back());
+                an.channels.push_back(std::move(out));
+            }
+            model->anims.push_back(std::move(an));
+        }
+    }
     float bmin[3] = { 1e30f, 1e30f, 1e30f }, bmax[3] = { -1e30f, -1e30f, -1e30f };
 
     const Value *nodes = ld.root->get("nodes");
@@ -547,10 +698,22 @@ dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t er
                     m4_decompose(world, &mn.position, &mn.rotation, &mn.scale);
                     std::snprintf(mn.name, sizeof(mn.name), "%s", n->str_at("name", ""));
                     model->nodes.push_back(mn);
-                    for (int i = 0; i < 3; ++i) {
-                        float c = (&mn.position.x)[i], e = fabsf((&mn.scale.x)[i]) * 1.0f;
-                        if (c - e < bmin[i]) bmin[i] = c - e;
-                        if (c + e > bmax[i]) bmax[i] = c + e;
+                    model->node_of_draw.push_back(index);
+                    model->skin_of_draw.push_back(n->int_at("skin", -1));
+                    // real bounds: transform the mesh AABB corners, not the pivot.
+                    // A pivot based box says a 4 m limb is 1 m tall, and every
+                    // camera that frames the model then sits inside it.
+                    for (int cx = 0; cx < 8; ++cx) {
+                        float local[3] = { (cx & 1) ? p.hi[0] : p.lo[0],
+                                           (cx & 2) ? p.hi[1] : p.lo[1],
+                                           (cx & 4) ? p.hi[2] : p.lo[2] };
+                        float wp[3];
+                        for (int i = 0; i < 3; ++i)
+                            wp[i] = world.m[0*4+i]*local[0] + world.m[1*4+i]*local[1] + world.m[2*4+i]*local[2] + world.m[3*4+i];
+                        for (int i = 0; i < 3; ++i) {
+                            if (wp[i] < bmin[i]) bmin[i] = wp[i];
+                            if (wp[i] > bmax[i]) bmax[i] = wp[i];
+                        }
                     }
                 }
             }
@@ -574,6 +737,8 @@ dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t er
     if (!walked_any && nodes)                       // no scene: take every root node
         for (size_t i = 0; i < nodes->size(); ++i) walker.walk((int)i, ident);
 
+    model->info.animations = (uint32_t)model->anims.size();
+    model->info.skins = (uint32_t)model->skins.size();
     model->info.nodes = (uint32_t)model->nodes.size();
     model->info.meshes = 0;
     for (auto &v : mesh_prims) model->info.meshes += (uint32_t)v.size();
@@ -602,6 +767,150 @@ const dai_model_node *dai_model_find(const dai_model *m, const char *name) {
     return nullptr;
 }
 
+// ---------------------------------------------------------------- animation
+
+uint32_t dai_model_animation_count(const dai_model *m) { return m ? (uint32_t)m->anims.size() : 0; }
+
+dai_animation_info dai_model_animation_at(const dai_model *m, uint32_t index) {
+    dai_animation_info info{};
+    if (!m || index >= m->anims.size()) return info;
+    const Animation &a = m->anims[index];
+    std::snprintf(info.name, sizeof(info.name), "%s", a.name.c_str());
+    info.duration = a.duration;
+    info.channels = (uint32_t)a.channels.size();
+    return info;
+}
+
+namespace {
+
+// Sampling one channel. glTF guarantees the times are sorted, so a binary
+// search is correct and O(log n) - which matters once a rig has a few hundred
+// keys per bone and you are posing a crowd.
+void sample_channel(const Channel &c, float t, float *out, int comps) {
+    if (c.times.empty()) return;
+    size_t n = c.times.size();
+    if (t <= c.times.front()) {
+        for (int i = 0; i < comps; ++i) out[i] = c.values[(c.interpolation == 2 ? comps : 0) + i];
+        return;
+    }
+    if (t >= c.times.back()) {
+        size_t last = n - 1;
+        size_t base = c.interpolation == 2 ? (last * 3 + 1) * (size_t)comps : last * (size_t)comps;
+        for (int i = 0; i < comps; ++i) out[i] = c.values[base + (size_t)i];
+        return;
+    }
+    size_t lo = 0, hi = n - 1;
+    while (hi - lo > 1) { size_t mid = (lo + hi) / 2; if (c.times[mid] <= t) lo = mid; else hi = mid; }
+    float span = c.times[hi] - c.times[lo];
+    float u = span > 1e-9f ? (t - c.times[lo]) / span : 0.0f;
+
+    if (c.interpolation == 1) {                       // STEP
+        for (int i = 0; i < comps; ++i) out[i] = c.values[lo * (size_t)comps + (size_t)i];
+        return;
+    }
+    if (c.interpolation == 2) {                       // CUBICSPLINE: in-tangent, value, out-tangent
+        const float *v0 = &c.values[(lo * 3 + 1) * (size_t)comps];
+        const float *b0 = &c.values[(lo * 3 + 2) * (size_t)comps];
+        const float *a1 = &c.values[(hi * 3 + 0) * (size_t)comps];
+        const float *v1 = &c.values[(hi * 3 + 1) * (size_t)comps];
+        float u2 = u * u, u3 = u2 * u;
+        float h00 = 2*u3 - 3*u2 + 1, h10 = u3 - 2*u2 + u, h01 = -2*u3 + 3*u2, h11 = u3 - u2;
+        for (int i = 0; i < comps; ++i)
+            out[i] = h00 * v0[i] + h10 * span * b0[i] + h01 * v1[i] + h11 * span * a1[i];
+        return;
+    }
+
+    const float *va = &c.values[lo * (size_t)comps];
+    const float *vb = &c.values[hi * (size_t)comps];
+    if (comps == 4) {                                  // rotations: shortest arc slerp
+        float dot = va[0]*vb[0] + va[1]*vb[1] + va[2]*vb[2] + va[3]*vb[3];
+        float sign = dot < 0.0f ? -1.0f : 1.0f;
+        dot = fabsf(dot);
+        float k0, k1;
+        if (dot > 0.9995f) { k0 = 1.0f - u; k1 = u; }
+        else {
+            float theta = acosf(dot), st = sinf(theta);
+            k0 = sinf((1.0f - u) * theta) / st;
+            k1 = sinf(u * theta) / st;
+        }
+        float len = 0.0f;
+        for (int i = 0; i < 4; ++i) { out[i] = k0 * va[i] + k1 * sign * vb[i]; len += out[i] * out[i]; }
+        len = sqrtf(len);
+        if (len > 1e-8f) for (int i = 0; i < 4; ++i) out[i] /= len;
+    } else {
+        for (int i = 0; i < comps; ++i) out[i] = va[i] + (vb[i] - va[i]) * u;
+    }
+}
+
+} // namespace
+
+uint32_t dai_model_pose(dai_model *m, int animation, float time, float *joints, uint32_t max_joints) {
+    if (!m) return 0;
+
+    std::vector<RawNode> posed = m->raw;
+    if (animation >= 0 && (size_t)animation < m->anims.size()) {
+        const Animation &a = m->anims[(size_t)animation];
+        float t = a.duration > 0.0f ? fmodf(time, a.duration) : 0.0f;
+        if (t < 0.0f) t += a.duration;
+        for (const Channel &c : a.channels) {
+            if (c.node < 0 || (size_t)c.node >= posed.size()) continue;
+            RawNode &n = posed[(size_t)c.node];
+            n.has_matrix = false;                       // an animated node is TRS by definition
+            if (c.path == 0) sample_channel(c, t, n.t, 3);
+            else if (c.path == 1) sample_channel(c, t, n.r, 4);
+            else sample_channel(c, t, n.s, 3);
+        }
+    }
+
+    // world transforms, parents before children
+    m->world.assign(posed.size(), m4_identity());
+    std::vector<char> done(posed.size(), 0);
+    std::vector<int> parent(posed.size(), -1);
+    for (size_t i = 0; i < posed.size(); ++i)
+        for (int c : posed[i].children)
+            if (c >= 0 && (size_t)c < parent.size()) parent[(size_t)c] = (int)i;
+
+    struct Resolver {
+        std::vector<RawNode> &posed;
+        std::vector<M4> &world;
+        std::vector<char> &done;
+        std::vector<int> &parent;
+        void resolve(int i) {
+            if (i < 0 || done[(size_t)i]) return;
+            done[(size_t)i] = 1;
+            RawNode &n = posed[(size_t)i];
+            M4 local = n.has_matrix ? n.matrix : m4_trs(n.t, n.r, n.s);
+            int p = parent[(size_t)i];
+            if (p >= 0) { resolve(p); world[(size_t)i] = m4_mul(world[(size_t)p], local); }
+            else world[(size_t)i] = local;
+        }
+    } res{ posed, m->world, done, parent };
+    for (size_t i = 0; i < posed.size(); ++i) res.resolve((int)i);
+
+    // joint matrices: world * inverse bind, per skin, packed back to back
+    uint32_t written = 0;
+    for (const Skin &sk : m->skins) {
+        for (size_t j = 0; j < sk.joints.size(); ++j) {
+            uint32_t slot = sk.offset + (uint32_t)j;
+            if (!joints || slot >= max_joints) continue;
+            int node = sk.joints[j];
+            M4 w = (node >= 0 && (size_t)node < m->world.size()) ? m->world[(size_t)node] : m4_identity();
+            M4 jm = m4_mul(w, sk.inverse_bind[j]);
+            std::memcpy(joints + (size_t)slot * 16, jm.m, 64);
+            if (slot + 1 > written) written = slot + 1;
+        }
+    }
+
+    // rigid pieces follow their node, so an animated prop moves too
+    for (size_t i = 0; i < m->nodes.size(); ++i) {
+        int node = i < m->node_of_draw.size() ? m->node_of_draw[i] : -1;
+        if (node < 0 || (size_t)node >= m->world.size()) continue;
+        if (i < m->skin_of_draw.size() && m->skin_of_draw[i] >= 0) continue;    // skinned: joints do it
+        m4_decompose(m->world[(size_t)node], &m->nodes[i].position, &m->nodes[i].rotation, &m->nodes[i].scale);
+    }
+    return written;
+}
+
 uint32_t dai_model_instances(const dai_model *m, dai_render_instance *out, uint32_t max,
                              dai_vec3 offset, dai_quat rot, float scale) {
     if (!m || !out) return 0;
@@ -619,8 +928,10 @@ uint32_t dai_model_instances(const dai_model *m, dai_render_instance *out, uint3
                          a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z };
     };
     uint32_t n = 0;
-    for (const dai_model_node &node : m->nodes) {
+    for (size_t ni = 0; ni < m->nodes.size(); ++ni) {
+        const dai_model_node &node = m->nodes[ni];
         if (n >= max) break;
+        uint32_t idx = n;
         dai_render_instance &o = out[n++];
         o = dai_render_instance_default();
         dai_vec3 p = rotate(rot, dai_vec3{ node.position.x * scale, node.position.y * scale, node.position.z * scale });
@@ -631,6 +942,17 @@ uint32_t dai_model_instances(const dai_model *m, dai_render_instance *out, uint3
         o.material = node.material;
         o.color = { 1, 1, 1 };
         o.roughness = 1.0f;
+        int skin = ni < m->skin_of_draw.size() ? m->skin_of_draw[ni] : -1;
+        if (skin >= 0 && (size_t)skin < m->skins.size()) {
+            o.joint_offset = m->skins[(size_t)skin].offset;
+            o.joint_count = (uint32_t)m->skins[(size_t)skin].joints.size();
+            // a skinned mesh is posed entirely by its joints: the node transform
+            // is already baked into them, so the instance must stay neutral
+            o.position = offset;
+            o.rotation = rot;
+            o.scale = { scale, scale, scale };
+        }
+        (void)idx;
     }
     return n;
 }
