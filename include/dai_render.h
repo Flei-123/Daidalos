@@ -195,6 +195,45 @@ DAI_API void dai_render_particle_atlas(dai_renderer *r, dai_texture tex, uint32_
  * pointer is copied, not retained. Pass count 0 to clear. */
 DAI_API void dai_render_particles(dai_renderer *r, const dai_particle *particles, uint32_t count);
 
+/* ---- lights ------------------------------------------------------------ */
+
+typedef enum dai_light_type {
+    DAI_LIGHT_POINT = 0,
+    DAI_LIGHT_SPOT  = 1
+} dai_light_type;
+
+/* Punctual lights, on top of the directional sun. No shadows from these yet -
+ * a point light shadow is six more depth passes, and a spot is one; both are
+ * worth having, neither is worth pretending to have. */
+typedef struct dai_light {
+    dai_vec3 position;
+    float    range;        /* metres; intensity reaches zero here            */
+    dai_vec3 color;
+    float    intensity;    /* multiplies colour                              */
+    dai_vec3 direction;    /* spot only, points away from the light          */
+    float    inner_deg;    /* spot cone, full brightness inside this angle   */
+    float    outer_deg;    /* spot cone, zero outside this angle             */
+    uint32_t type;         /* dai_light_type                                 */
+} dai_light;
+
+DAI_API dai_light dai_light_point(dai_vec3 position, dai_vec3 color, float intensity, float range);
+DAI_API dai_light dai_light_spot(dai_vec3 position, dai_vec3 direction, dai_vec3 color,
+                                 float intensity, float range, float inner_deg, float outer_deg);
+
+/* Uploads the lights for the NEXT frame. Count 0 clears them. */
+DAI_API void     dai_render_lights(dai_renderer *r, const dai_light *lights, uint32_t count);
+DAI_API uint32_t dai_render_max_lights(dai_renderer *r);
+
+/* ---- culling ----------------------------------------------------------- */
+
+/* Frustum culling is on by default. Instances whose bounding sphere is outside
+ * the camera frustum never reach the GPU. dai_render_last_culled() reports how
+ * many were dropped, which is the number that tells you whether your scene
+ * layout is doing anything sensible. */
+DAI_API void     dai_render_culling(dai_renderer *r, int enabled);
+DAI_API uint32_t dai_render_last_culled(dai_renderer *r);
+DAI_API uint32_t dai_render_last_visible(dai_renderer *r);
+
 /* ---- UI overlay -------------------------------------------------------- */
 
 /* Hands the renderer the UI batches for the NEXT frame; drawn last, in screen

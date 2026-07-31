@@ -493,20 +493,22 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
         { dai_render_destroy(r); return fail("instance buffer failed"); }
 
     // ---- descriptors
-    VkDescriptorSetLayoutBinding lb[3]{};
+    VkDescriptorSetLayoutBinding lb[4]{};
     lb[0].binding = 0; lb[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; lb[0].descriptorCount = 1;
     lb[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     lb[1].binding = 1; lb[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; lb[1].descriptorCount = 1;
     lb[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     lb[2].binding = 2; lb[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; lb[2].descriptorCount = 1;
     lb[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    lb[3].binding = 3; lb[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; lb[3].descriptorCount = 1;
+    lb[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo dlc{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    dlc.bindingCount = 3; dlc.pBindings = lb;
+    dlc.bindingCount = 4; dlc.pBindings = lb;
     if (vkCreateDescriptorSetLayout(r->dev, &dlc, nullptr, &r->dsl) != VK_SUCCESS)
         { dai_render_destroy(r); return fail("descriptor layout failed"); }
     VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
                                    { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 },
-                                   { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 } };
+                                   { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 } };
     VkDescriptorPoolCreateInfo dpc{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     dpc.maxSets = 1; dpc.poolSizeCount = 3; dpc.pPoolSizes = ps;
     if (vkCreateDescriptorPool(r->dev, &dpc, nullptr, &r->dpool) != VK_SUCCESS)
@@ -530,10 +532,17 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
         }
     }
 
+    r->light_capacity = DAI_MAX_LIGHTS;
+    if (!vk_make_buffer(r, (VkDeviceSize)r->light_capacity * sizeof(GpuLight),
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, host, &r->lights, true))
+        { dai_render_destroy(r); return fail("light buffer failed"); }
+    std::memset(r->lights.mapped, 0, (size_t)r->light_capacity * sizeof(GpuLight));
+
     VkDescriptorBufferInfo dbi{ r->ubo.buf, 0, sizeof(FrameUBO) };
     VkDescriptorBufferInfo jbi{ r->joints.buf, 0, VK_WHOLE_SIZE };
+    VkDescriptorBufferInfo lbi{ r->lights.buf, 0, VK_WHOLE_SIZE };
     VkDescriptorImageInfo dii{ r->shadow_sampler, r->shadow_view, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL };
-    VkWriteDescriptorSet wr[3]{};
+    VkWriteDescriptorSet wr[4]{};
     wr[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     wr[0].dstSet = r->dset; wr[0].dstBinding = 0; wr[0].descriptorCount = 1;
     wr[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; wr[0].pBufferInfo = &dbi;
@@ -543,7 +552,10 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     wr[2] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     wr[2].dstSet = r->dset; wr[2].dstBinding = 2; wr[2].descriptorCount = 1;
     wr[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; wr[2].pBufferInfo = &jbi;
-    vkUpdateDescriptorSets(r->dev, 3, wr, 0, nullptr);
+    wr[3] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+    wr[3].dstSet = r->dset; wr[3].dstBinding = 3; wr[3].descriptorCount = 1;
+    wr[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; wr[3].pBufferInfo = &lbi;
+    vkUpdateDescriptorSets(r->dev, 4, wr, 0, nullptr);
 
     // ---- material descriptors: 4 samplers per material, parameters go in
     //      push constants so switching material is one bind and no upload
@@ -788,6 +800,7 @@ void dai_render_destroy(dai_renderer *r) {
         vk_free_buffer(r, &r->vbo); vk_free_buffer(r, &r->ibo);
         vk_free_buffer(r, &r->inst); vk_free_buffer(r, &r->ubo); vk_free_buffer(r, &r->readback);
         vk_free_buffer(r, &r->joints);
+        vk_free_buffer(r, &r->lights);
         if (r->shadow_sampler) vkDestroySampler(r->dev, r->shadow_sampler, nullptr);
         if (r->tex_sampler) vkDestroySampler(r->dev, r->tex_sampler, nullptr);
         if (r->mat_pool) vkDestroyDescriptorPool(r->dev, r->mat_pool, nullptr);
@@ -865,6 +878,55 @@ void dai_render_joints(dai_renderer *r, const float *matrices, uint32_t count) {
 }
 
 uint32_t dai_render_max_joints(dai_renderer *r) { return r ? r->joint_capacity : 0; }
+
+dai_light dai_light_point(dai_vec3 p, dai_vec3 c, float intensity, float range) {
+    dai_light l{};
+    l.position = p; l.color = c; l.intensity = intensity;
+    l.range = range > 0.01f ? range : 1.0f;
+    l.direction = { 0, -1, 0 };
+    l.inner_deg = 0; l.outer_deg = 180.0f;
+    l.type = DAI_LIGHT_POINT;
+    return l;
+}
+
+dai_light dai_light_spot(dai_vec3 p, dai_vec3 dir, dai_vec3 c, float intensity,
+                         float range, float inner, float outer) {
+    dai_light l = dai_light_point(p, c, intensity, range);
+    l.direction = dir;
+    l.inner_deg = inner;
+    l.outer_deg = outer > inner ? outer : inner + 1.0f;
+    l.type = DAI_LIGHT_SPOT;
+    return l;
+}
+
+void dai_render_lights(dai_renderer *r, const dai_light *lights, uint32_t count) {
+    if (!r || !r->lights.mapped) return;
+    if (!lights || !count) { r->light_count = 0; return; }
+    if (count > r->light_capacity) count = r->light_capacity;
+    GpuLight *dst = (GpuLight *)r->lights.mapped;
+    for (uint32_t i = 0; i < count; ++i) {
+        const dai_light &l = lights[i];
+        GpuLight &g = dst[i];
+        g.position[0] = l.position.x; g.position[1] = l.position.y; g.position[2] = l.position.z;
+        g.range = l.range > 0.01f ? l.range : 1.0f;
+        g.color[0] = l.color.x; g.color[1] = l.color.y; g.color[2] = l.color.z;
+        g.intensity = l.intensity;
+        float dx = l.direction.x, dy = l.direction.y, dz = l.direction.z;
+        float len = sqrtf(dx*dx + dy*dy + dz*dz);
+        if (len < 1e-6f) { dx = 0; dy = -1; dz = 0; len = 1.0f; }
+        g.direction[0] = dx/len; g.direction[1] = dy/len; g.direction[2] = dz/len;
+        g.cos_inner = cosf(l.inner_deg * 3.14159265f / 180.0f);
+        g.cos_outer = cosf(l.outer_deg * 3.14159265f / 180.0f);
+        g.type = (float)l.type;
+        g.pad0 = g.pad1 = 0.0f;
+    }
+    r->light_count = count;
+}
+
+uint32_t dai_render_max_lights(dai_renderer *r) { return r ? r->light_capacity : 0; }
+void dai_render_culling(dai_renderer *r, int on) { if (r) r->culling = on ? 1 : 0; }
+uint32_t dai_render_last_culled(dai_renderer *r) { return r ? r->last_culled : 0; }
+uint32_t dai_render_last_visible(dai_renderer *r) { return r ? r->last_visible : 0; }
 
 void dai_render_ui(dai_renderer *r, const void *vertices, uint32_t vertex_count,
                    const uint32_t *counts, const uint32_t *textures, uint32_t batches) {

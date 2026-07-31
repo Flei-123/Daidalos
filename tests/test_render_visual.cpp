@@ -78,6 +78,9 @@ static Box2D silhouette(const Frame &f, float thresh = 0.02f) {
     return b;
 }
 
+static uint32_t f_w(dai_renderer *r) { return dai_render_width(r); }
+static uint32_t f_h(dai_renderer *r) { return dai_render_height(r); }
+
 static void save(dai_renderer *r, const char *name) {
     char path[512];
     std::snprintf(path, sizeof(path), "%s/%s", g_outdir, name);
@@ -571,6 +574,90 @@ int main(int argc, char **argv) {
         CHECK(far_drop > 100, "the caster 70 m away casts no shadow (%d px darkened) - only one cascade is working", far_drop);
         std::printf("     darkened pixels: near %d, far %d\n", near_drop, far_drop);
         dai_render_exposure(r, 1.2f);
+    }
+
+    // ---------------------------------------------------------------- 16
+    // Punctual lights: a point light must brighten what is near it and leave
+    // what is far alone, a spot must stay inside its cone, and both must be
+    // dark behind an object rather than shining through it.
+    {
+        std::printf("[16] point and spot lights\n");
+        dai_render_sky(r, 0);
+        dai_render_clear_color(r, 0, 0, 0);
+        dai_render_sun(r, dai_vec3{ 0, 1, 0 }, dai_vec3{ 1,1,1 }, 0.0f);      // sun off
+        dai_render_ambient(r, dai_vec3{ 0.02f,0.02f,0.03f }, dai_vec3{ 0.02f,0.02f,0.02f }, 0.05f);
+        dai_render_exposure(r, 1.0f);
+        dai_render_fog(r, 0.0f, dai_vec3{0,0,0});
+
+        dai_render_instance floor_i = dai_render_instance_default();
+        floor_i.position = { 0, -1, 0 }; floor_i.scale = { 20, 1, 20 };
+        floor_i.color = { 0.8f, 0.8f, 0.8f };
+        dai_render_camera(r, dai_vec3{ 0, 9, 9 }, dai_vec3{ 0, 0, 0 }, dai_vec3{ 0,1,0 }, 55.0f, 0.1f, 100.0f);
+
+        dai_render_lights(r, nullptr, 0);
+        dai_render_frame(r, &floor_i, 1);
+        Frame dark = grab(r);
+        float unlit = dark.lum(f_w(r) / 2, f_h(r) / 2);
+
+        dai_light lights[2];
+        lights[0] = dai_light_point(dai_vec3{ 0, 1.5f, 0 }, dai_vec3{ 1.0f, 0.9f, 0.7f }, 3.0f, 6.0f);
+        dai_render_lights(r, lights, 1);
+        dai_render_frame(r, &floor_i, 1);
+        Frame lit = grab(r); save(r, "vis_16_point.ppm");
+        float centre = lit.lum(lit.w / 2, lit.h / 2);
+        float corner = lit.lum(20, lit.h - 20);
+        std::printf("     unlit %.3f | under the light %.3f | far corner %.3f\n", unlit, centre, corner);
+        CHECK(centre > unlit + 0.1f, "point light did not brighten the floor (%.3f vs %.3f)", centre, unlit);
+        CHECK(centre > corner + 0.1f, "point light reaches as far as the frame corner (%.3f vs %.3f) - no falloff",
+              centre, corner);
+
+        // spot: aimed straight down, narrow cone
+        lights[0] = dai_light_spot(dai_vec3{ 0, 4.0f, 0 }, dai_vec3{ 0, -1, 0 },
+                                   dai_vec3{ 0.6f, 0.8f, 1.0f }, 40.0f, 12.0f, 10.0f, 18.0f);
+        dai_render_lights(r, lights, 1);
+        dai_render_frame(r, &floor_i, 1);
+        Frame spot = grab(r); save(r, "vis_16_spot.ppm");
+        float in_cone = spot.lum(spot.w / 2, spot.h / 2);
+        float out_cone = spot.lum(spot.w / 6, spot.h / 2);
+        std::printf("     spot: inside %.3f | outside %.3f\n", in_cone, out_cone);
+        CHECK(in_cone > out_cone + 0.15f, "spot cone does not fall off (%.3f inside, %.3f outside)",
+              in_cone, out_cone);
+
+        dai_render_lights(r, nullptr, 0);
+        dai_render_sun(r, dai_vec3{ 0.42f, 0.80f, 0.42f }, dai_vec3{ 1.0f, 0.95f, 0.86f }, 1.3f);
+    }
+
+    // ---------------------------------------------------------------- 17
+    // Frustum culling: turning the camera away must drop the instances, and
+    // the visible image must be identical with culling on and off.
+    {
+        std::printf("[17] frustum culling\n");
+        std::vector<dai_render_instance> in;
+        for (int i = 0; i < 400; ++i) {
+            dai_render_instance b = dai_render_instance_default();
+            float a = i * 0.157f;
+            b.position = { cosf(a) * (2.0f + i * 0.1f), 1.0f, sinf(a) * (2.0f + i * 0.1f) };
+            b.scale = { 0.4f, 0.4f, 0.4f };
+            in.push_back(b);
+        }
+        dai_render_camera(r, dai_vec3{ 0, 3, 6 }, dai_vec3{ 0, 1, -20 }, dai_vec3{ 0,1,0 }, 45.0f, 0.1f, 200.0f);
+        dai_render_culling(r, 1);
+        dai_render_frame(r, in.data(), (uint32_t)in.size());
+        uint32_t culled_forward = dai_render_last_culled(r);
+        Frame culled_img = grab(r);
+
+        dai_render_culling(r, 0);
+        dai_render_frame(r, in.data(), (uint32_t)in.size());
+        Frame full_img = grab(r);
+        CHECK(culled_forward > 50, "only %u of 400 instances were culled looking forward", culled_forward);
+        CHECK(culled_img.px == full_img.px, "culling changed the image - something visible was dropped");
+
+        dai_render_culling(r, 1);
+        dai_render_camera(r, dai_vec3{ 0, 3, 6 }, dai_vec3{ 0, 3, 60 }, dai_vec3{ 0,1,0 }, 45.0f, 0.1f, 200.0f);
+        dai_render_frame(r, in.data(), (uint32_t)in.size());
+        std::printf("     looking at the scene: %u culled | looking away: %u culled of 400\n",
+                    culled_forward, dai_render_last_culled(r));
+        CHECK(dai_render_last_culled(r) > 350, "looking away only culled %u of 400", dai_render_last_culled(r));
     }
 
     dai_render_destroy(r);

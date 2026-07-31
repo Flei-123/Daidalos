@@ -68,6 +68,16 @@ struct MaterialEntry {
     char name[48] = {0};
 };
 
+#define DAI_MAX_LIGHTS 256
+
+// std430 layout, matching the shader's Lights buffer
+struct GpuLight {
+    float position[3]; float range;
+    float color[3];    float intensity;
+    float direction[3]; float cos_inner;
+    float cos_outer;   float type; float pad0, pad1;
+};
+
 struct MeshEntry {
     uint32_t first_index = 0;
     uint32_t index_count = 0;
@@ -142,6 +152,11 @@ struct dai_renderer {
     GpuBuffer ui_verts;
     uint32_t ui_capacity = 0, ui_vertex_count = 0;
     std::vector<uint32_t> ui_batch_counts, ui_batch_textures;
+
+    GpuBuffer lights;
+    uint32_t light_capacity = 0, light_count = 0;
+    int culling = 1;
+    uint32_t last_culled = 0, last_visible = 0;
 
     GpuBuffer joints;                 // storage buffer of mat4, all characters
     uint32_t joint_capacity = 0, joint_count = 0;

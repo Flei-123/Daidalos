@@ -49,12 +49,59 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     if (!ensure_instances(r, count ? count : 1)) return DAI_ERR_OUT_OF_MEMORY;
     auto t0 = std::chrono::high_resolution_clock::now();
 
+    // ---- 0. frustum culling
+    //
+    // Six planes straight out of the view projection (Gribb/Hartmann), tested
+    // against each instance's bounding sphere. Cheap, exact enough, and it
+    // happens BEFORE sorting so culled instances cost nothing downstream.
+    Mat4 vp_cull = mat_mul(mat_perspective(r->fov, (float)r->width / (float)r->height, r->znear, r->zfar),
+                           mat_look_at(r->eye, r->target, r->up));
+    float planes[6][4];
+    for (int i = 0; i < 3; ++i) {
+        for (int s2 = 0; s2 < 2; ++s2) {
+            int p = i * 2 + s2;
+            float sign = s2 ? -1.0f : 1.0f;
+            for (int c = 0; c < 4; ++c)
+                planes[p][c] = vp_cull.m[c * 4 + 3] + sign * vp_cull.m[c * 4 + i];
+        }
+    }
+    for (int p = 0; p < 6; ++p) {
+        float len = sqrtf(planes[p][0]*planes[p][0] + planes[p][1]*planes[p][1] + planes[p][2]*planes[p][2]);
+        if (len > 1e-8f) for (int c = 0; c < 4; ++c) planes[p][c] /= len;
+    }
+
+    std::vector<uint32_t> visible;
+    visible.reserve(count);
+    uint32_t culled = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!r->culling) { visible.push_back(i); continue; }
+        const dai_render_instance &in = inst[i];
+        float sx = fabsf(in.scale.x), sy = fabsf(in.scale.y) + fabsf(in.param), sz = fabsf(in.scale.z);
+        float radius = sqrtf(sx*sx + sy*sy + sz*sz);
+        // skinned meshes are posed by joints the CPU does not track here, so
+        // they get a generous radius rather than a wrong one
+        if (in.joint_count) radius *= 4.0f;
+        bool in_frustum = true;
+        for (int p = 0; p < 6 && in_frustum; ++p) {
+            float d = planes[p][0]*in.position.x + planes[p][1]*in.position.y +
+                      planes[p][2]*in.position.z + planes[p][3];
+            if (d < -radius) in_frustum = false;
+        }
+        if (in_frustum) visible.push_back(i);
+        else ++culled;
+    }
+    r->last_culled = culled;
+    r->last_visible = (uint32_t)visible.size();
+    uint32_t total_input = count;
+    count = (uint32_t)visible.size();
+
     // ---- 1. sort: shadow casters first, then by mesh
     std::vector<uint32_t> order(count);
-    for (uint32_t i = 0; i < count; ++i) order[i] = i;
+    for (uint32_t i = 0; i < count; ++i) order[i] = visible[i];
     // sort by (casts shadow, material, mesh): shadow casters form a prefix the
     // depth pass can draw without touching materials, and inside that every
     // material/mesh pair becomes exactly one draw call
+    (void)total_input;
     auto key = [&](uint32_t i) {
         uint32_t m = inst[i].mesh < r->meshes.size() ? inst[i].mesh : (uint32_t)DAI_MESH_BOX;
         uint32_t mat = inst[i].material < r->materials.size() ? inst[i].material : 0u;
@@ -152,8 +199,9 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     if (!mat_invert(viewproj, &u.invviewproj)) u.invviewproj = mat_identity();
     for (uint32_t c = 0; c < DAI_SHADOW_CASCADES; ++c)
         u.lightviewproj[c] = lightvp[c < r->cascades ? c : r->cascades - 1];
-    for (uint32_t c = 0; c < 4; ++c)
+    for (uint32_t c = 0; c < 3; ++c)
         u.cascade_split[c] = splits[c + 1 <= r->cascades ? c + 1 : r->cascades];
+    u.cascade_split[3] = (float)r->light_count;      // w carries the light count
     for (int i = 0; i < 3; ++i) {
         u.sun_dir[i] = r->sun_dir[i];
         u.sun_color[i] = r->sun_color[i];

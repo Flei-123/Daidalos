@@ -29,6 +29,14 @@ layout(set = 0, binding = 0) uniform Frame {
 } F;
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow uShadow;
 
+struct Light {
+    vec3 position; float range;
+    vec3 color;    float intensity;
+    vec3 direction; float cos_inner;
+    float cos_outer; float type; float pad0, pad1;
+};
+layout(std430, set = 0, binding = 3) readonly buffer Lights { Light items[]; } gLights;
+
 layout(set = 1, binding = 0) uniform sampler2D uBaseColor;
 layout(set = 1, binding = 1) uniform sampler2D uORM;        // occlusion / roughness / metallic
 layout(set = 1, binding = 2) uniform sampler2D uNormal;
@@ -156,6 +164,40 @@ void main() {
     vec3  spec = F_Schlick(f0, vdh) * D_GGX(ndh, a) * V_Smith(ndv, ndl, a);
     vec3  sun  = F.sun_color.rgb * F.sun_dir.w * ndl * sh;
     vec3  color = (diffuse_color / PI + spec) * sun * PI;
+
+    // Punctual lights. One loop over all of them - no clustering yet, which is
+    // fine up to a few dozen and honest about where the limit is. The count
+    // travels in cascade_split.w, so no extra uniform was needed.
+    int light_count = int(F.cascade_split.w + 0.5);
+    for (int li = 0; li < light_count; ++li) {
+        Light lg = gLights.items[li];
+        vec3 to_light = lg.position - vWorld;
+        float dist2 = dot(to_light, to_light);
+        float dist = sqrt(max(dist2, 1e-8));
+        if (dist >= lg.range) continue;
+        vec3 Ld = to_light / dist;
+
+        // inverse square with a smooth window, so the light ends exactly at its
+        // range instead of being clipped mid gradient
+        float win = clamp(1.0 - pow(dist / lg.range, 4.0), 0.0, 1.0);
+        float atten = win * win / max(dist2, 0.01);
+
+        if (lg.type > 0.5) {                        // spot cone
+            float cd = dot(normalize(-Ld), normalize(lg.direction));
+            float t = clamp((cd - lg.cos_outer) / max(lg.cos_inner - lg.cos_outer, 1e-4), 0.0, 1.0);
+            atten *= t * t;
+        }
+        if (atten <= 0.0001) continue;
+
+        float ndl_p = max(dot(N, Ld), 0.0);
+        if (ndl_p <= 0.0) continue;
+        vec3 Hp = normalize(Ld + V);
+        float ndh_p = max(dot(N, Hp), 0.0);
+        float vdh_p = max(dot(V, Hp), 0.0);
+        vec3 spec_p = F_Schlick(f0, vdh_p) * D_GGX(ndh_p, a) * V_Smith(ndv, ndl_p, a);
+        vec3 radiance = lg.color * lg.intensity * atten * ndl_p;
+        color += (diffuse_color / PI + spec_p) * radiance * PI;
+    }
 
     // hemisphere ambient stands in for an environment probe: sky from above,
     // bounce from below, with a Fresnel weighted specular tint on top

@@ -52,8 +52,14 @@ ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics
 
 echo "-- shaders"
 if command -v glslangValidator >/dev/null 2>&1; then
+    # A failed shader compile used to leave the previous .spv in place, so the
+    # renderer silently kept running the OLD shader - which cost an afternoon
+    # of "why do the lights do nothing". Fail loudly instead.
     for s in mesh.vert mesh.frag shadow.vert sky.vert sky.frag particle.vert particle.frag ui.vert ui.frag; do
-        glslangValidator -V "shaders/$s" -o "shaders/$s.spv" >/dev/null
+        if ! glslangValidator -V "shaders/$s" -o "shaders/$s.spv.new" >/tmp/glsl_$s.log 2>&1; then
+            echo "   !! shader $s failed to compile:"; sed -n '1,12p' /tmp/glsl_$s.log; exit 1
+        fi
+        mv "shaders/$s.spv.new" "shaders/$s.spv"
     done
 else
     echo "   glslangValidator missing - using the .spv files already in shaders/"
