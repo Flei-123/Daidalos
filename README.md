@@ -67,6 +67,36 @@ written here. No stb, no zlib, no libpng, no GLM, no tinygltf, no VMA.
 
 ---
 
+## WebAssembly
+
+The simulation core builds for the web and produces **the same numbers**:
+
+```bash
+./build_web.sh && node build/web/daidalos_web.js
+```
+
+```
+backend   : null
+ticks     : 600
+CHECKSUM  : c45b292fa025384e      <- identical to the native build
+rollback  : ok, checksum reproduced
+```
+
+600 ticks, 65 bodies, a rollback, byte for byte the same checksum as the native
+binary of the same sources. That is the prerequisite for a browser client
+sharing a rollback session with a native one, and it is only true because the
+tick never reads the clock, the renderer or an unseeded random number.
+
+40 KB of wasm for engine + scene + particles. `DAI_NO_JOLT` drops the physics
+backend from the link, which is also a stricter version of the leak test: the
+engine has to be complete without it.
+
+What does NOT port yet is the renderer - Vulkan has no browser equivalent. A
+web build needs a WebGPU backend behind `dai_render.h`, which is precisely the
+swap the RHI boundary exists for: one new `rhi_*.cpp`, nothing else changes.
+Jolt itself compiles to wasm (upstream supports Emscripten), so a full browser
+build is a build system exercise rather than a redesign.
+
 ## Layers
 
 ### Simulation core - `include/daidalos.h`

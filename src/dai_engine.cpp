@@ -247,7 +247,14 @@ dai_result dai_create(const dai_config *cfg_in, dai_world **out) {
     w->input_ring = std::max(256u, w->snap_ring * 4);
     w->rng.seed(w->cfg.seed ? w->cfg.seed : 0x9e3779b97f4a7c15ULL);
 
+    // DAI_NO_JOLT drops the Jolt backend from the link entirely. That is what
+    // makes the WebAssembly build possible today (and it is a second, stricter
+    // version of the leak test: the engine has to be complete without it).
+#ifdef DAI_NO_JOLT
+    w->phys = create_null_backend();
+#else
     w->phys = (w->cfg.backend == DAI_PHYSICS_NULL) ? create_null_backend() : create_jolt_backend();
+#endif
     if (!w->phys) { delete w; return DAI_ERR_OUT_OF_MEMORY; }
     char perr[192] = {0};
     if (!w->phys->init(w->cfg, perr, sizeof(perr))) {
