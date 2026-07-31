@@ -156,12 +156,26 @@ g++ $FLAGS $ARCH -Iinclude build/_norender.cpp $LIBS -o build/_norender    # not
 ./build/_norender || { echo "   !! scene layer cannot run without a renderer"; exit 1; }
 rm -f build/_norender build/_norender.cpp
 
+# Scripting is optional: it is the only part that needs a vendored library
+QJS=extern/quickjs
+if [ -f "$QJS/libquickjs.a" ]; then
+    echo "-- scripting: quickjs"
+    g++ $FLAGS $ARCH -Iinclude -Isrc -I"$QJS" -c src/dai_script.cpp -o build/dai_script.o
+    SCRIPT_LIB="build/dai_script.o $QJS/libquickjs.a"
+else
+    echo "-- scripting: skipped (extern/quickjs not built)"
+    SCRIPT_LIB=""
+fi
+
 echo "-- tests"
 g++ $FLAGS $ARCH -Iinclude tests/test_daidalos.cpp $LIBS -o build/test_daidalos
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_image.cpp src/dai_inflate.cpp -o build/test_image
 g++ $FLAGS $ARCH -Iinclude tests/test_merge.cpp $LIBS -o build/test_merge
 g++ $FLAGS $ARCH -Iinclude tests/test_save.cpp $LIBS -o build/test_save
 g++ $FLAGS $ARCH -Iinclude tests/test_input.cpp $LIBS -o build/test_input
+if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
+    g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_script.cpp $SCRIPT_LIB $VKLIBS -o build/test_script
+fi
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/test_font
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
