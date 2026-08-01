@@ -110,16 +110,29 @@ int main(int argc, char **argv) {
 
     // ---- 3. the resolver, which is what the document actually calls -------
     std::printf("[3] resolver\n");
-    uint32_t mesh = 0xFFFFFFFFu, material = 0xFFFFFFFFu;
-    dai_vec3 scale{ 0, 0, 0 };
-    CHECK(dai_assets_resolve("blender_scene.glb", &mesh, &material, &scale, a) == 1,
-          "resolving a loaded model failed");
+    // Counting first, filling second - that is the contract, and it is how the
+    // sync layer sizes its buffer.
+    uint32_t part_count = dai_assets_resolve("blender_scene.glb", nullptr, 0, a);
+    CHECK(part_count == info.nodes,
+          "the resolver reports %u pieces, the model has %u nodes - a multi object "
+          "file must not collapse to one piece", part_count, info.nodes);
+
+    std::vector<dai_render_part> parts(part_count ? part_count : 1);
+    uint32_t filled = dai_assets_resolve("blender_scene.glb", parts.data(), (uint32_t)parts.size(), a);
+    CHECK(filled == part_count, "asking again filled %u of %u", filled, part_count);
+
+    uint32_t mesh = part_count ? parts[0].mesh : 0xFFFFFFFFu;
     CHECK(mesh != 0xFFFFFFFFu, "the resolver returned no mesh");
-    CHECK(scale.x != 0.0f || scale.y != 0.0f || scale.z != 0.0f,
-          "the resolver returned a zero scale, which the sync layer reads as 'unset'");
+    CHECK(parts[0].scale.x != 0.0f || parts[0].scale.y != 0.0f || parts[0].scale.z != 0.0f,
+          "the first piece has a zero scale, which draws nothing");
 
     const dai_model_node *first = dai_model_node_at(m, 0);
-    CHECK(first && mesh == first->mesh, "without a selector the resolver must take node 0");
+    CHECK(first && mesh == first->mesh, "piece 0 must be node 0");
+    // A short buffer must be filled as far as it goes and still report the truth.
+    dai_render_part one{};
+    CHECK(dai_assets_resolve("blender_scene.glb", &one, 1, a) == part_count,
+          "a one element buffer changed the reported count");
+    CHECK(one.mesh == first->mesh, "the short buffer did not get piece 0");
 
     // ---- 4. sub-asset selector -------------------------------------------
     // One Blender file, five objects, and a scene node wants ONE of them.
@@ -132,27 +145,27 @@ int main(int argc, char **argv) {
     CHECK(other != nullptr, "the test file has no second named node with its own mesh");
     if (other) {
         std::string sel = "blender_scene.glb#" + std::string(other->name);
-        uint32_t sm = 0xFFFFFFFFu, smat = 0;
-        dai_vec3 ss{ 0, 0, 0 };
-        CHECK(dai_assets_resolve(sel.c_str(), &sm, &smat, &ss, a) == 1,
-              "resolving '%s' failed", sel.c_str());
-        CHECK(sm == other->mesh, "the selector picked mesh %u, '%s' is mesh %u",
-              sm, other->name, other->mesh);
-        CHECK(sm != mesh, "the selector returned the same mesh as no selector at all");
-        std::printf("     node 0 mesh %u, '%s' mesh %u\n", mesh, other->name, sm);
+        dai_render_part sp{};
+        CHECK(dai_assets_resolve(sel.c_str(), &sp, 1, a) == 1,
+              "a selector must resolve to exactly one piece, '%s' did not", sel.c_str());
+        CHECK(sp.mesh == other->mesh, "the selector picked mesh %u, '%s' is mesh %u",
+              sp.mesh, other->name, other->mesh);
+        CHECK(sp.mesh != mesh, "the selector returned the same mesh as no selector at all");
+        std::printf("     whole file: %u pieces | '%s' alone: mesh %u\n",
+                    part_count, other->name, sp.mesh);
     }
 
     // A typo must not silently draw the wrong object.
-    uint32_t bogus_mesh = 0xFFFFFFFFu;
-    CHECK(dai_assets_resolve("blender_scene.glb#NoSuchObject", &bogus_mesh, &material, &scale, a) == 0,
+    dai_render_part bogus{};
+    CHECK(dai_assets_resolve("blender_scene.glb#NoSuchObject", &bogus, 1, a) == 0,
           "an unknown node name resolved anyway");
     CHECK(std::strstr(dai_assets_last_error(a), "NoSuchObject") != nullptr,
           "the error does not name the missing node: '%s'", dai_assets_last_error(a));
 
     // ---- 5. a missing file is not fatal -----------------------------------
     std::printf("[5] missing and broken assets\n");
-    uint32_t mm = 0xFFFFFFFFu;
-    CHECK(dai_assets_resolve("models/not_here.glb", &mm, &material, &scale, a) == 0,
+    dai_render_part mp{};
+    CHECK(dai_assets_resolve("models/not_here.glb", &mp, 1, a) == 0,
           "a missing file resolved");
     for (int i = 0; i < 200 && !dai_assets_failed(a); ++i) {
         dai_assets_poll(a);
@@ -161,8 +174,8 @@ int main(int argc, char **argv) {
     CHECK(dai_assets_failed(a) > 0, "a missing file did not end up in the failed count");
     CHECK(dai_assets_error_of(a, "models/not_here.glb")[0] != 0,
           "a missing file has no error message");
-    CHECK(dai_assets_resolve("", &mm, &material, &scale, a) == 0, "an empty path resolved");
-    CHECK(dai_assets_resolve("blender_scene.glb", &mm, &material, &scale, nullptr) == 0,
+    CHECK(dai_assets_resolve("", &mp, 1, a) == 0, "an empty path resolved");
+    CHECK(dai_assets_resolve("blender_scene.glb", &mp, 1, nullptr) == 0,
           "resolving without a registry did not fail cleanly");
 
     // ---- 6. a pack file behaves exactly like a folder ---------------------
@@ -237,15 +250,37 @@ int main(int argc, char **argv) {
     dai_assets_bind(a, sync);
     dai_doc_sync_apply(sync);
     n = dai_scene_instances(sc, inst, 64, 1.0f);
-    CHECK(n == 1, "%u instances after binding, expected 1", n);
-    if (n) {
-        CHECK(inst[0].mesh == mesh,
-              "the node draws mesh %u, the asset resolves to %u - the resolver is not reaching the scene",
-              inst[0].mesh, mesh);
-        CHECK(inst[0].mesh != fallback_mesh,
-              "the node still draws its collision shape (mesh %u) after the asset resolved",
-              fallback_mesh);
+    // ONE document node, every object in the file. A five object Blender export
+    // must not force the user to make five scene nodes.
+    CHECK(n == part_count, "%u instances after binding, the model has %u pieces", n, part_count);
+    bool drew_first = false, drew_fallback = false;
+    for (uint32_t i = 0; i < n; ++i) {
+        if (inst[i].mesh == mesh) drew_first = true;
+        if (inst[i].mesh == fallback_mesh) drew_fallback = true;
     }
+    CHECK(drew_first, "the imported mesh %u is not among the drawn instances", mesh);
+    CHECK(!drew_fallback, "the node still draws its collision shape (mesh %u)", fallback_mesh);
+    // Every piece keeps its own material, or a five material model would come
+    // out one colour.
+    uint32_t distinct_materials = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        bool seen = false;
+        for (uint32_t k = 0; k < i; ++k) if (inst[k].material == inst[i].material) seen = true;
+        if (!seen) ++distinct_materials;
+    }
+    CHECK(distinct_materials > 1, "all %u pieces share one material", n);
+    // And each piece has to land where the file says, not all at the origin.
+    uint32_t distinct_places = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        bool seen = false;
+        for (uint32_t k = 0; k < i; ++k)
+            if (std::memcmp(&inst[k].position, &inst[i].position, sizeof(dai_vec3)) == 0) seen = true;
+        if (!seen) ++distinct_places;
+    }
+    CHECK(distinct_places > 1,
+          "all %u pieces sit at the same position - the model's own transforms were dropped", n);
+    std::printf("     one node -> %u instances, %u materials, %u positions\n",
+                n, distinct_materials, distinct_places);
 
     // Point the same node at one specific object inside the file.
     if (other) {
@@ -255,8 +290,8 @@ int main(int argc, char **argv) {
         dai_doc_sync_apply(sync);
         n = dai_scene_instances(sc, inst, 64, 1.0f);
         CHECK(n == 1 && inst[0].mesh == other->mesh,
-              "retargeting to '%s' left the node on mesh %u, expected %u",
-              other->name, n ? inst[0].mesh : 0, other->mesh);
+              "retargeting to '%s' gave %u instances on mesh %u, expected 1 on %u",
+              other->name, n, n ? inst[0].mesh : 0, other->mesh);
     }
 
     // An asset that cannot be found leaves the node visible on its shape.

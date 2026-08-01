@@ -237,9 +237,14 @@ a worker is a crash waiting for a busy frame. A node whose asset has not
 arrived yet keeps drawing its collision shape - visibly wrong, never invisible -
 and picks up the real mesh a frame or two later.
 
-`models/scene.glb#Crate` takes one object out of a file that holds several,
-which is how a single Blender export serves as a library. Without a selector
-the first node wins.
+A file with several objects becomes several drawable pieces on ONE scene node:
+a crate with a lid is one rigid body and two meshes, not two nodes the user has
+to keep in step. Each piece keeps its own mesh, material and place inside the
+model. `models/scene.glb#Crate` narrows it to a single object, which is how the
+same Blender export doubles as a library of separate props.
+
+The resolver is asked twice - once with a null buffer to get the count, once to
+fill it - so an asset with forty pieces does not need a guessed maximum.
 
 This is also where the sync layer had a real hole: the resolver only ran when a
 node was first built, so an asset that finished loading afterwards never
@@ -481,11 +486,11 @@ have been struck from the list rather than left in to look modest.
 
 Assets are referenced by path (`asset models/crate.glb` in the scene file),
 resolved through Mnemosyne and the glTF importer, and a scene with imported
-models saves and reopens. Reloading a model releases the old one's meshes,
-textures and materials and reuses the slots, so an editing session does not
-grow. What is *not* here yet: a scene node resolves to ONE node of a glTF file
-(`file.glb#Object` picks which), so a five part model needs five scene nodes;
-and there is no asset browser.
+models saves and reopens. A file with several objects draws as several pieces
+on one scene node, reloading releases the old meshes and textures and reuses
+the slots, so an editing session does not grow. What is *not* here yet: no
+asset browser, and the pieces of a model share one rigid body - a crate whose
+lid should open needs two scene nodes and a joint.
 
 Editor:
 - No box select; multi-selection is click by click.

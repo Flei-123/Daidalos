@@ -229,8 +229,7 @@ dai_model *dai_assets_model_blocking(dai_assets *a, const char *path) {
     return m ? m->model : nullptr;
 }
 
-int dai_assets_resolve(const char *path, uint32_t *out_mesh, uint32_t *out_material,
-                       dai_vec3 *out_render_scale, void *user) {
+uint32_t dai_assets_resolve(const char *path, dai_render_part *out, uint32_t max, void *user) {
     dai_assets *a = (dai_assets *)user;
     if (!a || !path || !path[0]) return 0;
 
@@ -239,27 +238,35 @@ int dai_assets_resolve(const char *path, uint32_t *out_mesh, uint32_t *out_mater
     ModelAsset *m = asset_for(a, file, false);
     if (!m || !m->model) return 0;          // missing, still loading, or failed
 
-    const dai_model_node *n = nullptr;
+    auto write = [&](const dai_model_node *n, uint32_t at) {
+        if (!out || at >= max) return;
+        out[at].mesh = n->mesh;
+        out[at].material = n->material;
+        out[at].position = n->position;
+        out[at].rotation = n->rotation;
+        out[at].scale = n->scale;
+    };
+
+    // "file.glb#Object" is one piece out of a file that holds several.
     if (!node_name.empty()) {
-        n = dai_model_find(m->model, node_name.c_str());
+        const dai_model_node *n = dai_model_find(m->model, node_name.c_str());
         if (!n) {
             std::snprintf(a->err, sizeof(a->err), "%s: no node named '%s'",
                           file.c_str(), node_name.c_str());
             return 0;                        // a typo must not silently draw
         }                                    // the wrong object
-    } else {
-        if (!dai_model_node_count(m->model)) return 0;
-        n = dai_model_node_at(m->model, 0);
+        write(n, 0);
+        return 1;
     }
-    if (!n) return 0;
 
-    if (out_mesh) *out_mesh = n->mesh;
-    if (out_material) *out_material = n->material;
-    // The node's own scale from the file. The sync layer multiplies it by the
-    // document node's scale, so a model authored at 2m stays 2m and the
-    // editor's scale still works on top of it.
-    if (out_render_scale) *out_render_scale = n->scale;
-    return 1;
+    // No selector: the whole model. A five object Blender export is one scene
+    // node with five pieces, not five scene nodes the user has to keep in step.
+    uint32_t count = dai_model_node_count(m->model);
+    for (uint32_t i = 0; i < count; ++i) {
+        const dai_model_node *n = dai_model_node_at(m->model, i);
+        if (n) write(n, i);
+    }
+    return count;
 }
 
 void dai_assets_bind(dai_assets *a, dai_doc_sync *sync) {

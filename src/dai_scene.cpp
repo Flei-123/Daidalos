@@ -29,6 +29,9 @@ struct Renderable {
     std::string name;
     // compound parts, empty for simple shapes
     std::vector<dai_compound_part> parts;
+    // drawable pieces of an imported model, empty unless an asset resolved to
+    // more than one. Takes priority over both of the above.
+    std::vector<dai_render_part> render_parts;
 };
 
 // A pleasant default palette so a scene never comes out uniformly grey.
@@ -219,6 +222,20 @@ dai_result dai_scene_set_render(dai_scene *s, dai_entity e, uint32_t mesh,
     return DAI_OK;
 }
 
+dai_result dai_scene_set_parts(dai_scene *s, dai_entity e,
+                               const dai_render_part *parts, uint32_t count) {
+    if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
+    if (count && !parts) return DAI_ERR_INVALID_ARG;
+    Renderable &r = s->ents[e];
+    r.render_parts.assign(parts, parts + count);
+    return DAI_OK;
+}
+
+uint32_t dai_scene_part_count(const dai_scene *s, dai_entity e) {
+    if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return 0;
+    return (uint32_t)s->ents[e].render_parts.size();
+}
+
 dai_result dai_scene_set_material(dai_scene *s, dai_entity e, uint32_t material) {
     if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
     s->ents[e].material = material;
@@ -245,7 +262,28 @@ uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t ma
         const Renderable &r = s->ents[it->second];
         if (!r.alive || !r.visible) continue;
 
-        if (r.parts.empty()) {
+        if (!r.render_parts.empty()) {
+            // An imported model: every piece carries its own mesh, material and
+            // place inside the model, and the entity's transform puts the whole
+            // thing in the world.
+            for (const dai_render_part &p : r.render_parts) {
+                if (w >= max) break;
+                dai_vec3 local = mul(p.position, r.scale);
+                dai_render_instance &o = out[w++];
+                o = dai_render_instance_default();
+                o.position = { t.position.x + rotate(t.rotation, local).x,
+                               t.position.y + rotate(t.rotation, local).y,
+                               t.position.z + rotate(t.rotation, local).z };
+                o.rotation = qmul(t.rotation, p.rotation);
+                o.scale = mul(p.scale, r.scale);
+                o.color = r.color;
+                o.mesh = p.mesh;
+                o.roughness = r.roughness;
+                o.emissive = r.emissive;
+                o.flags = r.flags;
+                o.material = p.material;
+            }
+        } else if (r.parts.empty()) {
             dai_render_instance &o = out[w++];
             o = dai_render_instance_default();
             o.position = t.position;

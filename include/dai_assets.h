@@ -30,9 +30,10 @@
  * arrived yet keeps its collision shape and draws as that shape - visibly
  * wrong, never invisible - and picks up the real mesh on a later frame.
  *
- * Sub-asset selector: "models/scene.glb#Crate" takes the node named Crate out
- * of a file that holds several objects, which is how one Blender export can
- * serve as a library. Without a selector the FIRST node wins.
+ * A file with several objects becomes several drawable pieces on ONE scene
+ * node - a crate with a lid is one rigid body and two meshes. The selector
+ * "models/scene.glb#Crate" narrows it to a single object, which is how one
+ * Blender export can serve as a library of separate props.
  */
 #ifndef DAI_ASSETS_H
 #define DAI_ASSETS_H
@@ -72,12 +73,14 @@ DAI_API dai_model *dai_assets_model(dai_assets *a, const char *path);
  * the finalisers itself. Use it for a loading screen, not per frame. */
 DAI_API dai_model *dai_assets_model_blocking(dai_assets *a, const char *path);
 
-/* Matches dai_asset_resolve_fn exactly; `user` is the dai_assets *. Resolves
- * "path" or "path#node" to one node's mesh, material and scale. Returns 0 for
- * a missing file, a file that is still loading, or an unknown node name - all
- * three leave the caller on its fallback shape. */
-DAI_API int dai_assets_resolve(const char *path, uint32_t *out_mesh, uint32_t *out_material,
-                               dai_vec3 *out_render_scale, void *user);
+/* Matches dai_asset_resolve_fn exactly; `user` is the dai_assets *. Fills up to
+ * `max` pieces and returns how many the asset has - so `out = NULL, max = 0`
+ * asks for the count. Without a selector that is every node in the file; with
+ * one ("path#Crate") it is exactly that node, and 1. Returns 0 for a missing
+ * file, a file that is still loading, or an unknown node name - all three
+ * leave the caller on its fallback shape. */
+DAI_API uint32_t dai_assets_resolve(const char *path, dai_render_part *out,
+                                    uint32_t max, void *user);
 
 /* dai_doc_sync_resolver(sync, dai_assets_resolve, a) - and it also marks every
  * already built node as needing a rebuild, so calling it again after a reload

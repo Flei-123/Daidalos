@@ -393,16 +393,19 @@ int main() {
     // ---- 13. the asset resolver -------------------------------------------
     std::printf("asset resolver\n");
     {
+        // Two pieces on purpose: an imported model is usually more than one
+        // object, and one scene node has to be able to draw all of them.
         struct Res {
-            static int fn(const char *path, uint32_t *mesh, uint32_t *material,
-                          dai_vec3 *scale, void *user) {
+            static uint32_t fn(const char *path, dai_render_part *out, uint32_t max, void *user) {
                 int *calls = (int *)user;
                 ++*calls;
                 if (std::strcmp(path, "models/known.glb") != 0) return 0;
-                *mesh = 42;
-                *material = 7;
-                *scale = { 2, 2, 2 };
-                return 1;
+                const dai_render_part parts[2] = {
+                    { 42, 7, { 0, 0, 0 }, { 0, 0, 0, 1 }, { 2, 2, 2 } },
+                    { 43, 8, { 1, 0, 0 }, { 0, 0, 0, 1 }, { 1, 1, 1 } },
+                };
+                for (uint32_t i = 0; i < 2 && out && i < max; ++i) out[i] = parts[i];
+                return 2;
             }
         };
         int calls = 0;
@@ -426,10 +429,15 @@ int main() {
         dai_entity me = dai_doc_sync_entity(sy, missing);
         CHECK(ke != DAI_INVALID_ENTITY && me != DAI_INVALID_ENTITY,
               "an asset node did not get an entity");
+        int found_second = 0;
         for (uint32_t i = 0; i < ni; ++i) {
             if (inst[i].mesh == 42 && inst[i].material == 7) found_known = 1;
+            if (inst[i].mesh == 43 && inst[i].material == 8) found_second = 1;
         }
         CHECK(found_known, "the resolved mesh and material never reached a render instance");
+        CHECK(found_second, "the model's second piece was dropped - one node must draw all of them");
+        CHECK(dai_scene_part_count(sc, ke) == 2,
+              "the entity carries %u pieces, the asset has 2", dai_scene_part_count(sc, ke));
         // The unresolvable one still exists and still draws - as its shape.
         dai_body mb = dai_scene_body(sc, me);
         CHECK(mb != DAI_INVALID_BODY, "an unresolvable asset made the node disappear");

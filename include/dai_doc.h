@@ -155,12 +155,18 @@ DAI_API size_t     dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size)
  * instead of being reset to the document every frame. */
 DAI_API dai_doc_sync *dai_doc_sync_create(dai_doc *d, dai_scene *scene);
 
-/* Turns an asset path into render data. Return 1 and fill the outputs, or 0
- * when the asset cannot be resolved (the node then falls back to its shape
- * mesh, visibly, instead of disappearing). Runs on the sync thread. */
-typedef int (*dai_asset_resolve_fn)(const char *path, uint32_t *out_mesh,
-                                    uint32_t *out_material, dai_vec3 *out_render_scale,
-                                    void *user);
+/* Turns an asset path into render data. Fills up to `max` pieces and returns
+ * how many the asset HAS - which may be more than max, so a caller that got a
+ * full buffer can ask again with a bigger one. 0 means unresolved: missing
+ * file, still loading, or a selector that names nothing. The node then falls
+ * back to its shape mesh, visibly, instead of disappearing.
+ *
+ * More than one piece is the normal case, not an exception: a Blender file is
+ * usually several objects, and forcing the user to make one scene node per
+ * object would be an engine limitation leaking into their scene. Runs on the
+ * sync thread. */
+typedef uint32_t (*dai_asset_resolve_fn)(const char *path, dai_render_part *out,
+                                         uint32_t max, void *user);
 DAI_API void dai_doc_sync_resolver(dai_doc_sync *s, dai_asset_resolve_fn fn, void *user);
 DAI_API void          dai_doc_sync_destroy(dai_doc_sync *s);
 /* Returns how many nodes were created, updated or destroyed. 0 = nothing to do. */

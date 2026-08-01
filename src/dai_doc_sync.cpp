@@ -26,10 +26,7 @@ struct Live {
     // What the resolver answered when this entity was built. The SAME path can
     // answer differently later - an asset loads asynchronously, so the first
     // answer is usually "not yet". Keeping it is what lets apply() notice.
-    int           res_ok = 0;
-    uint32_t      res_mesh = 0xFFFFFFFFu;
-    uint32_t      res_material = 0;
-    dai_vec3      res_scale{ 0, 0, 0 };
+    std::vector<dai_render_part> res_parts;
 };
 
 // Changing any of these means the rigid body itself is wrong, not just its
@@ -88,8 +85,8 @@ dai_vec3 scaled_extent(const dai_node_desc &r, dai_vec3 ws) {
 } // namespace
 
 // Declared after the struct so it can see the resolver fields.
-static int resolve_asset_of(dai_doc_sync *s, const dai_node_desc &r,
-                            uint32_t *mesh, uint32_t *material, dai_vec3 *scale);
+static void resolve_asset_of(dai_doc_sync *s, const dai_node_desc &r,
+                             std::vector<dai_render_part> *out);
 
 namespace {
 
@@ -120,14 +117,16 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
     // An asset path wins over the mesh index. Failing to resolve is deliberately
     // NOT fatal: the node keeps its collision shape and draws as that shape, so
     // a missing file looks obviously wrong instead of silently vanishing.
-    uint32_t am = 0xFFFFFFFFu, amat = 0;
-    dai_vec3 ascale{ 0, 0, 0 };
-    int resolved = resolve_asset_of(s, r, &am, &amat, &ascale);
-    if (resolved) {
-        if (am != 0xFFFFFFFFu) d.mesh = am;
-        d.material = amat;
-        if (ascale.x != 0.0f || ascale.y != 0.0f || ascale.z != 0.0f)
-            d.render_scale = { ascale.x * ws.x, ascale.y * ws.y, ascale.z * ws.z };
+    std::vector<dai_render_part> parts;
+    resolve_asset_of(s, r, &parts);
+    if (!parts.empty()) {
+        // The pieces carry their own place inside the model, so the entity only
+        // has to carry the document's scale. One piece still goes through the
+        // parts path - one code path, and a model that grows a second object
+        // does not change how it is drawn.
+        d.mesh = parts[0].mesh;
+        d.material = parts[0].material;
+        d.render_scale = ws;
     }
     d.color = r.color;
     d.roughness = r.roughness;
@@ -139,14 +138,14 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
     dai_entity e = dai_scene_spawn(s->scene, &d);
     if (e == DAI_INVALID_ENTITY) return false;
 
+    if (!parts.empty())
+        dai_scene_set_parts(s->scene, e, parts.data(), (uint32_t)parts.size());
+
     Live l;
     l.entity = e;
     l.body = dai_scene_body(s->scene, e);
     l.built = r;
-    l.res_ok = resolved;
-    l.res_mesh = am;
-    l.res_material = amat;
-    l.res_scale = ascale;
+    l.res_parts = parts;
     s->live[n] = l;
     s->by_entity[e] = n;
     s->by_body[l.body] = n;
@@ -159,13 +158,17 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
 // update path. It used to exist only inside spawn(), which meant an asset that
 // finished loading AFTER its node was built never reached the screen - the
 // node was already live, so nothing asked again.
-static int resolve_asset_of(dai_doc_sync *s, const dai_node_desc &r,
-                            uint32_t *mesh, uint32_t *material, dai_vec3 *scale) {
-    *mesh = 0xFFFFFFFFu;
-    *material = 0;
-    *scale = dai_vec3{ 0, 0, 0 };
-    if (!r.asset[0] || !s->resolve_asset) return 0;
-    return s->resolve_asset(r.asset, mesh, material, scale, s->resolve_user) ? 1 : 0;
+static void resolve_asset_of(dai_doc_sync *s, const dai_node_desc &r,
+                             std::vector<dai_render_part> *out) {
+    out->clear();
+    if (!r.asset[0] || !s->resolve_asset) return;
+    // Ask once to size it, once to fill it. An asset with no parts and an
+    // asset that failed are the same thing here: nothing to draw.
+    uint32_t have = s->resolve_asset(r.asset, nullptr, 0, s->resolve_user);
+    if (!have) return;
+    out->resize(have);
+    uint32_t got = s->resolve_asset(r.asset, out->data(), have, s->resolve_user);
+    out->resize(got < have ? got : have);
 }
 
 extern "C" {
@@ -242,12 +245,12 @@ uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
         // finished loading, or a different resolver is in place. Anything that
         // moves mesh, material or scale needs the entity rebuilt - the scene
         // can set a mesh in place, but not a material or a render scale.
-        uint32_t am = 0xFFFFFFFFu, amat = 0;
-        dai_vec3 ascale{ 0, 0, 0 };
-        int resolved = resolve_asset_of(s, r, &am, &amat, &ascale);
-        bool asset_moved = resolved != l.res_ok || am != l.res_mesh ||
-                           amat != l.res_material ||
-                           std::memcmp(&ascale, &l.res_scale, sizeof(dai_vec3)) != 0;
+        std::vector<dai_render_part> parts;
+        resolve_asset_of(s, r, &parts);
+        bool asset_moved = parts.size() != l.res_parts.size() ||
+                           (!parts.empty() &&
+                            std::memcmp(parts.data(), l.res_parts.data(),
+                                        parts.size() * sizeof(dai_render_part)) != 0);
 
         if (asset_moved || needs_rebuild(l.built, r)) {
             // The body is thrown away and recreated - handles change, the node

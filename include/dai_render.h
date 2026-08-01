@@ -199,6 +199,17 @@ typedef enum dai_render_flags {
  * nothing and a zero quaternion is not a rotation. */
 DAI_API dai_render_instance dai_render_instance_default(void);
 
+/* One drawable piece of something that is not a single shape - an imported
+ * model with five objects in it, say. Mesh and material are its own; the
+ * transform is relative to whatever the piece belongs to. */
+typedef struct dai_render_part {
+    uint32_t mesh;
+    uint32_t material;
+    dai_vec3 position;
+    dai_quat rotation;
+    dai_vec3 scale;
+} dai_render_part;
+
 /* ---- particles --------------------------------------------------------- */
 
 /* What the renderer needs per particle. Filled by dai_particles_fill (see

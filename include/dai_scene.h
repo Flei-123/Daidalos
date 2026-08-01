@@ -70,6 +70,18 @@ DAI_API dai_result dai_scene_set_name(dai_scene *s, dai_entity e, const char *na
 /* Fills `out` with everything visible, interpolated by alpha (0..1) between
  * the last two ticks. Returns the number written. Purely presentation: safe
  * to call at any frame rate, never touches simulation state. */
+/* Draw this entity as several pieces instead of one shape - what an imported
+ * model with more than one object needs. The pieces are positioned relative to
+ * the entity, so the body stays one body: a crate with a lid is one rigid body
+ * and two meshes, not two entities that have to be kept in step.
+ *
+ * Passing count = 0 goes back to the single mesh. Parts win over both the
+ * single mesh and the compound shape expansion - if an asset resolved, that is
+ * what the user wants to see. */
+DAI_API dai_result dai_scene_set_parts(dai_scene *s, dai_entity e,
+                                       const dai_render_part *parts, uint32_t count);
+DAI_API uint32_t   dai_scene_part_count(const dai_scene *s, dai_entity e);
+
 DAI_API uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t max, float alpha);
 
 /* ---- camera helper ----------------------------------------------------- */
