@@ -5,3 +5,4 @@ build/
 *.ppm
 *.wav
 extern/quickjs/
+build-win/
