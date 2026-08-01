@@ -405,6 +405,69 @@ static void test_queries_jolt() {
     std::printf("  Kontakte im letzten Tick: %u\n", n);
     CHECK(n > 0, "no contacts reported although bodies rest on the floor");
     dai_destroy(w);
+
+    // ---- how hard was the hit --------------------------------------------
+    // A sphere dropped from a known height has a known impact impulse:
+    //   v = sqrt(2gh),  j = (1 + e) * m * v
+    // The check is against that number, not against "greater than zero" -
+    // an impulse that is merely non zero can still be nonsense.
+    {
+        dai_config cfg{};
+        cfg.backend = DAI_PHYSICS_JOLT;
+        cfg.tick_hz = 240;                 // fine ticks: less overshoot into the floor
+        cfg.max_bodies = 16; cfg.physics_threads = 1; cfg.snapshot_ring = 8; cfg.seed = 5;
+        dai_world *iw = nullptr;
+        if (dai_create(&cfg, &iw) != DAI_OK) { CHECK(false, "impulse world"); return; }
+
+        dai_body_desc floor{};
+        floor.shape = DAI_SHAPE_BOX; floor.motion = DAI_STATIC;
+        floor.half_extent = { 20, 0.5f, 20 };
+        floor.position = { 0, -0.5f, 0 };
+        floor.rotation = { 0, 0, 0, 1 };
+        dai_body_create(iw, &floor);
+
+        const float drop = 2.0f, radius = 0.5f, density = 1000.0f;
+        dai_body_desc ball{};
+        ball.shape = DAI_SHAPE_SPHERE; ball.motion = DAI_DYNAMIC;
+        ball.half_extent = { radius, radius, radius };
+        ball.position = { 0, drop + radius, 0 };
+        ball.rotation = { 0, 0, 0, 1 };
+        ball.density = density;
+        ball.restitution = 0.0f;           // no bounce: one clean impact
+        dai_body_create(iw, &ball);
+
+        float mass = density * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+        float v = std::sqrt(2.0f * 9.81f * drop);
+        float expect = mass * v;
+
+        float peak = 0.0f;
+        for (int i = 0; i < 240 && peak == 0.0f; ++i) {
+            dai_step(iw);
+            uint32_t cn = dai_poll_contacts(iw, nullptr, 0);
+            if (!cn) continue;
+            std::vector<dai_contact> cc(cn);
+            dai_poll_contacts(iw, cc.data(), cn);
+            for (const dai_contact &c : cc) if (c.impulse > peak) peak = c.impulse;
+        }
+        std::printf("  Aufprall: erwartet ~%.0f Ns, gemessen %.0f Ns (Masse %.1f kg, v %.2f m/s)\n",
+                    expect, peak, mass, v);
+        CHECK(peak > 0.0f, "the impact impulse is still zero - nothing was computed");
+        CHECK(peak > expect * 0.7f && peak < expect * 1.3f,
+              "impact impulse %.1f Ns is not within 30%% of the textbook %.1f Ns", peak, expect);
+
+        // Resting is not impact: after it has settled, the contact is still
+        // reported but carries almost nothing.
+        for (int i = 0; i < 240; ++i) dai_step(iw);
+        uint32_t rn = dai_poll_contacts(iw, nullptr, 0);
+        std::vector<dai_contact> rc(rn ? rn : 1);
+        dai_poll_contacts(iw, rc.data(), (uint32_t)rc.size());
+        float resting = 0.0f;
+        for (uint32_t i = 0; i < rn; ++i) if (rc[i].impulse > resting) resting = rc[i].impulse;
+        std::printf("  danach in Ruhe: %.2f Ns\n", resting);
+        CHECK(resting < expect * 0.1f,
+              "a resting body reports %.1f Ns - impact and load are being confused", resting);
+        dai_destroy(iw);
+    }
 }
 
 // ---------------------------------------------------------------------------

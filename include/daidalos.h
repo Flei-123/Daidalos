@@ -367,7 +367,14 @@ DAI_API int dai_raycast(dai_world *w, dai_vec3 from, dai_vec3 dir, float max_dis
 typedef struct dai_contact {
     dai_body a, b;              /* b == DAI_INVALID_BODY means "the world" */
     dai_vec3 point;
-    dai_vec3 normal;
+    dai_vec3 normal;            /* points from a towards b                  */
+    /* Newton seconds of the IMPACT, computed from the closing speed at the
+     * contact point and the two inverse masses. This is what "how hard did
+     * that hit" means, and what a collision sound or a damage number scales
+     * with. It is NOT the resting load: a crate sitting on the floor reports
+     * about zero, because nothing is being stopped. Two static bodies also
+     * report zero. Rotational inertia is left out, so an off centre hit reads
+     * slightly high rather than slightly low. */
     float    impulse;
 } dai_contact;
 

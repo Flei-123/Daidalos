@@ -466,6 +466,42 @@ private:
     std::mutex           mtx;
 };
 
+
+// How hard was that hit.
+//
+// Jolt does not hand the solver's applied impulse to a contact callback - it is
+// not known yet when the callback runs. What IS known is the state going in,
+// and the collision impulse for a pair of rigid bodies is textbook:
+//
+//     j = (1 + e) * v_rel_n / (1/m1 + 1/m2)
+//
+// with v_rel_n the closing speed along the contact normal, measured AT the
+// contact point so a spinning body's rim counts, and e the restitution Jolt
+// combined for this pair. Rotational inertia terms are left out: they lower
+// the true impulse for an off centre hit, so this is an upper bound rather
+// than a number that quietly grows.
+//
+// Two things this is deliberately NOT: it is the impulse of the IMPACT, so a
+// crate resting on the floor reports ~0 rather than its weight - "how hard did
+// that hit" and "how much load is on this" are different questions. And two
+// static bodies report 0, because nothing about that collision has a mass.
+static float impact_impulse(const Body &b1, const Body &b2, const ContactManifold &m, float restitution) {
+    const MotionProperties *mp1 = b1.GetMotionPropertiesUnchecked();
+    const MotionProperties *mp2 = b2.GetMotionPropertiesUnchecked();
+    float inv_mass = 0.0f;
+    if (mp1 && !b1.IsStatic()) inv_mass += mp1->GetInverseMass();
+    if (mp2 && !b2.IsStatic()) inv_mass += mp2->GetInverseMass();
+    if (inv_mass <= 0.0f) return 0.0f;
+
+    RVec3 p = m.GetWorldSpaceContactPointOn1(0);
+    Vec3 v_rel = b1.GetPointVelocity(p) - b2.GetPointVelocity(p);
+    // The manifold normal points from shape 1 towards shape 2, so a closing
+    // pair has a positive component along it.
+    float closing = v_rel.Dot(m.mWorldSpaceNormal);
+    if (closing <= 0.0f) return 0.0f;          // separating, or already resting
+    return (1.0f + restitution) * closing / inv_mass;
+}
+
 void Listener::OnContactAdded(const Body &b1, const Body &b2, const ContactManifold &m, ContactSettings &s) {
     s.mCombinedFriction = sqrtf(be->friction_for(b1.GetUserData()) * be->friction_for(b2.GetUserData()));
     ContactEvent e;
@@ -473,7 +509,7 @@ void Listener::OnContactAdded(const Body &b1, const Body &b2, const ContactManif
     e.slot_b = (uint32_t)b2.GetUserData();
     e.normal = DV(m.mWorldSpaceNormal);
     e.point  = DVR(m.GetWorldSpaceContactPointOn1(0));
-    e.impulse = 0.0f;
+    e.impulse = impact_impulse(b1, b2, m, s.mCombinedRestitution);
     be->record_contact(e);
 }
 void Listener::OnContactPersisted(const Body &b1, const Body &b2, const ContactManifold &m, ContactSettings &s) {
@@ -483,7 +519,7 @@ void Listener::OnContactPersisted(const Body &b1, const Body &b2, const ContactM
     e.slot_b = (uint32_t)b2.GetUserData();
     e.normal = DV(m.mWorldSpaceNormal);
     e.point  = DVR(m.GetWorldSpaceContactPointOn1(0));
-    e.impulse = 0.0f;
+    e.impulse = impact_impulse(b1, b2, m, s.mCombinedRestitution);
     be->record_contact(e);
 }
 

@@ -513,8 +513,9 @@ Editor:
 - The text field has no caret movement and no selection - typing and backspace.
 
 Engine:
-- `dai_contact::impulse` is always 0. The contact point and normal are real, the
-  strength is not, so "how hard did that hit" cannot be answered yet.
+- `dai_contact::impulse` is the impact, not the resting load - a crate sitting
+  on the floor reports ~0 rather than its weight, and rotational inertia is
+  left out so an off centre hit reads slightly high.
 - No morph targets and no animation state machine (pose blending exists).
 - Snapshots store the full physics blob per tick, so a large scene pays for the
   rollback ring in memory whether it needs it or not.
