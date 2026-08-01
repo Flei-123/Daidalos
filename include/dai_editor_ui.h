@@ -52,6 +52,44 @@ DAI_API int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input 
 /* Number of rows the hierarchy currently shows - folded subtrees excluded. */
 DAI_API uint32_t dai_editor_ui_visible_rows(const dai_editor_ui *p);
 
+/* ---- asset browser ------------------------------------------------------ */
+
+/*
+ * What is on disk, and one click to put it in the scene.
+ *
+ * The panel does NOT know where the list comes from or how to load anything -
+ * the same rule the resolver follows. The host fills it (dai_assets_list is
+ * the obvious source) and the host does the placing, so the editor UI keeps
+ * building without the asset layer and a project with its own idea of where
+ * assets live can still use the panel.
+ *
+ *   char paths[64][96];
+ *   uint32_t n = dai_assets_list(assets, paths[0], 64, 96);
+ *   const char *ptrs[64];
+ *   for (uint32_t i = 0; i < n && i < 64; ++i) ptrs[i] = paths[i];
+ *   dai_editor_ui_asset_list(panel, ptrs, n);
+ *   ...
+ *   const char *pick; int as_tree;
+ *   if (dai_editor_ui_assets(panel, x, y, w, h, &pick, &as_tree)) {
+ *       if (as_tree) dai_assets_instantiate(assets, doc, pick, 0);
+ *       else         add_a_node_with(pick);
+ *   }
+ *
+ * The pointers must stay alive until the next call.
+ */
+DAI_API void dai_editor_ui_asset_list(dai_editor_ui *p, const char *const *paths, uint32_t count);
+
+/* Draws the browser. Returns 1 on the frame the user asked to place something:
+ * `out_path` is which, and `out_as_tree` says whether they hit "Place" (one
+ * node, one rigid body) or "As tree" (one node per piece, one body each - the
+ * crate whose lid opens). */
+DAI_API int dai_editor_ui_assets(dai_editor_ui *p, float x, float y, float w, float h,
+                                 const char **out_path, int *out_as_tree);
+
+/* Which row is highlighted, or -1. Survives between frames so the panel can be
+ * drawn from anywhere. */
+DAI_API int dai_editor_ui_asset_selected(const dai_editor_ui *p);
+
 #ifdef __cplusplus
 }
 #endif

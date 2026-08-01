@@ -224,6 +224,54 @@ int main() {
     dai_editor_ui_viewport_input(panels, 20, 700, 0);
     CHECK(dai_editor_selection_count(ed) == 0, "clicking empty space did not clear the selection");
 
+    // ---- asset browser -----------------------------------------------------
+    // The panel does not know where its list comes from - the host fills it,
+    // same rule the resolver follows. So what is checked is: an empty browser
+    // is honest, a filled one draws more, the selection is real state, and
+    // shrinking the list cannot leave the selection pointing past the end.
+    std::printf("asset browser\n");
+    {
+        const char *paths[3] = { "models/crate.glb", "models/scene.glb", "props/lamp.gltf" };
+        const char *picked = nullptr;
+        int as_tree = -1;
+
+        dai_ui_input in{};
+        in.mouse_x = 640; in.mouse_y = 40;          // far from the panel
+        dai_ui_begin(ui, 1280, 720, &in);
+        int hit = dai_editor_ui_assets(panels, 8, 380, 240, 300, &picked, &as_tree);
+        dai_ui_end(ui);
+        uint32_t empty_verts = total_verts(ui);
+        CHECK(hit == 0 && picked == nullptr, "an empty browser reported a pick");
+        CHECK(dai_editor_ui_asset_selected(panels) == -1, "an empty browser has a selection");
+        CHECK(empty_verts > 0, "an empty browser drew nothing at all");
+
+        dai_editor_ui_asset_list(panels, paths, 3);
+        dai_ui_begin(ui, 1280, 720, &in);
+        dai_editor_ui_assets(panels, 8, 380, 240, 300, &picked, &as_tree);
+        dai_ui_end(ui);
+        CHECK(total_verts(ui) > empty_verts,
+              "a browser with 3 files drew %u vertices, an empty one drew %u",
+              total_verts(ui), empty_verts);
+        CHECK(hit == 0, "just drawing the list reported a pick");
+
+        // A list longer than the panel must say so rather than run off the edge.
+        const char *many[12];
+        for (int i = 0; i < 12; ++i) many[i] = paths[i % 3];
+        dai_editor_ui_asset_list(panels, many, 12);
+        dai_ui_begin(ui, 1280, 720, &in);
+        dai_editor_ui_assets(panels, 8, 380, 240, 140, &picked, &as_tree);   // short panel
+        dai_ui_end(ui);
+        CHECK(total_verts(ui) > 0, "a short panel drew nothing");
+
+        // Shrinking the list must not leave a stale index behind.
+        dai_editor_ui_asset_list(panels, paths, 3);
+        CHECK(dai_editor_ui_asset_selected(panels) < 3,
+              "the selection points past the end of the list");
+        dai_editor_ui_asset_list(panels, nullptr, 0);
+        CHECK(dai_editor_ui_asset_selected(panels) == -1, "clearing the list kept a selection");
+        std::printf("  empty %u verts, 3 files %u verts\n", empty_verts, total_verts(ui));
+    }
+
     // ---- 7. scrolling clips ------------------------------------------------
     std::printf("scrolling\n");
     // fill the hierarchy well past the panel height

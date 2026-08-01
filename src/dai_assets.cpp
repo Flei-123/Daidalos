@@ -10,8 +10,11 @@
 #include "dai_assets.h"
 #include "mnemosyne.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <string>
 #include <vector>
 
@@ -45,6 +48,10 @@ std::string dir_of(const std::string &p) {
 struct dai_assets {
     dai_renderer *r = nullptr;
     mne_registry *reg = nullptr;
+    // Mnemosyne does not enumerate its mounts - it is built to ANSWER for a
+    // path, not to list them - so the browser's source is kept here.
+    std::vector<std::string> dirs;
+    std::vector<std::string> packs;
     uint32_t      revision = 0;
     char          err[256] = { 0 };
 };
@@ -193,6 +200,7 @@ dai_result dai_assets_mount_dir(dai_assets *a, const char *dir, int priority) {
         std::snprintf(a->err, sizeof(a->err), "%s", mne_last_error(a->reg));
         return DAI_ERR_NOT_FOUND;
     }
+    a->dirs.push_back(dir);
     return DAI_OK;
 }
 
@@ -202,6 +210,7 @@ dai_result dai_assets_mount_pack(dai_assets *a, const char *pack_path, int prior
         std::snprintf(a->err, sizeof(a->err), "%s", mne_last_error(a->reg));
         return DAI_ERR_NOT_FOUND;
     }
+    a->packs.push_back(pack_path);
     return DAI_OK;
 }
 
@@ -340,6 +349,62 @@ dai_node dai_assets_instantiate(dai_assets *a, dai_doc *doc, const char *path, d
 
     dai_doc_commit(doc);
     return root;
+}
+
+uint32_t dai_assets_list(dai_assets *a, char *out, uint32_t max, uint32_t stride) {
+    if (!a) return 0;
+
+    std::vector<std::string> found;
+
+    // Folders, walked depth first. Only what the model loader can actually
+    // open - listing a .txt the browser cannot place would be a lie.
+    struct Walk {
+        static bool loadable(const std::string &p) {
+            size_t dot = p.find_last_of('.');
+            if (dot == std::string::npos) return false;
+            std::string e = p.substr(dot + 1);
+            for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            return e == "glb" || e == "gltf";
+        }
+        static void go(const std::string &root, const std::string &rel,
+                       std::vector<std::string> &out, int depth) {
+            if (depth > 8) return;                  // a symlink loop is not a reason to hang
+            std::string dir = rel.empty() ? root : root + "/" + rel;
+            DIR *d = opendir(dir.c_str());
+            if (!d) return;
+            while (struct dirent *e = readdir(d)) {
+                std::string n = e->d_name;
+                if (n == "." || n == ".." || n[0] == '.') continue;
+                std::string child = rel.empty() ? n : rel + "/" + n;
+                struct stat st;
+                if (stat((root + "/" + child).c_str(), &st) != 0) continue;
+                if ((st.st_mode & S_IFMT) == S_IFDIR) go(root, child, out, depth + 1);
+                else if (loadable(child)) out.push_back(child);
+            }
+            closedir(d);
+        }
+    };
+    for (const std::string &dir : a->dirs) Walk::go(dir, "", found, 0);
+
+    // Packs know their own contents.
+    for (const std::string &pack : a->packs) {
+        uint32_t n = mne_pack_list(pack.c_str(), nullptr, 0);
+        if (!n) continue;
+        std::vector<const char *> names(n);
+        mne_pack_list(pack.c_str(), names.data(), n);
+        for (uint32_t i = 0; i < n; ++i)
+            if (names[i] && Walk::loadable(names[i])) found.push_back(names[i]);
+    }
+
+    std::sort(found.begin(), found.end());
+    found.erase(std::unique(found.begin(), found.end()), found.end());
+
+    if (out && max && stride) {
+        uint32_t n = (uint32_t)found.size() < max ? (uint32_t)found.size() : max;
+        for (uint32_t i = 0; i < n; ++i)
+            std::snprintf(out + (size_t)i * stride, stride, "%s", found[i].c_str());
+    }
+    return (uint32_t)found.size();
 }
 
 uint32_t dai_assets_tracked(dai_assets *a) {

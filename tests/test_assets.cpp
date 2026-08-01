@@ -402,6 +402,38 @@ int main(int argc, char **argv) {
         }
     }
 
+    // ---- 8c. what the asset browser is fed --------------------------------
+    std::printf("[8c] listing what is mounted\n");
+    {
+        uint32_t total = dai_assets_list(a, nullptr, 0, 0);
+        CHECK(total >= 3, "the mounted folder lists %u loadable files, expected at least 3", total);
+
+        std::vector<char> buf((size_t)total * 96 + 96, 0);
+        uint32_t got = dai_assets_list(a, buf.data(), total, 96);
+        CHECK(got == total, "asking again reported %u instead of %u", got, total);
+
+        bool has_glb = false, has_gltf = false, sorted = true, has_junk = false;
+        std::string prev;
+        for (uint32_t i = 0; i < total; ++i) {
+            std::string e = &buf[(size_t)i * 96];
+            if (e.find("blender_scene.glb") != std::string::npos) has_glb = true;
+            if (e.find("parented.gltf") != std::string::npos) has_gltf = true;
+            if (e.find(".png") != std::string::npos || e.find(".bin") != std::string::npos)
+                has_junk = true;
+            if (!prev.empty() && e < prev) sorted = false;
+            prev = e;
+        }
+        CHECK(has_glb && has_gltf, "the list is missing the .glb or the .gltf");
+        CHECK(!has_junk, "the list offers files the loader cannot open");
+        CHECK(sorted, "the list is not sorted - the browser would jump around between frames");
+
+        // A short buffer must fill what it can and still report the truth.
+        char one[96] = { 0 };
+        CHECK(dai_assets_list(a, one, 1, 96) == total, "a one entry buffer changed the count");
+        CHECK(one[0] != 0, "a one entry buffer was not filled");
+        std::printf("     %u loadable files, first '%s'\n", total, one);
+    }
+
     // ---- 9. reloading does not grow the renderer --------------------------
     // The whole point of releasing: an editor that reloads the same model all
     // afternoon must not accumulate a copy of its geometry per reload. Slots

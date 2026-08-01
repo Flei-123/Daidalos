@@ -269,6 +269,36 @@ slots are recycled outright. Reloading the same model four times leaves the
 mesh table exactly where the first load left it - measured, in test_assets [9],
 because "we free it now" is the kind of claim that quietly stops being true.
 
+### Asset browser - `dai_editor_ui_assets`
+
+What is on disk, and one click to put it in the scene. The panel does not know
+where the list comes from or how to load anything - the host fills it, the host
+places it. Same rule the resolver follows, and the reason the editor UI still
+builds without the asset layer.
+
+```c
+char paths[64][96];
+uint32_t n = dai_assets_list(assets, paths[0], 64, 96);
+const char *ptrs[64];
+for (uint32_t i = 0; i < n && i < 64; ++i) ptrs[i] = paths[i];
+dai_editor_ui_asset_list(panel, ptrs, n);
+
+const char *pick; int as_tree;
+if (dai_editor_ui_assets(panel, x, y, w, h, &pick, &as_tree)) {
+    if (as_tree) dai_assets_instantiate(assets, doc, pick, 0);
+    else         add_a_node_whose_asset_is(pick);
+}
+```
+
+Two buttons because the difference is physical: **Place** is one node and one
+rigid body, **As tree** is one node per piece with a body each. `dai_assets_list`
+walks the mounted folders and packs, keeps only what the loader can actually
+open, and sorts and de-duplicates - the same file in a folder and in a pack is
+one entry, because the mount priority already decided which copy wins.
+
+It is deliberately not in the default layout: it needs a list only the host can
+produce, and a panel that always says "nothing mounted" is worse than no panel.
+
 ### Skinning and animation
 
 glTF skins and animations import with the rest of the file: joint hierarchies,
@@ -506,11 +536,20 @@ object whose origin sits outside its mesh gets a box in the wrong place.
 
 Editor:
 - No box select; multi-selection is click by click.
+- **A latent crash in `dai_ui`**, found while adding the asset browser and not
+  fixed yet: after the scrolling test's frame, the NEXT `dai_ui_begin` faults
+  inside `batches.clear()`. It never showed because that test was last in the
+  file and the process exited before another frame started. Reproduce by
+  appending a bare begin/end pair to `tests/test_editor_ui.cpp`. Something is
+  corrupting a batch during a scrolled frame; the asset browser test runs
+  before it until that is found.
 - Joints and compound bodies are deliberately not serialised (see dai_doc.h).
 - Prefab overrides do not exist: an instance's children come from the file, and
   editing one would be silently discarded on the next reload. Moving and
   renaming the instance root works, because that is a normal node.
 - No copy/paste between scenes.
+- The asset browser lists and places; it has no thumbnails, no folder tree and
+  no search.
 - The text field has no caret movement and no selection - typing and backspace.
 
 Engine:

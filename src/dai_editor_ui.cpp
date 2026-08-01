@@ -41,6 +41,10 @@ struct dai_editor_ui {
     char     asset_buf[96] = { 0 };
     dai_node asset_buf_node = DAI_INVALID_NODE;
 
+    // asset browser: the list is the host's, the selection is ours
+    std::vector<const char *> assets;
+    int asset_sel = -1;
+
     // viewport interaction
     bool viewport_dragging = false;
     bool prev_viewport_down = false;
@@ -432,11 +436,88 @@ int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in) {
 
 // ------------------------------------------------------------------ frame
 
+void dai_editor_ui_asset_list(dai_editor_ui *p, const char *const *paths, uint32_t count) {
+    if (!p) return;
+    p->assets.clear();
+    if (paths && count) p->assets.assign(paths, paths + count);
+    if (p->asset_sel >= (int)p->assets.size()) p->asset_sel = -1;
+}
+
+int dai_editor_ui_asset_selected(const dai_editor_ui *p) { return p ? p->asset_sel : -1; }
+
+int dai_editor_ui_assets(dai_editor_ui *p, float x, float y, float w, float h,
+                         const char **out_path, int *out_as_tree) {
+    if (out_path) *out_path = nullptr;
+    if (out_as_tree) *out_as_tree = 0;
+    if (!p || !p->ui) return 0;
+
+    dai_ui_panel_begin(p->ui, x, y, w, h, "Assets");
+    if (p->assets.empty()) {
+        // An empty browser and a browser nobody filled look the same to the
+        // user, so say which it is.
+        dai_ui_label(p->ui, "nothing mounted");
+        dai_ui_panel_end(p->ui);
+        return 0;
+    }
+
+    dai_ui_label_fmt(p->ui, "%u files", (unsigned)p->assets.size());
+    dai_ui_separator(p->ui);
+
+    // Only as many rows as fit. A folder with two hundred models must not push
+    // the buttons off the bottom of the panel, and a list that quietly runs
+    // past the edge is worse than one that says how much it is not showing.
+    const float ROW = 22.0f;
+    uint32_t fits = (uint32_t)((h - 110.0f) / ROW);
+    if (fits < 1) fits = 1;
+    uint32_t shown = (uint32_t)p->assets.size() < fits ? (uint32_t)p->assets.size() : fits;
+    for (uint32_t i = 0; i < shown; ++i) {
+        const char *full = p->assets[i] ? p->assets[i] : "";
+        const char *slash = std::strrchr(full, '/');
+        const char *label = slash ? slash + 1 : full;
+        int selected = (int)i == p->asset_sel;
+        char row[128];
+        std::snprintf(row, sizeof(row), "%s%s", selected ? "> " : "  ", label);
+        if (dai_ui_button(p->ui, row)) p->asset_sel = selected ? -1 : (int)i;
+    }
+    if (shown < p->assets.size())
+        dai_ui_label_fmt(p->ui, "... %u more", (unsigned)(p->assets.size() - shown));
+
+    dai_ui_separator(p->ui);
+    if (p->asset_sel < 0 || p->asset_sel >= (int)p->assets.size()) {
+        dai_ui_label(p->ui, "pick one");
+        dai_ui_panel_end(p->ui);
+        return 0;
+    }
+
+    const char *pick = p->assets[(size_t)p->asset_sel];
+    dai_ui_label(p->ui, pick ? pick : "");
+    int placed = 0;
+    dai_ui_row(p->ui, 22.0f);
+    // Two buttons because the difference is physical, not cosmetic: one body
+    // for the whole model, or one body per piece.
+    if (dai_ui_button(p->ui, "Place")) {
+        if (out_path) *out_path = pick;
+        if (out_as_tree) *out_as_tree = 0;
+        placed = 1;
+    }
+    if (dai_ui_button(p->ui, "As tree")) {
+        if (out_path) *out_path = pick;
+        if (out_as_tree) *out_as_tree = 1;
+        placed = 1;
+    }
+    dai_ui_panel_end(p->ui);
+    return placed;
+}
+
 void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     if (!p) return;
     const float SIDE = 240.0f;
     dai_editor_ui_toolbar(p, 8.0f, 8.0f, vw - 16.0f);
     dai_editor_ui_hierarchy(p, 8.0f, 60.0f, SIDE, vh * 0.5f);
+    // The asset browser is NOT in the default layout: it needs a list only the
+    // host can produce, and a panel that always says "nothing mounted" is
+    // worse than no panel. Place it yourself, under the hierarchy is the
+    // obvious spot.
     dai_editor_ui_inspector(p, vw - SIDE - 8.0f, 60.0f, SIDE, vh - 128.0f);
     dai_editor_ui_timeline(p, 8.0f + SIDE + 8.0f, vh - 52.0f, vw - 2.0f * (SIDE + 16.0f));
     dai_editor_ui_gizmo(p);

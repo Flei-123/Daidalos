@@ -112,6 +112,16 @@ DAI_API void dai_assets_bind(dai_assets *a, dai_doc_sync *sync);
 DAI_API dai_node dai_assets_instantiate(dai_assets *a, dai_doc *doc,
                                         const char *path, dai_node parent);
 
+/* Everything loadable in the mounted sources, as paths ready to hand to
+ * dai_assets_model or to put in a node's `asset` field. Fills up to `max`
+ * entries of `stride` bytes each (so a caller can use a fixed size array) and
+ * returns how many exist - more than max means ask again with a bigger buffer.
+ *
+ * Sorted and de-duplicated: the same file in a folder and in a pack is ONE
+ * entry, because that is what it is to everything else - the mount priority
+ * already decided which copy wins. */
+DAI_API uint32_t dai_assets_list(dai_assets *a, char *out, uint32_t max, uint32_t stride);
+
 /* Diagnostics. `tracked` counts assets the cache knows about, ready ones
  * included; `failed` counts the ones that will never resolve. */
 DAI_API uint32_t    dai_assets_tracked(dai_assets *a);
