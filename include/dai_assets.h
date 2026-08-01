@@ -87,6 +87,31 @@ DAI_API uint32_t dai_assets_resolve(const char *path, dai_render_part *out,
  * is how new handles reach the live scene. */
 DAI_API void dai_assets_bind(dai_assets *a, dai_doc_sync *sync);
 
+/* ---- putting a model into a scene -------------------------------------- */
+
+/*
+ * Two ways to place an imported model, and the difference is physical.
+ *
+ * ONE NODE (`asset models/crate.glb` on a node, resolved by dai_assets_resolve)
+ * draws every piece but they share one rigid body. Right for a prop that is
+ * rigid: a chair, a rock, a lamp post.
+ *
+ * A TREE (this function) makes one document node per piece, parented the way
+ * the artist built it in Blender, each with its own asset selector and its own
+ * body. That is what a crate whose lid opens needs - a lid that rotates
+ * against its crate is two bodies and a joint, which one body can never be.
+ *
+ * The collision shape comes from each piece's own bounding box, so a lid is
+ * lid sized rather than crate sized. Motion defaults to DAI_STATIC: turning
+ * the pieces dynamic is a decision about the scene, not about the file.
+ *
+ * Returns the root node it created, or 0 if the asset is not loaded yet - it
+ * does NOT block, so call it after dai_assets_model_blocking or when
+ * dai_assets_model returns non NULL. Everything it adds is one undo step.
+ */
+DAI_API dai_node dai_assets_instantiate(dai_assets *a, dai_doc *doc,
+                                        const char *path, dai_node parent);
+
 /* Diagnostics. `tracked` counts assets the cache knows about, ready ones
  * included; `failed` counts the ones that will never resolve. */
 DAI_API uint32_t    dai_assets_tracked(dai_assets *a);

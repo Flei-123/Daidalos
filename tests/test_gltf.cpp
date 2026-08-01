@@ -125,6 +125,56 @@ int main(int argc, char **argv) {
     dai_model *bad = dai_gltf_load(r, (dir + "/does_not_exist.glb").c_str(), e2, sizeof(e2));
     CHECK(bad == nullptr && e2[0], "loading a missing file did not report an error");
 
+    // ---- parenting: the crate and its lid ---------------------------------
+    // Blender's answer to "a box that opens" is a child object. The importer
+    // flattens transforms to world space so a piece can be drawn without
+    // walking a hierarchy - but the hierarchy itself has to survive, or the
+    // lid can never be animated relative to the crate it belongs to.
+    {
+        std::printf("parenting\n");
+        char perr[256] = { 0 };
+        dai_model *pm = dai_gltf_load(r, (dir + "/parented.gltf").c_str(), perr, sizeof(perr));
+        CHECK(pm != nullptr, "loading parented.gltf failed: %s", perr);
+        if (pm) {
+            CHECK(dai_model_node_count(pm) == 2, "expected 2 pieces, got %u",
+                  dai_model_node_count(pm));
+            const dai_model_node *crate = dai_model_find(pm, "Crate");
+            const dai_model_node *lid = dai_model_find(pm, "Lid");
+            CHECK(crate && lid, "the fixture's names did not survive the import");
+            if (crate && lid) {
+                int crate_index = -1;
+                for (uint32_t i = 0; i < dai_model_node_count(pm); ++i)
+                    if (dai_model_node_at(pm, i) == crate) crate_index = (int)i;
+
+                CHECK(crate->parent == -1, "the crate is a root, its parent is %d", crate->parent);
+                CHECK(lid->parent == crate_index,
+                      "the lid points at %d, the crate is piece %d - the hierarchy was lost",
+                      lid->parent, crate_index);
+
+                // world: the lid is where the crate is, one metre up
+                CHECK(std::fabs(lid->position.x - 2.0f) < 1e-4f &&
+                      std::fabs(lid->position.y - 1.0f) < 1e-4f,
+                      "the lid's world position is (%.3f %.3f %.3f), expected (2 1 0)",
+                      lid->position.x, lid->position.y, lid->position.z);
+                // local: one metre up, and NOT carrying the crate's offset
+                CHECK(std::fabs(lid->local_position.x) < 1e-4f &&
+                      std::fabs(lid->local_position.y - 1.0f) < 1e-4f,
+                      "the lid's local position is (%.3f %.3f %.3f), expected (0 1 0)",
+                      lid->local_position.x, lid->local_position.y, lid->local_position.z);
+                CHECK(std::fabs(crate->local_position.x - crate->position.x) < 1e-4f,
+                      "a root piece's local and world position must agree");
+                CHECK(crate->material != lid->material,
+                      "both pieces came out with the same material");
+                std::printf("  crate world (%.1f %.1f %.1f) | lid world (%.1f %.1f %.1f) local (%.1f %.1f %.1f) parent %d\n",
+                            crate->position.x, crate->position.y, crate->position.z,
+                            lid->position.x, lid->position.y, lid->position.z,
+                            lid->local_position.x, lid->local_position.y, lid->local_position.z,
+                            lid->parent);
+            }
+            dai_model_release(r, pm);
+        }
+    }
+
     dai_model_free(m);
     dai_render_destroy(r);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);

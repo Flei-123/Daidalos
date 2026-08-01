@@ -36,6 +36,37 @@ struct M4 { float m[16]; };   // column major, same convention as glTF
 
 M4 m4_identity() { M4 r{}; r.m[0] = r.m[5] = r.m[10] = r.m[15] = 1.0f; return r; }
 
+// Inverse of a TRS matrix (column major, m[col*4 + row]). Only the affine case
+// is handled, which is all glTF node transforms ever are - and it is needed to
+// answer "where is this child relative to its parent" after the hierarchy has
+// already been flattened to world space.
+M4 m4_invert_affine(const M4 &m) {
+    float a[3][3];
+    for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) a[r][c] = m.m[c * 4 + r];
+    float det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
+              - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+              + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+    if (det > -1e-12f && det < 1e-12f) return m4_identity();   // degenerate scale
+    float inv_det = 1.0f / det;
+    float b[3][3];
+    b[0][0] = (a[1][1] * a[2][2] - a[1][2] * a[2][1]) * inv_det;
+    b[0][1] = (a[0][2] * a[2][1] - a[0][1] * a[2][2]) * inv_det;
+    b[0][2] = (a[0][1] * a[1][2] - a[0][2] * a[1][1]) * inv_det;
+    b[1][0] = (a[1][2] * a[2][0] - a[1][0] * a[2][2]) * inv_det;
+    b[1][1] = (a[0][0] * a[2][2] - a[0][2] * a[2][0]) * inv_det;
+    b[1][2] = (a[0][2] * a[1][0] - a[0][0] * a[1][2]) * inv_det;
+    b[2][0] = (a[1][0] * a[2][1] - a[1][1] * a[2][0]) * inv_det;
+    b[2][1] = (a[0][1] * a[2][0] - a[0][0] * a[2][1]) * inv_det;
+    b[2][2] = (a[0][0] * a[1][1] - a[0][1] * a[1][0]) * inv_det;
+
+    const float t[3] = { m.m[12], m.m[13], m.m[14] };
+    M4 out = m4_identity();
+    for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) out.m[c * 4 + r] = b[r][c];
+    for (int r = 0; r < 3; ++r)
+        out.m[12 + r] = -(b[r][0] * t[0] + b[r][1] * t[1] + b[r][2] * t[2]);
+    return out;
+}
+
 M4 m4_mul(const M4 &a, const M4 &b) {
     M4 r{};
     for (int c = 0; c < 4; ++c)
@@ -709,7 +740,10 @@ dai_model *dai_gltf_load_memory(dai_renderer *r, const void *data, size_t size,
         float *bmin, *bmax;
         std::vector<char> &visited;
 
-        void walk(int index, const M4 &parent) {
+        // parent_draw: the piece a child should point at, -1 at the root.
+        // parent_world: that piece's world matrix, needed to turn a flattened
+        // world transform back into a local one.
+        void walk(int index, const M4 &parent, int parent_draw, const M4 &parent_world) {
             const Value *n = nodes ? nodes->at((size_t)index) : nullptr;
             if (!n || visited[(size_t)index]) return;
             visited[(size_t)index] = 1;
@@ -726,13 +760,25 @@ dai_model *dai_gltf_load_memory(dai_renderer *r, const void *data, size_t size,
             }
             M4 world = m4_mul(parent, local);
 
+            int first_here = -1;
             int mesh = n->int_at("mesh", -1);
             if (mesh >= 0 && (size_t)mesh < mesh_prims.size()) {
+                // Where this node sits relative to the nearest ancestor that
+                // also draws something. A group node in between contributes its
+                // transform but no piece, so the link skips it.
+                M4 rel = parent_draw >= 0 ? m4_mul(m4_invert_affine(parent_world), world) : world;
                 for (const Prim &p : mesh_prims[(size_t)mesh]) {
+                    if (first_here < 0) first_here = (int)model->nodes.size();
                     dai_model_node mn{};
                     mn.mesh = p.mesh;
                     mn.material = p.material;
                     m4_decompose(world, &mn.position, &mn.rotation, &mn.scale);
+                    // Several primitives on one node are siblings, not a chain:
+                    // they all sit at the same place and share one parent.
+                    mn.parent = parent_draw;
+                    m4_decompose(rel, &mn.local_position, &mn.local_rotation, &mn.local_scale);
+                    mn.bounds_min = { p.lo[0], p.lo[1], p.lo[2] };
+                    mn.bounds_max = { p.hi[0], p.hi[1], p.hi[2] };
                     std::snprintf(mn.name, sizeof(mn.name), "%s", n->str_at("name", ""));
                     model->nodes.push_back(mn);
                     model->node_of_draw.push_back(index);
@@ -754,8 +800,13 @@ dai_model *dai_gltf_load_memory(dai_renderer *r, const void *data, size_t size,
                     }
                 }
             }
+            // A node that drew something becomes the parent for everything
+            // below it; one that did not passes its own parent through.
+            int child_parent = first_here >= 0 ? first_here : parent_draw;
+            const M4 &child_world = first_here >= 0 ? world : parent_world;
             if (const Value *ch = n->get("children"))
-                for (size_t i = 0; i < ch->size(); ++i) walk(ch->at(i)->integer(-1), world);
+                for (size_t i = 0; i < ch->size(); ++i)
+                    walk(ch->at(i)->integer(-1), world, child_parent, child_world);
         }
     } walker{ ld, nodes, model, mesh_prims, bmin, bmax, visited };
 
@@ -766,13 +817,13 @@ dai_model *dai_gltf_load_memory(dai_renderer *r, const void *data, size_t size,
         const Value *sc = scenes->at((size_t)(si < 0 ? 0 : si));
         if (sc) {
             if (const Value *list = sc->get("nodes")) {
-                for (size_t i = 0; i < list->size(); ++i) walker.walk(list->at(i)->integer(-1), ident);
+                for (size_t i = 0; i < list->size(); ++i) walker.walk(list->at(i)->integer(-1), ident, -1, ident);
                 walked_any = true;
             }
         }
     }
     if (!walked_any && nodes)                       // no scene: take every root node
-        for (size_t i = 0; i < nodes->size(); ++i) walker.walk((int)i, ident);
+        for (size_t i = 0; i < nodes->size(); ++i) walker.walk((int)i, ident, -1, ident);
 
     model->info.animations = (uint32_t)model->anims.size();
     model->info.skins = (uint32_t)model->skins.size();

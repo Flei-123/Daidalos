@@ -28,13 +28,32 @@ extern "C" {
 
 typedef struct dai_model dai_model;
 
-/* One drawable piece: a mesh, its material and its world transform. */
+/* One drawable piece: a mesh, its material, and where it sits.
+ *
+ * Two transforms on purpose. `position/rotation/scale` are in the MODEL's
+ * space - flattened, ready to draw, and what most callers want. `parent` plus
+ * `local_*` keep the structure the artist built: in Blender a crate with a lid
+ * parented to it arrives as two pieces, the lid pointing at the crate, and its
+ * local transform is the one you animate when the lid opens.
+ *
+ * `parent` indexes this same node array, or -1 for a root. A group node with
+ * no mesh of its own produces no piece, so the parent link skips it and points
+ * at the nearest ancestor that does draw something. */
 typedef struct dai_model_node {
     dai_mesh     mesh;
     dai_material material;
-    dai_vec3     position;
+    dai_vec3     position;        /* model space */
     dai_quat     rotation;
     dai_vec3     scale;
+    int32_t      parent;          /* index into the node array, -1 = root */
+    dai_vec3     local_position;  /* relative to `parent`, or model space */
+    dai_quat     local_rotation;
+    dai_vec3     local_scale;
+    /* The mesh's own bounding box, in MESH space - before this node's scale,
+     * so a collision shape is (bounds * scale). Not the model's bounds: those
+     * cover everything and would give every piece the same box. */
+    dai_vec3     bounds_min;
+    dai_vec3     bounds_max;
     char         name[64];
 } dai_model_node;
 

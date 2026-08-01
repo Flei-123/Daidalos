@@ -237,11 +237,22 @@ a worker is a crash waiting for a busy frame. A node whose asset has not
 arrived yet keeps drawing its collision shape - visibly wrong, never invisible -
 and picks up the real mesh a frame or two later.
 
-A file with several objects becomes several drawable pieces on ONE scene node:
-a crate with a lid is one rigid body and two meshes, not two nodes the user has
-to keep in step. Each piece keeps its own mesh, material and place inside the
-model. `models/scene.glb#Crate` narrows it to a single object, which is how the
-same Blender export doubles as a library of separate props.
+A file with several objects can go into a scene two ways, and the difference is
+physical:
+
+- **One node.** `asset models/crate.glb` draws every piece, sharing one rigid
+  body. Right for anything rigid - a chair, a rock, a lamp post.
+- **A tree.** `dai_assets_instantiate` makes one document node per piece,
+  parented the way it was parented in Blender, each with its own selector and
+  its own body sized from its own bounding box. That is what a crate whose lid
+  opens needs: a lid that rotates against its crate is two bodies and a joint,
+  which one body can never be.
+
+The hierarchy survives the import either way. Transforms are flattened to model
+space so a piece can be drawn without walking anything, but each piece also
+keeps `parent` and its local transform - the structure the artist built is data,
+not something the importer throws away. `models/scene.glb#Crate` narrows to a
+single object, which is how the same export doubles as a library of props.
 
 The resolver is asked twice - once with a null buffer to get the count, once to
 fill it - so an asset with forty pieces does not need a guessed maximum.
@@ -487,10 +498,11 @@ have been struck from the list rather than left in to look modest.
 Assets are referenced by path (`asset models/crate.glb` in the scene file),
 resolved through Mnemosyne and the glTF importer, and a scene with imported
 models saves and reopens. A file with several objects draws as several pieces
-on one scene node, reloading releases the old meshes and textures and reuses
-the slots, so an editing session does not grow. What is *not* here yet: no
-asset browser, and the pieces of a model share one rigid body - a crate whose
-lid should open needs two scene nodes and a joint.
+on one scene node, or instantiates as a tree of nodes with one body per piece;
+reloading releases the old meshes and textures and reuses the slots, so an
+editing session does not grow. What is *not* here yet: no asset browser, and a
+piece's collision box comes from its bounding box with no offset, so a Blender
+object whose origin sits outside its mesh gets a box in the wrong place.
 
 Editor:
 - No box select; multi-selection is click by click.

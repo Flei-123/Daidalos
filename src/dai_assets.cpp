@@ -274,6 +274,74 @@ void dai_assets_bind(dai_assets *a, dai_doc_sync *sync) {
     dai_doc_sync_resolver(sync, dai_assets_resolve, a);
 }
 
+dai_node dai_assets_instantiate(dai_assets *a, dai_doc *doc, const char *path, dai_node parent) {
+    if (!a || !doc || !path || !path[0]) return 0;
+
+    std::string sel;
+    std::string file = strip_selector(path, &sel);
+    ModelAsset *m = asset_for(a, file, false);
+    if (!m || !m->model) {
+        std::snprintf(a->err, sizeof(a->err), "%s is not loaded yet", file.c_str());
+        return 0;                       // deliberately not blocking - see the header
+    }
+    uint32_t count = dai_model_node_count(m->model);
+    if (!count) {
+        std::snprintf(a->err, sizeof(a->err), "%s has nothing to draw", file.c_str());
+        return 0;
+    }
+
+    dai_doc_begin(doc, "Instantiate model");
+
+    // A piece can point at a parent that has not been created yet only if the
+    // file is malformed - glTF children always follow their parent in the walk
+    // - but map defensively anyway and fall back to the requested parent.
+    std::vector<dai_node> made(count, 0);
+    dai_node root = 0;
+
+    for (uint32_t i = 0; i < count; ++i) {
+        const dai_model_node *n = dai_model_node_at(m->model, i);
+        if (!n) continue;
+
+        dai_node_desc d = dai_node_desc_default();
+        std::snprintf(d.name, sizeof(d.name), "%s", n->name[0] ? n->name : "Piece");
+        // Each node draws exactly its own piece. Without the selector every
+        // node would draw the whole model and the scene would be a pile of
+        // copies of itself.
+        if (n->name[0]) std::snprintf(d.asset, sizeof(d.asset), "%s#%s", file.c_str(), n->name);
+        else            std::snprintf(d.asset, sizeof(d.asset), "%s", file.c_str());
+
+        d.position = n->local_position;
+        d.rotation = n->local_rotation;
+        d.scale = n->local_scale;
+
+        // Collision shape from the piece's own box. The pivot is assumed to be
+        // inside it - a Blender object whose origin is far outside its mesh
+        // gets a box in the wrong place, and there is nowhere in the document
+        // to put a shape offset yet.
+        dai_vec3 half{ (n->bounds_max.x - n->bounds_min.x) * 0.5f,
+                       (n->bounds_max.y - n->bounds_min.y) * 0.5f,
+                       (n->bounds_max.z - n->bounds_min.z) * 0.5f };
+        if (half.x < 1e-4f) half.x = 1e-4f;
+        if (half.y < 1e-4f) half.y = 1e-4f;
+        if (half.z < 1e-4f) half.z = 1e-4f;
+        d.half_extent = half;
+        d.shape = DAI_SHAPE_BOX;
+        d.motion = DAI_STATIC;          // the scene decides what moves, not the file
+
+        dai_node p = parent;
+        if (n->parent >= 0 && (uint32_t)n->parent < count && made[(size_t)n->parent])
+            p = made[(size_t)n->parent];
+        d.parent = p;
+
+        dai_node created = dai_doc_add(doc, &d);
+        made[i] = created;
+        if (!root) root = created;
+    }
+
+    dai_doc_commit(doc);
+    return root;
+}
+
 uint32_t dai_assets_tracked(dai_assets *a) {
     if (!a) return 0;
     mne_stats st{};

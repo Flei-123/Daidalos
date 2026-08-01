@@ -21,6 +21,7 @@
 #include "mnemosyne.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -233,7 +234,7 @@ int main(int argc, char **argv) {
     dai_doc_sync *sync = dai_doc_sync_create(doc, sc);
 
     dai_node_desc nd = dai_node_desc_default();
-    std::snprintf(nd.name, sizeof(nd.name), "Crate");
+    std::snprintf(nd.name, sizeof(nd.name), "WholeModel");
     nd.motion = DAI_STATIC;
     nd.position = { 0, 0, 0 };
     std::snprintf(nd.asset, sizeof(nd.asset), "blender_scene.glb");
@@ -322,6 +323,84 @@ int main(int argc, char **argv) {
     CHECK(rn && dai_doc_get(doc2, reopened[0], &read) == DAI_OK, "reading the node back failed");
     CHECK(std::strcmp(read.asset, "blender_scene.glb") == 0,
           "the asset path came back as '%s'", read.asset);
+
+    // ---- 8b. a model as a TREE of nodes, one body per piece ---------------
+    // The other way to place a model. One node with several pieces is one
+    // rigid body; a crate whose lid opens needs the lid to be its own body,
+    // and that means its own document node, parented the way Blender had it.
+    std::printf("[8b] instantiating a parented model\n");
+    {
+        dai_model *pm = dai_assets_model_blocking(a, "parented.gltf");
+        CHECK(pm != nullptr, "parented.gltf did not load: %s",
+              dai_assets_error_of(a, "parented.gltf"));
+        if (pm) {
+            CHECK(dai_model_node_count(pm) == 2, "the fixture should have 2 pieces, has %u",
+                  dai_model_node_count(pm));
+            uint32_t before = dai_doc_count(doc);
+            uint32_t undo_before = dai_doc_undo_depth(doc);
+            dai_node root = dai_assets_instantiate(a, doc, "parented.gltf", 0);
+            CHECK(root != 0, "instantiate returned nothing: %s", dai_assets_last_error(a));
+            CHECK(dai_doc_count(doc) == before + 2,
+                  "instantiate added %u nodes, expected 2", dai_doc_count(doc) - before);
+            CHECK(dai_doc_undo_depth(doc) == undo_before + 1,
+                  "instantiate should be exactly one undo step, it pushed %u",
+                  dai_doc_undo_depth(doc) - undo_before);
+
+            dai_node crate = dai_doc_find(doc, "Crate");
+            dai_node lid = dai_doc_find(doc, "Lid");
+            CHECK(crate != 0 && lid != 0, "the piece names did not become node names");
+
+            dai_node_desc cd{}, ld{};
+            dai_doc_get(doc, crate, &cd);
+            dai_doc_get(doc, lid, &ld);
+            CHECK(ld.parent == crate, "the lid's parent is %u, the crate is %u - the hierarchy was flattened",
+                  ld.parent, crate);
+            CHECK(std::strcmp(ld.asset, "parented.gltf#Lid") == 0,
+                  "the lid node points at '%s', expected 'parented.gltf#Lid'", ld.asset);
+            // Local, not world: the document accumulates through the parent.
+            CHECK(std::fabs(ld.position.y - 1.0f) < 1e-4f && std::fabs(ld.position.x) < 1e-4f,
+                  "the lid's local position is (%.2f %.2f %.2f), expected (0 1 0)",
+                  ld.position.x, ld.position.y, ld.position.z);
+            dai_vec3 lw{};
+            dai_doc_world_transform(doc, lid, &lw, nullptr, nullptr);
+            CHECK(std::fabs(lw.x - 2.0f) < 1e-4f && std::fabs(lw.y - 1.0f) < 1e-4f,
+                  "the lid ends up at world (%.2f %.2f %.2f), expected (2 1 0)", lw.x, lw.y, lw.z);
+
+            // Each piece gets a box its own size, not the whole model's.
+            CHECK(cd.half_extent.x > 0.4f && cd.half_extent.x < 0.6f,
+                  "the crate's collision half extent is %.3f, the mesh is 1 unit wide",
+                  cd.half_extent.x);
+
+            // Two nodes, two bodies, and each draws only its own piece.
+            dai_doc_sync_apply(sync);
+            dai_render_instance ti[64];
+            uint32_t tn = dai_scene_instances(sc, ti, 64, 1.0f);
+            dai_entity ce = dai_doc_sync_entity(sync, crate);
+            dai_entity le = dai_doc_sync_entity(sync, lid);
+            CHECK(ce != DAI_INVALID_ENTITY && le != DAI_INVALID_ENTITY,
+                  "a piece node did not get an entity");
+            CHECK(dai_scene_body(sc, ce) != dai_scene_body(sc, le),
+                  "the crate and the lid share one body - the whole point was two");
+            CHECK(dai_scene_part_count(sc, ce) == 1,
+                  "the crate node draws %u pieces, a selector must narrow it to 1",
+                  dai_scene_part_count(sc, ce));
+            uint32_t drawn = 0;
+            for (uint32_t i = 0; i < tn; ++i)
+                if (ti[i].mesh == dai_model_node_at(pm, 0)->mesh ||
+                    ti[i].mesh == dai_model_node_at(pm, 1)->mesh) ++drawn;
+            CHECK(drawn == 2, "%u of the 2 pieces reached a render instance", drawn);
+            std::printf("     crate node %u, lid node %u (parent %u), separate bodies\n",
+                        crate, lid, ld.parent);
+
+            // Undo has to take the whole tree back, not half of it.
+            CHECK(dai_doc_undo(doc) == 1, "undoing the instantiate failed");
+            CHECK(dai_doc_count(doc) == before,
+                  "undo left %u nodes behind", dai_doc_count(doc) - before);
+            dai_doc_redo(doc);
+            CHECK(dai_doc_count(doc) == before + 2, "redo did not put the tree back");
+            dai_doc_sync_apply(sync);
+        }
+    }
 
     // ---- 9. reloading does not grow the renderer --------------------------
     // The whole point of releasing: an editor that reloads the same model all
