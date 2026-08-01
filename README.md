@@ -507,8 +507,9 @@ object whose origin sits outside its mesh gets a box in the wrong place.
 Editor:
 - No box select; multi-selection is click by click.
 - Joints and compound bodies are deliberately not serialised (see dai_doc.h).
-- No prefab or instance concept - a hundred identical crates are a hundred
-  independent copies.
+- Prefab overrides do not exist: an instance's children come from the file, and
+  editing one would be silently discarded on the next reload. Moving and
+  renaming the instance root works, because that is a normal node.
 - No copy/paste between scenes.
 - The text field has no caret movement and no selection - typing and backspace.
 

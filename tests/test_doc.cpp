@@ -454,6 +454,118 @@ int main() {
               "swapping the asset path lost the node");
     }
 
+    // ---- 14. prefabs -------------------------------------------------------
+    // The point of a prefab is leverage: a hundred crates cost a hundred lines,
+    // and fixing the crate fixes all hundred. So the checks are about what is
+    // NOT in the scene file, and about a change to the original reaching the
+    // instances.
+    std::printf("prefabs\n");
+    {
+        dai_doc *lib = dai_doc_create();
+        dai_node_desc cd = dai_node_desc_default();
+        snprintf(cd.name, sizeof(cd.name), "CrateBody");
+        cd.half_extent = { 0.5f, 0.5f, 0.5f };
+        dai_node body = dai_doc_add(lib, &cd);
+        dai_node_desc ld = dai_node_desc_default();
+        snprintf(ld.name, sizeof(ld.name), "CrateLid");
+        ld.parent = body;
+        ld.position = { 0, 1, 0 };
+        dai_doc_add(lib, &ld);
+
+        const char *pf = "/tmp/dai_prefab_crate.scene";
+        CHECK(dai_doc_prefab_save(lib, body, pf) == DAI_OK, "saving the prefab failed");
+        dai_doc_destroy(lib);
+
+        dai_doc *scene = dai_doc_create();
+        dai_node_desc ground = dai_node_desc_default();
+        snprintf(ground.name, sizeof(ground.name), "Ground");
+        dai_doc_add(scene, &ground);
+
+        char perr[256] = { 0 };
+        dai_node inst_a = dai_doc_prefab_instantiate(scene, pf, 0, ".", perr, sizeof(perr));
+        CHECK(inst_a != 0, "instantiating the prefab failed: %s", perr);
+        dai_node inst_b = dai_doc_prefab_instantiate(scene, pf, 0, ".", perr, sizeof(perr));
+        CHECK(inst_b != 0 && inst_b != inst_a, "the second instance did not get its own nodes");
+        // root + 2 pieces per instance, plus the ground
+        CHECK(dai_doc_count(scene) == 1 + 2 * 3, "the scene has %u nodes, expected 7",
+              dai_doc_count(scene));
+        CHECK(dai_doc_undo_depth(scene) >= 2, "each instantiate should be one undo step");
+
+        // The instance's pieces must NOT be written into the scene file.
+        const char *sp = "/tmp/dai_prefab_scene.scene";
+        CHECK(dai_doc_save(scene, sp) == DAI_OK, "saving the scene failed");
+        size_t text_len = dai_doc_to_text(scene, nullptr, 0);
+        std::vector<char> text(text_len + 1, 0);
+        dai_doc_to_text(scene, text.data(), text.size());
+        CHECK(std::strstr(text.data(), "CrateLid") == nullptr,
+              "the prefab's children were written into the scene - the reference bought nothing");
+        CHECK(std::strstr(text.data(), "prefab ") != nullptr,
+              "the scene does not record the prefab reference at all");
+
+        // Reopening expands them again.
+        dai_doc *back = dai_doc_create();
+        char lerr[256] = { 0 };
+        CHECK(dai_doc_load(back, sp, lerr, sizeof(lerr)) == DAI_OK, "reopening failed: %s", lerr);
+        CHECK(dai_doc_count(back) == dai_doc_count(scene),
+              "reopened scene has %u nodes, the original had %u",
+              dai_doc_count(back), dai_doc_count(scene));
+        CHECK(dai_doc_find(back, "CrateLid") != 0, "the prefab was not expanded on load");
+
+        // Change the original: every instance has to follow.
+        dai_doc *lib2 = dai_doc_create();
+        CHECK(dai_doc_load(lib2, pf, lerr, sizeof(lerr)) == DAI_OK, "reopening the prefab failed");
+        dai_node lid = dai_doc_find(lib2, "CrateLid");
+        CHECK(lid != 0, "the prefab lost its lid");
+        dai_node_desc lrec{};
+        dai_doc_get(lib2, lid, &lrec);
+        snprintf(lrec.name, sizeof(lrec.name), "CrateHatch");
+        dai_doc_set(lib2, lid, &lrec);
+        CHECK(dai_doc_save(lib2, pf) == DAI_OK, "resaving the prefab failed");
+        dai_doc_destroy(lib2);
+
+        uint32_t rebuilt = dai_doc_prefab_reload(back, ".");
+        CHECK(rebuilt == 2, "%u instances rebuilt, expected 2", rebuilt);
+        CHECK(dai_doc_find(back, "CrateHatch") != 0,
+              "the edited prefab did not reach the instances");
+        CHECK(dai_doc_find(back, "CrateLid") == 0, "the old piece is still there after a reload");
+        CHECK(dai_doc_count(back) == 7, "reload changed the node count to %u", dai_doc_count(back));
+
+        // A prefab that contains itself must be refused, not recursed into.
+        dai_doc *evil = dai_doc_create();
+        dai_node_desc ed = dai_node_desc_default();
+        snprintf(ed.name, sizeof(ed.name), "Loop");
+        snprintf(ed.prefab, sizeof(ed.prefab), "dai_prefab_loop.scene");
+        dai_doc_add(evil, &ed);
+        CHECK(dai_doc_save(evil, "/tmp/dai_prefab_loop.scene") == DAI_OK, "saving the loop failed");
+        dai_doc_destroy(evil);
+        dai_doc *loaded = dai_doc_create();
+        char eerr[256] = { 0 };
+        dai_result lr = dai_doc_load(loaded, "/tmp/dai_prefab_loop.scene", eerr, sizeof(eerr));
+        CHECK(lr == DAI_OK, "a self referencing prefab took the whole load down");
+        CHECK(dai_doc_count(loaded) < 20, "a self referencing prefab expanded %u times",
+              dai_doc_count(loaded));
+        dai_doc_destroy(loaded);
+
+        // A missing prefab leaves the instance node, empty.
+        dai_doc *miss = dai_doc_create();
+        dai_node_desc md = dai_node_desc_default();
+        snprintf(md.name, sizeof(md.name), "Gone");
+        snprintf(md.prefab, sizeof(md.prefab), "no_such_prefab.scene");
+        dai_doc_add(miss, &md);
+        dai_doc_save(miss, "/tmp/dai_prefab_missing.scene");
+        dai_doc_destroy(miss);
+        dai_doc *miss2 = dai_doc_create();
+        CHECK(dai_doc_load(miss2, "/tmp/dai_prefab_missing.scene", eerr, sizeof(eerr)) == DAI_OK,
+              "a missing prefab made the whole scene fail to open");
+        CHECK(dai_doc_count(miss2) == 1, "the instance node did not survive a missing prefab");
+        dai_doc_destroy(miss2);
+
+        std::printf("  2 instances, %u nodes, scene file %zu bytes without the pieces\n",
+                    dai_doc_count(back), text_len);
+        dai_doc_destroy(back);
+        dai_doc_destroy(scene);
+    }
+
     dai_doc_sync_destroy(sy);
     dai_doc_destroy(d);
     dai_scene_destroy(sc);

@@ -136,10 +136,28 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
     std::vector<dai_node> ids((size_t)dai_doc_count(d));
     if (!ids.empty()) dai_doc_nodes(d, ids.data(), (uint32_t)ids.size());
 
+    // Children of a prefab instance are not written: they came from the prefab
+    // file and belong to it. That is the whole point - a hundred crates are a
+    // hundred lines, and fixing the crate fixes all hundred. dai_doc_nodes
+    // lists parents before children, so one pass builds the skip set.
+    std::unordered_map<dai_node, char> inside_prefab;
+    for (dai_node id : ids) {
+        const Node *n = find(d, id);
+        if (!n) continue;
+        bool skip = false;
+        if (n->d.parent) {
+            const Node *p = find(d, n->d.parent);
+            // under an instance root, or under something already skipped
+            if (p && (p->d.prefab[0] || inside_prefab.count(n->d.parent))) skip = true;
+        }
+        if (skip) inside_prefab[id] = 1;
+    }
+
     const dai_node_desc def = dai_node_desc_default();
     for (dai_node id : ids) {
         const Node *n = find(d, id);
         if (!n) continue;
+        if (inside_prefab.count(id)) continue;
         const dai_node_desc &r = n->d;
         put(s, "\nnode %u\n", (unsigned)id);
         if (r.name[0])                      put(s, "  name %s\n", r.name);
@@ -159,6 +177,7 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
         if (r.no_body != def.no_body)           put(s, "  nobody %d\n", r.no_body);
         if (r.mesh != def.mesh)             put(s, "  mesh %u\n", (unsigned)r.mesh);
         if (r.asset[0])                     put(s, "  asset %s\n", r.asset);
+        if (r.prefab[0])                    put(s, "  prefab %s\n", r.prefab);
         if (!v3eq(r.color, def.color))          write_v3(s, "color", r.color);
         if (!feq(r.roughness, def.roughness))   put(s, "  roughness %s\n", fstr(r.roughness).c_str());
         if (!feq(r.emissive, def.emissive))     put(s, "  emissive %s\n", fstr(r.emissive).c_str());
@@ -261,6 +280,8 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "mesh")   { ok = parse_u32(after, &rec.mesh); }
         else if (key == "asset")  { std::string v = rest_of_line(after);
                                     snprintf(rec.asset, sizeof(rec.asset), "%s", v.c_str()); }
+        else if (key == "prefab") { std::string v = rest_of_line(after);
+                                    snprintf(rec.prefab, sizeof(rec.prefab), "%s", v.c_str()); }
         else if (key == "color")  { ok = parse_floats(after, &rec.color.x, 3); }
         else if (key == "roughness") { ok = parse_floats(after, &rec.roughness, 1); }
         else if (key == "emissive")  { ok = parse_floats(after, &rec.emissive, 1); }
@@ -323,6 +344,213 @@ dai_result dai_doc_save(const dai_doc *d, const char *path) {
     return DAI_OK;
 }
 
+// ---- prefabs ---------------------------------------------------------------
+//
+// A prefab is just a scene file, and an instance is a node that points at one.
+// Expansion happens on load rather than in dai_doc_from_text, because only the
+// load knows what directory the paths are relative to.
+
+namespace {
+
+std::string dir_of_path(const std::string &p) {
+    size_t slash = p.find_last_of("/\\");
+    return slash == std::string::npos ? std::string(".") : p.substr(0, slash);
+}
+
+std::string join_path(const std::string &base, const std::string &rel) {
+    if (rel.empty()) return rel;
+    if (rel[0] == '/' || (rel.size() > 1 && rel[1] == ':')) return rel;   // absolute
+    if (base.empty() || base == ".") return rel;
+    return base + "/" + rel;
+}
+
+// Copies every node of `src` under `parent` in `dst`, keeping the shape of the
+// tree. Ids are NOT preserved: they belong to the document they live in, and
+// two instances of the same prefab must not collide.
+uint32_t graft(dai_doc *dst, const dai_doc *src, dai_node parent) {
+    std::vector<dai_node> ids((size_t)dai_doc_count(src));
+    if (ids.empty()) return 0;
+    dai_doc_nodes(src, ids.data(), (uint32_t)ids.size());
+
+    std::unordered_map<dai_node, dai_node> map;
+    uint32_t made = 0;
+    for (dai_node id : ids) {                     // parents come first
+        dai_node_desc rec{};
+        if (dai_doc_get(src, id, &rec) != DAI_OK) continue;
+        // The instance root carries the reference; the copies must not, or a
+        // reload would expand them again and again.
+        rec.prefab[0] = 0;
+        dai_node p = parent;
+        if (rec.parent) {
+            auto it = map.find(rec.parent);
+            if (it != map.end()) p = it->second;
+        }
+        rec.parent = p;
+        dai_node made_id = dai_doc_add(dst, &rec);
+        if (!made_id) continue;
+        map[id] = made_id;
+        ++made;
+    }
+    return made;
+}
+
+// The chain of prefab files currently being expanded. It has to be file
+// scoped, not a parameter: expanding an instance calls dai_doc_load, which
+// expands ITS instances, and a per call vector would start empty every time -
+// a prefab containing itself would then recurse until the stack ran out.
+// Which is exactly what it did.
+std::vector<std::string> g_expanding;
+
+bool expand_one(dai_doc *d, dai_node n, const std::string &base_dir,
+                std::vector<std::string> &seen, char *err, size_t err_size) {
+    dai_node_desc rec{};
+    if (dai_doc_get(d, n, &rec) != DAI_OK || !rec.prefab[0]) return true;
+    (void)seen;
+    std::string full = join_path(base_dir, rec.prefab);
+    for (const std::string &s : g_expanding) {
+        if (s == full) {
+            if (err && err_size) snprintf(err, err_size, "prefab '%s' contains itself", rec.prefab);
+            return false;
+        }
+    }
+    if (g_expanding.size() >= 8) {
+        if (err && err_size) snprintf(err, err_size, "prefabs nested more than 8 deep");
+        return false;
+    }
+
+    dai_doc *sub = dai_doc_create();
+    if (!sub) return false;
+    char lerr[192] = { 0 };
+    // On the stack BEFORE the nested load, or the recursion it triggers cannot
+    // see that this file is already open.
+    g_expanding.push_back(full);
+    dai_result loaded = dai_doc_load(sub, full.c_str(), lerr, sizeof(lerr));
+    g_expanding.pop_back();
+    if (loaded != DAI_OK) {
+        // A missing prefab is not fatal: the instance node stays, empty and
+        // obviously wrong, rather than taking the whole scene down with it.
+        dai_doc_destroy(sub);
+        if (err && err_size) snprintf(err, err_size, "%s", lerr);
+        return true;
+    }
+    graft(d, sub, n);
+    dai_doc_destroy(sub);
+    return true;
+}
+
+uint32_t expand_all(dai_doc *d, const std::string &base_dir, char *err, size_t err_size) {
+    std::vector<dai_node> ids((size_t)dai_doc_count(d));
+    if (ids.empty()) return 0;
+    dai_doc_nodes(d, ids.data(), (uint32_t)ids.size());
+    std::vector<std::string> seen;
+    uint32_t n = 0;
+    for (dai_node id : ids) {
+        dai_node_desc rec{};
+        if (dai_doc_get(d, id, &rec) != DAI_OK || !rec.prefab[0]) continue;
+        if (expand_one(d, id, base_dir, seen, err, err_size)) ++n;
+    }
+    return n;
+}
+
+} // namespace
+
+dai_result dai_doc_prefab_save(const dai_doc *d, dai_node n, const char *path) {
+    if (!d || !path || !dai_doc_valid(d, n)) return DAI_ERR_INVALID_ARG;
+
+    // Copy the subtree into a document of its own, rooted at n with no parent,
+    // so the file can be dropped anywhere.
+    dai_doc *sub = dai_doc_create();
+    if (!sub) return DAI_ERR_OUT_OF_MEMORY;
+
+    std::vector<dai_node> ids((size_t)dai_doc_count(d));
+    if (!ids.empty()) dai_doc_nodes(d, ids.data(), (uint32_t)ids.size());
+    std::unordered_map<dai_node, dai_node> map;
+    for (dai_node id : ids) {
+        // only n and its descendants
+        bool mine = (id == n);
+        if (!mine) {
+            dai_node_desc probe{};
+            if (dai_doc_get(d, id, &probe) != DAI_OK) continue;
+            if (probe.parent && (probe.parent == n || map.count(probe.parent))) mine = true;
+        }
+        if (!mine) continue;
+
+        dai_node_desc rec{};
+        if (dai_doc_get(d, id, &rec) != DAI_OK) continue;
+        if (id == n) {
+            rec.parent = 0;
+            rec.prefab[0] = 0;     // the original is not an instance of itself
+        } else {
+            auto it = map.find(rec.parent);
+            rec.parent = it == map.end() ? 0 : it->second;
+        }
+        dai_node made = dai_doc_add(sub, &rec);
+        if (made) map[id] = made;
+    }
+    dai_result r = dai_doc_save(sub, path);
+    dai_doc_destroy(sub);
+    return r;
+}
+
+dai_node dai_doc_prefab_instantiate(dai_doc *d, const char *path, dai_node parent,
+                                    const char *base_dir, char *err, size_t err_size) {
+    if (!d || !path || !path[0]) return 0;
+    if (err && err_size) err[0] = 0;
+
+    std::string full = join_path(base_dir ? base_dir : ".", path);
+    dai_doc *sub = dai_doc_create();
+    if (!sub) return 0;
+    if (dai_doc_load(sub, full.c_str(), err, err_size) != DAI_OK) {
+        dai_doc_destroy(sub);
+        return 0;
+    }
+    // The instance root is a transform node that points at the file. It gets
+    // the prefab root's own transform so the instance lands where the original
+    // was authored.
+    dai_node_desc root = dai_node_desc_default();
+    std::vector<dai_node> sids((size_t)dai_doc_count(sub));
+    if (!sids.empty()) {
+        dai_doc_nodes(sub, sids.data(), (uint32_t)sids.size());
+        dai_doc_get(sub, sids[0], &root);
+    }
+    root.parent = parent;
+    root.no_body = 1;                 // the pieces carry the physics
+    root.mesh = 0xFFFFFFFFu;
+    root.asset[0] = 0;
+    snprintf(root.prefab, sizeof(root.prefab), "%s", path);
+
+    dai_doc_begin(d, "Instantiate prefab");
+    dai_node made = dai_doc_add(d, &root);
+    if (made) graft(d, sub, made);
+    dai_doc_commit(d);
+    dai_doc_destroy(sub);
+    return made;
+}
+
+uint32_t dai_doc_prefab_reload(dai_doc *d, const char *base_dir) {
+    if (!d) return 0;
+    std::vector<dai_node> ids((size_t)dai_doc_count(d));
+    if (ids.empty()) return 0;
+    dai_doc_nodes(d, ids.data(), (uint32_t)ids.size());
+
+    dai_doc_begin(d, "Reload prefabs");
+    uint32_t n = 0;
+    std::vector<std::string> seen;
+    for (dai_node id : ids) {
+        dai_node_desc rec{};
+        if (dai_doc_get(d, id, &rec) != DAI_OK || !rec.prefab[0]) continue;
+        // Drop what is there and take it from disk again.
+        dai_node kids[256];
+        uint32_t kn = dai_doc_children(d, id, kids, 256);
+        for (uint32_t i = 0; i < kn; ++i) dai_doc_remove(d, kids[i]);
+        char lerr[192] = { 0 };
+        expand_one(d, id, base_dir ? base_dir : ".", seen, lerr, sizeof(lerr));
+        ++n;
+    }
+    dai_doc_commit(d);
+    return n;
+}
+
 dai_result dai_doc_load(dai_doc *d, const char *path, char *err, size_t err_size) {
     if (!d || !path) return DAI_ERR_INVALID_ARG;
     FILE *f = fopen(path, "rb");
@@ -335,7 +563,12 @@ dai_result dai_doc_load(dai_doc *d, const char *path, char *err, size_t err_size
     size_t n;
     while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) data.append(chunk, n);
     fclose(f);
-    return dai_doc_from_text(d, data.c_str(), data.size(), err, err_size);
+    dai_result r = dai_doc_from_text(d, data.c_str(), data.size(), err, err_size);
+    if (r != DAI_OK) return r;
+    // Prefab references are relative to the scene that holds them, so this can
+    // only happen here - dai_doc_from_text has no idea where the text came from.
+    expand_all(d, dir_of_path(path), err, err_size);
+    return DAI_OK;
 }
 
 } // extern "C"

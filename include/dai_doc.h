@@ -74,6 +74,13 @@ typedef struct dai_node_desc {
      * run. When set it wins over `mesh`; how a path becomes a mesh is the
      * sync layer's resolver, so the document stays engine free. */
     char     asset[96];
+    /* Prefab reference BY PATH, relative to the scene file. A node with one is
+     * the ROOT of an instance: its children come from that file and are not
+     * written into this scene, so a hundred crates cost a hundred lines and
+     * fixing the crate fixes all hundred. Editing an instance's children is
+     * not a thing yet - there is nowhere to record the override, so a reload
+     * would silently discard it. */
+    char     prefab[96];
     dai_vec3 color;             /* 0,0,0 -> stable colour from the id           */
     float    roughness;         /* 0 -> 1 (matte)                               */
     float    emissive;
@@ -142,6 +149,25 @@ DAI_API dai_result dai_doc_save(const dai_doc *d, const char *path);
 /* Replaces the contents and clears undo history. On a parse error nothing is
  * changed and `err` (if given) holds the line number and reason. */
 DAI_API dai_result dai_doc_load(dai_doc *d, const char *path, char *err, size_t err_size);
+
+/* ---- prefabs ----------------------------------------------------------- */
+
+/* Writes the subtree rooted at `n` as a scene file of its own - the original
+ * that instances point at. The root is written without a parent, so it can be
+ * dropped anywhere. */
+DAI_API dai_result dai_doc_prefab_save(const dai_doc *d, dai_node n, const char *path);
+
+/* Loads that file in as a subtree under `parent` and marks the new root as an
+ * instance of it. Everything it adds is one undo step. `path` is stored as
+ * given, so pass it relative to the scene file if the scene is meant to be
+ * portable. Returns the new root, or 0 with `err` filled. */
+DAI_API dai_node dai_doc_prefab_instantiate(dai_doc *d, const char *path, dai_node parent,
+                                            const char *base_dir, char *err, size_t err_size);
+
+/* Throws away the children of every prefab instance and expands them again
+ * from disk - what "I just edited the prefab" needs. Returns how many
+ * instances were rebuilt. */
+DAI_API uint32_t dai_doc_prefab_reload(dai_doc *d, const char *base_dir);
 DAI_API dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
                                      char *err, size_t err_size);
 /* Writes into `buf`; returns the number of bytes the text needs (excluding the
