@@ -209,6 +209,43 @@ plane) and checks geometry, materials, the Z-up to Y-up conversion and the
 matrix decomposition. See `docs/MATERIALS.md` for why the material model is
 four maps and no node graph.
 
+### Assets - `include/dai_assets.h`
+
+The glue between "the document says `models/crate.glb`" and "there is a mesh on
+screen". Two libraries that never learn about each other:
+
+- **Mnemosyne** decides where bytes come from - mounted folders and pack files
+  searched by priority, so a mod folder overrides the shipped pack - loads each
+  file once, caches it, and notices when it changed on disk.
+- **dai_gltf** turns those bytes into meshes, materials and textures.
+
+```c
+dai_assets *a = dai_assets_create(renderer, 1);   // 1 = watch for edits
+dai_assets_mount_pack(a, "game.mnp", 0);
+dai_assets_mount_dir (a, "mods/hd", 10);          // wins
+dai_assets_bind(a, sync);
+
+// per frame
+if (dai_assets_poll(a)) dai_assets_bind(a, sync);  // something (re)loaded
+dai_doc_sync_apply(sync);
+```
+
+Loading is asynchronous and the split is not cosmetic: reading and parsing run
+on worker threads, and the GPU upload happens inside `dai_assets_poll` on the
+thread that owns the Vulkan context, because a loader that touches the GPU from
+a worker is a crash waiting for a busy frame. A node whose asset has not
+arrived yet keeps drawing its collision shape - visibly wrong, never invisible -
+and picks up the real mesh a frame or two later.
+
+`models/scene.glb#Crate` takes one object out of a file that holds several,
+which is how a single Blender export serves as a library. Without a selector
+the first node wins.
+
+This is also where the sync layer had a real hole: the resolver only ran when a
+node was first built, so an asset that finished loading afterwards never
+reached the screen. It now re-resolves on every pass and rebuilds the entity
+when the answer moved - which is exactly what asynchronous loading needs.
+
 ### Skinning and animation
 
 glTF skins and animations import with the rest of the file: joint hierarchies,
@@ -435,11 +472,12 @@ and shading when a test fails and you need to know which half is lying.
 Kept honest: things listed here are genuinely absent, and things that got built
 have been struck from the list rather than left in to look modest.
 
-Assets are referenced by path now (`asset models/crate.glb` in the scene file)
-and resolved through a callback, so a scene with imported models saves and
-reopens. What is *not* here yet is the resolver itself wired to Mnemosyne and
-the glTF importer - the document and sync layers are ready for it, the glue is
-not written.
+Assets are referenced by path (`asset models/crate.glb` in the scene file),
+resolved through Mnemosyne and the glTF importer, and a scene with imported
+models saves and reopens. What is *not* here yet: nothing releases a mesh, so
+editing the same model over and over in one session grows GPU memory; a node
+resolves to ONE node of a glTF file (`file.glb#Object` picks which), so a
+five part model needs five scene nodes; and there is no asset browser.
 
 Editor:
 - No box select; multi-selection is click by click.

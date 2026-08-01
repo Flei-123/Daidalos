@@ -62,6 +62,20 @@ typedef struct dai_model_info {
  * renderer, so the returned model only holds handles. Returns NULL on error
  * and fills `err`. */
 DAI_API dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t err_len);
+
+/* Reads a file the glTF references by URI - a .bin buffer or an external PNG.
+ * Return 1 and hand out bytes that stay valid until the call that asked for
+ * them returns, or 0 if it does not exist. */
+typedef int (*dai_gltf_read_fn)(const char *uri, const void **out_bytes,
+                                size_t *out_size, void *user);
+
+/* The same import, from bytes the caller already has. This is what an asset
+ * cache uses: it has read the file through its own mounts (a folder, a pack),
+ * and there is no path left to hand over. `sidecar` resolves external buffers
+ * and images; pass NULL for a self contained .glb. */
+DAI_API dai_model *dai_gltf_load_memory(dai_renderer *r, const void *bytes, size_t size,
+                                        dai_gltf_read_fn sidecar, void *user,
+                                        char *err, size_t err_len);
 DAI_API void       dai_model_free(dai_model *m);
 
 DAI_API dai_model_info        dai_model_get_info(const dai_model *m);

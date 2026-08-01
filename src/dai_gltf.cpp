@@ -168,6 +168,22 @@ struct Loader {
     daijson::Document doc;
     const Value *root = nullptr;
     std::string base_dir;
+    // Where a .bin buffer or an external PNG comes from. Without a callback it
+    // is base_dir on disk; with one it is whatever the host mounts - which is
+    // how a .gltf inside a pack file finds its own sidecars.
+    dai_gltf_read_fn sidecar = nullptr;
+    void            *sidecar_user = nullptr;
+
+    bool read_ref(const std::string &uri, std::vector<uint8_t> &out) {
+        if (sidecar) {
+            const void *b = nullptr; size_t n = 0;
+            if (!sidecar(uri.c_str(), &b, &n, sidecar_user)) return false;
+            const uint8_t *p = (const uint8_t *)b;
+            out.assign(p, p + n);
+            return true;
+        }
+        return read_file(base_dir + "/" + uri, out);
+    }
     std::vector<std::vector<uint8_t>> buffers;
     const uint8_t *glb_bin = nullptr;
     size_t glb_bin_size = 0;
@@ -332,19 +348,24 @@ struct dai_model {
 
 extern "C" {
 
-dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t err_len) {
+dai_model *dai_gltf_load_memory(dai_renderer *r, const void *data, size_t size,
+                                dai_gltf_read_fn sidecar, void *user,
+                                char *err, size_t err_len) {
     auto bail = [&](const char *m) -> dai_model * {
         if (err && err_len) std::snprintf(err, err_len, "%s", m);
         return nullptr;
     };
-    if (!r || !path) return bail("no renderer or path");
+    if (!r || !data || !size) return bail("no renderer or no bytes");
 
-    std::vector<uint8_t> file;
-    if (!read_file(path, file)) return bail("cannot read file");
+    // A view, not a copy: the caller owns the bytes for the duration of the
+    // call, which is exactly what an asset cache wants to hear.
+    struct { const uint8_t *p; size_t n;
+             size_t size() const { return n; } const uint8_t *data() const { return p; } }
+        file{ (const uint8_t *)data, size };
 
     Loader ld;
     ld.r = r; ld.err = err; ld.err_len = err_len;
-    ld.base_dir = dir_of(path);
+    ld.sidecar = sidecar; ld.sidecar_user = user;
 
     const char *json_text = nullptr;
     size_t json_len = 0;
@@ -391,7 +412,7 @@ dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t er
                 if (!comma) return bail("malformed data uri");
                 base64_decode(comma + 1, std::strlen(comma + 1), data);
             } else {
-                if (!read_file(ld.base_dir + "/" + uri_decode(uri), data))
+                if (!ld.read_ref(uri_decode(uri), data))
                     return bail("cannot read external buffer");
             }
             ld.buffers.push_back(std::move(data));
@@ -419,7 +440,7 @@ dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t er
         std::vector<uint8_t> bytes;
         const char *uri = im->str_at("uri", "");
         if (uri[0] && std::strncmp(uri, "data:", 5)) {
-            if (!read_file(ld.base_dir + "/" + uri_decode(uri), bytes)) return 0;
+            if (!ld.read_ref(uri_decode(uri), bytes)) return 0;
         } else if (uri[0]) {
             const char *comma = std::strchr(uri, ',');
             if (!comma) return 0;
@@ -750,6 +771,34 @@ dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t er
     model->info.bounds_min = { bmin[0], bmin[1], bmin[2] };
     model->info.bounds_max = { bmax[0], bmax[1], bmax[2] };
     return model;
+}
+
+namespace {
+// The path based entry point is the memory one with a sidecar that reads from
+// the file's own directory. One code path for both, so a .gltf with external
+// buffers behaves the same whether it came off disk or out of a pack.
+struct DiskSidecar { std::string dir; std::vector<uint8_t> buf; };
+int disk_sidecar(const char *uri, const void **out, size_t *out_size, void *user) {
+    DiskSidecar *d = (DiskSidecar *)user;
+    if (!read_file(d->dir + "/" + uri, d->buf)) return 0;
+    *out = d->buf.data(); *out_size = d->buf.size();
+    return 1;
+}
+} // namespace
+
+dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t err_len) {
+    if (!r || !path) {
+        if (err && err_len) std::snprintf(err, err_len, "no renderer or path");
+        return nullptr;
+    }
+    std::vector<uint8_t> file;
+    if (!read_file(path, file)) {
+        if (err && err_len) std::snprintf(err, err_len, "cannot read file");
+        return nullptr;
+    }
+    DiskSidecar side;
+    side.dir = dir_of(path);
+    return dai_gltf_load_memory(r, file.data(), file.size(), disk_sidecar, &side, err, err_len);
 }
 
 void dai_model_free(dai_model *m) { delete m; }

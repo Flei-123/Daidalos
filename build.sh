@@ -13,6 +13,7 @@ cd "$(dirname "$0")"
 JOLT_SRC=${JOLT_SRC:-/root/projects/JoltPhysics}
 JOLT_LIB=${JOLT_LIB:-/root/projects/jolt-build}
 AULOS=${AULOS:-/root/projects/aulos}
+MNEMOSYNE=${MNEMOSYNE:-/root/projects/mnemosyne}
 
 # These MUST match how libJolt.a was compiled. A mismatch is not a link error,
 # it is a runtime crash: the JPH_USE_* defines change the layout of Vec3/Mat44.
@@ -133,6 +134,27 @@ else
     echo "-- renderer: skipped (no vulkan headers)"
 fi
 
+# ---- asset layer: Mnemosyne (where bytes come from) + glTF (what they mean)
+#
+# Optional the same way audio is: without it the engine still builds, scenes
+# still save their asset paths, and nothing resolves them. Mnemosyne is
+# compiled with ITS flags, not ours - it is a separate library with a C API,
+# and forcing -fno-exceptions on someone else's std::vector is not our call.
+ASSETS_LIB=""
+if [ "$VK_OK" = "1" ] && [ -f "$MNEMOSYNE/include/mnemosyne.h" ]; then
+    echo "-- assets: Mnemosyne + glTF ($MNEMOSYNE)"
+    MNE_FLAGS="-std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -pthread"
+    for f in mne_path mne_vfs mne_pack mne_registry; do
+        g++ $MNE_FLAGS -I"$MNEMOSYNE/include" -I"$MNEMOSYNE/src" -c "$MNEMOSYNE/src/$f.cpp" -o "build/$f.o"
+    done
+    g++ $FLAGS $ARCH -Iinclude -Isrc -I"$MNEMOSYNE/include" -c src/dai_assets.cpp -o build/dai_assets.o
+    ar rcs build/libdaidalos_assets.a build/dai_assets.o \
+           build/mne_path.o build/mne_vfs.o build/mne_pack.o build/mne_registry.o
+    ASSETS_LIB="build/libdaidalos_assets.a"
+else
+    echo "-- assets: skipped (no Mnemosyne at $MNEMOSYNE)"
+fi
+
 LIBS="build/libdaidalos.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lpthread -lm"
 VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lvulkan ${X11_LIB:-} -lpthread -lm"
 
@@ -198,6 +220,10 @@ if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui
     g++ $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
+    if [ -n "$ASSETS_LIB" ]; then
+        g++ $FLAGS $ARCH -Iinclude -I"$MNEMOSYNE/include" tests/test_assets.cpp \
+            $ASSETS_LIB $LIBS $VKLIBS -o build/test_assets
+    fi
 fi
 
 echo "-- diagnostics"

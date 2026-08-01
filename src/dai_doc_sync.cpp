@@ -23,6 +23,13 @@ struct Live {
     dai_body      body = DAI_INVALID_BODY;
     uint64_t      rev = 0;
     dai_node_desc built{};      // the record the body was created from
+    // What the resolver answered when this entity was built. The SAME path can
+    // answer differently later - an asset loads asynchronously, so the first
+    // answer is usually "not yet". Keeping it is what lets apply() notice.
+    int           res_ok = 0;
+    uint32_t      res_mesh = 0xFFFFFFFFu;
+    uint32_t      res_material = 0;
+    dai_vec3      res_scale{ 0, 0, 0 };
 };
 
 // Changing any of these means the rigid body itself is wrong, not just its
@@ -78,6 +85,14 @@ dai_vec3 scaled_extent(const dai_node_desc &r, dai_vec3 ws) {
     }
 }
 
+} // namespace
+
+// Declared after the struct so it can see the resolver fields.
+static int resolve_asset_of(dai_doc_sync *s, const dai_node_desc &r,
+                            uint32_t *mesh, uint32_t *material, dai_vec3 *scale);
+
+namespace {
+
 bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
     if (r.no_body) {                       // group / marker: nothing to simulate
         Live l;
@@ -105,15 +120,14 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
     // An asset path wins over the mesh index. Failing to resolve is deliberately
     // NOT fatal: the node keeps its collision shape and draws as that shape, so
     // a missing file looks obviously wrong instead of silently vanishing.
-    if (r.asset[0] && s->resolve_asset) {
-        uint32_t am = 0xFFFFFFFFu, amat = 0;
-        dai_vec3 ascale{ 0, 0, 0 };
-        if (s->resolve_asset(r.asset, &am, &amat, &ascale, s->resolve_user)) {
-            if (am != 0xFFFFFFFFu) d.mesh = am;
-            d.material = amat;
-            if (ascale.x != 0.0f || ascale.y != 0.0f || ascale.z != 0.0f)
-                d.render_scale = { ascale.x * ws.x, ascale.y * ws.y, ascale.z * ws.z };
-        }
+    uint32_t am = 0xFFFFFFFFu, amat = 0;
+    dai_vec3 ascale{ 0, 0, 0 };
+    int resolved = resolve_asset_of(s, r, &am, &amat, &ascale);
+    if (resolved) {
+        if (am != 0xFFFFFFFFu) d.mesh = am;
+        d.material = amat;
+        if (ascale.x != 0.0f || ascale.y != 0.0f || ascale.z != 0.0f)
+            d.render_scale = { ascale.x * ws.x, ascale.y * ws.y, ascale.z * ws.z };
     }
     d.color = r.color;
     d.roughness = r.roughness;
@@ -129,6 +143,10 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
     l.entity = e;
     l.body = dai_scene_body(s->scene, e);
     l.built = r;
+    l.res_ok = resolved;
+    l.res_mesh = am;
+    l.res_material = amat;
+    l.res_scale = ascale;
     s->live[n] = l;
     s->by_entity[e] = n;
     s->by_body[l.body] = n;
@@ -136,6 +154,19 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
 }
 
 } // namespace
+
+// One place where a path becomes render data, used by both the spawn and the
+// update path. It used to exist only inside spawn(), which meant an asset that
+// finished loading AFTER its node was built never reached the screen - the
+// node was already live, so nothing asked again.
+static int resolve_asset_of(dai_doc_sync *s, const dai_node_desc &r,
+                            uint32_t *mesh, uint32_t *material, dai_vec3 *scale) {
+    *mesh = 0xFFFFFFFFu;
+    *material = 0;
+    *scale = dai_vec3{ 0, 0, 0 };
+    if (!r.asset[0] || !s->resolve_asset) return 0;
+    return s->resolve_asset(r.asset, mesh, material, scale, s->resolve_user) ? 1 : 0;
+}
 
 extern "C" {
 
@@ -150,13 +181,16 @@ dai_doc_sync *dai_doc_sync_create(dai_doc *d, dai_scene *scene) {
 
 void dai_doc_sync_destroy(dai_doc_sync *s) { delete s; }
 
+
 void dai_doc_sync_resolver(dai_doc_sync *s, dai_asset_resolve_fn fn, void *user) {
     if (!s) return;
     s->resolve_asset = fn;
     s->resolve_user = user;
     // Everything already built may have been drawn with the wrong (or no) asset,
     // so force a full pass rather than leaving stale geometry on screen.
-    for (auto &kv : s->live) kv.second.rev = 0;
+    // UINT64_MAX rather than 0: a document revision of 0 is a real value for a
+    // node nobody has touched, and "equal" would skip exactly those.
+    for (auto &kv : s->live) kv.second.rev = UINT64_MAX;
 }
 
 dai_scene *dai_doc_sync_scene(const dai_doc_sync *s) { return s ? s->scene : nullptr; }
@@ -204,10 +238,23 @@ uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
         Live &l = it->second;
         if (l.rev == rev) continue;                 // untouched: leave physics alone
 
-        if (needs_rebuild(l.built, r)) {
+        // The path did not change, but the answer might have: the file has
+        // finished loading, or a different resolver is in place. Anything that
+        // moves mesh, material or scale needs the entity rebuilt - the scene
+        // can set a mesh in place, but not a material or a render scale.
+        uint32_t am = 0xFFFFFFFFu, amat = 0;
+        dai_vec3 ascale{ 0, 0, 0 };
+        int resolved = resolve_asset_of(s, r, &am, &amat, &ascale);
+        bool asset_moved = resolved != l.res_ok || am != l.res_mesh ||
+                           amat != l.res_material ||
+                           std::memcmp(&ascale, &l.res_scale, sizeof(dai_vec3)) != 0;
+
+        if (asset_moved || needs_rebuild(l.built, r)) {
             // The body is thrown away and recreated - handles change, the node
             // id does not. Nothing outside this file stores a body handle, so
-            // this is invisible to the editor and to undo.
+            // this is invisible to the editor and to undo. Rebuilding for a
+            // resolver change costs one entity respawn per node, once, when
+            // the asset arrives.
             forget(s, n);
             if (spawn(s, n, r)) s->live[n].rev = rev;
             ++changed;
