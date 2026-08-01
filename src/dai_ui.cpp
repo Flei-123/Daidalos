@@ -76,6 +76,16 @@ struct dai_ui {
     uint32_t text_cursor = 0;       // caret in the active text field
     float    drag_accum = 0.0f;     // sub-step remainder of a drag_float
 
+    // ---- icons ------------------------------------------------------------
+    dai_icons  *icons = nullptr;
+    dai_texture icon_tex = 0;
+    // What the icon under the pointer means. Collected during the frame and
+    // drawn at the very end, on top of everything - a tooltip emitted in place
+    // would be painted over by the next window.
+    char  tooltip[64] = { 0 };
+    float tooltip_x = 0, tooltip_y = 0;
+    bool  tooltip_on = false;
+
     // ---- windows ----------------------------------------------------------
     struct Win {
         uint64_t id = 0;
@@ -248,6 +258,7 @@ void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in)
     ui->cur_layer = 0;
     ui->blocked = false;
     ui->win_depth = 0;
+    ui->tooltip_on = false;
     if (!ui->dock_area_set) { ui->dock_x = 0; ui->dock_y = 0; ui->dock_w = width; ui->dock_h = height; }
     ui->dock_area_set = false;
     for (auto &w : ui->wins) w.seen = false;
@@ -258,6 +269,26 @@ void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in)
 
 void dai_ui_end(dai_ui *ui) {
     if (!ui) return;
+    if (ui->tooltip_on && ui->tooltip[0]) {
+        // Above every window, and outside every clip rectangle: a tooltip that
+        // obeys the panel it was raised in gets cut in half by it.
+        int save_layer = ui->cur_layer;
+        std::vector<dai_ui::Clip> save_clips;
+        save_clips.swap(ui->clips);
+        ui->cur_layer = 1 << 20;
+        float tw = dai_ui_text_width(ui, ui->tooltip);
+        float th = dai_font_line_height(ui->font) + 6.0f;
+        float x = ui->tooltip_x, y = ui->tooltip_y;
+        if (x + tw + 12.0f > ui->width) x = ui->width - tw - 12.0f;
+        if (y + th > ui->height) y = ui->tooltip_y - th - 8.0f;
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        dai_ui_rect(ui, x, y, tw + 12.0f, th, 0xF0101010u);
+        dai_ui_rect_outline(ui, x, y, tw + 12.0f, th, 1.0f, ui->style.panel_border);
+        dai_ui_text(ui, x + 6.0f, y + 3.0f, ui->tooltip, ui->style.text);
+        ui->cur_layer = save_layer;
+        ui->clips.swap(save_clips);
+    }
     if (!ui->input.mouse_down) { ui->active = 0; ui->drag_win = 0; ui->size_win = 0; }
     // A window the host stopped drawing loses its slot in the z order rather
     // than sitting there forever blocking clicks with a stale rectangle.
@@ -790,7 +821,90 @@ void dai_ui_progress(dai_ui *ui, float fraction, const char *utf8) {
     }
 }
 
+void dai_ui_set_icons(dai_ui *ui, dai_icons *icons, dai_texture tex) {
+    if (!ui) return;
+    ui->icons = icons;
+    ui->icon_tex = tex;
+}
+
+int dai_ui_has_icon(const dai_ui *ui, const char *name) {
+    if (!ui || !ui->icons || !name) return 0;
+    return dai_icons_uv(ui->icons, name, nullptr, nullptr, nullptr, nullptr);
+}
+
+void dai_ui_icon_at(dai_ui *ui, const char *name, float x, float y,
+                    float size, uint32_t color) {
+    if (!ui || !ui->icons || !name) return;
+    float u0, v0, u1, v1;
+    if (!dai_icons_uv(ui->icons, name, &u0, &v0, &u1, &v1)) return;
+    if (size <= 0.0f) size = dai_icons_size(ui->icons);
+    // Snapped to whole pixels. Half a pixel of offset on a 16 px icon made of
+    // 1.3 px strokes is the difference between a crisp line and a grey smear.
+    x = std::floor(x + 0.5f);
+    y = std::floor(y + 0.5f);
+    ui->quad(ui->icon_tex, x, y, x + size, y + size, u0, v0, u1, v1,
+             color ? color : ui->style.text);
+}
+
+void dai_ui_icon(dai_ui *ui, const char *name, float size, uint32_t color) {
+    if (!ui) return;
+    if (size <= 0.0f) size = ui->icons ? dai_icons_size(ui->icons) : 16.0f;
+    float x, y;
+    next_rect(ui, size, size, &x, &y);
+    dai_ui_icon_at(ui, name, x, y, size, color);
+}
+
+int dai_ui_icon_button(dai_ui *ui, const char *name, const char *tooltip, int active) {
+    if (!ui) return 0;
+    float h = widget_height(ui);
+    float w = h;                       // square, so a toolbar reads as a strip
+    float x, y;
+    next_rect(ui, w, h, &x, &y);
+
+    uint64_t id = hash_id(name ? name : "icon", x, y);
+    bool over = inside(ui, x, y, w, h);
+    if (over) { ui->hot = id; ui->mouse_over_ui = true; }
+    bool pressed = false;
+    if (over && ui->input.mouse_down && !ui->prev.mouse_down) ui->active = id;
+    if (ui->active == id && !ui->input.mouse_down) { pressed = over; ui->active = 0; }
+
+    uint32_t bg = active ? ui->style.accent : ui->style.button;
+    if (ui->active == id) bg = ui->style.button_active;
+    else if (over && !active) bg = ui->style.button_hover;
+    dai_ui_rect(ui, x, y, w, h, bg);
+
+    float isz = dai_icons_size(ui->icons);
+    if (isz <= 0.0f || isz > h - 4.0f) isz = h - 6.0f;
+    uint32_t tint = active ? 0xFF101010u : ui->style.text;
+    if (dai_ui_has_icon(ui, name)) {
+        dai_ui_icon_at(ui, name, x + (w - isz) * 0.5f, y + (h - isz) * 0.5f, isz, tint);
+    } else if (tooltip) {
+        // No icon set loaded: fall back to the words, so the editor is still
+        // usable rather than a row of empty squares.
+        float tw = dai_ui_text_width(ui, tooltip);
+        dai_ui_text(ui, x + (w - tw) * 0.5f, y + ui->style.row_pad * 0.5f, tooltip, tint);
+    }
+    if (over && tooltip && !ui->input.mouse_down) {
+        std::snprintf(ui->tooltip, sizeof(ui->tooltip), "%s", tooltip);
+        ui->tooltip_x = x;
+        ui->tooltip_y = y + h + 6.0f;
+        ui->tooltip_on = true;
+    }
+    return pressed ? 1 : 0;
+}
+
+void dai_ui_toolbar_gap(dai_ui *ui, float w) {
+    if (!ui) return;
+    if (ui->in_row) ui->cursor_x += w;
+    else            ui->cursor_y += w;
+}
+
 int dai_ui_header(dai_ui *ui, const char *title, int *open, int *enabled) {
+    return dai_ui_header_icon(ui, nullptr, title, open, enabled);
+}
+
+int dai_ui_header_icon(dai_ui *ui, const char *icon, const char *title,
+                       int *open, int *enabled) {
     if (!ui || !title) return 0;
     float h = dai_font_line_height(ui->font) + 6.0f;
     float x, y;
@@ -810,9 +924,27 @@ int dai_ui_header(dai_ui *ui, const char *title, int *open, int *enabled) {
 
     dai_ui_rect(ui, x, y, w, h, over ? ui->style.button_hover : ui->style.button);
     dai_ui_rect(ui, x, y, 3.0f, h, ui->style.accent);
-    dai_ui_text(ui, x + 8.0f, y + 2.0f, (open && !*open) ? "\xe2\x96\xb8" : "\xe2\x96\xbe",
-                ui->style.text_dim);
-    dai_ui_text(ui, x + 22.0f, y + 2.0f, title, ui->style.text);
+
+    // The fold arrow, then the component's own icon, then its name. Falls back
+    // to the two triangle glyphs when no icon set was given - the same header
+    // has to work in a headless test with nothing but a font.
+    float tx = x + 8.0f;
+    bool folded = (open && !*open);
+    const char *chev = folded ? "chevron-right" : "chevron-down";
+    float isz = dai_icons_size(ui->icons);
+    if (isz <= 0.0f || isz > h - 2.0f) isz = h - 4.0f;
+    if (dai_ui_has_icon(ui, chev)) {
+        dai_ui_icon_at(ui, chev, tx, y + (h - isz) * 0.5f, isz, ui->style.text_dim);
+        tx += isz + 3.0f;
+    } else {
+        dai_ui_text(ui, tx, y + 2.0f, folded ? "\xe2\x96\xb8" : "\xe2\x96\xbe", ui->style.text_dim);
+        tx += 14.0f;
+    }
+    if (icon && dai_ui_has_icon(ui, icon)) {
+        dai_ui_icon_at(ui, icon, tx, y + (h - isz) * 0.5f, isz, ui->style.accent);
+        tx += isz + 5.0f;
+    }
+    dai_ui_text(ui, tx, y + 2.0f, title, ui->style.text);
     if (enabled) {
         float bx = x + w - box - 4.0f, by = y + 3.0f;
         dai_ui_rect(ui, bx, by, box, box, ui->style.track);
@@ -1026,8 +1158,18 @@ int dai_ui_tree_item(dai_ui *ui, const char *label, int depth, int has_children,
 
     if (selected)   dai_ui_rect(ui, x, y, w, h, ui->style.accent);
     else if (over)  dai_ui_rect(ui, x, y, w, h, ui->style.button_hover);
-    if (has_children && open)
-        dai_ui_text(ui, x + indent + 2.0f, y + 1.0f, *open ? "▾" : "▸", ui->style.text_dim);
+    if (has_children && open) {
+        const char *chev = *open ? "chevron-down" : "chevron-right";
+        if (dai_ui_has_icon(ui, chev)) {
+            float isz = dai_icons_size(ui->icons);
+            if (isz <= 0.0f || isz > h) isz = h - 2.0f;
+            dai_ui_icon_at(ui, chev, x + indent + 1.0f, y + (h - isz) * 0.5f, isz,
+                           ui->style.text_dim);
+        } else {
+            dai_ui_text(ui, x + indent + 2.0f, y + 1.0f, *open ? "▾" : "▸",
+                        ui->style.text_dim);
+        }
+    }
     dai_ui_text(ui, x + indent + arrow_w + 2.0f, y + 1.0f, label,
                 selected ? ui->style.text : ui->style.text);
     return clicked;

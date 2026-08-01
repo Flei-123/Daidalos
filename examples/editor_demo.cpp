@@ -83,6 +83,17 @@ int main(int argc, char **argv) {
     }
     dai_ui *ui = dai_ui_create(font, font_tex);
 
+    // Vector icons for the toolbar and the inspector's component headers.
+    // Rasterised HERE, at 16 px, because that is the size this interface draws
+    // them at - the SVG sources are resolution independent, the atlas is not.
+    dai_icons *icons = dai_icons_create(16.0f);
+    if (icons) {
+        uint32_t iw = 0, ih = 0;
+        const uint8_t *irgba = dai_icons_atlas_rgba(icons, &iw, &ih);
+        if (irgba && iw && ih)
+            dai_ui_set_icons(ui, icons, dai_render_texture_create(r, irgba, iw, ih, 0));
+    }
+
     dai_render_sun(r, dai_vec3{ 0.42f, 0.80f, 0.42f }, dai_vec3{ 1.0f, 0.95f, 0.86f }, 1.3f);
     dai_render_ambient(r, dai_vec3{ 0.24f, 0.40f, 0.72f }, dai_vec3{ 0.26f, 0.24f, 0.20f }, 0.38f);
     dai_render_exposure(r, 0.45f);
@@ -214,6 +225,7 @@ int main(int argc, char **argv) {
     dai_editor_ui_destroy(panels);
     dai_editor_destroy(ed);
     dai_ui_destroy(ui);
+    if (icons) dai_icons_free(icons);
     if (font) dai_font_free(font);
     dai_window_close(win);
     dai_render_destroy(r);

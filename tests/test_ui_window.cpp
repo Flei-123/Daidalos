@@ -9,6 +9,7 @@
 
 #include "dai_ui.h"
 #include "dai_font.h"
+#include "dai_icons.h"
 
 #include <cmath>
 #include <cstdio>
@@ -301,6 +302,84 @@ int main() {
         std::printf("  nach dem Klick auf die Box: offen=%d, aktiv=%d\n", open, enabled);
         CHECK(enabled == 0, "the header checkbox did not switch the component off");
         CHECK(open == 0, "the checkbox also toggled the fold state");
+    }
+
+    // ---- 9. icons -------------------------------------------------------
+    std::printf("\n[9] SVG-Icons in der Oberflaeche\n");
+    {
+        // A texture id the font atlas cannot be confused with: the whole point
+        // is that icon quads end up in their OWN batch, pointing at their own
+        // atlas. Getting this wrong is how the UI once drew every glyph out of
+        // the wrong texture and produced a wall of white boxes.
+        const dai_texture ICON_TEX = 77;
+        dai_icons *icons = dai_icons_create(16.0f);
+        CHECK(icons != nullptr, "no icon set");
+        dai_ui_set_icons(ui, icons, ICON_TEX);
+        CHECK(dai_ui_has_icon(ui, "play") == 1, "the ui cannot see the built-in icons");
+        CHECK(dai_ui_has_icon(ui, "not-an-icon") == 0, "an unknown icon reported present");
+
+        int clicked = 0;
+        auto frame = [&](float mx, float my, int down) {
+            dai_ui_input in = mouse(mx, my, down);
+            dai_ui_begin(ui, 800, 600, &in);
+            dai_ui_panel_begin(ui, 0, 0, 800, 34, nullptr);
+            dai_ui_row(ui, 24.0f);
+            clicked = dai_ui_icon_button(ui, "play", "Play", 0);
+            dai_ui_icon_button(ui, "stop", "Stop", 1);
+            dai_ui_panel_end(ui);
+            dai_ui_end(ui);
+        };
+
+        frame(-1, -1, 0);
+        const dai_ui_draw *draws = nullptr;
+        uint32_t nd = dai_ui_draws(ui, &draws);
+        uint32_t icon_verts = 0, icon_batches = 0;
+        for (uint32_t i = 0; i < nd; ++i)
+            if (draws[i].texture == ICON_TEX) { ++icon_batches; icon_verts += draws[i].count; }
+        std::printf("  %u Batches, davon %u mit Icon-Textur, %u Vertices\n", nd, icon_batches, icon_verts);
+        CHECK(icon_batches >= 1, "no draw batch used the icon texture");
+        CHECK(icon_verts == 12, "two icons should be two quads (12 vertices), got %u", icon_verts);
+
+        // The uvs have to point inside the icon's own cell, not at the whole
+        // atlas: a quad with 0..1 uvs draws all thirty icons squashed into one
+        // button, which looks like noise and is easy to miss on a dark panel.
+        float u0 = 0, v0 = 0, u1 = 0, v1 = 0;
+        dai_icons_uv(icons, "play", &u0, &v0, &u1, &v1);
+        CHECK(u1 > u0 && v1 > v0, "the play icon has an empty uv rectangle");
+        CHECK(u1 - u0 < 0.5f && v1 - v0 < 0.5f, "one icon claims half the atlas");
+        bool found = false;
+        for (uint32_t i = 0; i < nd && !found; ++i) {
+            if (draws[i].texture != ICON_TEX) continue;
+            for (uint32_t v = 0; v < draws[i].count; ++v) {
+                const dai_ui_vertex &vx = draws[i].vertices[v];
+                if (std::fabs(vx.u - u0) < 1e-4f && std::fabs(vx.v - v0) < 1e-4f) { found = true; break; }
+            }
+        }
+        CHECK(found, "no icon vertex carries the play icon's uv");
+
+        // Clicking one.
+        frame(12.0f, 12.0f, 1);
+        frame(12.0f, 12.0f, 0);
+        CHECK(clicked == 1, "clicking an icon button did nothing");
+
+        // Hovering one names it. An icon only toolbar without tooltips is a
+        // memory test, so the tooltip is part of the widget, not decoration.
+        frame(12.0f, 12.0f, 0);
+        nd = dai_ui_draws(ui, &draws);
+        int top_layer_verts = 0;
+        for (uint32_t i = 0; i < nd; ++i)
+            if (draws[i].texture != ICON_TEX) top_layer_verts += (int)draws[i].count;
+        frame(400.0f, 400.0f, 0);          // pointer away from the toolbar
+        const dai_ui_draw *draws2 = nullptr;
+        uint32_t nd2 = dai_ui_draws(ui, &draws2);
+        int away_verts = 0;
+        for (uint32_t i = 0; i < nd2; ++i)
+            if (draws2[i].texture != ICON_TEX) away_verts += (int)draws2[i].count;
+        std::printf("  Vertices mit Tooltip %d, ohne %d\n", top_layer_verts, away_verts);
+        CHECK(top_layer_verts > away_verts, "hovering an icon button drew no tooltip");
+
+        dai_ui_set_icons(ui, nullptr, 0);
+        dai_icons_free(icons);
     }
 
     dai_ui_destroy(ui);

@@ -224,7 +224,7 @@ static void inspector_body(dai_editor_ui *p) {
     // is different information. These are NOT invented components - each block
     // is exactly the part of dai_node_desc the engine treats as one thing:
     // the transform, the rigid body, the renderable.
-    dai_ui_header(p->ui, "Transform", &p->fold_transform, nullptr);
+    dai_ui_header_icon(p->ui, DAI_ICON_MOVE, "Transform", &p->fold_transform, nullptr);
     if (p->fold_transform) {
         dai_ui_drag_vec3(p->ui, "Position", &r.position.x, 0.02f);
 
@@ -256,7 +256,7 @@ static void inspector_body(dai_editor_ui *p) {
     // The checkbox in the header IS r.no_body, inverted: a node without a rigid
     // body is a group, which is what "remove the component" means here.
     int has_body = !r.no_body;
-    if (dai_ui_header(p->ui, "Rigidbody", &p->fold_body, &has_body) == 2)
+    if (dai_ui_header_icon(p->ui, DAI_ICON_BOX, "Rigidbody", &p->fold_body, &has_body) == 2)
         r.no_body = !has_body;
     if (p->fold_body) {
         if (!has_body) {
@@ -272,7 +272,8 @@ static void inspector_body(dai_editor_ui *p) {
 
     // ---- Renderer ----------------------------------------------------------
     int visible = !r.hidden;
-    if (dai_ui_header(p->ui, "Renderer", &p->fold_render, &visible) == 2)
+    if (dai_ui_header_icon(p->ui, visible ? DAI_ICON_EYE : DAI_ICON_EYE_OFF, "Renderer",
+                           &p->fold_render, &visible) == 2)
         r.hidden = !visible;
     if (p->fold_render) {
         // Show what the object IS, not what the document happens to store. A
@@ -332,32 +333,40 @@ void dai_editor_ui_toolbar(dai_editor_ui *p, float x, float y, float w) {
     dai_ui_panel_begin(p->ui, x, y, w, 34.0f, nullptr);
     dai_ui_row(p->ui, 24.0f);
 
+    // Icons, not words. A toolbar of eleven text buttons is 600 px of chrome
+    // and still unreadable at a glance; the icons are SVG, rasterised once at
+    // the size this interface actually uses, and every one of them carries the
+    // word it replaced as a tooltip - an icon only toolbar with no tooltips is
+    // a memory test.
     int mode = dai_editor_gizmo_mode_get(p->ed);
-    if (dai_ui_button(p->ui, mode == DAI_GIZMO_TRANSLATE ? "[Move]" : "Move"))
+    if (dai_ui_icon_button(p->ui, DAI_ICON_MOVE, "Move", mode == DAI_GIZMO_TRANSLATE))
         dai_editor_gizmo_mode(p->ed, DAI_GIZMO_TRANSLATE);
-    if (dai_ui_button(p->ui, mode == DAI_GIZMO_ROTATE ? "[Rotate]" : "Rotate"))
+    if (dai_ui_icon_button(p->ui, DAI_ICON_ROTATE, "Rotate", mode == DAI_GIZMO_ROTATE))
         dai_editor_gizmo_mode(p->ed, DAI_GIZMO_ROTATE);
-    if (dai_ui_button(p->ui, mode == DAI_GIZMO_SCALE ? "[Scale]" : "Scale"))
+    if (dai_ui_icon_button(p->ui, DAI_ICON_SCALE, "Scale", mode == DAI_GIZMO_SCALE))
         dai_editor_gizmo_mode(p->ed, DAI_GIZMO_SCALE);
 
-    if (dai_ui_button(p->ui, "Undo")) dai_editor_undo(p->ed);
-    if (dai_ui_button(p->ui, "Redo")) dai_editor_redo(p->ed);
-    if (dai_ui_button(p->ui, "Duplicate")) dai_editor_duplicate_selection(p->ed);
-    if (dai_ui_button(p->ui, "Delete")) dai_editor_delete_selection(p->ed);
+    dai_ui_toolbar_gap(p->ui, 10.0f);
+    if (dai_ui_icon_button(p->ui, DAI_ICON_UNDO, "Undo", 0)) dai_editor_undo(p->ed);
+    if (dai_ui_icon_button(p->ui, DAI_ICON_REDO, "Redo", 0)) dai_editor_redo(p->ed);
+    if (dai_ui_icon_button(p->ui, DAI_ICON_COPY, "Duplicate", 0)) dai_editor_duplicate_selection(p->ed);
+    if (dai_ui_icon_button(p->ui, DAI_ICON_TRASH, "Delete", 0)) dai_editor_delete_selection(p->ed);
 
+    dai_ui_toolbar_gap(p->ui, 10.0f);
     if (state == DAI_EDITOR_EDIT) {
-        if (dai_ui_button(p->ui, "Play")) dai_editor_play(p->ed);
+        if (dai_ui_icon_button(p->ui, DAI_ICON_PLAY, "Play", 0)) dai_editor_play(p->ed);
     } else if (state == DAI_EDITOR_PLAY) {
-        if (dai_ui_button(p->ui, "Pause")) dai_editor_pause(p->ed);
-        if (dai_ui_button(p->ui, "Stop")) dai_editor_stop(p->ed);
+        if (dai_ui_icon_button(p->ui, DAI_ICON_PAUSE, "Pause", 1)) dai_editor_pause(p->ed);
+        if (dai_ui_icon_button(p->ui, DAI_ICON_STOP, "Stop", 0)) dai_editor_stop(p->ed);
     } else {
-        if (dai_ui_button(p->ui, "Resume")) dai_editor_play(p->ed);
-        if (dai_ui_button(p->ui, "Stop")) dai_editor_stop(p->ed);
-        if (dai_ui_button(p->ui, "Keep")) dai_editor_apply_sim(p->ed);
+        if (dai_ui_icon_button(p->ui, DAI_ICON_PLAY, "Resume", 0)) dai_editor_play(p->ed);
+        if (dai_ui_icon_button(p->ui, DAI_ICON_STOP, "Stop", 0)) dai_editor_stop(p->ed);
+        if (dai_ui_icon_button(p->ui, DAI_ICON_CHECK, "Keep", 0)) dai_editor_apply_sim(p->ed);
     }
 
     // The way back from a layout the user dragged into a corner.
-    if (dai_ui_button(p->ui, "Layout") && p->layout_ready)
+    dai_ui_toolbar_gap(p->ui, 10.0f);
+    if (dai_ui_icon_button(p->ui, DAI_ICON_LAYOUT, "Layout", 0) && p->layout_ready)
         dai_editor_ui_layout_reset(p, p->layout_w, p->layout_h);
     (void)d;
     dai_ui_panel_end(p->ui);

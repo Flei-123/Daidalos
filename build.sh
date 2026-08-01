@@ -155,12 +155,17 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf_write.cpp   -o build/dai_gltf_write.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_particles.cpp    -o build/dai_particles.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_font.cpp          -o build/dai_font.o
+    # Vector icons: the SVG rasteriser and the atlas it packs. Same reasoning
+    # as the TrueType loader next to it - a few hundred lines instead of a
+    # dependency, and icons that are sharp at whatever size the display wants.
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_svg.cpp           -o build/dai_svg.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_icons.cpp         -o build/dai_icons.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_ui.cpp            -o build/dai_ui.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_update.cpp       -o build/dai_update.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor_ui.cpp     -o build/dai_editor_ui.o
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
            $WINDOW_OBJ build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
-           build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_ui.o build/dai_update.o \
+           build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_svg.o build/dai_icons.o build/dai_ui.o build/dai_update.o \
            build/dai_editor_ui.o
     VK_OK=1
 else
@@ -253,6 +258,10 @@ if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_script.cpp $SCRIPT_LIB $VKLIBS -o build/test_script
 fi
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/test_font
+# The SVG rasteriser: no renderer, no font, no window - it turns text into
+# coverage, so the test reads the coverage back.
+g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_svg.cpp src/dai_svg.cpp src/dai_icons.cpp \
+    -o build/test_svg && ./build/test_svg
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
     # Cheap and load bearing: dai_key must stay bit identical to the X11
@@ -274,7 +283,7 @@ if [ "$VK_OK" = "1" ]; then
     # Windows and the solid texel every rectangle in the interface is drawn
     # with. Needs no renderer: it reads the atlas and the vertices.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_window.cpp src/dai_ui.cpp src/dai_font.cpp \
-        -o build/test_ui_window
+        src/dai_svg.cpp src/dai_icons.cpp -o build/test_ui_window
     g++ $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
     if [ -n "$ASSETS_LIB" ]; then

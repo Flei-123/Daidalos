@@ -23,6 +23,7 @@
 
 #include "dai_render.h"
 #include "dai_font.h"
+#include "dai_icons.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -163,6 +164,32 @@ DAI_API void dai_ui_separator(dai_ui *ui);
  * checkbox on the right (NULL for none); it is the component's on/off switch.
  * Returns 1 when the header was clicked, 2 when the checkbox was. */
 DAI_API int dai_ui_header(dai_ui *ui, const char *title, int *open, int *enabled);
+/* The same with the component's icon in front of its name. `icon` is a name
+ * from the icon set; an unknown one simply draws nothing, so a host that never
+ * called dai_ui_set_icons still gets a working header. */
+DAI_API int dai_ui_header_icon(dai_ui *ui, const char *icon, const char *title,
+                               int *open, int *enabled);
+
+/* ---- icons --------------------------------------------------------------
+ *
+ * Vector icons, rasterised once at the size the interface uses and packed into
+ * one atlas (see dai_icons.h). They are coverage only and are TINTED here, so
+ * the same icon serves the dim, hover and accent states.
+ */
+DAI_API void dai_ui_set_icons(dai_ui *ui, dai_icons *icons, dai_texture tex);
+DAI_API int  dai_ui_has_icon(const dai_ui *ui, const char *name);
+/* Absolute placement - for toolbars and gizmo overlays that do their own
+ * layout. `size` <= 0 uses the atlas's native size, which is the crisp one. */
+DAI_API void dai_ui_icon_at(dai_ui *ui, const char *name, float x, float y,
+                            float size, uint32_t color);
+/* Laid out like any other widget. */
+DAI_API void dai_ui_icon(dai_ui *ui, const char *name, float size, uint32_t color);
+/* A square button with an icon instead of a label. `tooltip` is what the icon
+ * means, shown on hover - an icon only toolbar without one is a memory test.
+ * `active` draws it in the accent colour, for a mode that is currently on. */
+DAI_API int dai_ui_icon_button(dai_ui *ui, const char *name, const char *tooltip, int active);
+/* A gap between groups of toolbar buttons. */
+DAI_API void dai_ui_toolbar_gap(dai_ui *ui, float w);
 
 /* Sprites: any texture, any sub rectangle of it. This is how an atlas is used
  * for icons - one texture, many uv rects, one draw batch. */
