@@ -616,9 +616,12 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     mlc.bindingCount = 4; mlc.pBindings = mb;
     if (vkCreateDescriptorSetLayout(r->dev, &mlc, nullptr, &r->mat_dsl) != VK_SUCCESS)
         { dai_render_destroy(r); return fail("material descriptor layout failed"); }
-    VkDescriptorPoolSize mps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * DAI_MAX_MATERIALS };
+    // Materials and the UI's per texture sets share this pool, so it has room
+    // for both. A font atlas needs a set and belongs to no material.
+    const uint32_t max_sets = DAI_MAX_MATERIALS + DAI_MAX_UI_TEXTURES;
+    VkDescriptorPoolSize mps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * max_sets };
     VkDescriptorPoolCreateInfo mpc{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-    mpc.maxSets = DAI_MAX_MATERIALS; mpc.poolSizeCount = 1; mpc.pPoolSizes = &mps;
+    mpc.maxSets = max_sets; mpc.poolSizeCount = 1; mpc.pPoolSizes = &mps;
     if (vkCreateDescriptorPool(r->dev, &mpc, nullptr, &r->mat_pool) != VK_SUCCESS)
         { dai_render_destroy(r); return fail("material descriptor pool failed"); }
 

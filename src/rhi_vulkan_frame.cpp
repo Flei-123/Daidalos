@@ -399,13 +399,15 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         uint32_t first = 0;
         for (size_t i = 0; i < r->ui_batch_counts.size(); ++i) {
             uint32_t tex = r->ui_batch_textures[i];
-            // the UI names a TEXTURE; the pipeline needs a descriptor set, so
-            // materials double as texture bindings here
-            uint32_t mat = 0;
-            for (uint32_t m = 0; m < r->materials.size(); ++m)
-                if (r->materials[m].base_tex == tex) { mat = m; break; }
+            // The UI names a TEXTURE. This used to hunt for a material that
+            // happened to use it and fall back to material 0 when none did -
+            // which is what always happened for a font atlas, because an atlas
+            // belongs to no material. Every glyph was then drawn with the
+            // default white texture, so text rendered as solid white boxes.
+            VkDescriptorSet set = vk_texture_set(r, tex);
+            if (set == VK_NULL_HANDLE) { first += r->ui_batch_counts[i]; continue; }
             vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 1, 1,
-                                    &r->materials[mat].set, 0, nullptr);
+                                    &set, 0, nullptr);
             vkCmdDraw(r->cmd, r->ui_batch_counts[i], 1, first, 0);
             first += r->ui_batch_counts[i];
         }

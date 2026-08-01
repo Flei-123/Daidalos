@@ -44,12 +44,17 @@ struct FrameUBO {
 };
 
 #define DAI_MAX_MATERIALS 512
+#define DAI_MAX_UI_TEXTURES 256
 
 struct TextureEntry {
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory mem = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     uint32_t width = 0, height = 0, mips = 1;
+    // The UI draws by TEXTURE, not by material - a font atlas is a texture that
+    // no material ever refers to. Without a set of its own it cannot be bound,
+    // and the pass falls back to something else entirely.
+    VkDescriptorSet ui_set = VK_NULL_HANDLE;
 };
 
 // Push constant block, must match the shaders. 80 bytes: still well inside the
@@ -209,5 +214,9 @@ void vk_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect,
                 VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
                 VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess,
                 uint32_t layers = 1);
+
+/* A descriptor set bound to one texture, for draws that name a texture instead
+ * of a material - the UI. Built on first use and cached on the entry. */
+VkDescriptorSet vk_texture_set(dai_renderer *r, uint32_t tex);
 
 #endif

@@ -791,6 +791,44 @@ drag costs the handful that are actually moving.
 `tools/editor_shot` takes a resolution now, so the ultrawide case can be
 rendered here rather than only on the desk where it broke.
 
+## The text was boxes, on every platform, for a long time
+
+Worth writing down because of how it survived.
+
+The UI batches draws by **texture**. The renderer, asked to bind one, scanned
+the material table for a material that happened to use that texture and fell
+back to material 0 when none did. A font atlas is uploaded directly and belongs
+to no material - so it *always* hit the fallback, and every glyph was sampled
+from the default white texture. Text rendered as rows of solid white boxes.
+
+Nothing detected it. The UI tests count vertices, and the vertex count was
+correct. `editor_shot` wrote PNGs that were never opened. The renderer reported
+no error, because binding the wrong texture is not an error. It was found by a
+user, in a photograph of his monitor.
+
+Two things came out of that:
+
+Textures now get **their own descriptor set** (`vk_texture_set`), built on first
+use and cached on the entry, so a draw that names a texture binds that texture.
+No table scan, no fallback.
+
+And `test_ui_text` looks at the pixels. It draws a row of H's and measures what
+fraction of the text's bounding box is lit, plus how often the busiest scanline
+crosses between light and dark. Glyphs are mostly holes; boxes are not:
+
+```
+  broken:  text box 204x14 - 94.1% lit,  25 transitions   FAIL
+  fixed:   text box 512x13 - 53.9% lit,  64 transitions   ok
+```
+
+Reverting the fix makes it fail with *"text covers 94.1% of its own box - these
+are boxes, not glyphs"*. A test that passes whether or not the feature works is
+not a test, and every UI test in this repo had that shape until now.
+
+The lesson generalises past this bug: **a renderer test that never looks at the
+picture is measuring the wrong thing.** Assert on the pixels, or find out from a
+photograph.
+
 ## What is still missing
 
 Kept honest: things listed here are genuinely absent, and things that got built

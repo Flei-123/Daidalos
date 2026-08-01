@@ -60,6 +60,50 @@ void tex_barrier(VkCommandBuffer cb, VkImage img, uint32_t mip, uint32_t count,
 
 // Creates the descriptor set for a material. Called for the default material
 // during startup and for every user material afterwards.
+// A descriptor set that points at ONE texture, for draws that name a texture
+// rather than a material - which is what the UI does.
+//
+// This used to be faked by scanning the material table for something that
+// happened to use the same texture, falling back to material 0 when nothing
+// did. A font atlas is created directly and belongs to no material, so it
+// always hit that fallback and every glyph was drawn with the default white
+// texture: text came out as rows of solid white boxes, on every platform. It
+// survived because the UI tests count vertices and nobody looked at the
+// screenshots.
+//
+// The set is built once per texture and kept on the entry.
+VkDescriptorSet vk_texture_set(dai_renderer *r, uint32_t tex) {
+    if (!r || tex >= r->textures.size()) tex = 0;
+    TextureEntry &t = r->textures[tex];
+    if (t.ui_set != VK_NULL_HANDLE) return t.ui_set;
+    if (t.view == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+
+    VkDescriptorSetAllocateInfo ai{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+    ai.descriptorPool = r->mat_pool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &r->mat_dsl;
+    if (vkAllocateDescriptorSets(r->dev, &ai, &t.ui_set) != VK_SUCCESS) {
+        t.ui_set = VK_NULL_HANDLE;
+        return VK_NULL_HANDLE;
+    }
+
+    // The layout has four bindings; the UI only samples the first, but all of
+    // them must be written or the set is incomplete and validation objects.
+    VkDescriptorImageInfo info[4]{};
+    VkWriteDescriptorSet w[4]{};
+    for (int i = 0; i < 4; ++i) {
+        info[i].sampler = r->tex_sampler;
+        info[i].imageView = t.view;
+        info[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        w[i] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        w[i].dstSet = t.ui_set; w[i].dstBinding = (uint32_t)i; w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[i].pImageInfo = &info[i];
+    }
+    vkUpdateDescriptorSets(r->dev, 4, w, 0, nullptr);
+    return t.ui_set;
+}
+
 static bool build_material_set(dai_renderer *r, MaterialEntry &m) {
     // Rewrite an existing set rather than allocating a second one. Swapping a
     // texture used to leak a set per call, and the pool is a fixed size - a

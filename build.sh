@@ -226,6 +226,9 @@ if [ "$VK_OK" = "1" ]; then
     # Cheap and load bearing: dai_key must stay bit identical to the X11
     # keysyms it is defined as, or the X11 backend silently stops matching.
     g++ $FLAGS $ARCH -Iinclude tests/test_keys.cpp -o build/test_keys && ./build/test_keys
+    # Looks at the pixels: text that covers ~100%% of its own box is boxes, not
+    # glyphs, which is how a broken font binding hid for so long.
+    g++ $FLAGS $ARCH -Iinclude tests/test_ui_text.cpp $VKLIBS -o build/test_ui_text
     g++ $FLAGS $ARCH -Iinclude tests/test_gltf.cpp $VKLIBS -o build/test_gltf
     # No renderer: fracture is arithmetic on triangles, so the test runs
     # anywhere, including a machine with no GPU and no display.
