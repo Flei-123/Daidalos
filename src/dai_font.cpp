@@ -110,7 +110,12 @@ void rasterise(const std::vector<Contour> &contours, int w, int h, float ox, flo
                 }
             }
         }
-        uint8_t *row = &out[(size_t)y * w];
+        // Scanline y is in FONT space, where y grows upwards; the atlas is an
+        // image, where it grows downwards. Writing row y straight out stores
+        // every glyph upside down - which nobody noticed, because it was hidden
+        // first behind text drawn as white boxes and then behind the letters H
+        // and o, which are symmetric. A 'T' shows it instantly.
+        uint8_t *row = &out[(size_t)(h - 1 - y) * w];
         for (int x = 0; x < w; ++x) row[x] = (uint8_t)std::min<uint16_t>(acc[(size_t)x], 255);
     }
 }

@@ -250,7 +250,13 @@ void dai_ui_text(dai_ui *ui, float x, float y, const char *utf8, uint32_t color)
         const dai_glyph *g = dai_font_glyph(ui->font, cp);
         if (!g) continue;
         if (g->x1 > g->x0)
-            ui->quad(ui->font_tex, pen_x + g->x0, pen_y - g->y1, pen_x + g->x1, pen_y - g->y0,
+            // ADD the offsets, do not subtract them. dai_font already returns
+            // them in screen convention - y0 above the baseline is negative -
+            // so negating again mirrors the glyph about the baseline: a 'T'
+            // came out with its bar along the bottom. It hid behind the white
+            // box bug for as long as that lasted, and behind the letter H,
+            // which is symmetric, for one test after that.
+            ui->quad(ui->font_tex, pen_x + g->x0, pen_y + g->y0, pen_x + g->x1, pen_y + g->y1,
                      g->u0, g->v0, g->u1, g->v1, color);
         pen_x += g->advance;
     }

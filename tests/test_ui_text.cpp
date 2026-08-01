@@ -59,9 +59,15 @@ int main() {
 
     dai_ui_input in{};
     dai_ui_begin(ui, (float)W, (float)H, &in);
-    dai_ui_panel_begin(ui, 0, 0, (float)W, (float)H, "");
-    dai_ui_label(ui, "HHHHHHHHHHHHHHHH");   // a letter with two strokes and a gap
-    dai_ui_panel_end(ui);
+    // Text and nothing else - no panel. A panel draws a background, a border and
+    // a separator, and those are bright pixels that have nothing to do with the
+    // glyphs; measuring them as if they were text is how the first version of
+    // this check fooled itself.
+    //
+    // T, not H: H is symmetric top to bottom, so it cannot tell a correctly
+    // oriented glyph from an upside down one. That is exactly how a flipped
+    // font atlas survived.
+    dai_ui_text(ui, 20.0f, 40.0f, "TTTTTTTTTTTTTTTT", 0xFFFFFFFFu);
     dai_ui_end(ui);
 
     const dai_ui_draw *draws = nullptr;
@@ -146,6 +152,29 @@ int main() {
     CHECK(best >= 8,
           "the busiest row across 16 H's has only %d transitions - the text is drawn "
           "as solid runs, not glyphs", best);
+
+    // ---- orientation --------------------------------------------------------
+    //
+    // A 'T' is heavy at the top and thin below. Upside down it is still text,
+    // still covers the right fraction of its box and still has the right number
+    // of transitions - every other check here passes. Only the balance of ink
+    // between the halves catches it, and the atlas WAS being written upside
+    // down: glyphs were rasterised in font space, where y grows upwards, and
+    // stored straight into an image, where it grows down.
+    const uint32_t midline = (miny + maxy) / 2;
+    size_t top_ink = 0, bottom_ink = 0;
+    for (uint32_t y = miny; y <= maxy; ++y) {
+        for (uint32_t x = minx; x <= maxx; ++x) {
+            const uint8_t *p = &px[((size_t)y * W + x) * 4];
+            if (p[0] > 170 && p[1] > 170 && p[2] > 170) {
+                if (y <= midline) ++top_ink; else ++bottom_ink;
+            }
+        }
+    }
+    std::printf("  ink above the middle: %zu, below: %zu\n", top_ink, bottom_ink);
+    CHECK(top_ink > bottom_ink * 2,
+          "a row of T's has %zu lit pixels on top and %zu below - the glyphs are "
+          "upside down (a T is a bar over a stem)", top_ink, bottom_ink);
 
     dai_ui_destroy(ui);
     dai_font_free(font);
