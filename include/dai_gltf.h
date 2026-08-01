@@ -95,6 +95,52 @@ typedef int (*dai_gltf_read_fn)(const char *uri, const void **out_bytes,
 DAI_API dai_model *dai_gltf_load_memory(dai_renderer *r, const void *bytes, size_t size,
                                         dai_gltf_read_fn sidecar, void *user,
                                         char *err, size_t err_len);
+
+/* ---- geometry without a renderer ---------------------------------------- */
+
+/* One primitive's triangles, on the CPU. What a TOOL needs: a fracture baker
+ * has to cut the mesh, and cutting something that only exists as a handle
+ * inside the renderer is not possible. */
+typedef struct dai_mesh_data {
+    dai_vertex *vertices;
+    uint32_t    vertex_count;
+    uint32_t   *indices;
+    uint32_t    index_count;
+    char        name[64];        /* the mesh's name, not the node's */
+} dai_mesh_data;
+
+/* Reads every triangle primitive out of a .glb or .gltf and hands back plain
+ * arrays. No renderer, no textures, no materials, no node hierarchy - the
+ * transform each primitive ends up under is the caller's problem, which is
+ * exactly right for a tool that works in the mesh's own space.
+ *
+ * Returns how many primitives the file has; fills up to `max`. Free what was
+ * filled with dai_gltf_free_geometry. External .bin buffers are NOT resolved:
+ * pass a self contained .glb. */
+DAI_API uint32_t dai_gltf_read_geometry(const void *bytes, size_t size,
+                                        dai_mesh_data *out, uint32_t max,
+                                        char *err, size_t err_len);
+DAI_API void     dai_gltf_free_geometry(dai_mesh_data *m, uint32_t count);
+
+/* ---- writing ------------------------------------------------------------ */
+
+typedef struct dai_mesh_write {
+    const dai_vertex *vertices;
+    uint32_t          vertex_count;
+    const uint32_t   *indices;
+    uint32_t          index_count;
+    const char       *name;       /* becomes both the mesh and the node name */
+} dai_mesh_write;
+
+/* Writes a self contained .glb: positions, normals and indices, one node per
+ * mesh at the identity transform. No materials, no textures, no hierarchy - a
+ * tool that produces geometry should not be inventing a scene.
+ *
+ * This exists because a baker has to hand its output back in the format the
+ * engine already reads. Written through a temp file and renamed, so an
+ * interrupted bake cannot destroy the previous result. */
+DAI_API dai_result dai_gltf_write(const char *path, const dai_mesh_write *meshes,
+                                  uint32_t count, char *err, size_t err_len);
 DAI_API void       dai_model_free(dai_model *m);
 /* Frees the model AND everything the import created inside the renderer: its
  * meshes, its textures, its materials. Nothing else owns those handles, so a

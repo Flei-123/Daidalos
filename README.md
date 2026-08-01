@@ -520,6 +520,64 @@ and shading when a test fails and you need to know which half is lying.
 
 ---
 
+## Breaking things
+
+`tools/daifracture` cuts a mesh into pieces once, at build time:
+
+```sh
+./build/daifracture assets/models/stone.glb assets/models/stone_pieces.glb 12 42
+#                   in                       out                          N  seed
+```
+
+Voronoi cells clipped out of the source geometry - scatter N points in the
+mesh's box, keep for each point everything closer to it than to any other,
+which is an intersection of half spaces. Each cut face is capped so a piece is
+a closed solid the physics can accept, not a hollow shell.
+
+Baked rather than solved live, for two reasons. Cutting geometry is expensive
+and the cost lands exactly when the frame is already busy - something just got
+hit. And a runtime cut would be a second source of geometry that has to match
+across a rollback; a baked file is the same on every machine because it was
+computed once. The seed is an explicit parameter, so re-running the command
+reproduces the same rubble.
+
+The test does not look at a screenshot. It sums the signed volume of every
+piece and requires the original volume back: an unclosed cut face leaks volume,
+overlapping cells give too much, a gap gives too little. A 2x2x2 box broken into
+2, 5, 8, 20 and 50 pieces returns 8.000000 every time, as does an off-centre
+8x0.5x2 slab. The same seed twice is bit identical; a different seed is not.
+
+At runtime nothing needs to be cut. The pieces are an ordinary model, so the
+glue is short - swap one body for N when the hit is hard enough:
+
+```c
+for (uint32_t i = 0; i < n_contacts; ++i) {
+    if (contacts[i].impulse < break_threshold) continue;
+    dai_node broken = contacts[i].node_a;              /* the stone */
+    dai_vec3 at = contacts[i].position;
+    dai_doc_remove(doc, broken);
+    dai_node pieces = dai_assets_instantiate(assets, doc, "models/stone_pieces.glb", parent);
+    /* one body per piece; push each away from where it was hit */
+    for (dai_node p = first_child(doc, pieces); p; p = next_sibling(doc, p))
+        dai_body_add_impulse(world, body_of(p), scaled_away_from(at, centre_of(p)), at);
+}
+```
+
+Limits worth knowing before using it on a character model: the cap assumes the
+cut cross section is convex, which holds for a convex mesh and for any Voronoi
+cell, and is only approximately true for a concave one - so a hollow or L shaped
+model can get wrong inner faces. UVs are not carried onto the new faces; a
+broken stone wants rock on the outside and a flat colour inside, and inventing
+coordinates would look worse than leaving them at zero. Materials are not
+written - the pieces come out as plain geometry.
+
+Writing glTF is new: `dai_gltf_write` in `src/dai_gltf_write.cpp` produces a
+self contained `.glb` with positions, normals and indices, one node per mesh.
+The parser it reads back with is the same one the engine uses, shared through
+`src/dai_gltf_common.hpp`, which is a header precisely so the tool half
+(`dai_gltf_geom.cpp`, geometry as plain arrays) can be linked without Vulkan.
+`daifracture` and `test_fracture` build and run on a machine with no GPU.
+
 ## What is still missing
 
 Kept honest: things listed here are genuinely absent, and things that got built
@@ -554,6 +612,8 @@ Engine:
   rollback ring in memory whether it needs it or not.
 - No network transport. Rollback and tick stamped input exist; the wire does not.
 - Particle atlases are one texture for the whole pass, not one per emitter.
+- Fracture caps assume a convex cut cross section, so a concave model can get
+  wrong inner faces; and `dai_gltf_write` emits geometry only, no materials.
 - The Win32 backend is cross compiled with mingw-w64 but has never been run on
   Windows from here: no Windows machine in this setup has a compiler and a
   Vulkan loader. X11 and Wayland are both tested headless.

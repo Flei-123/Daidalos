@@ -121,13 +121,16 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_inflate.cpp      -o build/dai_inflate.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_json.cpp         -o build/dai_json.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf.cpp         -o build/dai_gltf.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf_geom.cpp    -o build/dai_gltf_geom.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_fracture.cpp     -o build/dai_fracture.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf_write.cpp   -o build/dai_gltf_write.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_particles.cpp    -o build/dai_particles.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_font.cpp          -o build/dai_font.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_ui.cpp            -o build/dai_ui.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor_ui.cpp     -o build/dai_editor_ui.o
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
            $WINDOW_OBJ build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
-           build/dai_gltf.o build/dai_particles.o build/dai_font.o build/dai_ui.o \
+           build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_ui.o \
            build/dai_editor_ui.o
     VK_OK=1
 else
@@ -215,6 +218,10 @@ g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/t
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
     g++ $FLAGS $ARCH -Iinclude tests/test_gltf.cpp $VKLIBS -o build/test_gltf
+    # No renderer: fracture is arithmetic on triangles, so the test runs
+    # anywhere, including a machine with no GPU and no display.
+    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_fracture.cpp src/dai_fracture.cpp \
+        src/dai_gltf_geom.cpp src/dai_gltf_write.cpp src/dai_json.cpp -o build/test_fracture
     g++ $FLAGS $ARCH -Iinclude tests/test_particles.cpp $VKLIBS -o build/test_particles
     g++ $FLAGS $ARCH -Iinclude tests/test_skinning.cpp $VKLIBS -o build/test_skinning
     g++ $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui
@@ -229,6 +236,11 @@ fi
 echo "-- diagnostics"
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tools/gizmo_shot.cpp $VKLIBS -o build/gizmo_shot
+    # The fracture baker needs no renderer: it reads geometry, cuts it and
+    # writes geometry. Linking the Vulkan half in would make a build tool
+    # depend on a GPU driver being present.
+    g++ $FLAGS $ARCH -Iinclude -Isrc tools/daifracture.cpp src/dai_fracture.cpp src/dai_gltf_geom.cpp \
+        src/dai_gltf_write.cpp src/dai_json.cpp -o build/daifracture
     g++ $FLAGS $ARCH -Iinclude tools/editor_shot.cpp $VKLIBS -o build/editor_shot
 fi
 

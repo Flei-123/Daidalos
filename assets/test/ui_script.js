@@ -1,0 +1,1 @@
+function draw() { ui.panel(0,0,300,300,'more'); for (var i = 0; i < 8; i++) ui.label('line ' + i); ui.panelEnd(); }
