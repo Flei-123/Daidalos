@@ -47,6 +47,7 @@ typedef uint32_t dai_node;
  * undo stack generic instead of one command class per property. */
 typedef struct dai_node_desc {
     char     name[DAI_NODE_NAME_MAX];
+    char     tag[32];           /* free form, like Unity's tag - "Player", "Enemy" */
     dai_node parent;            /* 0 = root                                     */
 
     /* transform, local to the parent */
@@ -60,6 +61,10 @@ typedef struct dai_node_desc {
     int      shape;             /* dai_shape, no compound in v1                 */
     int      motion;            /* dai_motion                                   */
     dai_vec3 half_extent;
+    int      trigger;           /* 1 = collider reports overlaps, blocks nothing.
+                                   This is what Unity's "Is Trigger" is: the
+                                   collider exists, the collision does not.    */
+    dai_vec3 collider_center;   /* offset of the shape from the transform       */
     float    density;           /* 0 -> engine default                          */
     float    friction;          /* 0 -> engine default                          */
     float    restitution;

@@ -49,6 +49,7 @@ typedef struct dai_ui_draw {
 typedef struct dai_ui_input {
     float    mouse_x, mouse_y;
     int      mouse_down;      /* left button held                       */
+    int      right_down;      /* right button held - the context menu     */
     float    wheel;
     uint32_t text[8];         /* code points typed this frame, 0 terminated */
     int      key_backspace, key_enter, key_tab;
@@ -80,6 +81,16 @@ DAI_API int dai_ui_wants_mouse(const dai_ui *ui);
 /* The pointer state this frame, for code that draws its own interactive
  * widgets (the editor timeline) instead of using the ones above. */
 DAI_API void dai_ui_mouse(const dai_ui *ui, float *x, float *y, int *down, int *pressed);
+/* The right button, held this frame and pressed this frame. The context menu
+ * is the only consumer of the right button in the whole UI, so these are
+ * top level rather than buried in the input struct. */
+DAI_API int  dai_ui_right_down(const dai_ui *ui);
+DAI_API int  dai_ui_right_pressed(const dai_ui *ui);
+/* Whether any numeric field is being typed into right now. An editor that
+ * batches document edits into undo steps needs it: a drag ends when the
+ * button comes up, but typing ends when the field LOSES FOCUS - and one undo
+ * step per keystroke is not undo, it is a replay. */
+DAI_API int  dai_ui_num_editing(const dai_ui *ui);
 
 /* ---- layout ------------------------------------------------------------ */
 
@@ -191,6 +202,45 @@ DAI_API int dai_ui_icon_button(dai_ui *ui, const char *name, const char *tooltip
 /* A gap between groups of toolbar buttons. */
 DAI_API void dai_ui_toolbar_gap(dai_ui *ui, float w);
 
+/* ---- the popup menu ------------------------------------------------------
+ *
+ * A floating list of actions, opened with the right button. The state lives in
+ * the caller (dai_ui_popup), like the window rectangles, so a menu can survive
+ * the frames between opening it and clicking an entry.
+ *
+ *   static dai_ui_popup menu = { 0 };
+ *   if (right_pressed) dai_ui_popup_open(&menu, mx, my);
+ *   int pick = dai_ui_popup_menu(ui, &menu, ITEMS, COUNT);
+ *
+ * Returns -2 while it is open and nothing happened yet, -1 the frame it
+ * closed (anywhere else clicked), or the item's index. */
+typedef struct dai_ui_popup {
+    float x, y;
+    int   open;
+} dai_ui_popup;
+
+typedef struct dai_ui_menu_item {
+    const char *icon;        /* dai_icons name, or NULL  */
+    const char *label;
+    const char *shortcut;    /* shown right aligned, or NULL */
+} dai_ui_menu_item;
+
+DAI_API void dai_ui_popup_open(dai_ui_popup *m, float x, float y);
+DAI_API void dai_ui_popup_close(dai_ui_popup *m);
+DAI_API int  dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
+                               const dai_ui_menu_item *items, uint32_t count);
+
+/* A field whose value is typed, not dragged. Parses on Enter or when the
+ * pointer leaves. `min`/`max` with min < max clamps the typed value. Returns 1
+ * the frame a value was committed - which is the frame an editor should save
+ * and resync, not before. */
+DAI_API int dai_ui_num_field(dai_ui *ui, const char *label, float *value,
+                             float step, float min, float max, const char *id);
+/* Three of them in one row, with the axis letter in front of each. Hovering
+ * the LETTER and holding the left button drags the value - that is how Unity's
+ * inspector works, and typing still works by clicking the number. */
+DAI_API int dai_ui_num_vec3(dai_ui *ui, const char *label, float *xyz, float step);
+
 /* Sprites: any texture, any sub rectangle of it. This is how an atlas is used
  * for icons - one texture, many uv rects, one draw batch. */
 DAI_API void dai_ui_image(dai_ui *ui, dai_texture tex, float w, float h,
@@ -218,6 +268,16 @@ DAI_API int  dai_ui_input_text(dai_ui *ui, const char *label, char *buf, size_t 
  * (pass NULL for a leaf). Returns 1 when the row itself was clicked. */
 DAI_API int  dai_ui_tree_item(dai_ui *ui, const char *label, int depth,
                               int has_children, int *open, int selected);
+/* Same row, more mouse: 1 on a left click, 2 on a right click - the bit
+ * positions mean "both" never has to be a special value. dai_ui_tree_item is
+ * the left click half of this. */
+DAI_API int  dai_ui_tree_item_ex(dai_ui *ui, const char *label, int depth,
+                                 int has_children, int *open, int selected);
+/* The row as a text field, for renaming. 0 while editing, 1 to commit (Enter
+ * or a click elsewhere). A rename that needs a special key to keep is a
+ * rename you will lose. */
+DAI_API int  dai_ui_tree_rename(dai_ui *ui, char *buf, size_t buf_size, int depth,
+                                int has_children, int *open);
 
 /* A clipped, scrollable region inside a panel. Everything drawn between the
  * two calls is cut to the region and moves with the wheel. */

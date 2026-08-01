@@ -382,6 +382,149 @@ int main() {
         dai_icons_free(icons);
     }
 
+    // ---- 10. numeric fields: typing and the axis drag ---------------------
+    std::printf("\n[10] Zahlenfelder\n");
+    {
+        float value = 0.5f;
+        float xyz[3] = { 1.0f, 2.0f, 3.0f };
+        auto frame = [&](float mx, float my, int down) {
+            dai_ui_input in = mouse(mx, my, down);
+            dai_ui_begin(ui, 800, 600, &in);
+            dai_ui_panel_begin(ui, 0, 0, 320, 400, nullptr);
+            dai_ui_num_field(ui, "Friction", &value, 0.005f, 0.0f, 10.0f, "fric");
+            dai_ui_num_vec3(ui, "Position", xyz, 0.02f);
+            dai_ui_panel_end(ui);
+            dai_ui_end(ui);
+        };
+        frame(-1, -1, 0);
+
+        // Small values must not vanish. The old display snapped anything under
+        // 0.005 to "0", so every friction anyone typed read back as zero.
+        value = 0.0034f;
+        frame(-1, -1, 0);
+        // Click the field and type. Field 1's rect: label 62 px, so the box
+        // starts at x=5+62.
+        float fx = 5.0f + 62.0f + 10.0f, fy = 5.0f + 10.0f;
+        frame(fx, fy, 1); frame(fx, fy, 0);          // click into it
+        // clear with backspace, then type 0.75
+        dai_ui_input keys = mouse(fx, fy, 0);
+        keys.key_backspace = 1;
+        for (int i = 0; i < 6; ++i) {
+            dai_ui_begin(ui, 800, 600, &keys);
+            dai_ui_panel_begin(ui, 0, 0, 320, 400, nullptr);
+            dai_ui_num_field(ui, "Friction", &value, 0.005f, 0.0f, 10.0f, "fric");
+            dai_ui_num_vec3(ui, "Position", xyz, 0.02f);
+            dai_ui_panel_end(ui);
+            dai_ui_end(ui);
+        }
+        uint32_t digits[4] = { '0', '.', '7', '5' };
+        for (int d = 0; d < 4; ++d) {
+            dai_ui_input t = mouse(fx, fy, 0);
+            t.text[0] = digits[d];
+            dai_ui_begin(ui, 800, 600, &t);
+            dai_ui_panel_begin(ui, 0, 0, 320, 400, nullptr);
+            dai_ui_num_field(ui, "Friction", &value, 0.005f, 0.0f, 10.0f, "fric");
+            dai_ui_num_vec3(ui, "Position", xyz, 0.02f);
+            dai_ui_panel_end(ui);
+            dai_ui_end(ui);
+        }
+        std::printf("  vor Enter: %.4f\n", value);
+        CHECK(value == 0.0034f, "typing changed the value before Enter (%.4f)", value);
+        dai_ui_input ent = mouse(fx, fy, 0);
+        ent.key_enter = 1;
+        dai_ui_begin(ui, 800, 600, &ent);
+        dai_ui_panel_begin(ui, 0, 0, 320, 400, nullptr);
+        dai_ui_num_field(ui, "Friction", &value, 0.005f, 0.0f, 10.0f, "fric");
+        dai_ui_num_vec3(ui, "Position", xyz, 0.02f);
+        dai_ui_panel_end(ui);
+        dai_ui_end(ui);
+        std::printf("  nach Enter: %.4f\n", value);
+        CHECK(std::fabs(value - 0.75f) < 1e-4f, "Enter committed %.4f, not 0.75", value);
+
+        // Letters do not belong in a number.
+        dai_ui_input t = mouse(fx, fy, 0);
+        frame(fx, fy, 1); frame(fx, fy, 0);
+        t.text[0] = 'a'; t.text[1] = 'b';
+        dai_ui_begin(ui, 800, 600, &t);
+        dai_ui_panel_begin(ui, 0, 0, 320, 400, nullptr);
+        dai_ui_num_field(ui, "Friction", &value, 0.005f, 0.0f, 10.0f, "fric");
+        dai_ui_num_vec3(ui, "Position", xyz, 0.02f);
+        dai_ui_panel_end(ui);
+        dai_ui_end(ui);
+        dai_ui_input ent2 = mouse(fx, fy, 0);
+        ent2.key_enter = 1;
+        dai_ui_begin(ui, 800, 600, &ent2);
+        dai_ui_panel_begin(ui, 0, 0, 320, 400, nullptr);
+        dai_ui_num_field(ui, "Friction", &value, 0.005f, 0.0f, 10.0f, "fric");
+        dai_ui_num_vec3(ui, "Position", xyz, 0.02f);
+        dai_ui_panel_end(ui);
+        dai_ui_end(ui);
+        CHECK(std::fabs(value - 0.75f) < 1e-4f, "letters got into the number (%.4f)", value);
+
+        // The axis letter drags. The vec3 row is one widget below the field:
+        // h = line_height + row_pad, so aim one row down, at the X letter.
+        float row_h = 13.0f + 4.0f + 3.0f;
+        float ax = 5.0f + 62.0f + 4.0f;    // the X of the first field
+        float ay = 5.0f + row_h + 10.0f;
+        float before_x = xyz[0];
+        frame(ax, ay, 1);
+        for (int i = 1; i <= 10; ++i) frame(ax + (float)i * 3.0f, ay, 1);
+        frame(ax + 30.0f, ay, 0);
+        std::printf("  Achsen-Drag: X %.3f -> %.3f\n", before_x, xyz[0]);
+        CHECK(xyz[0] > before_x, "dragging the X letter did not change X (%.3f)", xyz[0]);
+        CHECK(std::fabs(xyz[1] - 2.0f) < 1e-4f, "the X drag touched Y too");
+    }
+
+    // ---- 11. the popup menu ----------------------------------------------
+    std::printf("\n[11] Aufklapp-Menue\n");
+    {
+        dai_ui_popup menu{};
+        static const dai_ui_menu_item ITEMS[] = {
+            { nullptr, "Rename", "F2" },
+            { nullptr, "Duplicate", "Ctrl+D" },
+            { nullptr, "Delete", "Del" },
+        };
+        int pick = -99;
+        int dead_clicks = 0;
+        auto frame = [&](float mx, float my, int down, int rdown) {
+            dai_ui_input in = mouse(mx, my, down);
+            in.right_down = rdown;
+            dai_ui_begin(ui, 800, 600, &in);
+            dai_ui_panel_begin(ui, 0, 0, 800, 600, nullptr);
+            if (dai_ui_button(ui, "under the menu")) ++dead_clicks;
+            dai_ui_panel_end(ui);
+            pick = dai_ui_popup_menu(ui, &menu, ITEMS, 3);
+            dai_ui_end(ui);
+        };
+        frame(-1, -1, 0, 0);
+        CHECK(pick == -2 || pick == -99, "a menu that was never opened is reporting clicks");
+
+        dai_ui_popup_open(&menu, 100.0f, 100.0f);
+        frame(-1, -1, 0, 0);
+        CHECK(menu.open == 1, "the menu closed itself");
+
+        // Click the second entry. The row height is the FONT's line height
+        // plus 8, plus a 4 px pad at the top - asking the font instead of
+        // guessing 13 is the difference between a test and a superstition.
+        float row_h = dai_font_line_height(font) + 8.0f;
+        float entry_y = 100.0f + 4.0f + row_h * 1.5f;
+        frame(140.0f, entry_y, 1, 0);
+        // Immediate mode means the answer is THIS frame's return value - the
+        // release frame after it returns "nothing happened" again.
+        CHECK(pick == 1, "the second entry did not answer on the press frame (pick=%d)", pick);
+        frame(140.0f, entry_y, 0, 0);
+        CHECK(menu.open == 0, "choosing an entry left the menu open");
+
+        // Reopen and dismiss by clicking elsewhere: the click must NOT reach
+        // the button underneath.
+        dai_ui_popup_open(&menu, 100.0f, 100.0f);
+        frame(-1, -1, 0, 0);
+        frame(10.0f, 10.0f, 1, 0);        // over the "under the menu" button
+        frame(10.0f, 10.0f, 0, 0);
+        CHECK(menu.open == 0, "clicking away did not close the menu");
+        CHECK(dead_clicks == 0, "the dismiss click pressed the button under the menu");
+    }
+
     dai_ui_destroy(ui);
     dai_font_free(font);
     std::printf("\n==================================\n");

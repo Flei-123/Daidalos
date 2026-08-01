@@ -22,9 +22,104 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+// ---- the project host: the editor's "New Project" needs a disk ------------
+// A project is a folder: scenes and assets under one root. That is the entire
+// definition - a Unity project is also just a folder with opinions.
+static char g_projects_root[512] = { 0 };
+static char g_scene_path[512] = { 0 };
+
+static const char *project_list(uint32_t index, void *) {
+    static std::vector<std::string> names;
+#ifdef _WIN32
+    if (index == 0) {
+        names.clear();
+        std::string pat = std::string(g_projects_root) + "\\*";
+        WIN32_FIND_DATAA fd{};
+        HANDLE h = FindFirstFileA(pat.c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+                if (fd.cFileName[0] == '.') continue;
+                names.push_back(fd.cFileName);
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
+        }
+    }
+#endif
+    if (index >= names.size()) return nullptr;
+    return names[index].c_str();
+}
+
+static int project_path(const char *name, char *out, size_t n) {
+    if (!name || !*name) return 0;
+    for (const char *c = name; *c; ++c) {
+        // A project name is a folder name. Anything else is how "my project"
+        // becomes ../somewhere.
+        bool ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+                  (*c >= '0' && *c <= '9') || *c == '-' || *c == '_' || *c == ' ';
+        if (!ok) return 0;
+    }
+    size_t rl = std::strlen(g_projects_root), nl = std::strlen(name);
+    if (rl + 1 + nl + 1 > n) return 0;
+    std::memcpy(out, g_projects_root, rl);
+    out[rl] = '/';
+    std::memcpy(out + rl + 1, name, nl + 1);
+    return 1;
+}
+
+static int project_create(const char *name, void *) {
+    char path[512];
+    if (!project_path(name, path, sizeof(path))) return 0;
+#ifdef _WIN32
+    CreateDirectoryA(g_projects_root, nullptr);
+    if (!CreateDirectoryA(path, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+        return 0;
+    std::string scenes = std::string(path) + "/scenes";
+    std::string assets = std::string(path) + "/assets";
+    CreateDirectoryA(scenes.c_str(), nullptr);
+    CreateDirectoryA(assets.c_str(), nullptr);
+#endif
+    if (std::strlen(path) + 22 <= sizeof(g_scene_path)) {
+        std::snprintf(g_scene_path, sizeof(g_scene_path), "%s/scenes/main.daidalos", path);
+    }
+    return 1;
+}
+
+static int project_open(const char *name, void *) {
+    char path[512];
+    if (!project_path(name, path, sizeof(path))) return 0;
+    if (std::strlen(path) + 22 <= sizeof(g_scene_path)) {
+        std::snprintf(g_scene_path, sizeof(g_scene_path), "%s/scenes/main.daidalos", path);
+    }
+    return 1;
+}
+
+// The renderer's inventory, so the inspector's mesh picker shows names
+// instead of a number nobody chose.
+static const char *mesh_name_of(uint32_t mesh, void *) {
+    switch (mesh) {
+    case DAI_MESH_BOX:     return "Box (builtin)";
+    case DAI_MESH_SPHERE:  return "Sphere (builtin)";
+    case DAI_MESH_CAPSULE: return "Capsule (builtin)";
+    case DAI_MESH_PLANE:   return "Plane (builtin)";
+    default: break;
+    }
+    static char buf[48];
+    std::snprintf(buf, sizeof(buf), "mesh %u", mesh);
+    return buf;
+}
 
 int main(int argc, char **argv) {
     const char *scene_path = argc > 1 ? argv[1] : nullptr;
+#ifdef _WIN32
+    std::snprintf(g_projects_root, sizeof(g_projects_root), "C:\\daidalos\\projects");
+#else
+    std::snprintf(g_projects_root, sizeof(g_projects_root), "projects");
+#endif
 
     dai_config cfg{};
     cfg.tick_hz = 60; cfg.max_bodies = 4096; cfg.snapshot_ring = 120; cfg.seed = 1;
@@ -104,10 +199,15 @@ int main(int argc, char **argv) {
     dai_editor_camera(ed, dai_vec3{ 6.0f, 4.5f, 9.5f }, dai_vec3{ 0, 1, 0 }, dai_vec3{ 0, 1, 0 },
                       55.0f, 0.1f, 300.0f, (float)W, (float)H);
     dai_editor_ui *panels = dai_editor_ui_create(ed, ui);
+    dai_editor_ui_project_host(panels, project_list, project_create, project_open, nullptr);
+    dai_editor_ui_mesh_host(panels, mesh_name_of, 4, nullptr);   // the builtins
 
     auto last = std::chrono::high_resolution_clock::now();
     int prev_keys[8] = { 0 };
     std::vector<dai_render_instance> inst(4096);
+    int prev_f2 = 0, prev_backspace = 0, prev_enter = 0, prev_tab = 0;
+    uint8_t key_was[256] = { 0 };
+    uint8_t keys_now[256] = { 0 };
 
     while (dai_window_poll(win)) {
         auto now = std::chrono::high_resolution_clock::now();
@@ -124,6 +224,7 @@ int main(int argc, char **argv) {
         ci.mouse_left = (buttons & (1u << 1)) ? 1 : 0;
         ci.mouse_middle = (buttons & (1u << 2)) ? 1 : 0;
         ci.mouse_right = (buttons & (1u << 3)) ? 1 : 0;
+        if (dai_editor_ui_menu_open(panels)) ci.mouse_right = 0;
         ci.wheel = wheel;
         ci.key_w = dai_window_key_down(win, DAI_KEY_W);
         ci.key_a = dai_window_key_down(win, DAI_KEY_A);
@@ -181,10 +282,47 @@ int main(int argc, char **argv) {
 
         // The UI has to run before the viewport, because "is the pointer over a
         // panel" is only known once the panels have been laid out this frame.
+        // F2 renames the selection, in the hierarchy where the name lives.
+        if (dai_window_key_down(win, DAI_KEY_F2) && !prev_f2 &&
+            dai_editor_selection_count(ed) > 0)
+            dai_editor_ui_rename(panels, dai_editor_selected(ed, 0));
+        prev_f2 = dai_window_key_down(win, DAI_KEY_F2);
+
+        // The menu swallows the right button: while one is open, right is not
+        // the camera's look button - otherwise dismissing a menu with the same
+        // button that summoned it also turns the world.
         dai_ui_input in{};
         in.mouse_x = (float)mx; in.mouse_y = (float)my;
         in.mouse_down = ci.mouse_left;
+        in.right_down = dai_editor_ui_menu_open(panels) ? 0 : ci.mouse_right;
         in.wheel = wheel;
+        // Typed text for the fields: ASCII from the same key state the camera
+        // reads. A window backend with real text events would feed the same
+        // array; this is what it looks like when it does not exist yet.
+        std::memset(keys_now, 0, sizeof(keys_now));
+        for (uint32_t k = 0x20; k < 0x7F; ++k)
+            keys_now[k] = dai_window_key_down(win, k) ? 1 : 0;
+        {
+            int ti = 0;
+            int shift = ci.key_shift;
+            for (uint32_t k = DAI_KEY_A; k <= DAI_KEY_Z && ti < 7; ++k)
+                if (dai_window_key_down(win, k) && !key_was[k & 0xFF]) {
+                    in.text[ti++] = shift ? (k - 0x20) : k;
+                }
+            for (uint32_t k = DAI_KEY_0; k <= DAI_KEY_9 && ti < 7; ++k)
+                if (dai_window_key_down(win, k) && !key_was[k & 0xFF])
+                    in.text[ti++] = k;
+            if (dai_window_key_down(win, DAI_KEY_SPACE) && !key_was[DAI_KEY_SPACE & 0xFF])
+                in.text[ti++] = ' ';
+            in.text[ti] = 0;
+        }
+        std::memcpy(key_was, keys_now, sizeof(key_was));
+        in.key_backspace = dai_window_key_down(win, DAI_KEY_BACKSPACE) && !prev_backspace;
+        prev_backspace = dai_window_key_down(win, DAI_KEY_BACKSPACE);
+        in.key_enter = dai_window_key_down(win, DAI_KEY_RETURN) && !prev_enter;
+        prev_enter = dai_window_key_down(win, DAI_KEY_RETURN);
+        in.key_tab = dai_window_key_down(win, DAI_KEY_TAB) && !prev_tab;
+        prev_tab = dai_window_key_down(win, DAI_KEY_TAB);
         dai_ui_begin(ui, (float)ww, (float)wh, &in);
         dai_editor_ui_frame(panels, (float)ww, (float)wh);
         dai_ui_end(ui);

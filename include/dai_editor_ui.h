@@ -22,6 +22,16 @@ extern "C" {
 
 typedef struct dai_editor_ui dai_editor_ui;
 
+/* Starts renaming a node in the hierarchy: the row turns into a text field,
+ * focused, with the current name selected. What the toolbar's F2 and the
+ * context menu's Rename both call. */
+DAI_API void dai_editor_ui_rename(dai_editor_ui *p, dai_node n);
+
+/* Whether a right click menu is currently open. The host needs this because
+ * the right button is also the camera's look around: while a menu is up it
+ * belongs to the menu. */
+DAI_API int  dai_editor_ui_menu_open(const dai_editor_ui *p);
+
 DAI_API dai_editor_ui *dai_editor_ui_create(dai_editor *editor, dai_ui *ui);
 DAI_API void           dai_editor_ui_destroy(dai_editor_ui *p);
 
@@ -73,6 +83,29 @@ DAI_API int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input 
  * test that clicks its way down the panel and would otherwise fold the block it
  * is looking for. */
 DAI_API void dai_editor_ui_expand_all(dai_editor_ui *p);
+
+/* The project window needs two things from the host: where the projects
+ * live, and what to do when the user makes or opens one. The editor owns
+ * none of that - it cannot know where your disk is - but it does own the
+ * two clicks. */
+typedef const char *(*dai_editor_ui_project_list_fn)(uint32_t index, void *user);
+typedef int (*dai_editor_ui_project_action_fn)(const char *name, void *user);
+
+DAI_API void dai_editor_ui_project_host(dai_editor_ui *p,
+                                        dai_editor_ui_project_list_fn list,
+                                        dai_editor_ui_project_action_fn create,
+                                        dai_editor_ui_project_action_fn open,
+                                        void *user);
+/* Reloads the list from the host - after a project was created on disk. */
+DAI_API void dai_editor_ui_projects_refresh(dai_editor_ui *p);
+
+/* The mesh picker: the host hands over its renderer's inventory, the Project
+ * window shows it, and the renderer component edits the selection's mesh.
+ * Names come from a host function so the engine needs no renderer include. */
+typedef const char *(*dai_editor_ui_mesh_name_fn)(uint32_t mesh, void *user);
+DAI_API void dai_editor_ui_mesh_host(dai_editor_ui *p,
+                                     dai_editor_ui_mesh_name_fn name,
+                                     uint32_t mesh_count, void *user);
 
 /* Number of rows the hierarchy currently shows - folded subtrees excluded. */
 DAI_API uint32_t dai_editor_ui_visible_rows(const dai_editor_ui *p);

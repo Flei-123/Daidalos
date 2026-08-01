@@ -322,9 +322,9 @@ dai_vec3 dai_editor_selection_center(const dai_editor *e) {
     uint32_t n = 0;
     for (dai_node id : e->selection) {
         dai_vec3 p{};
-        if (dai_doc_world_transform(e->doc, id, &p, nullptr, nullptr) == DAI_OK) {
-            c = add(c, p); ++n;
-        }
+        // Live, not documented: during play the gizmo must sit ON the body,
+        // or the falling crate leaves its handle hanging where play started.
+        if (dai_editor_live_position(e, id, &p)) { c = add(c, p); ++n; }
     }
     return n ? mul(c, 1.0f / (float)n) : c;
 }
@@ -999,6 +999,45 @@ void dai_editor_stop(dai_editor *e) {
 }
 
 int dai_editor_state_get(const dai_editor *e) { return e ? e->state : DAI_EDITOR_EDIT; }
+
+int dai_editor_live_position(const dai_editor *e, dai_node n, dai_vec3 *out) {
+    if (!e || !out) return 0;
+    // Editing: the document is the truth and the scene follows it, so asking
+    // costs a doc lookup. Playing or paused: the document still holds the
+    // pre-play pose - that is the whole reason Stop can be exact - and the
+    // truth is the body, so a panel asking "where is the object" must ask
+    // the body, or it shows a frozen ghost of where play started.
+    if (e->state == DAI_EDITOR_EDIT) {
+        dai_node_desc d{};
+        if (dai_doc_get(e->doc, n, &d) != DAI_OK) return 0;
+        dai_vec3 ws{ 1, 1, 1 };
+        dai_quat qr{ 0, 0, 0, 1 };
+        dai_doc_world_transform(e->doc, n, out, &qr, &ws);
+        return 1;
+    }
+    if (!e->sync) return 0;
+    dai_entity ent = dai_doc_sync_entity(e->sync, n);
+    dai_scene *sc = dai_doc_sync_scene(e->sync);
+    if (!ent || !sc) return 0;
+    dai_body b = dai_scene_body(sc, ent);
+    if (!b) return 0;
+    dai_transform t{};
+    if (dai_body_get(editor_world(e), b, &t) != DAI_OK) return 0;
+    *out = t.position;
+    return 1;
+}
+
+void dai_editor_node_label(const dai_editor *e, dai_node n, char *buf, size_t len) {
+    if (!buf || !len) return;
+    buf[0] = 0;
+    if (!e) { std::snprintf(buf, len, "?"); return; }
+    dai_node_desc d{};
+    if (dai_doc_get(e->doc, n, &d) != DAI_OK) { std::snprintf(buf, len, "?"); return; }
+    if (d.tag[0] && d.name[0]) std::snprintf(buf, len, "%s %s", d.tag, d.name);
+    else if (d.tag[0])           std::snprintf(buf, len, "%s", d.tag);
+    else if (d.name[0])          std::snprintf(buf, len, "%s", d.name);
+    else                         std::snprintf(buf, len, "Node %u", n);
+}
 
 int dai_editor_node_color(dai_editor *e, dai_node n, dai_vec3 *out) {
     if (!e || !out || !e->sync) return 0;

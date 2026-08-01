@@ -185,6 +185,19 @@ DAI_API int  dai_editor_state_get(const dai_editor *e);
  * when the node has no live entity. */
 DAI_API int dai_editor_node_color(dai_editor *e, dai_node n, dai_vec3 *out);
 
+/* The transform the SELECTION is actually at. While editing this is the
+ * document. While playing or paused the document still holds the pre-play
+ * pose - that is what makes Stop exact - and this reads the live body
+ * instead, so the inspector and the gizmo show the object where it IS, not
+ * where it was when play was pressed. Returns 0 when the node has no live
+ * body (a group node), and the caller should then show the document. */
+DAI_API int dai_editor_live_position(const dai_editor *e, dai_node n, dai_vec3 *out);
+
+/* The name used for picking paths and for status lines: "Player" is better
+ * than "node 7", and a Unity user looks for the tag too. Writes "tag name",
+ * "name", or the id, into buf. */
+DAI_API void dai_editor_node_label(const dai_editor *e, dai_node n, char *buf, size_t len);
+
 /* Pushes document changes into the live scene. Incremental (only nodes whose
  * revision changed) and idempotent, so calling it after an edit and again from
  * dai_editor_advance costs nothing. A frontend that writes to the document

@@ -142,7 +142,15 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     float R = r->shadow_radius;
     float splits[DAI_SHADOW_CASCADES + 1];
     {
+        // The far cascade has to reach where the user looks, not twice a
+        // default radius: at R*2 = 60 m, "a little way away" already has no
+        // shadows at all. The camera's far plane is the honest answer,
+        // clamped so a game with zfar 10 km does not smear one texel over a
+        // football field. shadow_radius stays the quality knob for the NEAR
+        // cascades - that is what it always was.
         float near_d = 0.5f, far_d = R * 2.0f;
+        float want = r->zfar * 0.5f;
+        if (want > far_d) far_d = want < 400.0f ? want : 400.0f;
         splits[0] = near_d;
         for (uint32_t i = 1; i <= r->cascades; ++i) {
             float t = (float)i / (float)r->cascades;
