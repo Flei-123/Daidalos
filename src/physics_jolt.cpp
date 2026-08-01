@@ -155,6 +155,7 @@ public:
         ObjectLayer layer = (mt == EMotionType::Static) ? Layers::NON_MOVING : Layers::MOVING;
 
         BodyCreationSettings bc(shape, RV(d.position), Q(d.rotation), mt, layer);
+        bc.mIsSensor = d.sensor != 0;      // reports overlaps, blocks nothing
         bc.mFriction        = d.friction_static;
         bc.mRestitution     = d.restitution;
         bc.mLinearDamping   = d.linear_damping;

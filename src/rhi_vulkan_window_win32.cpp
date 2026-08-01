@@ -86,6 +86,9 @@ uint32_t dai_key_from_vk(WPARAM vk) {
     case VK_HOME:    return DAI_KEY_HOME;
     case VK_END:     return DAI_KEY_END;
     case VK_F1:      return DAI_KEY_F1;
+    case VK_F2:      return DAI_KEY_F2;
+    case VK_F3:      return DAI_KEY_F3;
+    case VK_F4:      return DAI_KEY_F4;
     case VK_F5:      return DAI_KEY_F5;
     case VK_LSHIFT:  return DAI_KEY_SHIFT_L;
     case VK_RSHIFT:  return DAI_KEY_SHIFT_R;

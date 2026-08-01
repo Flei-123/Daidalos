@@ -16,6 +16,7 @@
 
 #include "dai_editor_ui.h"
 #include "dai_render.h"
+#include "dai_assets.h"
 
 #include <chrono>
 #include <cstdio>
@@ -96,6 +97,70 @@ static int project_open(const char *name, void *) {
         std::snprintf(g_scene_path, sizeof(g_scene_path), "%s/scenes/main.daidalos", path);
     }
     return 1;
+}
+
+// "New Script" in the Project window. A behaviour is a file in assets/, and a
+// template beats an empty file: the first script you ever write should not
+// start with figuring out what the entry point is called.
+static char g_assets_dir[512] = { 0 };
+static int script_create(const char *name, void *) {
+    if (!name || !*name || !g_assets_dir[0]) return 0;
+    for (const char *c = name; *c; ++c) {
+        bool ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+                  (*c >= '0' && *c <= '9') || *c == '-' || *c == '_';
+        if (!ok) return 0;
+    }
+    char path[512];
+    std::snprintf(path, sizeof(path), "%s/%s.js", g_assets_dir, name);
+#ifdef _WIN32
+    HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    const char *tpl =
+        "// A Daidalos behaviour. The engine calls the globals it finds:\r\n"
+        "//   init()   once when play starts\r\n"
+        "//   frame()  every rendered frame\r\n"
+        "// `state.<name>` holds numbers the inspector or the game can set.\r\n"
+        "\r\n"
+        "function init() {\r\n"
+        "}\r\n"
+        "\r\n"
+        "function frame() {\r\n"
+        "}\r\n";
+    DWORD wrote = 0;
+    WriteFile(h, tpl, (DWORD)std::strlen(tpl), &wrote, nullptr);
+    CloseHandle(h);
+    return 1;
+#else
+    FILE *f = std::fopen(path, "wx");
+    if (!f) return 0;
+    std::fputs("// Daidalos behaviour: init() once, frame() per frame.\n", f);
+    std::fclose(f);
+    return 1;
+#endif
+}
+
+// The settings window's font swap needs what main() owns, so main() publishes
+// it here. One editor, one font - this is not a place that needs generality.
+static dai_renderer *g_renderer = nullptr;
+static dai_ui       *g_ui = nullptr;
+static dai_font     *g_font = nullptr;
+
+static void apply_font(float px, void *) {
+    if (!g_renderer || !g_ui) return;
+    char err[256] = { 0 };
+    dai_font *nf = dai_font_load_ui(px, err, sizeof(err));
+    if (!nf) { std::printf("font reload failed: %s\n", err); return; }
+    uint32_t aw = 0, ah = 0;
+    const uint8_t *atlas = dai_font_atlas(nf, &aw, &ah);
+    std::vector<uint8_t> rgba((size_t)aw * ah * 4);
+    for (size_t i = 0; i < (size_t)aw * ah; ++i) {
+        rgba[i*4+0] = 255; rgba[i*4+1] = 255; rgba[i*4+2] = 255; rgba[i*4+3] = atlas[i];
+    }
+    dai_texture nt = dai_render_texture_create(g_renderer, rgba.data(), aw, ah, 0);
+    if (!nt) { dai_font_free(nf); return; }
+    dai_ui_font_set(g_ui, nf, nt);
+    if (g_font) dai_font_free(g_font);
+    g_font = nf;
 }
 
 // The renderer's inventory, so the inspector's mesh picker shows names
@@ -204,6 +269,15 @@ int main(int argc, char **argv) {
     dai_editor_ui *panels = dai_editor_ui_create(ed, ui);
     dai_editor_ui_project_host(panels, project_list, project_create, project_open, nullptr);
     dai_editor_ui_mesh_host(panels, mesh_name_of, 4, nullptr);   // the builtins
+    dai_editor_ui_script_host(panels, script_create, nullptr);
+
+    // The asset layer: a mounted folder of glTF/JS, hot reloaded, bound to the
+    // document sync so "asset crate.glb" on a node actually resolves.
+    dai_assets *assets = dai_assets_create(r, 1);
+
+    // Settings: the UI size is a font reload, and the font is ours.
+    g_renderer = r; g_ui = ui; g_font = font;
+    dai_editor_ui_settings_host(panels, apply_font, 13.0f, nullptr);
 
     auto last = std::chrono::high_resolution_clock::now();
     int prev_keys[8] = { 0 };
@@ -276,6 +350,72 @@ int main(int argc, char **argv) {
         }
         std::memcpy(prev_keys, keys, sizeof(keys));
 
+        // ---- project switching: the callbacks set g_scene_path, the loop
+        //      turns it into a loaded scene and a mounted assets folder.
+        static char current_scene[512] = { 0 };
+        if (std::strcmp(g_scene_path, current_scene) != 0 && g_scene_path[0]) {
+            std::snprintf(current_scene, sizeof(current_scene), "%s", g_scene_path);
+            scene_path = current_scene;
+            dai_doc_clear(doc);
+            char lerr[256] = { 0 };
+            if (dai_doc_load(doc, current_scene, lerr, sizeof(lerr)) != DAI_OK) {
+                // A project with no scene yet is a new project, not a broken one.
+                dai_node_desc g2 = dai_node_desc_default();
+                std::snprintf(g2.name, sizeof(g2.name), "Ground");
+                g2.motion = DAI_STATIC;
+                g2.half_extent = { 12, 0.5f, 12 };
+                g2.position = { 0, -0.5f, 0 };
+                g2.color = { 0.20f, 0.22f, 0.19f };
+                dai_doc_add(doc, &g2);
+            }
+            dai_editor_deselect_all(ed);
+            dai_doc_sync_reset(sync);
+            dai_doc_sync_apply(sync);
+            // <project>/assets is the mounted folder.
+            std::snprintf(g_assets_dir, sizeof(g_assets_dir), "%s", current_scene);
+            char *slash = std::strstr(g_assets_dir, "/scenes/");
+            if (slash) {
+                *slash = 0;
+                std::strncat(g_assets_dir, "/assets", sizeof(g_assets_dir) - std::strlen(g_assets_dir) - 1);
+                if (assets) {
+                    dai_assets_destroy(assets);
+                    assets = dai_assets_create(r, 1);
+                    if (assets) {
+                        dai_assets_mount_dir(assets, g_assets_dir, 0);
+                        dai_assets_bind(assets, sync);
+                    }
+                }
+            }
+            std::printf("project: %s\n", current_scene);
+        }
+
+        // ---- assets: hot reload, list, and what the Project window clicked
+        if (assets) {
+            if (dai_assets_poll(assets)) dai_assets_bind(assets, sync);
+            static uint32_t fed_rev = 0xFFFFFFFFu;
+            uint32_t rev = dai_assets_revision(assets);
+            if (rev != fed_rev) {
+                fed_rev = rev;
+                static char paths[256][96];
+                static const char *ptrs[256];
+                uint32_t n2 = dai_assets_list(assets, paths[0], 256, 96);
+                if (n2 > 256) n2 = 256;
+                for (uint32_t i = 0; i < n2; ++i) ptrs[i] = paths[i];
+                dai_editor_ui_asset_list(panels, ptrs, n2);
+            }
+            const char *pick = nullptr;
+            int as_tree = 0;
+            if (dai_editor_ui_take_asset(panels, &pick, &as_tree) && pick) {
+                if (dai_assets_model_blocking(assets, pick)) {
+                    dai_node made = dai_assets_instantiate(assets, doc, pick, 0);
+                    if (made) {
+                        dai_doc_sync_apply(sync);
+                        dai_editor_select(ed, made, 0);
+                    }
+                }
+            }
+        }
+
         uint32_t ww = W, wh = H;
         dai_window_size(win, &ww, &wh);
 
@@ -306,7 +446,7 @@ int main(int argc, char **argv) {
         // press events; it hands them over as code points, already
         // shift-resolved. */
         uint32_t typed[8] = { 0 };
-        uint32_t ntyped = dai_window_text(win, typed, 8);
+        dai_window_text(win, typed, 8);
 
         // The menu swallows the right button: while one is open, right is not
         // the camera's look button - otherwise dismissing a menu with the same
@@ -406,7 +546,8 @@ int main(int argc, char **argv) {
     dai_editor_destroy(ed);
     dai_ui_destroy(ui);
     if (icons) dai_icons_free(icons);
-    if (font) dai_font_free(font);
+    if (g_font) dai_font_free(g_font);
+    if (assets) dai_assets_destroy(assets);
     dai_window_close(win);
     dai_render_destroy(r);
     dai_doc_sync_destroy(sync);

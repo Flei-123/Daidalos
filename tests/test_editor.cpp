@@ -302,6 +302,23 @@ int main() {
     dai_node copy = dai_editor_selected(ed, 0);
     CHECK(copy != cubes[0] && dai_doc_valid(doc, copy), "the copy did not become the selection");
     CHECK(near3(world_of(doc, copy), doomed_pos), "the copy is not where the original was");
+    // A copy of an uncoloured node must NOT pick a new palette colour - the
+    // colour comes from the id, and the copy has a new one, which is how
+    // duplicating used to repaint things. The displayed colour is baked in.
+    {
+        dai_node_desc src{}, cpy{};
+        dai_doc_get(doc, cubes[0], &src);
+        dai_doc_get(doc, copy, &cpy);
+        CHECK(cpy.color.x != 0.0f || cpy.color.y != 0.0f || cpy.color.z != 0.0f,
+              "the copy kept colour 0,0,0 - it will recolour from its new id");
+        dai_vec3 shown{};
+        if (dai_editor_node_color(ed, cubes[0], &shown)) {
+            CHECK(std::fabs(cpy.color.x - shown.x) < 1e-4f &&
+                  std::fabs(cpy.color.y - shown.y) < 1e-4f &&
+                  std::fabs(cpy.color.z - shown.z) < 1e-4f,
+                  "the copy is a different colour than the original shows");
+        }
+    }
     CHECK(dai_editor_undo(ed) == 1, "undo of duplicate failed");
     CHECK(dai_doc_count(doc) == count_before, "undo did not remove the copy");
 

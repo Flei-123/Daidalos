@@ -253,8 +253,11 @@ int main() {
         frame(-1, -1, 0);
         std::printf("  rechts oben abgelegt: dock=%d slot=%d h=%.0f\n", d.dock, d.dock_slot, d.h);
         CHECK(d.dock == DAI_DOCK_RIGHT, "dropping at the right edge did not dock right");
-        CHECK(d.dock_slot == 1, "dropping in the top third should take the upper half");
-        CHECK(std::fabs(d.h - 275.0f) < 1.0f, "the upper half should be 275 tall, is %.0f", d.h);
+        CHECK(d.dock_slot == 1, "dropping in the top third should remember the upper half");
+        // Alone on an edge, a docked window gets ALL of it - the half is where
+        // it lands once a neighbour joins, which is how Unity's dock regions
+        // behave. A window alone in a half of nothing is just small.
+        CHECK(std::fabs(d.h - 550.0f) < 1.0f, "alone on the edge it should be full height, is %.0f", d.h);
         CHECK(std::fabs((d.x + d.w) - 800.0f) < 1.0f, "a right docked window must touch the right edge");
 
         // Picking it up again releases it.
@@ -263,6 +266,51 @@ int main() {
         std::printf("  waehrend des Ziehens: dock=%d\n", d.dock);
         CHECK(d.dock == DAI_DOCK_NONE, "dragging a docked window did not undock it");
         frame(400.0f, 300.0f, 0);
+    }
+
+    // ---- 7b. a docked stack shares its edge -------------------------------
+    std::printf("\n[7b] Andock-Stack (Nachbarn resizen mit)\n");
+    {
+        dai_ui_window top = dai_ui_window_docked(DAI_DOCK_LEFT, 1, 200);
+        dai_ui_window bot = dai_ui_window_docked(DAI_DOCK_LEFT, 2, 200);
+        auto frame = [&](float mx, float my, int down) {
+            dai_ui_input in = mouse(mx, my, down);
+            dai_ui_begin(ui, 800, 600, &in);
+            dai_ui_dock_area(ui, 0, 30, 800, 550);
+            dai_ui_window_begin(ui, "Top", &top);
+            dai_ui_window_end(ui);
+            dai_ui_window_begin(ui, "Bottom", &bot);
+            dai_ui_window_end(ui);
+            dai_ui_end(ui);
+        };
+        frame(-1, -1, 0);
+        frame(-1, -1, 0);      // dock sizes settle on the second frame
+        std::printf("  Top %.0f,%.0f %.0fx%.0f   Bottom %.0f,%.0f %.0fx%.0f\n",
+                    top.x, top.y, top.w, top.h, bot.x, bot.y, bot.w, bot.h);
+        CHECK(std::fabs(top.y - 30.0f) < 1.0f, "the first window starts at the dock top (%.0f)", top.y);
+        CHECK(top.h > 260.0f && top.h < 290.0f, "two docked windows split the edge, top is %.0f", top.h);
+        CHECK(std::fabs(bot.y - (top.y + top.h)) < 1.5f,
+              "the second window starts where the first ends (%.0f vs %.0f)", bot.y, top.y + top.h);
+        CHECK(std::fabs((bot.y + bot.h) - 580.0f) < 1.5f, "the stack does not fill the edge (%.0f)",
+              bot.y + bot.h);
+
+        // Drag the split between them down by 100 px: the top one grows, the
+        // bottom one shrinks - both, not one.
+        float sx = top.x + top.w * 0.5f, sy = top.y + top.h - 2.0f;
+        float th0 = top.h, bh0 = bot.h;
+        frame(sx, sy, 1);
+        frame(sx, sy + 40.0f, 1);
+        frame(sx, sy + 100.0f, 1);
+        frame(sx, sy + 100.0f, 0);
+        frame(-1, -1, 0);
+        std::printf("  nach dem Split-Ziehen: Top h=%.0f, Bottom h=%.0f\n", top.h, bot.h);
+        CHECK(top.h > th0 + 60.0f, "dragging the split down did not grow the top window (%.0f -> %.0f)",
+              th0, top.h);
+        CHECK(bot.h < bh0 - 60.0f, "the neighbour did not shrink (%.0f -> %.0f) - a split moves BOTH",
+              bh0, bot.h);
+        CHECK(std::fabs((top.h + bot.h) - (th0 + bh0)) < 4.0f,
+              "the stack grew by %.0f px - docked windows share a fixed edge",
+              (top.h + bot.h) - (th0 + bh0));
     }
 
     // ---- 8. component headers -------------------------------------------

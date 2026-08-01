@@ -118,12 +118,15 @@ struct dai_ui {
         char     title[48] = { 0 };
         float    x = 0, y = 0, w = 0, h = 0;   // last frame's rectangle
         bool     seen = false;                 // drawn this frame
+        int      dock = 0, slot = 0;           // last frame's dock state
+        float    dock_size = 0;   // this window's share of its dock edge
     };
     std::vector<Win> wins;          // z order: back() is in front
     int      cur_layer = 0;
     bool     blocked = false;       // the current window is behind another one
     float dock_x = 0, dock_y = 0, dock_w = 0, dock_h = 0;   // area docked windows divide
     bool  dock_area_set = false;
+    int   preview_slot = 0;             // set for the drop preview only
     uint64_t drag_win = 0;          // window being moved
     uint64_t size_win = 0;          // window being resized
     int      size_edge = 0;         // 1 left, 2 right, 4 top, 8 bottom
@@ -287,6 +290,13 @@ dai_ui *dai_ui_create(dai_font *font, dai_texture font_texture) {
 }
 
 void dai_ui_destroy(dai_ui *ui) { delete ui; }
+
+void dai_ui_font_set(dai_ui *ui, dai_font *font, dai_texture font_texture) {
+    if (!ui) return;
+    ui->font = font;
+    ui->font_tex = font_texture;
+    if (font) dai_font_white_uv(font, &ui->white_u, &ui->white_v);
+}
 dai_ui_style *dai_ui_style_of(dai_ui *ui) { return ui ? &ui->style : nullptr; }
 
 void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in) {
@@ -475,23 +485,70 @@ void dai_ui_dock_area(dai_ui *ui, float x, float y, float w, float h) {
 
 namespace {
 
-// Where a docked window sits, given its own size along the free axis.
-void dock_rect(const dai_ui *ui, int dock, int slot, float own_w, float own_h,
+// Where a docked window sits. Windows on the same edge STACK: each one's
+// share of the cross axis is its dock_size, normalised to the space that
+// exists - so resizing ONE window takes the pixels from its neighbours, which
+// is what "dragging the split between two panels resizes both" means. The old
+// model gave every window a fixed half and made the split unmoving.
+void dock_stack(const dai_ui *ui, int dock, std::vector<const dai_ui::Win *> *out) {
+    out->clear();
+    for (const dai_ui::Win &w : ui->wins)
+        if (w.dock == dock) out->push_back(&w);
+    // Slot first, then position: slot 0 means "the whole edge" and comes
+    // alone; 1 and 2 are the two halves, in order.
+    std::sort(out->begin(), out->end(), [](const dai_ui::Win *a, const dai_ui::Win *b) {
+        if (a->slot != b->slot) return a->slot < b->slot;
+        return a->y != b->y ? a->y < b->y : a->x < b->x;
+    });
+}
+
+void dock_rect(const dai_ui *ui, uint64_t self, int dock, float own_w, float own_h,
                float *x, float *y, float *w, float *h) {
     float ax = ui->dock_x, ay = ui->dock_y, aw = ui->dock_w, ah = ui->dock_h;
-    if (dock == DAI_DOCK_LEFT || dock == DAI_DOCK_RIGHT) {
-        float sy = ay, sh = ah;
-        if (slot == 1) sh = ah * 0.5f;
-        else if (slot == 2) { sy = ay + ah * 0.5f; sh = ah * 0.5f; }
+    bool vertical = (dock == DAI_DOCK_LEFT || dock == DAI_DOCK_RIGHT);
+    float span = vertical ? ah : aw;
+
+    std::vector<const dai_ui::Win *> sibs;
+    dock_stack(ui, dock, &sibs);
+    auto size_of = [&](const dai_ui::Win *s2) {
+        float v = s2->dock_size > 0.0f ? s2->dock_size : (vertical ? s2->h : s2->w);
+        return v > 1.0f ? v : span / 2.0f;
+    };
+    float total = 0.0f;
+    bool have_self = false;
+    for (const dai_ui::Win *s2 : sibs) {
+        total += size_of(s2);
+        if (s2->id == self) have_self = true;
+    }
+    if (!have_self) {
+        // The drop preview, or the first frame of a freshly docked window: it
+        // joins the stack as one share among the others.
+        total += own_h > 1.0f ? own_h : span / 2.0f;
+    }
+
+    float pos = vertical ? ay : ax;
+    float mine = span;
+    bool placed = false;
+    for (const dai_ui::Win *s2 : sibs) {
+        float share = span * size_of(s2) / total;
+        if (s2->id == self) { mine = share; placed = true; break; }
+        pos += share;
+    }
+    if (!placed) {
+        // The drop preview has no record yet: draw the half the pointer is
+        // over, which is what the drop will actually produce.
+        if (ui->preview_slot == 1)      { mine = span * 0.5f; pos = vertical ? ay : ax; }
+        else if (ui->preview_slot == 2) { mine = span * 0.5f; pos = (vertical ? ay : ax) + span * 0.5f; }
+        else { mine = span; pos = vertical ? ay : ax; }
+    }
+
+    if (vertical) {
         *x = (dock == DAI_DOCK_LEFT) ? ax : ax + aw - own_w;
-        *y = sy; *w = own_w; *h = sh;
+        *y = pos; *w = own_w; *h = mine;
     } else {
-        float sx = ax, sw = aw;
-        if (slot == 1) sw = aw * 0.5f;
-        else if (slot == 2) { sx = ax + aw * 0.5f; sw = aw * 0.5f; }
-        *x = sx;
+        *x = pos;
         *y = (dock == DAI_DOCK_TOP) ? ay : ay + ah - own_h;
-        *w = sw; *h = own_h;
+        *w = mine; *h = own_h;
     }
 }
 
@@ -545,6 +602,17 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
     float mx = ui->input.mouse_x, my = ui->input.mouse_y;
     bool pressed = ui->input.mouse_down && !ui->prev.mouse_down;
 
+    // The dock state lives in the persistent record, because a stack needs to
+    // know its members BEFORE they have all been laid out this frame - last
+    // frame's record is the best answer there is, and it is a good one.
+    dai_ui::Win *rec = ui->find_win(id);
+    rec->dock = win->dock;
+    rec->slot = win->dock_slot;
+    if (win->dock != DAI_DOCK_NONE && rec->dock_size <= 0.0f)
+        rec->dock_size = (win->dock == DAI_DOCK_LEFT || win->dock == DAI_DOCK_RIGHT)
+                         ? win->h : win->w;
+    if (win->dock == DAI_DOCK_NONE) rec->dock_size = 0.0f;
+
     // Dragging first, so a window that follows the pointer keeps following it
     // even when the pointer briefly leaves its title bar - anything else makes
     // a fast drag drop the window.
@@ -560,6 +628,31 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
         int slot = 0;
         int edge = dock_hit(ui, mx, my, &slot);
         if (edge != DAI_DOCK_NONE) { win->dock = edge; win->dock_slot = slot; }
+    } else if (ui->size_win == id && ui->input.mouse_down &&
+               (win->dock == DAI_DOCK_LEFT || win->dock == DAI_DOCK_RIGHT) &&
+               (ui->size_edge & 12) && !(ui->size_edge & 3)) {
+        // A docked window's top/bottom edge is the SPLIT between it and its
+        // stack neighbour: the pixels have to come from somewhere, so they
+        // come from the adjacent window. Both change - that is the whole
+        // point of a split, and what a stack of independent sizes never did.
+        float delta = (ui->size_edge & 8) ? (my - (rec->y + rec->h)) : (rec->y - my);
+        float want = rec->dock_size + delta;
+        if (want >= 40.0f) {
+            std::vector<const dai_ui::Win *> sibs;
+            dock_stack(ui, win->dock, &sibs);
+            for (size_t i = 0; i < sibs.size(); ++i) {
+                if (sibs[i]->id != id) continue;
+                size_t ni = (ui->size_edge & 8) ? i + 1 : i - 1;
+                if (ni >= sibs.size()) break;
+                dai_ui::Win *nb = ui->find_win(sibs[ni]->id);
+                if (!nb) break;
+                float nsize = nb->dock_size > 0.0f ? nb->dock_size : nb->h;
+                if (nsize - delta < 40.0f) break;
+                nb->dock_size = nsize - delta;
+                rec->dock_size = want;
+                break;
+            }
+        }
     } else if (ui->size_win == id && ui->input.mouse_down) {
         // Any edge, and any two of them at a corner. The opposite edge is
         // pinned (size_fx/size_fy), which is what makes dragging the LEFT side
@@ -604,7 +697,7 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
     // width still counts, so the resize grip drags the split.
     if (win->dock != DAI_DOCK_NONE && !(ui->drag_win == id && ui->input.mouse_down)) {
         float dx, dy, dw, dh;
-        dock_rect(ui, win->dock, win->dock_slot, win->w, win->h, &dx, &dy, &dw, &dh);
+        dock_rect(ui, id, win->dock, win->w, win->h, &dx, &dy, &dw, &dh);
         win->x = dx; win->y = dy;
         if (win->dock == DAI_DOCK_LEFT || win->dock == DAI_DOCK_RIGHT) win->h = dh;
         else                                                          win->w = dw;
@@ -613,8 +706,7 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
     float body_h = win->collapsed ? 0.0f : win->h - bar;
     float full_h = bar + body_h;
 
-    dai_ui::Win *rec = ui->find_win(id);
-    if (rec) {
+    {
         rec->x = win->x; rec->y = win->y; rec->w = win->w; rec->h = full_h;
         rec->seen = true;
         std::snprintf(rec->title, sizeof(rec->title), "%s", title ? title : "");
@@ -626,7 +718,9 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
 
     bool over_win = !ui->blocked && mx >= win->x - 3.0f && mx < win->x + win->w + 3.0f &&
                     my >= win->y - 3.0f && my < win->y + full_h + 3.0f;
-    if (over_win) ui->mouse_over_ui = true;
+    // A viewport window's body is the 3D view: the title bar and the resize
+    // edges belong to the window, the middle belongs to the scene.
+    if (over_win && !win->viewport) ui->mouse_over_ui = true;
 
     bool over_bar = over_win && my < win->y + bar && mx >= win->x && mx < win->x + win->w;
     // Any edge resizes, not a corner grip: 6 px measured from the outside in,
@@ -680,16 +774,22 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
 
     bool focused = !ui->wins.empty() && ui->wins.back().id == id;
 
-    // shadow, body, title bar, border - in that order
+    // shadow, body, title bar, border - in that order. A viewport window has
+    // no body to draw: drawing one would paint over the scene it exists to
+    // frame.
     dai_ui_rect(ui, win->x + 3.0f, win->y + 3.0f, win->w, full_h + 1.0f, st.shadow);
-    if (!win->collapsed) dai_ui_rect(ui, win->x, win->y + bar, win->w, body_h, st.panel);
+    if (!win->collapsed && !win->viewport)
+        dai_ui_rect(ui, win->x, win->y + bar, win->w, body_h, st.panel);
     dai_ui_rect(ui, win->x, win->y, win->w, bar, focused ? st.titlebar_focused : st.titlebar);
     dai_ui_rect_outline(ui, win->x, win->y, win->w, full_h, st.border,
                         focused ? st.accent : st.panel_border);
 
     dai_ui_text(ui, win->x + 5.0f, win->y + 3.0f, win->collapsed ? "\xe2\x96\xb8" : "\xe2\x96\xbe",
                 st.text_dim);
-    dai_ui_text(ui, win->x + bar, win->y + 3.0f, title ? title : "", st.text);
+    // A viewport window's bar belongs to its tabs - printing the title there
+    // too would draw "Scene" under the Scene tab.
+    if (!win->viewport)
+        dai_ui_text(ui, win->x + bar, win->y + 3.0f, title ? title : "", st.text);
 
     if (win->collapsed) return 0;
 
@@ -698,7 +798,9 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
     // it is visible over it - a drag with no feedback is a guess.
     if (drop_dock != DAI_DOCK_NONE) {
         float dx, dy, dw, dh;
-        dock_rect(ui, drop_dock, drop_slot, win->w, win->h, &dx, &dy, &dw, &dh);
+        ui->preview_slot = drop_slot;
+        dock_rect(ui, 0, drop_dock, win->w, win->h, &dx, &dy, &dw, &dh);
+        ui->preview_slot = 0;
         uint32_t tint = (st.accent & 0x00FFFFFFu) | 0x50000000u;
         dai_ui_rect(ui, dx, dy, dw, dh, tint);
         dai_ui_rect_outline(ui, dx, dy, dw, dh, 2.0f, st.accent);
@@ -725,6 +827,16 @@ void dai_ui_window_end(dai_ui *ui) {
     ui->blocked = false;
     ui->cur_layer = 0;
 }
+
+int dai_ui_window_layer(const dai_ui *ui, const char *title) {
+    if (!ui) return 0;
+    uint64_t id = hash_id(title ? title : "window", 0, 0);
+    for (size_t i = 0; i < ui->wins.size(); ++i)
+        if (ui->wins[i].id == id) return (int)i + 1;
+    return 0;
+}
+
+void dai_ui_layer_set(dai_ui *ui, int layer) { if (ui) ui->cur_layer = layer; }
 
 const char *dai_ui_window_front(const dai_ui *ui) {
     if (!ui || ui->wins.empty()) return "";
@@ -871,6 +983,26 @@ int dai_ui_button(dai_ui *ui, const char *utf8) {
     return pressed ? 1 : 0;
 }
 
+int dai_ui_toggle_button(dai_ui *ui, const char *utf8, int active) {
+    if (!ui || !utf8) return 0;
+    float h = widget_height(ui), x, y;
+    next_rect(ui, 0, h, &x, &y);
+    float w = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    uint64_t id = hash_id(utf8, x, y);
+    bool over = inside_chk(ui, x, y, w, h);
+    if (over) { ui->hot = id; ui->mouse_over_ui = true; }
+    int pressed = 0;
+    if (over && ui->input.mouse_down && !ui->prev.mouse_down) ui->active = id;
+    if (ui->active == id && !ui->input.mouse_down) { pressed = over ? 1 : 0; ui->active = 0; }
+    dai_ui_rect(ui, x, y + 1.0f, w, h - 2.0f,
+                active ? ui->style.button_active
+                       : (over ? ui->style.button_hover : ui->style.button));
+    dai_ui_rect_outline(ui, x, y + 1.0f, w, h - 2.0f, 1.0f, ui->style.panel_border);
+    float tw = dai_ui_text_width(ui, utf8);
+    dai_ui_text(ui, x + (w - tw) * 0.5f, y + ui->style.row_pad * 0.5f, utf8, ui->style.text);
+    return pressed;
+}
+
 int dai_ui_checkbox(dai_ui *ui, const char *utf8, int *value) {
     if (!ui || !value) return 0;
     float h = widget_height(ui);
@@ -883,9 +1015,18 @@ int dai_ui_checkbox(dai_ui *ui, const char *utf8, int *value) {
     int changed = 0;
     if (over && ui->input.mouse_down && !ui->prev.mouse_down) { *value = !*value; changed = 1; }
 
-    dai_ui_rect(ui, x, y + 4.0f, box, box, ui->style.track);
+    dai_ui_rect(ui, x, y + 4.0f, box, box, over ? ui->style.button_hover : ui->style.track);
     dai_ui_rect_outline(ui, x, y + 4.0f, box, box, 1.0f, ui->style.panel_border);
-    if (*value) dai_ui_rect(ui, x + 3.0f, y + 7.0f, box - 6.0f, box - 6.0f, ui->style.accent);
+    if (*value) {
+        // A checkmark, drawn as two strokes. Not a filled tile: the box says
+        // "this is a checkbox", the tick says "on", and a blue square said
+        // neither - it looked like a colour swatch.
+        float bx = x, by = y + 4.0f;
+        dai_ui_line(ui, bx + box * 0.20f, by + box * 0.52f, bx + box * 0.42f, by + box * 0.74f,
+                    2.0f, ui->style.text);
+        dai_ui_line(ui, bx + box * 0.42f, by + box * 0.74f, bx + box * 0.82f, by + box * 0.24f,
+                    2.0f, ui->style.text);
+    }
     dai_ui_text(ui, x + box + 8.0f, y + ui->style.row_pad * 0.5f, utf8, ui->style.text);
     return changed;
 }
@@ -1038,7 +1179,10 @@ int dai_ui_header_icon(dai_ui *ui, const char *icon, const char *title,
         else if (open) { *open = !*open; result = 1; }
     }
 
-    dai_ui_rect(ui, x, y, w, h, over ? ui->style.button_hover : ui->style.button);
+    // #3E3E3E - a component header is quieter than a button. The button grey
+    // made every header read as something to press, which is how "Is Trigger"
+    // ended up looking like it lived on a toolbar.
+    dai_ui_rect(ui, x, y, w, h, over ? rgba(0x48, 0x48, 0x48, 255) : rgba(0x3E, 0x3E, 0x3E, 255));
     dai_ui_rect(ui, x, y, 3.0f, h, ui->style.accent);
 
     // The fold arrow, then the component's own icon, then its name. Falls back
@@ -1063,9 +1207,14 @@ int dai_ui_header_icon(dai_ui *ui, const char *icon, const char *title,
     dai_ui_text(ui, tx, y + 2.0f, title, ui->style.text);
     if (enabled) {
         float bx = x + w - box - 4.0f, by = y + 3.0f;
-        dai_ui_rect(ui, bx, by, box, box, ui->style.track);
+        dai_ui_rect(ui, bx, by, box, box, on_box ? ui->style.button_hover : ui->style.track);
         dai_ui_rect_outline(ui, bx, by, box, box, 1.0f, ui->style.panel_border);
-        if (*enabled) dai_ui_rect(ui, bx + 3.0f, by + 3.0f, box - 6.0f, box - 6.0f, ui->style.accent);
+        if (*enabled) {
+            dai_ui_line(ui, bx + box * 0.20f, by + box * 0.52f, bx + box * 0.42f, by + box * 0.74f,
+                        2.0f, ui->style.text);
+            dai_ui_line(ui, bx + box * 0.42f, by + box * 0.74f, bx + box * 0.82f, by + box * 0.24f,
+                        2.0f, ui->style.text);
+        }
     }
     return result;
 }
@@ -1188,8 +1337,11 @@ int dai_ui_option(dai_ui *ui, const char *label, int *value,
     if (*value >= count) *value = count - 1;
     dai_ui_rect(ui, x, y + 2.0f, w, h - 4.0f, over ? ui->style.button_hover : ui->style.button);
     dai_ui_text(ui, x + 7.0f, y + ui->style.row_pad * 0.5f, items[*value], ui->style.text);
-    const char *mark = "▸";
-    dai_ui_text(ui, x + w - 12.0f, y + ui->style.row_pad * 0.5f, mark, ui->style.text_dim);
+    // A chevron, drawn - the "?" the old "▸" glyph fell back to looked like an
+    // error, and it was one: the font simply does not have that code point.
+    float cx = x + w - 12.0f, cy = y + h * 0.5f;
+    dai_ui_line(ui, cx - 3.0f, cy - 2.5f, cx + 1.0f, cy + 1.5f, 1.5f, ui->style.text_dim);
+    dai_ui_line(ui, cx + 1.0f, cy + 1.5f, cx + 5.0f, cy - 2.5f, 1.5f, ui->style.text_dim);
     return changed;
 }
 

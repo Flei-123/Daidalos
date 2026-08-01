@@ -312,7 +312,15 @@ g++ $FLAGS $ARCH -Iinclude examples/hello_daidalos.cpp $LIBS -o build/hello_daid
 if [ "$VK_OK" = "1" ]; then
     for ex in sandbox_demo vehicle_demo model_viewer window_demo particles_demo editor_demo; do
         [ -f "examples/$ex.cpp" ] || continue
-        g++ $FLAGS $ARCH -Iinclude "examples/$ex.cpp" $VKLIBS -o "build/$ex"
+        # The editor drives the asset layer directly (mount, list, instantiate),
+        # so it links it in when it exists; the other examples stay lean.
+        EXTRA=""
+        EXTRA_I=""
+        if [ "$ex" = "editor_demo" ] && [ -n "$ASSETS_LIB" ]; then
+            EXTRA="$ASSETS_LIB"
+            EXTRA_I="-I$MNEMOSYNE/include"
+        fi
+        g++ $FLAGS $ARCH -Iinclude $EXTRA_I "examples/$ex.cpp" $EXTRA $VKLIBS -o "build/$ex"
     done
 fi
 

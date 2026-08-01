@@ -39,6 +39,8 @@ bool needs_rebuild(const dai_node_desc &a, const dai_node_desc &b) {
     if (std::memcmp(&a.render_extent, &b.render_extent, sizeof(dai_vec3)) != 0) return true;
     if (std::memcmp(&a.collider_center, &b.collider_center, sizeof(dai_vec3)) != 0) return true;
     return a.shape != b.shape || a.motion != b.motion || a.no_body != b.no_body ||
+           a.no_collider != b.no_collider || a.no_rigidbody != b.no_rigidbody ||
+           a.trigger != b.trigger ||
            a.no_sleeping != b.no_sleeping ||
            std::memcmp(&a.half_extent, &b.half_extent, sizeof(dai_vec3)) != 0 ||
            std::memcmp(&a.scale, &b.scale, sizeof(dai_vec3)) != 0 ||
@@ -112,21 +114,28 @@ static void resolve_asset_of(dai_doc_sync *s, const dai_node_desc &r,
 
 namespace {
 
+// What the components add up to. The collider checkbox, the rigidbody
+// checkbox and the group flag are three different answers, and none of them is
+// "stop drawing the model":
+//
+//   no_body                     -> no physics at all, still rendered
+//   no_collider + no_rigidbody  -> the same thing, reached the other way
+//   no_collider                 -> a sensor: it moves, nothing bounces off it
+//   trigger                     -> a sensor that still has a collider
+//   no_rigidbody                -> static, whatever Motion says
+bool physicsless(const dai_node_desc &r) {
+    return r.no_body || (r.no_collider && r.no_rigidbody);
+}
+
 bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
-    if (r.no_body) {                       // group / marker: nothing to simulate
-        Live l;
-        l.rev = 0;
-        l.built = r;
-        s->live[n] = l;
-        return true;
-    }
     dai_vec3 wp{}, ws{ 1, 1, 1 };
     dai_quat wr{ 0, 0, 0, 1 };
     dai_doc_world_transform(s->doc, n, &wp, &wr, &ws);
 
     dai_entity_desc d = dai_entity_desc_default();
     d.body.shape = r.shape;
-    d.body.motion = r.motion;
+    d.body.motion = r.no_rigidbody ? DAI_STATIC : r.motion;
+    d.body.sensor = (r.trigger || r.no_collider) && !physicsless(r);
     d.body.half_extent = scaled_extent(r, ws);
     d.body.position = wp;
     d.body.rotation = wr;
@@ -169,7 +178,8 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
     d.invisible = r.hidden;
     d.name = r.name[0] ? r.name : nullptr;
 
-    dai_entity e = dai_scene_spawn(s->scene, &d);
+    dai_entity e = physicsless(r) ? dai_scene_spawn_render(s->scene, &d)
+                                  : dai_scene_spawn(s->scene, &d);
     if (e == DAI_INVALID_ENTITY) return false;
 
     if (!parts.empty())
@@ -309,7 +319,7 @@ uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
                 wp = { wp.x + off.x, wp.y + off.y, wp.z + off.z };
             }
             dai_body_set_transform(s->world, l.body, wp, wr);
-            if (s->zero_velocities)
+            if (s->zero_velocities && l.body != DAI_INVALID_BODY)
                 dai_body_set_velocity(s->world, l.body, dai_vec3{ 0,0,0 }, dai_vec3{ 0,0,0 });
             // A zero colour in the document means "no colour was chosen", and
             // the scene already picked one from the palette when this entity
@@ -355,6 +365,7 @@ uint32_t dai_doc_sync_pull(dai_doc_sync *s, const char *undo_name) {
     for (dai_node n : ids) {
         auto it = s->live.find(n);
         if (it == s->live.end() || !it->second.entity) continue;
+        if (it->second.body == DAI_INVALID_BODY) continue;   // render-only: nothing simulated
         dai_transform t{};
         if (dai_body_get(s->world, it->second.body, &t) != DAI_OK) continue;
         // The body sits at the COLLIDER, which a centre offset moved away from

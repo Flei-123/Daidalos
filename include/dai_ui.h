@@ -105,6 +105,10 @@ typedef struct dai_ui_style {
 DAI_API dai_ui_style dai_ui_style_default(void);
 
 DAI_API dai_ui *dai_ui_create(dai_font *font, dai_texture font_texture);
+/* Swaps the font (and its texture) without rebuilding the UI - what changing
+ * the UI size in Settings does. The widget geometry follows automatically:
+ * everything is measured from the font. */
+DAI_API void    dai_ui_font_set(dai_ui *ui, dai_font *font, dai_texture font_texture);
 DAI_API void    dai_ui_destroy(dai_ui *ui);
 DAI_API dai_ui_style *dai_ui_style_of(dai_ui *ui);
 
@@ -175,6 +179,16 @@ typedef struct dai_ui_window {
      * half. Two windows can share an edge - hierarchy over project, which is
      * the layout every 3D editor ships with. */
     int   dock_slot;
+    /* A viewport window draws its title bar and border but NO body: whatever
+     * is behind it (the 3D view) shows through. The host reads the body rect
+     * back and treats exactly that as the viewport. This is what makes the
+     * scene view a real window - dockable, resizable, tear-off - instead of
+     * "the hole the panels leave". */
+    int   viewport;
+    /* Set by the host, not by the window system: a viewport window that has
+     * been dragged off its fill position floats; one that has not covers the
+     * free area. */
+    int   floated;
 } dai_ui_window;
 
 DAI_API dai_ui_window dai_ui_window_make(float x, float y, float w, float h);
@@ -190,6 +204,11 @@ DAI_API int  dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *w
 DAI_API void dai_ui_window_end(dai_ui *ui);
 /* Which window is in front, by title. "" when the pointer is over none. */
 DAI_API const char *dai_ui_window_front(const dai_ui *ui);
+/* Draw layer of a window (its position in the z order + 1), for chrome the
+ * host draws on TOP of a window after window_end - the tabs in a viewport
+ * window's title bar, for instance. */
+DAI_API int  dai_ui_window_layer(const dai_ui *ui, const char *title);
+DAI_API void dai_ui_layer_set(dai_ui *ui, int layer);
 /* The largest rectangle no window covers - where a 3D viewport belongs.
  * Approximated by starting from the full surface and cutting away the docked
  * edges, which is what an editor layout actually looks like. */
@@ -216,6 +235,10 @@ DAI_API void dai_ui_label(dai_ui *ui, const char *utf8);
 DAI_API void dai_ui_label_fmt(dai_ui *ui, const char *fmt, ...);
 DAI_API int  dai_ui_button(dai_ui *ui, const char *utf8);
 DAI_API int  dai_ui_checkbox(dai_ui *ui, const char *utf8, int *value);
+/* A full width button that can stay ON - "Edit Collider", "Wireframe". The
+ * icon button next to a label did not read as a button at all, and a checkbox
+ * is the wrong shape for "you are now in a mode". */
+DAI_API int  dai_ui_toggle_button(dai_ui *ui, const char *utf8, int active);
 DAI_API int  dai_ui_slider(dai_ui *ui, const char *utf8, float *value, float min, float max);
 DAI_API void dai_ui_progress(dai_ui *ui, float fraction, const char *utf8);
 DAI_API void dai_ui_separator(dai_ui *ui);

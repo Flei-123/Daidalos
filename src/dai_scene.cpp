@@ -16,6 +16,11 @@ namespace {
 
 struct Renderable {
     dai_body body = DAI_INVALID_BODY;
+    // Where a body-less renderable stands. Bodies own their transform; for an
+    // entity that deliberately has none (a model, not a physics object) the
+    // scene keeps it instead.
+    dai_vec3 tpos{ 0, 0, 0 };
+    dai_quat trot{ 0, 0, 0, 1 };
     uint32_t mesh = DAI_MESH_BOX;
     dai_vec3 offset{ 0, 0, 0 };   // mesh relative to the body, body space
     dai_vec3 scale{ 1, 1, 1 };
@@ -134,9 +139,11 @@ uint32_t dai_scene_count(dai_scene *s) {
 }
 
 dai_entity dai_scene_attach(dai_scene *s, dai_body b, const dai_entity_desc *desc) {
-    if (!s || b == DAI_INVALID_BODY || !desc) return DAI_INVALID_ENTITY;
+    if (!s || !desc) return DAI_INVALID_ENTITY;
     Renderable r;
     r.body = b;
+    r.tpos = desc->body.position;
+    r.trot = desc->body.rotation;
     r.alive = true;
     r.visible = !desc->invisible;
     r.roughness = desc->roughness > 0.0f ? desc->roughness : 1.0f;
@@ -166,8 +173,26 @@ dai_entity dai_scene_attach(dai_scene *s, dai_body b, const dai_entity_desc *des
         s->ents.push_back(r);
         idx = (uint32_t)s->ents.size() - 1;
     }
-    s->by_body[b] = idx;
+    if (b != DAI_INVALID_BODY) s->by_body[b] = idx;
     return idx;
+}
+
+dai_entity dai_scene_spawn_render(dai_scene *s, const dai_entity_desc *desc) {
+    // No body at all - the entity is a picture with a transform.
+    return dai_scene_attach(s, DAI_INVALID_BODY, desc);
+}
+
+dai_result dai_scene_set_transform(dai_scene *s, dai_entity e, dai_vec3 pos, dai_quat rot) {
+    if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
+    Renderable &r = s->ents[e];
+    if (r.body != DAI_INVALID_BODY) {
+        // A body's transform belongs to the physics - this is the same call
+        // with the authority in the right place.
+        return dai_body_set_transform(s->world, r.body, pos, rot);
+    }
+    r.tpos = pos;
+    r.trot = rot;
+    return DAI_OK;
 }
 
 dai_entity dai_scene_spawn(dai_scene *s, const dai_entity_desc *desc) {
@@ -180,8 +205,10 @@ dai_entity dai_scene_spawn(dai_scene *s, const dai_entity_desc *desc) {
 dai_result dai_scene_remove(dai_scene *s, dai_entity e) {
     if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
     Renderable &r = s->ents[e];
-    dai_body_destroy(s->world, r.body);
-    s->by_body.erase(r.body);
+    if (r.body != DAI_INVALID_BODY) {
+        dai_body_destroy(s->world, r.body);
+        s->by_body.erase(r.body);
+    }
     r.alive = false;
     r.parts.clear();
     r.name.clear();
@@ -263,6 +290,23 @@ uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t ma
     uint32_t n = dai_get_transforms(s->world, s->scratch.data(), (uint32_t)s->scratch.size(), alpha);
 
     uint32_t w = 0;
+    // Body-less renderables first: their transform is their own.
+    for (size_t i = 1; i < s->ents.size() && w < max; ++i) {
+        const Renderable &r = s->ents[i];
+        if (!r.alive || !r.visible || r.body != DAI_INVALID_BODY) continue;
+        dai_render_instance &o = out[w++];
+        o = dai_render_instance_default();
+        o.position = r.tpos;
+        o.rotation = r.trot;
+        o.scale = r.scale;
+        o.color = r.color;
+        o.mesh = r.mesh;
+        o.param = r.param;
+        o.roughness = r.roughness;
+        o.emissive = r.emissive;
+        o.flags = r.flags;
+        o.material = r.material;
+    }
     for (uint32_t i = 0; i < n && w < max; ++i) {
         const dai_transform &t = s->scratch[i];
         auto it = s->by_body.find(t.body);

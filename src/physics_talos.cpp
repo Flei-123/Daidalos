@@ -206,6 +206,7 @@ public:
         bs.linear_damping   = d.linear_damping;
         bs.angular_damping  = d.angular_damping;
         bs.allow_sleeping   = d.no_sleeping ? 0 : 1;
+        bs.is_sensor        = d.sensor != 0;   // reports overlaps, blocks nothing
         bs.user_data        = slot;
         if (d.density > 0.0f && mt == TAL_MOTION_DYNAMIC) {
             float m = tal_shape_get_mass(shape, d.density);

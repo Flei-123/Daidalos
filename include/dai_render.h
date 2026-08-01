@@ -362,6 +362,8 @@ typedef enum dai_key {
     DAI_KEY_END       = 0xFF57,
     DAI_KEY_F1        = 0xFFBE,
     DAI_KEY_F2        = 0xFFBF,
+    DAI_KEY_F3        = 0xFFC0,
+    DAI_KEY_F4        = 0xFFC1,
     DAI_KEY_F5        = 0xFFC2,
 
     /* Modifiers come in pairs because X11 reports them that way. A backend that
