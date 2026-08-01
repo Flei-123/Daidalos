@@ -50,6 +50,13 @@ struct dai_window {
     // what a text field wants, and nothing like "is the key held".
     uint32_t text[64] = { 0 };
     uint32_t text_head = 0, text_tail = 0;   // ring: head writes, tail reads
+
+    // The pointer shape. Windows resets it to the window class's cursor on
+    // every mouse move unless WM_SETCURSOR is answered, which is why this is a
+    // stored handle and not a one off SetCursor call.
+    HCURSOR cursor = nullptr;
+    int     cursor_id = -1;
+    int     dbl_click = 0;
 };
 
 namespace {
@@ -76,6 +83,8 @@ uint32_t dai_key_from_vk(WPARAM vk) {
     case VK_UP:      return DAI_KEY_UP;
     case VK_RIGHT:   return DAI_KEY_RIGHT;
     case VK_DOWN:    return DAI_KEY_DOWN;
+    case VK_HOME:    return DAI_KEY_HOME;
+    case VK_END:     return DAI_KEY_END;
     case VK_F1:      return DAI_KEY_F1;
     case VK_F5:      return DAI_KEY_F5;
     case VK_LSHIFT:  return DAI_KEY_SHIFT_L;
@@ -145,7 +154,13 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    case WM_SETCURSOR:
+        // Only inside the client area: the frame's own resize cursors are the
+        // window manager's business.
+        if (LOWORD(lp) == HTCLIENT && w->cursor) { SetCursor(w->cursor); return TRUE; }
+        break;
     case WM_MOUSEMOVE:  w->mouse_x = (int)(short)LOWORD(lp); w->mouse_y = (int)(short)HIWORD(lp); return 0;
+    case WM_LBUTTONDBLCLK: w->buttons |= 1u << 1; w->dbl_click = 1; return 0;
     case WM_LBUTTONDOWN: w->buttons |= 1u << 1; return 0;
     case WM_LBUTTONUP:   w->buttons &= ~(1u << 1); return 0;
     case WM_MBUTTONDOWN: w->buttons |= 1u << 2; return 0;
@@ -263,6 +278,7 @@ dai_window *dai_window_open(dai_renderer *r, const char *title, uint32_t width, 
     wc.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
     wc.lpfnWndProc = wnd_proc;
     wc.hInstance = w->inst;
+    wc.style |= CS_DBLCLKS;                                 // WM_LBUTTONDBLCLK at all
     wc.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);   // IDC_* are MAKEINTRESOURCE ordinals
     wc.lpszClassName = L"DaidalosWindow";
     RegisterClassExW(&wc);          // duplicate registration is harmless
@@ -429,6 +445,28 @@ int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {
     if (y) *y = (int)((double)w->mouse_y * sy);
     if (buttons) *buttons = w->buttons;
     return 1;
+}
+
+void dai_window_cursor(dai_window *w, int cursor) {
+    if (!w) return;
+    if (cursor < 0 || cursor > 6) cursor = 0;
+    if (cursor == w->cursor_id) return;
+    static const LPCWSTR SHAPE[7] = {
+        (LPCWSTR)IDC_ARROW, (LPCWSTR)IDC_IBEAM, (LPCWSTR)IDC_SIZEWE, (LPCWSTR)IDC_SIZENS,
+        (LPCWSTR)IDC_SIZENWSE, (LPCWSTR)IDC_SIZENESW, (LPCWSTR)IDC_HAND
+    };
+    HCURSOR h = LoadCursorW(nullptr, SHAPE[cursor]);
+    if (!h) return;
+    w->cursor = h;
+    w->cursor_id = cursor;
+    SetCursor(h);
+}
+
+int dai_window_double_click(dai_window *w) {
+    if (!w) return 0;
+    int v = w->dbl_click;
+    w->dbl_click = 0;
+    return v;
 }
 
 void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height) {

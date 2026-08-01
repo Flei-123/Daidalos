@@ -354,10 +354,12 @@ typedef enum dai_key {
     DAI_KEY_RETURN    = 0xFF0D,
     DAI_KEY_BACKSPACE = 0xFF08,
     DAI_KEY_DELETE    = 0xFFFF,
+    DAI_KEY_HOME      = 0xFF50,
     DAI_KEY_LEFT      = 0xFF51,
     DAI_KEY_UP        = 0xFF52,
     DAI_KEY_RIGHT     = 0xFF53,
     DAI_KEY_DOWN      = 0xFF54,
+    DAI_KEY_END       = 0xFF57,
     DAI_KEY_F1        = 0xFFBE,
     DAI_KEY_F2        = 0xFFBF,
     DAI_KEY_F5        = 0xFFC2,
@@ -393,6 +395,31 @@ DAI_API int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons);
  * so a frame that is even slightly late misses it entirely. */
 DAI_API float dai_window_wheel(dai_window *w);
 DAI_API void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height);
+
+/* The pointer shape. The values ARE dai_ui_cursor_kind's, so a host can pass
+ * dai_ui_cursor(ui) straight through without a translation table - the UI is
+ * the only thing that knows which widget is under the pointer, and the window
+ * is the only thing that can set a system cursor.
+ *
+ * Cheap to call every frame: the backend only touches the system when the
+ * shape actually changes. */
+typedef enum dai_cursor {
+    DAI_WINDOW_CURSOR_ARROW = 0,
+    DAI_WINDOW_CURSOR_TEXT,
+    DAI_WINDOW_CURSOR_SIZE_WE,
+    DAI_WINDOW_CURSOR_SIZE_NS,
+    DAI_WINDOW_CURSOR_SIZE_NWSE,
+    DAI_WINDOW_CURSOR_SIZE_NESW,
+    DAI_WINDOW_CURSOR_HAND
+} dai_cursor;
+DAI_API void dai_window_cursor(dai_window *w, int cursor);
+
+/* Was the most recent press a double click? Reads and clears, like the wheel:
+ * a double click is two presses and a gap, and the only place that knows the
+ * gap was short enough is the window system's own timer. Text fields need it
+ * (double click selects the whole value) and polling button state cannot tell
+ * you. */
+DAI_API int dai_window_double_click(dai_window *w);
 
 /* ---- frame ------------------------------------------------------------- */
 

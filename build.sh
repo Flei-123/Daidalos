@@ -284,6 +284,10 @@ if [ "$VK_OK" = "1" ]; then
     # with. Needs no renderer: it reads the atlas and the vertices.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_window.cpp src/dai_ui.cpp src/dai_font.cpp \
         src/dai_svg.cpp src/dai_icons.cpp -o build/test_ui_window
+    # Text fields: selection, caret, Home/End, Escape - and the resize edges.
+    # No renderer: input in, vertices out.
+    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_field.cpp src/dai_ui.cpp src/dai_font.cpp \
+        src/dai_svg.cpp src/dai_icons.cpp -o build/test_ui_field && ./build/test_ui_field
     g++ $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
     if [ -n "$ASSETS_LIB" ]; then

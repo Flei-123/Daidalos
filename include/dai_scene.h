@@ -35,6 +35,12 @@ typedef struct dai_entity_desc {
     uint32_t      mesh;         /* 0xFFFFFFFF -> pick from body.shape           */
     dai_vec3      color;        /* 0,0,0 -> a stable colour derived from the id */
     dai_vec3      render_scale; /* 0,0,0 -> derive from the collision shape     */
+    /* Where the MESH sits relative to the body, in the body's own frame. Not a
+     * cosmetic nicety: a collider with a centre offset (Unity's Box Collider
+     * "Center") moves the collision shape and must NOT move the model, and the
+     * body is what carries the transform here. So the collider offset becomes
+     * the mesh's negative offset, and the object stays where it is drawn. */
+    dai_vec3      render_offset;
     float         roughness;    /* 0 -> 1 (matte)                               */
     float         emissive;
     uint32_t      material;     /* dai_material, 0 = default                    */

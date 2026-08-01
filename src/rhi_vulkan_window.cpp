@@ -50,6 +50,18 @@ struct dai_window {
     uint32_t text[64] = { 0 };
     uint32_t text_head = 0, text_tail = 0;
     float    wheel = 0.0f;
+
+    // Pointer shapes, created on first use. X11 has them built in (the "cursor
+    // font"), so this costs nothing until something asks for one.
+    Cursor cursors[7] = { 0, 0, 0, 0, 0, 0, 0 };
+    int    cursor_now = -1;
+
+    // Double click: X11 does not have one. It hands out presses with a
+    // millisecond timestamp and leaves the policy to the toolkit - 400 ms and
+    // 4 px is what every toolkit picks.
+    unsigned long last_press_time = 0;
+    int  last_press_x = -999, last_press_y = -999;
+    int  dbl_click = 0;
 };
 
 namespace {
@@ -231,7 +243,17 @@ int dai_window_poll(dai_window *w) {
             // the button mask, or "middle drag" would trigger on every scroll.
             if (e.xbutton.button == 4) w->wheel += 1.0f;
             else if (e.xbutton.button == 5) w->wheel -= 1.0f;
-            else w->buttons |= (1u << e.xbutton.button);
+            else {
+                w->buttons |= (1u << e.xbutton.button);
+                if (e.xbutton.button == 1) {
+                    long dt = (long)(e.xbutton.time - w->last_press_time);
+                    int dx = e.xbutton.x - w->last_press_x, dy = e.xbutton.y - w->last_press_y;
+                    if (dt > 0 && dt < 400 && dx * dx + dy * dy <= 16) w->dbl_click = 1;
+                    w->last_press_time = e.xbutton.time;
+                    w->last_press_x = e.xbutton.x;
+                    w->last_press_y = e.xbutton.y;
+                }
+            }
             break;
         case ButtonRelease:
             if (e.xbutton.button != 4 && e.xbutton.button != 5)
@@ -354,6 +376,29 @@ int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {
     if (y) *y = (int)((double)w->mouse_y * sy);
     if (buttons) *buttons = w->buttons;
     return 1;
+}
+
+int dai_window_double_click(dai_window *w) {
+    if (!w) return 0;
+    int v = w->dbl_click;
+    w->dbl_click = 0;
+    return v;
+}
+
+void dai_window_cursor(dai_window *w, int cursor) {
+    if (!w || !w->dpy) return;
+    if (cursor < 0 || cursor > 6) cursor = 0;
+    if (cursor == w->cursor_now) return;          // only talk to X when it changes
+    if (!w->cursors[cursor]) {
+        // X11 cursor font shapes: XC_left_ptr 68, XC_xterm 152, XC_sb_h_double_arrow
+        // 108, XC_sb_v_double_arrow 116, XC_bottom_right_corner 14,
+        // XC_bottom_left_corner 12, XC_hand2 60. Spelled as numbers so this
+        // file does not need X11/cursorfont.h.
+        static const unsigned int SHAPE[7] = { 68, 152, 108, 116, 14, 12, 60 };
+        w->cursors[cursor] = XCreateFontCursor(w->dpy, SHAPE[cursor]);
+    }
+    XDefineCursor(w->dpy, w->win, w->cursors[cursor]);
+    w->cursor_now = cursor;
 }
 
 void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height) {

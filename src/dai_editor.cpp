@@ -114,6 +114,12 @@ struct dai_editor {
 
     int  state = DAI_EDITOR_EDIT;
     dai_tick play_start_tick = 0;
+    // The document as it was when Play was pressed. Everything done while the
+    // simulation runs - a gizmo drag, a typed position, a new object - is a
+    // rehearsal, and Stop throws it away. Without this, moving a crate during
+    // play wrote through to the document and Stop "restored" the scene to the
+    // moved crate, which is the one thing play mode must never do.
+    dai_doc_state *play_state = nullptr;
 
     bool dragging = false;
     bool drag_screen_rotate = false;   // ring seen edge-on, fall back to screen angle
@@ -214,7 +220,10 @@ dai_editor *dai_editor_create(dai_doc *doc, dai_doc_sync *sync) {
     return e;
 }
 
-void dai_editor_destroy(dai_editor *e) { delete e; }
+void dai_editor_destroy(dai_editor *e) {
+    if (e && e->play_state) dai_doc_state_free(e->play_state);
+    delete e;
+}
 dai_doc *dai_editor_doc(const dai_editor *e) { return e ? e->doc : nullptr; }
 
 void dai_editor_camera_viewport(dai_editor *e, float vw, float vh) {
@@ -973,6 +982,8 @@ void dai_editor_play(dai_editor *e) {
     if (!w) return;
     if (e->state == DAI_EDITOR_EDIT) {
         if (e->dragging) dai_editor_drag_cancel(e);
+        if (e->play_state) dai_doc_state_free(e->play_state);
+        e->play_state = dai_doc_state_capture(e->doc);
         resync(e);                       // start from what the document says
         // +1 on purpose. A snapshot holds the state at the START of its tick,
         // before that tick's commands run - and the bodies the resync just
@@ -990,6 +1001,16 @@ void dai_editor_pause(dai_editor *e) {
 void dai_editor_stop(dai_editor *e) {
     if (!e || e->state == DAI_EDITOR_EDIT) return;
     e->state = DAI_EDITOR_EDIT;
+    if (e->dragging) dai_editor_drag_cancel(e);
+    // Undo everything that was done WHILE playing. Unity does exactly this,
+    // and for the same reason: you move things around during play to see what
+    // happens, not to edit the scene. dai_editor_apply_sim is the explicit
+    // "keep it" button, and it is the only way anything survives Stop.
+    if (e->play_state) {
+        dai_doc_state_restore(e->doc, e->play_state);
+        dai_doc_state_free(e->play_state);
+        e->play_state = nullptr;
+    }
     // The document is untouched, so putting the world back is just a matter of
     // telling the sync layer that everything it believes is stale.
     if (e->sync) {
@@ -1024,6 +1045,19 @@ int dai_editor_live_position(const dai_editor *e, dai_node n, dai_vec3 *out) {
     dai_transform t{};
     if (dai_body_get(editor_world(e), b, &t) != DAI_OK) return 0;
     *out = t.position;
+    // A collider centre offset puts the body somewhere the object is not. The
+    // inspector asks where the OBJECT is.
+    dai_node_desc rec{};
+    if (dai_doc_get(e->doc, n, &rec) == DAI_OK &&
+        (rec.collider_center.x || rec.collider_center.y || rec.collider_center.z)) {
+        dai_vec3 wp{}, ws{ 1, 1, 1 };
+        dai_quat wr{ 0, 0, 0, 1 };
+        dai_doc_world_transform(e->doc, n, &wp, &wr, &ws);
+        dai_vec3 off = qrot(t.rotation, dai_vec3{ rec.collider_center.x * ws.x,
+                                                  rec.collider_center.y * ws.y,
+                                                  rec.collider_center.z * ws.z });
+        out->x -= off.x; out->y -= off.y; out->z -= off.z;
+    }
     return 1;
 }
 
@@ -1068,7 +1102,15 @@ uint32_t dai_editor_advance(dai_editor *e, double real_seconds, float *out_alpha
 
 uint32_t dai_editor_apply_sim(dai_editor *e) {
     if (!e || !e->sync) return 0;
-    return dai_doc_sync_pull(e->sync, "Apply simulation");
+    uint32_t n = dai_doc_sync_pull(e->sync, "Apply simulation");
+    // "Keep" means keep: the play snapshot would otherwise put everything back
+    // the moment Stop is pressed, undoing the very thing this button did. It
+    // stays undoable through the undo stack, which is where it belongs.
+    if (e->play_state) {
+        dai_doc_state_free(e->play_state);
+        e->play_state = dai_doc_state_capture(e->doc);
+    }
+    return n;
 }
 
 // --------------------------------------------------------------- timeline

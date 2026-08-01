@@ -170,6 +170,9 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
         if (r.shape != def.shape)           put(s, "  shape %d\n", r.shape);
         if (r.motion != def.motion)         put(s, "  motion %d\n", r.motion);
         if (!v3eq(r.half_extent, def.half_extent)) write_v3(s, "extent", r.half_extent);
+        if (!v3eq(r.collider_center, def.collider_center)) write_v3(s, "center", r.collider_center);
+        if (r.trigger != def.trigger)       put(s, "  trigger %d\n", r.trigger);
+        if (!v3eq(r.render_extent, def.render_extent)) write_v3(s, "rextent", r.render_extent);
         if (!feq(r.density, def.density))       put(s, "  density %s\n", fstr(r.density).c_str());
         if (!feq(r.friction, def.friction))     put(s, "  friction %s\n", fstr(r.friction).c_str());
         if (!feq(r.restitution, def.restitution)) put(s, "  restitution %s\n", fstr(r.restitution).c_str());
@@ -272,6 +275,9 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "shape")  { ok = parse_i32(after, &rec.shape); }
         else if (key == "motion") { ok = parse_i32(after, &rec.motion); }
         else if (key == "extent") { ok = parse_floats(after, &rec.half_extent.x, 3); }
+        else if (key == "center") { ok = parse_floats(after, &rec.collider_center.x, 3); }
+        else if (key == "trigger") { ok = parse_i32(after, &rec.trigger); }
+        else if (key == "rextent") { ok = parse_floats(after, &rec.render_extent.x, 3); }
         else if (key == "density")     { ok = parse_floats(after, &rec.density, 1); }
         else if (key == "friction")    { ok = parse_floats(after, &rec.friction, 1); }
         else if (key == "restitution") { ok = parse_floats(after, &rec.restitution, 1); }

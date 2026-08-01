@@ -17,6 +17,7 @@ namespace {
 struct Renderable {
     dai_body body = DAI_INVALID_BODY;
     uint32_t mesh = DAI_MESH_BOX;
+    dai_vec3 offset{ 0, 0, 0 };   // mesh relative to the body, body space
     dai_vec3 scale{ 1, 1, 1 };
     dai_vec3 color{ 0.8f, 0.8f, 0.8f };
     float    param = 0.0f;
@@ -148,6 +149,7 @@ dai_entity dai_scene_attach(dai_scene *s, dai_body b, const dai_entity_desc *des
     shape_to_mesh(desc->body.shape, desc->body.half_extent, &mesh, &scale, &param);
     r.mesh = (desc->mesh == 0xFFFFFFFFu) ? mesh : desc->mesh;
     r.scale = is_zero(desc->render_scale) ? scale : desc->render_scale;
+    r.offset = desc->render_offset;
     r.param = param;
     r.color = is_zero(desc->color) ? auto_color((uint32_t)s->ents.size()) : desc->color;
 
@@ -275,6 +277,7 @@ uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t ma
             for (const dai_render_part &p : r.render_parts) {
                 if (w >= max) break;
                 dai_vec3 local = mul(p.position, r.scale);
+                local = { local.x + r.offset.x, local.y + r.offset.y, local.z + r.offset.z };
                 dai_render_instance &o = out[w++];
                 o = dai_render_instance_default();
                 o.position = { t.position.x + rotate(t.rotation, local).x,
@@ -293,6 +296,11 @@ uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t ma
             dai_render_instance &o = out[w++];
             o = dai_render_instance_default();
             o.position = t.position;
+            if (!is_zero(r.offset)) {
+                dai_vec3 off = rotate(t.rotation, r.offset);
+                o.position = { t.position.x + off.x, t.position.y + off.y,
+                               t.position.z + off.z };
+            }
             o.rotation = t.rotation;
             o.scale = r.scale;
             o.color = r.color;

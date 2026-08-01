@@ -86,6 +86,21 @@ struct dai_editor_ui {
     // folds live here.
     int fold_transform = 1, fold_body = 1, fold_collider = 1, fold_render = 1;
 
+    // ---- scene view / game view ------------------------------------------
+    int  view = DAI_VIEW_SCENE;
+    int  view_was_playing = 0;      // so Play switches to Game exactly once
+
+    // ---- Edit Collider ---------------------------------------------------
+    // The mode Unity's little box-with-handles button turns on: the collider
+    // gets six face handles in the scene and dragging one moves that FACE,
+    // which changes size and centre together - dragging the right face must
+    // not also move the left one.
+    int   collider_edit = 0;
+    int   col_axis = -1;            // 0,1,2 while a handle is held
+    int   col_sign = 1;
+    float col_last_x = 0, col_last_y = 0;
+    bool  col_tx_open = false;
+
     char     name_buf[DAI_NODE_NAME_MAX] = { 0 };
     dai_node name_buf_node = DAI_INVALID_NODE;
     char     tag_buf[32] = { 0 };
@@ -369,6 +384,44 @@ void dai_editor_ui_hierarchy(dai_editor_ui *p, float x, float y, float w, float 
 
 // -------------------------------------------------------------- inspector
 
+namespace {
+
+// Unity's inspector is a label column and a value column, and the label column
+// is a fraction of the panel, not a fixed number of pixels: at 230 px the
+// three XYZ boxes have to give the labels less room than they do at 400.
+void fit_label_column(dai_ui *ui) {
+    dai_ui_style *st = dai_ui_style_of(ui);
+    float w = dai_ui_panel_width(ui) * 0.32f;
+    if (w < 52.0f) w = 52.0f;
+    if (w > 110.0f) w = 110.0f;
+    st->label_w = w;      // kept, not restored: the panel it was measured for
+                          // is the one every field after this belongs to
+}
+
+// The builtin mesh a shape draws as. Freezing this is what stops "I changed
+// the collider to a sphere" from also turning the model into a sphere.
+uint32_t mesh_of_shape(int shape) {
+    switch (shape) {
+    case DAI_SHAPE_SPHERE:  return DAI_MESH_SPHERE;
+    case DAI_SHAPE_CAPSULE: return DAI_MESH_CAPSULE;
+    default:                return DAI_MESH_BOX;
+    }
+}
+
+const char *collider_title(int shape) {
+    switch (shape) {
+    case DAI_SHAPE_SPHERE:  return "Sphere Collider";
+    case DAI_SHAPE_CAPSULE: return "Capsule Collider";
+    default:                return "Box Collider";
+    }
+}
+
+bool v3_differs(dai_vec3 a, dai_vec3 b) {
+    return a.x != b.x || a.y != b.y || a.z != b.z;
+}
+
+} // namespace
+
 static void inspector_body(dai_editor_ui *p) {
     close_field_tx_on_release(p);
     dai_doc *d = dai_editor_doc(p->ed);
@@ -386,9 +439,12 @@ static void inspector_body(dai_editor_ui *p) {
     if (dai_doc_get(d, n, &r) != DAI_OK) return;
     dai_node_desc before = r;
 
+    fit_label_column(p->ui);
     int playing = dai_editor_state_get(p->ed) != DAI_EDITOR_EDIT;
 
-    // ---- header: what this object is --------------------------------------
+    // ---- the object header: icon, active, name, then tag ------------------
+    // Same shape as Unity's: what the thing is, whether it is on, what it is
+    // called. The name is a text field you can put a caret in, not a label.
     if (p->name_buf_node != n) {
         std::snprintf(p->name_buf, sizeof(p->name_buf), "%s", r.name);
         p->name_buf_node = n;
@@ -416,21 +472,10 @@ static void inspector_body(dai_editor_ui *p) {
         // While playing the document still holds the pose from before play -
         // that is exactly what makes Stop able to restore it - so a panel that
         // asked the document would show a frozen ghost. Ask the BODY where the
-        // object is, and write typed values back to the document: the last
-        // pose you set up is the one Stop returns to.
+        // object is, and write typed values back to the document.
         dai_vec3 pos = r.position;
         if (playing) dai_editor_live_position(p->ed, n, &pos);
-        if (dai_ui_num_vec3(p->ui, "Position", &pos.x, 0.02f)) {
-            if (playing) {
-                // Only the root's stored local pose moves with the world one;
-                // a child's parent chain might be moving too. For a child the
-                // document's local value is the honest thing to edit, and the
-                // live readout above already told the truth about the world.
-                r.position = pos;
-            } else {
-                r.position = pos;
-            }
-        }
+        if (dai_ui_num_vec3(p->ui, "Position", &pos.x, 0.02f)) r.position = pos;
 
         // Rotation is shown in degrees. The cache is refreshed whenever the
         // quaternion moved from anywhere that is not this field - the gizmo,
@@ -448,71 +493,38 @@ static void inspector_body(dai_editor_ui *p) {
         dai_ui_num_vec3(p->ui, "Scale", &r.scale.x, 0.01f);
     }
 
-    // ---- Rigidbody ---------------------------------------------------------
-    // Only the mass side of physics: which solver drives the transform and
-    // how much it resists. The shape it drives is the collider's business.
-    int has_body = !r.no_body;
-    if (dai_ui_header_icon(p->ui, DAI_ICON_BOX, "Rigidbody", &p->fold_body, &has_body) == 2)
-        r.no_body = !has_body;
-    if (p->fold_body) {
-        if (!has_body) {
-            dai_ui_label(p->ui, "group - no body, children move with it");
-        } else {
-            dai_ui_option(p->ui, "Motion", &r.motion, MOTIONS, 3);
-            dai_ui_num_field(p->ui, "Friction", &r.friction, 0.005f, 0.0f, 10.0f, "friction");
-            dai_ui_num_field(p->ui, "Bounce", &r.restitution, 0.005f, 0.0f, 1.0f, "bounce");
-        }
-    }
-
-    // ---- Collider ----------------------------------------------------------
-    // What the world can hit, and whether hitting it does anything. Separate
-    // from the rigidbody because that is what they are: a static level is a
-    // collider without a rigidbody, and a trigger volume is a collider that
-    // reports overlaps instead of blocking.
-    int has_collider = !r.no_body;
-    if (dai_ui_header_icon(p->ui, DAI_ICON_SPHERE, "Collider", &p->fold_collider, &has_collider) == 2)
-        r.no_body = !has_collider;
-    if (p->fold_collider) {
-        if (!has_collider) {
-            dai_ui_label(p->ui, "no collider - nothing can hit this");
-        } else {
-            int shape_idx = r.shape;
-            // mesh==0xFFFFFFFE is the explicit "from the asset" answer, distinct
-            // from 0xFFFFFFFF ("derive from the shape"): without that, picking
-            // From Mesh and then a different asset quietly keeps the mesh.
-            if (r.mesh == 0xFFFFFFFEu) shape_idx = 3;
-            if (dai_ui_option(p->ui, "Shape", &shape_idx, COLLIDER_SHAPES, 4)) {
-                if (shape_idx == 3) r.mesh = 0xFFFFFFFEu;
-                else { r.shape = shape_idx; r.mesh = 0xFFFFFFFFu; }
-            }
-            int trig = r.trigger;
-            if (dai_ui_checkbox(p->ui, "Is Trigger", &trig)) r.trigger = trig;
-            if (shape_idx != 3)
-                dai_ui_num_vec3(p->ui, "Size", &r.half_extent.x, 0.01f);
-            dai_ui_num_vec3(p->ui, "Center", &r.collider_center.x, 0.01f);
-        }
-    }
-
-    // ---- Renderer ----------------------------------------------------------
+    // ---- Mesh Renderer -----------------------------------------------------
     int visible = !r.hidden;
-    if (dai_ui_header_icon(p->ui, visible ? DAI_ICON_EYE : DAI_ICON_EYE_OFF, "Renderer",
+    if (dai_ui_header_icon(p->ui, visible ? DAI_ICON_EYE : DAI_ICON_EYE_OFF, "Mesh Renderer",
                            &p->fold_render, &visible) == 2)
         r.hidden = !visible;
     if (p->fold_render) {
-        // Which mesh. The names are the host renderer's inventory - without
-        // them the field is a number, and nobody picks mesh 7 on purpose.
         if (p->mesh_name) {
             const char *cur = r.mesh == 0xFFFFFFFFu ? "(from shape)"
+                            : r.mesh == 0xFFFFFFFEu ? "(from asset)"
                             : p->mesh_name(r.mesh, p->mesh_user);
             dai_ui_label_fmt(p->ui, "Mesh: %s", cur ? cur : "?");
-            dai_ui_row(p->ui, 22.0f);
+            dai_ui_row(p->ui, 20.0f);
             if (dai_ui_button(p->ui, "<") && p->mesh_count > 0) {
-                r.mesh = r.mesh == 0xFFFFFFFFu ? p->mesh_count - 1
+                r.mesh = r.mesh >= 0xFFFFFFFEu ? p->mesh_count - 1
                        : (r.mesh + p->mesh_count - 1) % p->mesh_count;
             }
             if (dai_ui_button(p->ui, ">") && p->mesh_count > 0) {
-                r.mesh = r.mesh == 0xFFFFFFFFu ? 0 : (r.mesh + 1) % p->mesh_count;
+                r.mesh = r.mesh >= 0xFFFFFFFEu ? 0 : (r.mesh + 1) % p->mesh_count;
             }
+            if (dai_ui_button(p->ui, "auto")) r.mesh = 0xFFFFFFFFu;
+            dai_ui_row_end(p->ui);
+        }
+        // The size of the DRAWN mesh. Zero means "same as the collider", so a
+        // fresh box shows the collider's numbers and stops following it the
+        // moment either one is typed into.
+        dai_vec3 shown_size = r.render_extent;
+        bool follows = !(shown_size.x || shown_size.y || shown_size.z);
+        if (follows) shown_size = r.half_extent;
+        dai_vec3 full{ shown_size.x * 2.0f, shown_size.y * 2.0f, shown_size.z * 2.0f };
+        if (dai_ui_num_vec3(p->ui, "Size", &full.x, 0.01f)) {
+            r.render_extent = { full.x * 0.5f, full.y * 0.5f, full.z * 0.5f };
+            if (r.mesh == 0xFFFFFFFFu) r.mesh = mesh_of_shape(r.shape);
         }
         // Show what the object IS, not what the document happens to store. A
         // node that never had a colour set carries 0,0,0 and the scene picked
@@ -527,6 +539,75 @@ static void inspector_body(dai_editor_ui *p) {
         dai_ui_num_field(p->ui, "Emissive", &r.emissive, 0.01f, 0.0f, 100.0f, "emissive");
     }
 
+    // ---- Collider ----------------------------------------------------------
+    // What the world can hit. NOT what it looks like: the wireframe is green
+    // and separate on purpose, and Size here resizes the collision box while
+    // the model stays the size it was.
+    int has_collider = !r.no_body;
+    if (dai_ui_header_icon(p->ui, DAI_ICON_BOX, collider_title(r.shape),
+                           &p->fold_collider, &has_collider) == 2)
+        r.no_body = !has_collider;
+    if (p->fold_collider) {
+        if (!has_collider) {
+            dai_ui_label(p->ui, "no collider - nothing can hit this");
+        } else {
+            // Edit Collider: the same toggle button Unity puts at the top of
+            // the block, and it does the same thing - handles in the scene.
+            dai_ui_row(p->ui, 22.0f);
+            dai_ui_label(p->ui, "Edit Collider");
+            if (dai_ui_icon_button(p->ui, DAI_ICON_SCALE, "Edit the collider in the scene",
+                                   p->collider_edit))
+                p->collider_edit = !p->collider_edit;
+            dai_ui_row_end(p->ui);
+
+            int shape_idx = r.shape;
+            if (r.mesh == 0xFFFFFFFEu) shape_idx = 3;
+            if (dai_ui_option(p->ui, "Shape", &shape_idx, COLLIDER_SHAPES, 4)) {
+                // Changing the collider's shape must not reshape the model:
+                // pin the mesh to what it is right now first.
+                if (r.mesh == 0xFFFFFFFFu) r.mesh = mesh_of_shape(r.shape);
+                if (shape_idx == 3) r.mesh = 0xFFFFFFFEu;
+                else                r.shape = shape_idx;
+            }
+            int trig = r.trigger;
+            if (dai_ui_checkbox(p->ui, "Is Trigger", &trig)) r.trigger = trig;
+            dai_ui_num_vec3(p->ui, "Center", &r.collider_center.x, 0.01f);
+            if (shape_idx != 3) {
+                // Unity shows the FULL size of the box, not the half extent.
+                // The document stores halves, so the field converts.
+                dai_vec3 size{ r.half_extent.x * 2.0f, r.half_extent.y * 2.0f,
+                               r.half_extent.z * 2.0f };
+                if (dai_ui_num_vec3(p->ui, "Size", &size.x, 0.01f))
+                    r.half_extent = { size.x * 0.5f, size.y * 0.5f, size.z * 0.5f };
+            }
+        }
+    }
+
+    // ---- Rigidbody ---------------------------------------------------------
+    int has_body = !r.no_body;
+    if (dai_ui_header_icon(p->ui, DAI_ICON_SETTINGS, "Rigidbody", &p->fold_body, &has_body) == 2)
+        r.no_body = !has_body;
+    if (p->fold_body) {
+        if (!has_body) {
+            dai_ui_label(p->ui, "group - no body, children move with it");
+        } else {
+            dai_ui_option(p->ui, "Motion", &r.motion, MOTIONS, 3);
+            dai_ui_num_field(p->ui, "Friction", &r.friction, 0.005f, 0.0f, 10.0f, "friction");
+            dai_ui_num_field(p->ui, "Bounce", &r.restitution, 0.005f, 0.0f, 1.0f, "bounce");
+        }
+    }
+
+    // THE rule this whole session was about: the collider is not the mesh. The
+    // moment the collider's size or offset is touched, the mesh stops
+    // following it - by freezing the size it has at that instant, so nothing
+    // visibly jumps and the next drag of the green box leaves the model alone.
+    if ((v3_differs(r.half_extent, before.half_extent) ||
+         v3_differs(r.collider_center, before.collider_center)) &&
+        !(r.render_extent.x || r.render_extent.y || r.render_extent.z)) {
+        r.render_extent = before.half_extent;
+        if (r.mesh == 0xFFFFFFFFu) r.mesh = mesh_of_shape(before.shape);
+    }
+
     // Clamp here rather than in the widgets: these are physical quantities and
     // a negative roughness or a zero scale would reach the renderer as garbage.
     if (r.roughness < 0.02f) r.roughness = 0.02f;
@@ -538,6 +619,8 @@ static void inspector_body(dai_editor_ui *p) {
         if (std::fabs(*v) < 0.001f) *v = 0.001f;
     for (float *v : { &r.half_extent.x, &r.half_extent.y, &r.half_extent.z })
         if (*v < 0.001f) *v = 0.001f;
+    for (float *v : { &r.render_extent.x, &r.render_extent.y, &r.render_extent.z })
+        if (*v < 0.0f) *v = 0.0f;
     for (float *v : { &r.color.x, &r.color.y, &r.color.z })
         *v = *v < 0.0f ? 0.0f : (*v > 1.0f ? 1.0f : *v);
 
@@ -663,6 +746,7 @@ void dai_editor_ui_timeline(dai_editor_ui *p, float x, float y, float w) {
 
 void dai_editor_ui_gizmo(dai_editor_ui *p) {
     if (!p) return;
+    if (p->collider_edit) return;   // one set of handles at a time
     uint32_t n = dai_editor_gizmo_lines(p->ed, nullptr, 0);
     if (!n) return;
     std::vector<dai_gizmo_line> lines(n);
@@ -677,6 +761,415 @@ void dai_editor_ui_gizmo(dai_editor_ui *p) {
     }
 }
 
+// ------------------------------------------------------- colliders in 3D
+
+namespace {
+
+dai_vec3 qrot_v(dai_quat q, dai_vec3 v) {
+    dai_vec3 u{ q.x, q.y, q.z };
+    dai_vec3 uv{ u.y*v.z - u.z*v.y, u.z*v.x - u.x*v.z, u.x*v.y - u.y*v.x };
+    dai_vec3 uuv{ u.y*uv.z - u.z*uv.y, u.z*uv.x - u.x*uv.z, u.x*uv.y - u.y*uv.x };
+    return { v.x + 2.0f*(q.w*uv.x + uuv.x),
+             v.y + 2.0f*(q.w*uv.y + uuv.y),
+             v.z + 2.0f*(q.w*uv.z + uuv.z) };
+}
+dai_vec3 v_add(dai_vec3 a, dai_vec3 b) { return { a.x+b.x, a.y+b.y, a.z+b.z }; }
+dai_vec3 v_mul(dai_vec3 a, float s) { return { a.x*s, a.y*s, a.z*s }; }
+
+// Where the collider actually is: the node's world transform, plus the centre
+// offset, with the extents scaled the same way the physics scales them.
+struct ColliderBox {
+    dai_vec3 center{};      // world
+    dai_quat rot{ 0, 0, 0, 1 };
+    dai_vec3 half{};        // world units, already scaled
+    dai_vec3 scale{ 1, 1, 1 };
+    int      shape = 0;
+};
+
+bool collider_of(dai_editor_ui *p, dai_node n, ColliderBox *out) {
+    dai_doc *d = dai_editor_doc(p->ed);
+    dai_node_desc r{};
+    if (dai_doc_get(d, n, &r) != DAI_OK) return false;
+    if (r.no_body) return false;
+    dai_vec3 wp{}, ws{ 1, 1, 1 };
+    dai_quat wr{ 0, 0, 0, 1 };
+    dai_doc_world_transform(d, n, &wp, &wr, &ws);
+    // While playing, the object is where the SIMULATION put it - a wireframe
+    // left at the pre-play pose would be a lie drawn in green.
+    if (dai_editor_state_get(p->ed) != DAI_EDITOR_EDIT)
+        dai_editor_live_position(p->ed, n, &wp);
+    dai_vec3 off{ r.collider_center.x * ws.x, r.collider_center.y * ws.y,
+                  r.collider_center.z * ws.z };
+    out->center = v_add(wp, qrot_v(wr, off));
+    out->rot = wr;
+    out->scale = ws;
+    out->shape = r.shape;
+    float ax = std::fabs(ws.x), ay = std::fabs(ws.y), az = std::fabs(ws.z);
+    if (r.shape == DAI_SHAPE_SPHERE) {
+        float rad = r.half_extent.x * ax;
+        out->half = { rad, rad, rad };
+    } else if (r.shape == DAI_SHAPE_CAPSULE) {
+        float rad = r.half_extent.x * ax;
+        out->half = { rad, r.half_extent.y * ay + rad, rad };
+    } else {
+        out->half = { r.half_extent.x * ax, r.half_extent.y * ay, r.half_extent.z * az };
+    }
+    return true;
+}
+
+void wire_line(dai_editor_ui *p, dai_vec3 a, dai_vec3 b, uint32_t col, float thick) {
+    float ax, ay, bx, by;
+    if (!dai_editor_project(p->ed, a, &ax, &ay)) return;
+    if (!dai_editor_project(p->ed, b, &bx, &by)) return;
+    dai_ui_line(p->ui, ax, ay, bx, by, thick, col);
+}
+
+void wire_box(dai_editor_ui *p, const ColliderBox &c, uint32_t col, float thick) {
+    dai_vec3 corner[8];
+    for (int i = 0; i < 8; ++i) {
+        dai_vec3 l{ (i & 1) ? c.half.x : -c.half.x,
+                    (i & 2) ? c.half.y : -c.half.y,
+                    (i & 4) ? c.half.z : -c.half.z };
+        corner[i] = v_add(c.center, qrot_v(c.rot, l));
+    }
+    static const int EDGES[12][2] = { {0,1},{2,3},{4,5},{6,7}, {0,2},{1,3},{4,6},{5,7},
+                                      {0,4},{1,5},{2,6},{3,7} };
+    for (auto &e : EDGES) wire_line(p, corner[e[0]], corner[e[1]], col, thick);
+}
+
+void wire_circle(dai_editor_ui *p, dai_vec3 c, dai_quat rot, dai_vec3 ax, dai_vec3 ay,
+                 float r, uint32_t col, float thick) {
+    const int N = 24;
+    dai_vec3 prev{};
+    for (int i = 0; i <= N; ++i) {
+        float t = (float)i / (float)N * 6.2831853f;
+        dai_vec3 l = v_add(v_mul(ax, std::cos(t) * r), v_mul(ay, std::sin(t) * r));
+        dai_vec3 wpt = v_add(c, qrot_v(rot, l));
+        if (i) wire_line(p, prev, wpt, col, thick);
+        prev = wpt;
+    }
+}
+
+// Unity's collider green. Not "a green": this exact one, because the point of
+// the colour is that it is instantly recognisable as "collision, not model".
+const uint32_t WIRE_GREEN = 0xFF8FF08Fu;   // 0xAABBGGRR
+
+void draw_collider(dai_editor_ui *p, const ColliderBox &c, uint32_t col, float thick) {
+    if (c.shape == DAI_SHAPE_SPHERE) {
+        wire_circle(p, c.center, c.rot, dai_vec3{1,0,0}, dai_vec3{0,1,0}, c.half.x, col, thick);
+        wire_circle(p, c.center, c.rot, dai_vec3{0,1,0}, dai_vec3{0,0,1}, c.half.x, col, thick);
+        wire_circle(p, c.center, c.rot, dai_vec3{1,0,0}, dai_vec3{0,0,1}, c.half.x, col, thick);
+    } else if (c.shape == DAI_SHAPE_CAPSULE) {
+        float rad = c.half.x, shaft = c.half.y - rad;
+        dai_vec3 top = v_add(c.center, qrot_v(c.rot, dai_vec3{ 0, shaft, 0 }));
+        dai_vec3 bot = v_add(c.center, qrot_v(c.rot, dai_vec3{ 0, -shaft, 0 }));
+        wire_circle(p, top, c.rot, dai_vec3{1,0,0}, dai_vec3{0,0,1}, rad, col, thick);
+        wire_circle(p, bot, c.rot, dai_vec3{1,0,0}, dai_vec3{0,0,1}, rad, col, thick);
+        for (int i = 0; i < 4; ++i) {
+            float sx = (i == 0) ? rad : (i == 1) ? -rad : 0.0f;
+            float sz = (i == 2) ? rad : (i == 3) ? -rad : 0.0f;
+            wire_line(p, v_add(top, qrot_v(c.rot, dai_vec3{ sx, 0, sz })),
+                         v_add(bot, qrot_v(c.rot, dai_vec3{ sx, 0, sz })), col, thick);
+        }
+    } else {
+        wire_box(p, c, col, thick);
+    }
+}
+
+// The six face handles: centre of each face, in world space.
+void face_handles(const ColliderBox &c, dai_vec3 *out, int *axis, int *sign) {
+    int k = 0;
+    for (int a = 0; a < 3; ++a) {
+        for (int s = -1; s <= 1; s += 2) {
+            dai_vec3 l{ 0, 0, 0 };
+            (&l.x)[a] = (&c.half.x)[a] * (float)s;
+            out[k] = v_add(c.center, qrot_v(c.rot, l));
+            axis[k] = a;
+            sign[k] = s;
+            ++k;
+        }
+    }
+}
+
+} // namespace
+
+int dai_editor_ui_collider_edit(const dai_editor_ui *p) { return p ? p->collider_edit : 0; }
+void dai_editor_ui_collider_edit_set(dai_editor_ui *p, int on) { if (p) p->collider_edit = on ? 1 : 0; }
+
+void dai_editor_ui_colliders(dai_editor_ui *p) {
+    if (!p || p->view != DAI_VIEW_SCENE) return;
+    uint32_t sel = dai_editor_selection_count(p->ed);
+    for (uint32_t i = 0; i < sel; ++i) {
+        ColliderBox c{};
+        if (!collider_of(p, dai_editor_selected(p->ed, i), &c)) continue;
+        draw_collider(p, c, WIRE_GREEN, p->collider_edit ? 2.0f : 1.5f);
+        if (!p->collider_edit || i != 0) continue;
+
+        // Edit mode: a handle per face, filled when it is the one being held.
+        dai_vec3 h[6]; int ax[6], sg[6];
+        face_handles(c, h, ax, sg);
+        for (int k = 0; k < 6; ++k) {
+            float sx, sy;
+            if (!dai_editor_project(p->ed, h[k], &sx, &sy)) continue;
+            bool live = p->col_axis == ax[k] && p->col_sign == sg[k];
+            float s = live ? 4.0f : 3.0f;
+            dai_ui_rect(p->ui, sx - s, sy - s, s * 2.0f, s * 2.0f,
+                        live ? 0xFFFFFFFFu : WIRE_GREEN);
+        }
+    }
+}
+
+// Dragging a face handle: the FACE moves, so half extent and centre both move
+// by half the distance - that is what "the box grew on one side" means, and
+// resizing symmetrically instead is the thing that makes Unity users think the
+// editor is broken.
+static int collider_edit_input(dai_editor_ui *p, float mx, float my, int down) {
+    if (!p->collider_edit || dai_editor_selection_count(p->ed) == 0) return 0;
+    dai_node n = dai_editor_selected(p->ed, 0);
+    ColliderBox c{};
+    if (!collider_of(p, n, &c)) return 0;
+    dai_doc *d = dai_editor_doc(p->ed);
+
+    if (p->col_axis < 0) {
+        if (!down) return 0;
+        dai_vec3 h[6]; int ax[6], sg[6];
+        face_handles(c, h, ax, sg);
+        int best = -1;
+        float bestd = 10.0f;      // pixels
+        for (int k = 0; k < 6; ++k) {
+            float sx, sy;
+            if (!dai_editor_project(p->ed, h[k], &sx, &sy)) continue;
+            float dx = sx - mx, dy = sy - my;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist < bestd) { bestd = dist; best = k; }
+        }
+        if (best < 0) return 0;
+        p->col_axis = ax[best];
+        p->col_sign = sg[best];
+        p->col_last_x = mx;
+        p->col_last_y = my;
+        dai_doc_begin(d, "Resize collider");
+        p->col_tx_open = true;
+        return 1;
+    }
+
+    if (!down) {
+        p->col_axis = -1;
+        if (p->col_tx_open) { dai_doc_commit(d); p->col_tx_open = false; }
+        return 1;
+    }
+
+    // How many world units one pixel of movement along this axis is worth:
+    // project the axis itself and measure it on screen. No camera maths here,
+    // and it stays correct at any zoom or angle.
+    dai_vec3 axis_w = qrot_v(c.rot, dai_vec3{ p->col_axis == 0 ? 1.0f : 0.0f,
+                                              p->col_axis == 1 ? 1.0f : 0.0f,
+                                              p->col_axis == 2 ? 1.0f : 0.0f });
+    dai_vec3 handle = v_add(c.center, v_mul(axis_w, (&c.half.x)[p->col_axis] * (float)p->col_sign));
+    float ax0, ay0, ax1, ay1;
+    const float PROBE = 0.5f;
+    if (!dai_editor_project(p->ed, handle, &ax0, &ay0)) return 1;
+    if (!dai_editor_project(p->ed, v_add(handle, v_mul(axis_w, PROBE)), &ax1, &ay1)) return 1;
+    float sdx = ax1 - ax0, sdy = ay1 - ay0;
+    float slen = std::sqrt(sdx * sdx + sdy * sdy);
+    if (slen < 0.5f) return 1;              // axis points at the camera: nothing to drag
+    float mdx = mx - p->col_last_x, mdy = my - p->col_last_y;
+    float along = (mdx * sdx + mdy * sdy) / slen;      // pixels along the axis
+    float world = along * PROBE / slen * (float)p->col_sign;
+    p->col_last_x = mx;
+    p->col_last_y = my;
+    if (world == 0.0f) return 1;
+
+    dai_node_desc r{};
+    if (dai_doc_get(d, n, &r) != DAI_OK) return 1;
+    dai_node_desc before = r;
+    float s = std::fabs((&c.scale.x)[p->col_axis]);
+    if (s < 1e-4f) s = 1.0f;
+    float local = world / s;                 // the document stores local units
+    float *half = &r.half_extent.x + p->col_axis;
+    float *ctr  = &r.collider_center.x + p->col_axis;
+    float nh = *half + local * 0.5f;
+    if (nh < 0.005f) nh = 0.005f;
+    *ctr += (nh - *half) * (float)p->col_sign;
+    *half = nh;
+    // Same rule as the inspector: touching the collider unpins the mesh.
+    if (!(r.render_extent.x || r.render_extent.y || r.render_extent.z)) {
+        r.render_extent = before.half_extent;
+        if (r.mesh == 0xFFFFFFFFu) r.mesh = mesh_of_shape(before.shape);
+    }
+    dai_doc_set(d, n, &r);
+    dai_editor_resync(p->ed);
+    return 1;
+}
+
+// ------------------------------------------------------- scene / game view
+
+namespace {
+
+// The camera node: a node tagged "MainCamera". No new document type, because a
+// camera IS a transform with a meaning - and a tag is how this document says
+// what something means (the same way Unity's tag does).
+const char *CAMERA_TAG = "MainCamera";
+
+dai_node find_camera(const dai_editor_ui *p) {
+    dai_doc *d = dai_editor_doc(p->ed);
+    uint32_t count = dai_doc_count(d);
+    if (!count) return DAI_INVALID_NODE;
+    std::vector<dai_node> ids(count);
+    dai_doc_nodes(d, ids.data(), count);
+    for (dai_node id : ids) {
+        dai_node_desc r{};
+        if (dai_doc_get(d, id, &r) != DAI_OK) continue;
+        if (std::strcmp(r.tag, CAMERA_TAG) == 0) return id;
+    }
+    return DAI_INVALID_NODE;
+}
+
+// A rotation whose local -Z points along `dir`. Built from an orthonormal
+// basis rather than from yaw/pitch, so it cannot disagree with whatever
+// convention the camera code happens to use.
+dai_quat look_quat(dai_vec3 dir) {
+    float len = std::sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
+    if (len < 1e-6f) return dai_quat{ 0, 0, 0, 1 };
+    dai_vec3 back{ -dir.x/len, -dir.y/len, -dir.z/len };
+    dai_vec3 up{ 0, 1, 0 };
+    if (std::fabs(back.y) > 0.999f) up = dai_vec3{ 0, 0, 1 };
+    dai_vec3 right{ up.y*back.z - up.z*back.y, up.z*back.x - up.x*back.z,
+                    up.x*back.y - up.y*back.x };
+    float rl = std::sqrt(right.x*right.x + right.y*right.y + right.z*right.z);
+    right = { right.x/rl, right.y/rl, right.z/rl };
+    dai_vec3 u2{ back.y*right.z - back.z*right.y, back.z*right.x - back.x*right.z,
+                 back.x*right.y - back.y*right.x };
+    // matrix (columns right, u2, back) -> quaternion
+    float m00 = right.x, m01 = u2.x, m02 = back.x;
+    float m10 = right.y, m11 = u2.y, m12 = back.y;
+    float m20 = right.z, m21 = u2.z, m22 = back.z;
+    float tr = m00 + m11 + m22;
+    dai_quat q{};
+    if (tr > 0.0f) {
+        float s = std::sqrt(tr + 1.0f) * 2.0f;
+        q.w = 0.25f * s; q.x = (m21 - m12) / s; q.y = (m02 - m20) / s; q.z = (m10 - m01) / s;
+    } else if (m00 > m11 && m00 > m22) {
+        float s = std::sqrt(1.0f + m00 - m11 - m22) * 2.0f;
+        q.w = (m21 - m12) / s; q.x = 0.25f * s; q.y = (m01 + m10) / s; q.z = (m02 + m20) / s;
+    } else if (m11 > m22) {
+        float s = std::sqrt(1.0f + m11 - m00 - m22) * 2.0f;
+        q.w = (m02 - m20) / s; q.x = (m01 + m10) / s; q.y = 0.25f * s; q.z = (m12 + m21) / s;
+    } else {
+        float s = std::sqrt(1.0f + m22 - m00 - m11) * 2.0f;
+        q.w = (m10 - m01) / s; q.x = (m02 + m20) / s; q.y = (m12 + m21) / s; q.z = 0.25f * s;
+    }
+    return q;
+}
+
+} // namespace
+
+int  dai_editor_ui_view(const dai_editor_ui *p) { return p ? p->view : DAI_VIEW_SCENE; }
+void dai_editor_ui_view_set(dai_editor_ui *p, int view) {
+    if (p) p->view = view == DAI_VIEW_GAME ? DAI_VIEW_GAME : DAI_VIEW_SCENE;
+}
+
+int dai_editor_ui_game_camera(const dai_editor_ui *p, dai_vec3 *eye, dai_vec3 *look,
+                              float *fov_deg) {
+    if (!p) return 0;
+    dai_node cam = find_camera(p);
+    if (cam == DAI_INVALID_NODE) return 0;
+    dai_doc *d = dai_editor_doc(p->ed);
+    dai_vec3 wp{}, ws{ 1, 1, 1 };
+    dai_quat wr{ 0, 0, 0, 1 };
+    if (dai_doc_world_transform(d, cam, &wp, &wr, &ws) != DAI_OK) return 0;
+    if (dai_editor_state_get(p->ed) != DAI_EDITOR_EDIT)
+        dai_editor_live_position(p->ed, cam, &wp);
+    dai_vec3 dir = qrot_v(wr, dai_vec3{ 0, 0, -1 });
+    if (eye) *eye = wp;
+    if (look) *look = v_add(wp, dir);
+    if (fov_deg) *fov_deg = 60.0f;
+    return 1;
+}
+
+dai_node dai_editor_ui_add_camera(dai_editor_ui *p) {
+    if (!p) return DAI_INVALID_NODE;
+    dai_doc *d = dai_editor_doc(p->ed);
+    // Where the editor camera is looking: "align with view", the only way
+    // anybody actually places a camera.
+    float cx = p->layout_w > 0 ? p->layout_w * 0.5f : 640.0f;
+    float cy = p->layout_h > 0 ? p->layout_h * 0.5f : 360.0f;
+    dai_vec3 o{}, dir{ 0, 0, -1 };
+    dai_editor_ray(p->ed, cx, cy, &o, &dir);
+    dai_node_desc r = dai_node_desc_default();
+    std::snprintf(r.name, sizeof(r.name), "Main Camera");
+    std::snprintf(r.tag, sizeof(r.tag), "%s", CAMERA_TAG);
+    r.position = o;
+    r.rotation = look_quat(dir);
+    r.no_body = 1;          // a camera is a transform, not a thing to collide with
+    r.hidden = 1;
+    dai_doc_begin(d, "Add camera");
+    dai_node n = dai_doc_add(d, &r);
+    dai_doc_commit(d);
+    dai_editor_resync(p->ed);
+    dai_editor_select(p->ed, n, 0);
+    return n;
+}
+
+// The camera's frustum, drawn in the scene view the way every editor draws it:
+// you cannot aim something you cannot see.
+static void draw_cameras(dai_editor_ui *p) {
+    dai_doc *d = dai_editor_doc(p->ed);
+    uint32_t count = dai_doc_count(d);
+    if (!count) return;
+    std::vector<dai_node> ids(count);
+    dai_doc_nodes(d, ids.data(), count);
+    for (dai_node id : ids) {
+        dai_node_desc r{};
+        if (dai_doc_get(d, id, &r) != DAI_OK) continue;
+        if (std::strcmp(r.tag, CAMERA_TAG) != 0) continue;
+        dai_vec3 wp{}, ws{ 1, 1, 1 };
+        dai_quat wr{ 0, 0, 0, 1 };
+        dai_doc_world_transform(d, id, &wp, &wr, &ws);
+        bool sel = dai_editor_is_selected(p->ed, id) != 0;
+        uint32_t col = sel ? 0xFFFFFFFFu : 0xFFB0B0B0u;
+        const float NEAR_D = 0.35f, FAR_D = 1.6f, HALF = 0.55f;
+        dai_vec3 c[8];
+        int k = 0;
+        for (float depth : { NEAR_D, FAR_D }) {
+            float hw = HALF * depth, hh = hw * 0.56f;
+            for (int i = 0; i < 4; ++i) {
+                float sx = (i == 0 || i == 3) ? -hw : hw;
+                float sy = (i < 2) ? hh : -hh;
+                c[k++] = v_add(wp, qrot_v(wr, dai_vec3{ sx, sy, -depth }));
+            }
+        }
+        for (int i = 0; i < 4; ++i) {
+            wire_line(p, c[i], c[(i + 1) % 4], col, 1.5f);
+            wire_line(p, c[4 + i], c[4 + (i + 1) % 4], col, 1.5f);
+            wire_line(p, c[i], c[4 + i], col, 1.5f);
+        }
+        wire_line(p, wp, c[0], col, 1.5f);
+        wire_line(p, wp, c[2], col, 1.5f);
+    }
+}
+
+// One tab of the Scene/Game bar. Drawn by hand rather than with dai_ui_button
+// because this bar sits on the chrome, outside any panel, and it has to claim
+// the click so it does not also land in the 3D view underneath.
+static int view_tab(dai_editor_ui *p, float x, float y, float w, float h,
+                    const char *label, int active) {
+    dai_ui *ui = p->ui;
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    float mx = 0, my = 0;
+    int down = 0, pressed = 0;
+    dai_ui_mouse(ui, &mx, &my, &down, &pressed);
+    bool over = mx >= x && mx < x + w && my >= y && my < y + h;
+    if (over) dai_ui_claim_mouse(ui);
+    dai_ui_rect(ui, x, y, w, h,
+                active ? st->panel : (over ? st->titlebar_focused : st->titlebar));
+    if (active) dai_ui_rect(ui, x, y, w, 2.0f, st->accent);
+    float tw = dai_ui_text_width(ui, label);
+    dai_ui_text(ui, x + (w - tw) * 0.5f, y + 3.0f, label,
+                active ? st->text : st->text_dim);
+    return over && pressed;
+}
+
 // ------------------------------------------------------- viewport input
 
 int dai_editor_ui_viewport_input(dai_editor_ui *p, float mx, float my, int mouse_down) {
@@ -688,6 +1181,19 @@ int dai_editor_ui_viewport_input(dai_editor_ui *p, float mx, float my, int mouse
     bool released = !mouse_down && p->prev_viewport_down;
     p->prev_viewport_down = mouse_down != 0;
 
+    // The game view is what the player sees. Clicking in it must not pick,
+    // move or deselect anything - that is the scene view's job.
+    if (p->view != DAI_VIEW_SCENE) return 0;
+
+    // Edit Collider handles outrank the gizmo: while that mode is on, the
+    // handles ARE the thing you are aiming at.
+    if (p->col_axis >= 0) {
+        collider_edit_input(p, mx, my, mouse_down);
+        return 1;
+    }
+    if (p->collider_edit && pressed && !over_ui && collider_edit_input(p, mx, my, mouse_down))
+        return 1;
+
     if (p->viewport_dragging) {
         if (mouse_down) dai_editor_drag_update(p->ed, mx, my);
         if (released) { dai_editor_drag_end(p->ed); p->viewport_dragging = false; }
@@ -698,7 +1204,7 @@ int dai_editor_ui_viewport_input(dai_editor_ui *p, float mx, float my, int mouse
     if (over_ui) return 0;
 
     if (pressed) {
-        int axis = dai_editor_gizmo_hit(p->ed, mx, my);
+        int axis = p->collider_edit ? DAI_AXIS_NONE : dai_editor_gizmo_hit(p->ed, mx, my);
         if (axis != DAI_AXIS_NONE) {
             dai_editor_drag_begin(p->ed, axis, mx, my);
             p->viewport_dragging = dai_editor_dragging(p->ed) != 0;
@@ -708,12 +1214,20 @@ int dai_editor_ui_viewport_input(dai_editor_ui *p, float mx, float my, int mouse
         dai_editor_select(p->ed, hit, 0);       // empty space clears the selection
         return 1;
     }
-    dai_editor_gizmo_hover(p->ed, mx, my);
+    if (!p->collider_edit) dai_editor_gizmo_hover(p->ed, mx, my);
     return 0;
 }
 
 int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in) {
     if (!p || !in) return 0;
+
+    // The game view is not navigable - it is the player's camera, and dragging
+    // it around would be editing the scene by accident.
+    if (p->view != DAI_VIEW_SCENE) {
+        p->prev_right_down = in->mouse_right != 0;
+        p->prev_viewport_down = in->mouse_left != 0;
+        return 0;
+    }
 
     // A camera gesture that started in the viewport keeps going even when the
     // pointer wanders over a panel - releasing the button outside should not
@@ -841,6 +1355,7 @@ static int assets_body(dai_editor_ui *p, float h, const char **out_path, int *ou
         if (out_as_tree) *out_as_tree = 1;
         placed = 1;
     }
+    dai_ui_row_end(p->ui);
     return placed;
 }
 
@@ -893,8 +1408,10 @@ static void run_context_menus(dai_editor_ui *p) {
     static const dai_ui_menu_item CANVAS_ITEMS[] = {
         { DAI_ICON_BOX, "New Box", nullptr },
         { DAI_ICON_SPHERE, "New Sphere", nullptr },
+        { DAI_ICON_CAMERA, "New Camera", nullptr },
     };
-    int cpick = dai_ui_popup_menu(p->ui, &p->menu_canvas, CANVAS_ITEMS, 2);
+    int cpick = dai_ui_popup_menu(p->ui, &p->menu_canvas, CANVAS_ITEMS, 3);
+    if (cpick == 2) { dai_editor_ui_add_camera(p); return; }
     if (cpick >= 0) {
         dai_node_desc r = dai_node_desc_default();
         if (cpick == 1) {
@@ -962,6 +1479,7 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             p->proj_tab = 1;
             dai_editor_ui_projects_refresh(p);
         }
+        dai_ui_row_end(ui);
         dai_ui_separator(ui);
 
         if (p->proj_tab == 1) {
@@ -1012,11 +1530,39 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     dai_ui_free_area(ui, &fx, &fy, &fw, &fh);
     if (fy < TOP) { fh -= (TOP - fy); fy = TOP; }
     if (fy + fh > vh - BOTTOM) fh = vh - BOTTOM - fy;
+
+    // ---- the Scene | Game tabs -------------------------------------------
+    // Play switches to Game and Stop switches back, exactly once each, so a
+    // user who deliberately looked at the scene while playing keeps looking
+    // at it.
+    int playing = dai_editor_state_get(p->ed) != DAI_EDITOR_EDIT;
+    if (playing && !p->view_was_playing) p->view = DAI_VIEW_GAME;
+    if (!playing && p->view_was_playing) p->view = DAI_VIEW_SCENE;
+    p->view_was_playing = playing;
+
+    const float TABH = 20.0f;
+    dai_ui_rect(ui, fx, fy, fw, TABH, st->chrome);
+    if (view_tab(p, fx, fy, 62.0f, TABH, "Scene", p->view == DAI_VIEW_SCENE))
+        p->view = DAI_VIEW_SCENE;
+    if (view_tab(p, fx + 63.0f, fy, 62.0f, TABH, "Game", p->view == DAI_VIEW_GAME))
+        p->view = DAI_VIEW_GAME;
+    if (p->view == DAI_VIEW_GAME && !dai_editor_ui_game_camera(p, nullptr, nullptr, nullptr)) {
+        // Unity's message, and it means the same thing here.
+        const char *msg = "No camera in the scene - right click the viewport, New Camera";
+        float tw = dai_ui_text_width(ui, msg);
+        dai_ui_text(ui, fx + (fw - tw) * 0.5f, fy + fh * 0.5f, msg, st->text_dim);
+    }
+    fy += TABH;
+    fh -= TABH;
     p->view_x = fx; p->view_y = fy; p->view_w = fw; p->view_h = fh;
 
     dai_editor_ui_timeline(p, fx + 8.0f, vh - BOTTOM - 50.0f, fw - 16.0f);
     dai_editor_ui_status(p, 0.0f, vh - BOTTOM, vw, BOTTOM);
-    dai_editor_ui_gizmo(p);
+    if (p->view == DAI_VIEW_SCENE) {
+        dai_editor_ui_colliders(p);
+        draw_cameras(p);
+        dai_editor_ui_gizmo(p);
+    }
 
     run_context_menus(p);
 }

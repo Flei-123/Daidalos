@@ -923,6 +923,76 @@ The lesson generalises past this bug: **a renderer test that never looks at the
 picture is measuring the wrong thing.** Assert on the pixels, or find out from a
 photograph.
 
+## The session that made the editor an editor
+
+A long list from one evening in front of the real thing, and every item on it
+turned out to be the same complaint: *the editor is not a mesh viewer with
+fields, it is a place where a scene is built.*
+
+**The collider is not the mesh.** Resizing a Box Collider resized the model,
+because the render scale was derived from the collision half extent - one
+number wearing two hats. `dai_node_desc` now carries `render_extent`, the half
+size of the *drawn* mesh; `{0,0,0}` means "follow the collider", which is what
+every scene written before this field existed means, so old files look exactly
+as they did. The moment the collider's size, shape or centre is touched, the
+mesh is pinned at the size it has right now - nothing jumps, and from then on
+the two are independent. Unity's Box Collider `Center` works too: the body
+carries the offset, the entity carries the negative of it as `render_offset`,
+so the collision volume moves and the model does not.
+
+**The collider is visible.** Selected objects draw a green wireframe -
+box, sphere or capsule, at the collider's own transform, offset and scale.
+**Edit Collider** (the button at the top of the block, same as Unity's) puts six
+handles on the faces: dragging one moves *that face*, which changes size and
+centre together. Resizing symmetrically instead is the thing that makes people
+think the editor is broken.
+
+**Play mode is a rehearsal.** Press play, drag a crate, press stop - and the
+crate stayed where you dragged it, forever. The document was the thing being
+edited even while the simulation ran, so "stop restores the document" restored
+the *edited* document. `dai_doc_state_capture` takes a snapshot of every node
+when play starts, outside the undo stack, and stop puts it back: everything done
+while playing is thrown away, including objects created during the run. `Keep`
+(`dai_editor_apply_sim`) is still the one explicit way to keep a result, and it
+refreshes the snapshot so stop does not immediately undo it.
+
+**Scene and Game.** Two tabs above the viewport. The scene view is where you
+build: editor camera, gizmos, collider wireframes, camera frustums. The game
+view is what the player sees - the node tagged `MainCamera`, no editor
+furniture, no picking, no camera flying. Play switches to Game and stop switches
+back, once each, so someone deliberately watching the scene view while playing
+keeps watching it. A scene with no camera says so, in the middle of the view,
+instead of quietly showing the editor camera and calling it the game.
+
+**Real text fields.** The old ones had a caret that could only sit at the end
+and no selection at all: the only way to replace a value was to hold backspace.
+There is now ONE text editor in `dai_ui`, shared by numeric fields, the name
+field and the hierarchy's rename row - which is why fixing Home fixed it
+everywhere. One click selects the whole value (so typing replaces it), a second
+click puts the caret where you clicked, dragging selects, double click selects
+all, and Left/Right/Home/End/Shift+arrows/Ctrl+A/Delete/Escape do what they do
+in every other text box on the machine. Long values scroll so the caret stays
+visible. `tests/test_ui_field.cpp` drives all of it frame by frame.
+
+**The pointer says what is under it.** `dai_ui_cursor` reports an I-beam over a
+field, a horizontal arrow over a drag handle, and the right diagonal at a window
+corner; `dai_window_cursor` applies it (X11 cursor font, Win32 `IDC_*`,
+documented no-op on Wayland). Windows resize from **any** edge now, not just the
+bottom right - which matters because a right docked inspector only *has* a left
+edge to grab.
+
+**Unity's greys, exactly.** `#333333` panels, `#141414` chrome, `#2A2A2A`
+fields, `#2C5D87` selection. Not a mood board: those are the values, measured
+off the editor next to it, and the inspector's label column is now a fraction of
+the panel width instead of a fixed 62 px that was right at one width and wrong
+at every other.
+
+One layout bug fell out of it: `dai_ui_row` had no end. Two buttons in a row
+left the layout in row mode forever, so every widget after them drew on the same
+line, off the right hand edge - which is what the mesh picker did to the whole
+Renderer block. `dai_ui_row_end` exists, and starting a row ends the previous
+one.
+
 ## What is still missing
 
 Kept honest: things listed here are genuinely absent, and things that got built
@@ -946,7 +1016,7 @@ Editor:
 - No copy/paste between scenes.
 - The asset browser lists and places; it has no thumbnails, no folder tree and
   no search.
-- The text field has no caret movement and no selection - typing and backspace.
+- No copy/paste of components between objects; the inspector edits one node.
 
 Engine:
 - `dai_contact::impulse` is the impact, not the resting load - a crate sitting

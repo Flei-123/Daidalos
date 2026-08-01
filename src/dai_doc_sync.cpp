@@ -33,6 +33,11 @@ struct Live {
 // pose - Jolt shapes are immutable once created, so the body is rebuilt.
 bool needs_rebuild(const dai_node_desc &a, const dai_node_desc &b) {
     if (std::strcmp(a.asset, b.asset) != 0) return true;   // different model entirely
+    // The mesh size and the collider offset are baked into the entity at spawn
+    // time (render_scale / render_offset), so they need the same rebuild the
+    // collision shape does.
+    if (std::memcmp(&a.render_extent, &b.render_extent, sizeof(dai_vec3)) != 0) return true;
+    if (std::memcmp(&a.collider_center, &b.collider_center, sizeof(dai_vec3)) != 0) return true;
     return a.shape != b.shape || a.motion != b.motion || a.no_body != b.no_body ||
            a.no_sleeping != b.no_sleeping ||
            std::memcmp(&a.half_extent, &b.half_extent, sizeof(dai_vec3)) != 0 ||
@@ -72,13 +77,30 @@ void forget(dai_doc_sync *s, dai_node n) {
 // collides the way it looks. A sphere has one radius, so a non uniform scale
 // on it can only follow one axis - x wins, and that is documented rather than
 // silently producing an ellipsoid the physics does not have.
-dai_vec3 scaled_extent(const dai_node_desc &r, dai_vec3 ws) {
-    dai_vec3 he = r.half_extent;
-    switch (r.shape) {
+dai_vec3 scaled_he(int shape, dai_vec3 he, dai_vec3 ws) {
+    switch (shape) {
     case DAI_SHAPE_SPHERE:  return { he.x * std::fabs(ws.x), he.y, he.z };
     case DAI_SHAPE_CAPSULE: return { he.x * std::fabs(ws.x), he.y * std::fabs(ws.y), he.z };
     default:                return { he.x * std::fabs(ws.x), he.y * std::fabs(ws.y),
                                      he.z * std::fabs(ws.z) };
+    }
+}
+
+dai_vec3 scaled_extent(const dai_node_desc &r, dai_vec3 ws) {
+    return scaled_he(r.shape, r.half_extent, ws);
+}
+
+bool nonzero3(dai_vec3 v) { return v.x != 0.0f || v.y != 0.0f || v.z != 0.0f; }
+
+// The size the MESH is drawn at. Zero means "the same as the collider", which
+// is how every scene behaved before the two could differ - so old files look
+// exactly as they did, and a node that says otherwise is honoured.
+dai_vec3 render_scale_of(const dai_node_desc &r, dai_vec3 ws) {
+    dai_vec3 he = scaled_he(r.shape, r.render_extent, ws);
+    switch (r.shape) {
+    case DAI_SHAPE_SPHERE:
+    case DAI_SHAPE_CAPSULE: return { he.x, he.x, he.x };
+    default:                return he;
     }
 }
 
@@ -108,6 +130,18 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
     d.body.half_extent = scaled_extent(r, ws);
     d.body.position = wp;
     d.body.rotation = wr;
+    // Unity's "Center": the collider moves, the model does not. The body is
+    // what carries the transform here, so the body takes the offset and the
+    // mesh takes it back - which is the same picture with a different
+    // collision volume, exactly as intended.
+    if (nonzero3(r.collider_center)) {
+        dai_vec3 off{ r.collider_center.x * ws.x, r.collider_center.y * ws.y,
+                      r.collider_center.z * ws.z };
+        dai_vec3 world = qrot(wr, off);
+        d.body.position = { wp.x + world.x, wp.y + world.y, wp.z + world.z };
+        d.render_offset = { -off.x, -off.y, -off.z };
+    }
+    if (nonzero3(r.render_extent)) d.render_scale = render_scale_of(r, ws);
     d.body.density = r.density;
     d.body.friction_static = r.friction;
     d.body.restitution = r.restitution;
@@ -268,6 +302,12 @@ uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
             dai_vec3 wp{}, ws{ 1, 1, 1 };
             dai_quat wr{ 0, 0, 0, 1 };
             dai_doc_world_transform(s->doc, n, &wp, &wr, &ws);
+            if (nonzero3(r.collider_center)) {
+                dai_vec3 off = qrot(wr, dai_vec3{ r.collider_center.x * ws.x,
+                                                  r.collider_center.y * ws.y,
+                                                  r.collider_center.z * ws.z });
+                wp = { wp.x + off.x, wp.y + off.y, wp.z + off.z };
+            }
             dai_body_set_transform(s->world, l.body, wp, wr);
             if (s->zero_velocities)
                 dai_body_set_velocity(s->world, l.body, dai_vec3{ 0,0,0 }, dai_vec3{ 0,0,0 });
@@ -317,6 +357,19 @@ uint32_t dai_doc_sync_pull(dai_doc_sync *s, const char *undo_name) {
         if (it == s->live.end() || !it->second.entity) continue;
         dai_transform t{};
         if (dai_body_get(s->world, it->second.body, &t) != DAI_OK) continue;
+        // The body sits at the COLLIDER, which a centre offset moved away from
+        // the node. Writing that back unchanged would walk the object off by
+        // one offset every time play mode was kept.
+        dai_node_desc rec{};
+        if (dai_doc_get(s->doc, n, &rec) == DAI_OK && nonzero3(rec.collider_center)) {
+            dai_vec3 wp{}, ws{ 1, 1, 1 };
+            dai_quat wr{ 0, 0, 0, 1 };
+            dai_doc_world_transform(s->doc, n, &wp, &wr, &ws);
+            dai_vec3 off = qrot(t.rotation, dai_vec3{ rec.collider_center.x * ws.x,
+                                                      rec.collider_center.y * ws.y,
+                                                      rec.collider_center.z * ws.z });
+            t.position = { t.position.x - off.x, t.position.y - off.y, t.position.z - off.z };
+        }
         dai_doc_set_world_position(s->doc, n, t.position);
         dai_doc_set_world_rotation(s->doc, n, t.rotation);
         ++written;
