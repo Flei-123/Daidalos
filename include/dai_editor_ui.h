@@ -69,6 +69,11 @@ DAI_API int dai_editor_ui_viewport_input(dai_editor_ui *p, float mouse_x, float 
  * the viewport used the input. Prefer this over the two calls above. */
 DAI_API int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in);
 
+/* Opens every component block in the inspector. For a screenshot, and for a
+ * test that clicks its way down the panel and would otherwise fold the block it
+ * is looking for. */
+DAI_API void dai_editor_ui_expand_all(dai_editor_ui *p);
+
 /* Number of rows the hierarchy currently shows - folded subtrees excluded. */
 DAI_API uint32_t dai_editor_ui_visible_rows(const dai_editor_ui *p);
 

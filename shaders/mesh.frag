@@ -63,33 +63,62 @@ vec3 tonemap_aces(vec3 x) {
 // Cascade selection by view depth, then a 3x3 PCF tap. The cascade index is
 // chosen from the distance to the camera rather than from the depth buffer, so
 // it stays stable under a moving camera and costs one compare.
-float shadow_factor(vec3 world, float ndl) {
+// The shadow term.
+//
+// Two biases, because there are two different errors to hide. The DEPTH bias
+// fights the quantisation of the shadow map's own depth values. The NORMAL
+// OFFSET moves the lookup off the surface, along its normal, by about one
+// shadow texel measured in WORLD units - which is what actually kills acne on
+// a face lit at a glancing angle: there, one texel of the map covers a long
+// stretch of surface, and no constant depth bias is both large enough to clear
+// it and small enough to keep the contact shadow.
+//
+// The world size of a texel is read out of the light matrix rather than passed
+// in: for an orthographic projection the length of its first row is 2/width,
+// so one texel is 2*texel_uv/length(row0) metres.
+float shadow_factor(vec3 world, vec3 N, float ndl) {
     if (F.cam_pos.w < 0.5) return 1.0;
     float view_depth = length(F.cam_pos.xyz - world);
     int c = 0;
     if (view_depth > F.cascade_split.x) c = 1;
     if (view_depth > F.cascade_split.y) c = 2;
 
-    vec4 lp = F.lightviewproj[c] * vec4(world, 1.0);
-    vec3 p  = lp.xyz / lp.w;
-    p.xy = p.xy * 0.5 + 0.5;
-    if (p.x < 0.002 || p.x > 0.998 || p.y < 0.002 || p.y > 0.998 || p.z > 1.0 || p.z < 0.0) {
-        // outside this cascade: try the widest one before giving up
-        lp = F.lightviewproj[2] * vec4(world, 1.0);
+    float texel = F.sun_color.w;
+    // How far the surface tilts away from the light. Clamped, or a face seen
+    // exactly edge on pushes the sample point into the next county.
+    float slope = clamp(sqrt(max(0.0, 1.0 - ndl * ndl)) / max(ndl, 0.12), 0.0, 3.0);
+
+    vec3 p = vec3(0.0);
+    bool inside = false;
+    for (int attempt = 0; attempt < 2 && !inside; ++attempt) {
+        // Second attempt: the widest cascade, which is the only fallback that
+        // can still contain the point.
+        if (attempt == 1) c = 2;
+        mat4 M = F.lightviewproj[c];
+        vec3 row0 = vec3(M[0][0], M[1][0], M[2][0]);
+        float world_per_texel = 2.0 * texel / max(length(row0), 1e-6);
+        vec3 offset_world = world + N * world_per_texel * (1.0 + 2.0 * slope);
+
+        vec4 lp = M * vec4(offset_world, 1.0);
         p = lp.xyz / lp.w;
         p.xy = p.xy * 0.5 + 0.5;
-        c = 2;
-        if (p.x < 0.002 || p.x > 0.998 || p.y < 0.002 || p.y > 0.998 || p.z > 1.0 || p.z < 0.0) return 1.0;
+        inside = !(p.x < 0.002 || p.x > 0.998 || p.y < 0.002 || p.y > 0.998 || p.z > 1.0 || p.z < 0.0);
     }
+    if (!inside) return 1.0;
 
-    // bias grows with cascade size, otherwise the far cascade acnes
-    float bias = mix(0.0035, 0.0007, ndl) * (1.0 + float(c) * 1.6);
-    float texel = F.sun_color.w;
+    // With the normal offset doing the heavy lifting, the depth bias only has
+    // to cover depth quantisation, so it can stay small - which is what keeps
+    // a crate's shadow attached to the crate instead of floating away from it.
+    float bias = mix(0.0012, 0.0004, ndl) * (1.0 + float(c) * 1.2);
+
+    // 5x5 PCF. The hardware does the compare and the bilinear filtering, so
+    // this is 25 texture fetches and no arithmetic - the difference between a
+    // staircase edge and a soft one.
     float s = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
+    for (int y = -2; y <= 2; ++y)
+        for (int x = -2; x <= 2; ++x)
             s += texture(uShadow, vec4(p.xy + vec2(x, y) * texel, float(c), p.z - bias));
-    return s / 9.0;
+    return s / 25.0;
 }
 
 // Tangent frame from screen space derivatives. Saves a vertex attribute and,
@@ -160,7 +189,7 @@ void main() {
     vec3 f0 = mix(vec3(0.04), albedo, metallic);
     vec3 diffuse_color = albedo * (1.0 - metallic);
 
-    float sh = shadow_factor(vWorld, ndl);
+    float sh = shadow_factor(vWorld, N, ndl);
     float a = roughness * roughness;
     vec3  spec = F_Schlick(f0, vdh) * D_GGX(ndh, a) * V_Smith(ndv, ndl, a);
     vec3  sun  = F.sun_color.rgb * F.sun_dir.w * ndl * sh;

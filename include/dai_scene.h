@@ -59,6 +59,11 @@ DAI_API dai_body   dai_scene_body(dai_scene *s, dai_entity e);
 DAI_API dai_entity dai_scene_find(dai_scene *s, const char *name);
 DAI_API uint32_t   dai_scene_count(dai_scene *s);
 DAI_API dai_result dai_scene_set_color(dai_scene *s, dai_entity e, dai_vec3 color);
+/* What the entity is ACTUALLY drawn in. Not the same as what was asked for: a
+ * spawn with colour 0,0,0 means "pick one", and the scene then took one from
+ * the palette. An editor that shows the requested colour shows three zeros and
+ * paints the object black the moment anyone touches the field. */
+DAI_API dai_result dai_scene_color(const dai_scene *s, dai_entity e, dai_vec3 *out);
 DAI_API dai_result dai_scene_set_visible(dai_scene *s, dai_entity e, int visible);
 /* Graphics side only - shape and size stay with the body. mesh 0xFFFFFFFF
  * keeps the current mesh. */

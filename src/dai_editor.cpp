@@ -1000,9 +1000,28 @@ void dai_editor_stop(dai_editor *e) {
 
 int dai_editor_state_get(const dai_editor *e) { return e ? e->state : DAI_EDITOR_EDIT; }
 
+int dai_editor_node_color(dai_editor *e, dai_node n, dai_vec3 *out) {
+    if (!e || !out || !e->sync) return 0;
+    dai_entity ent = dai_doc_sync_entity(e->sync, n);
+    dai_scene *sc = dai_doc_sync_scene(e->sync);
+    if (!ent || !sc) return 0;
+    return dai_scene_color(sc, ent, out) == DAI_OK ? 1 : 0;
+}
+
+uint32_t dai_editor_resync(dai_editor *e) {
+    if (!e || !e->sync) return 0;
+    return dai_doc_sync_apply(e->sync);
+}
+
 uint32_t dai_editor_advance(dai_editor *e, double real_seconds, float *out_alpha) {
     if (out_alpha) *out_alpha = 1.0f;
-    if (!e || e->state != DAI_EDITOR_PLAY) return 0;
+    if (!e) return 0;
+    // Not playing? Then the document is the truth and the scene follows it.
+    // Without this, a frontend that edits the document directly - typing a
+    // number into the inspector rather than dragging the gizmo - moved the
+    // gizmo (which reads the document) while the object stayed exactly where
+    // it was, because only the drag path called resync.
+    if (e->state != DAI_EDITOR_PLAY) { resync(e); return 0; }
     dai_world *w = editor_world(e);
     if (!w) return 0;
     return dai_advance(w, real_seconds, out_alpha);

@@ -86,6 +86,8 @@ struct dai_ui {
     std::vector<Win> wins;          // z order: back() is in front
     int      cur_layer = 0;
     bool     blocked = false;       // the current window is behind another one
+    float dock_x = 0, dock_y = 0, dock_w = 0, dock_h = 0;   // area docked windows divide
+    bool  dock_area_set = false;
     uint64_t drag_win = 0;          // window being moved
     uint64_t size_win = 0;          // window being resized
     float    drag_dx = 0, drag_dy = 0;
@@ -246,6 +248,8 @@ void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in)
     ui->cur_layer = 0;
     ui->blocked = false;
     ui->win_depth = 0;
+    if (!ui->dock_area_set) { ui->dock_x = 0; ui->dock_y = 0; ui->dock_w = width; ui->dock_h = height; }
+    ui->dock_area_set = false;
     for (auto &w : ui->wins) w.seen = false;
     // NOTE: the active widget is cleared in dai_ui_end, not here. Clearing it
     // at the start of the frame means the widget never sees the release that
@@ -364,6 +368,72 @@ dai_ui_window dai_ui_window_make(float x, float y, float w, float h) {
     return win;
 }
 
+dai_ui_window dai_ui_window_docked(int dock, int slot, float size) {
+    dai_ui_window w = dai_ui_window_make(0, 0, size, size);
+    w.dock = dock;
+    w.dock_slot = slot;
+    return w;
+}
+
+void dai_ui_dock_area(dai_ui *ui, float x, float y, float w, float h) {
+    if (!ui) return;
+    ui->dock_x = x; ui->dock_y = y; ui->dock_w = w; ui->dock_h = h;
+    ui->dock_area_set = true;
+}
+
+namespace {
+
+// Where a docked window sits, given its own size along the free axis.
+void dock_rect(const dai_ui *ui, int dock, int slot, float own_w, float own_h,
+               float *x, float *y, float *w, float *h) {
+    float ax = ui->dock_x, ay = ui->dock_y, aw = ui->dock_w, ah = ui->dock_h;
+    if (dock == DAI_DOCK_LEFT || dock == DAI_DOCK_RIGHT) {
+        float sy = ay, sh = ah;
+        if (slot == 1) sh = ah * 0.5f;
+        else if (slot == 2) { sy = ay + ah * 0.5f; sh = ah * 0.5f; }
+        *x = (dock == DAI_DOCK_LEFT) ? ax : ax + aw - own_w;
+        *y = sy; *w = own_w; *h = sh;
+    } else {
+        float sx = ax, sw = aw;
+        if (slot == 1) sw = aw * 0.5f;
+        else if (slot == 2) { sx = ax + aw * 0.5f; sw = aw * 0.5f; }
+        *x = sx;
+        *y = (dock == DAI_DOCK_TOP) ? ay : ay + ah - own_h;
+        *w = sw; *h = own_h;
+    }
+}
+
+// Which edge is the pointer asking for, and which half of it.
+int dock_hit(const dai_ui *ui, float mx, float my, int *slot) {
+    const float ZONE = 48.0f;
+    float ax = ui->dock_x, ay = ui->dock_y, aw = ui->dock_w, ah = ui->dock_h;
+    *slot = 0;
+    if (mx < ax - ZONE || mx > ax + aw + ZONE || my < ay - ZONE || my > ay + ah + ZONE)
+        return DAI_DOCK_NONE;
+    int edge = DAI_DOCK_NONE;
+    float best = ZONE;
+    if (mx - ax < best)            { best = mx - ax;            edge = DAI_DOCK_LEFT; }
+    if ((ax + aw) - mx < best)     { best = (ax + aw) - mx;     edge = DAI_DOCK_RIGHT; }
+    if (my - ay < best)            { best = my - ay;            edge = DAI_DOCK_TOP; }
+    if ((ay + ah) - my < best)     { best = (ay + ah) - my;     edge = DAI_DOCK_BOTTOM; }
+    if (edge == DAI_DOCK_NONE) return DAI_DOCK_NONE;
+    // Half of the edge, chosen by where along it the pointer is. Dropping in
+    // the middle third takes the whole edge - otherwise a window can never be
+    // put back to full height once anything else has been split.
+    if (edge == DAI_DOCK_LEFT || edge == DAI_DOCK_RIGHT) {
+        float t = ah > 0 ? (my - ay) / ah : 0.5f;
+        if (t < 0.34f) *slot = 1;
+        else if (t > 0.66f) *slot = 2;
+    } else {
+        float t = aw > 0 ? (mx - ax) / aw : 0.5f;
+        if (t < 0.34f) *slot = 1;
+        else if (t > 0.66f) *slot = 2;
+    }
+    return edge;
+}
+
+} // namespace
+
 int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
     if (!ui || !win) return 0;
     if (!win->open) return 0;
@@ -386,9 +456,18 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
     // Dragging first, so a window that follows the pointer keeps following it
     // even when the pointer briefly leaves its title bar - anything else makes
     // a fast drag drop the window.
+    int drop_dock = DAI_DOCK_NONE, drop_slot = 0;
     if (ui->drag_win == id && ui->input.mouse_down) {
+        win->dock = DAI_DOCK_NONE;      // picking it up undocks it
         win->x = mx - ui->drag_dx;
         win->y = my - ui->drag_dy;
+        drop_dock = dock_hit(ui, mx, my, &drop_slot);
+    } else if (ui->drag_win == id && !ui->input.mouse_down) {
+        // The frame the button comes up on: this is the drop. drag_win is
+        // cleared in dai_ui_end, so this is the only place that sees it.
+        int slot = 0;
+        int edge = dock_hit(ui, mx, my, &slot);
+        if (edge != DAI_DOCK_NONE) { win->dock = edge; win->dock_slot = slot; }
     } else if (ui->size_win == id && ui->input.mouse_down) {
         win->w = mx - win->x + ui->drag_dx;
         win->h = my - win->y + ui->drag_dy;
@@ -412,6 +491,16 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
     if (win->y > ui->height - bar) win->y = ui->height - bar;
     if (win->x + win->w < 40.0f) win->x = 40.0f - win->w;
     if (win->y < 0.0f) win->y = 0.0f;
+
+    // A docked window does not own its position - the dock area does. Its own
+    // width still counts, so the resize grip drags the split.
+    if (win->dock != DAI_DOCK_NONE && !(ui->drag_win == id && ui->input.mouse_down)) {
+        float dx, dy, dw, dh;
+        dock_rect(ui, win->dock, win->dock_slot, win->w, win->h, &dx, &dy, &dw, &dh);
+        win->x = dx; win->y = dy;
+        if (win->dock == DAI_DOCK_LEFT || win->dock == DAI_DOCK_RIGHT) win->h = dh;
+        else                                                          win->w = dw;
+    }
 
     float body_h = win->collapsed ? 0.0f : win->h - bar;
     float full_h = bar + body_h;
@@ -470,6 +559,16 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
                     over_grip ? st.accent : st.panel_border);
         dai_ui_rect(ui, win->x + win->w - 4.0f, win->y + full_h - grip, 2.0f, grip - 2.0f,
                     over_grip ? st.accent : st.panel_border);
+    }
+
+    // Where it would land if the button came up now. Drawn after the window so
+    // it is visible over it - a drag with no feedback is a guess.
+    if (drop_dock != DAI_DOCK_NONE) {
+        float dx, dy, dw, dh;
+        dock_rect(ui, drop_dock, drop_slot, win->w, win->h, &dx, &dy, &dw, &dh);
+        uint32_t tint = (st.accent & 0x00FFFFFFu) | 0x50000000u;
+        dai_ui_rect(ui, dx, dy, dw, dh, tint);
+        dai_ui_rect_outline(ui, dx, dy, dw, dh, 2.0f, st.accent);
     }
 
     // Everything after this behaves exactly like a panel, clipped to the body.
@@ -689,6 +788,38 @@ void dai_ui_progress(dai_ui *ui, float fraction, const char *utf8) {
         float tw = dai_ui_text_width(ui, utf8);
         dai_ui_text(ui, x + (w - tw) * 0.5f, y + ui->style.row_pad * 0.5f, utf8, ui->style.text);
     }
+}
+
+int dai_ui_header(dai_ui *ui, const char *title, int *open, int *enabled) {
+    if (!ui || !title) return 0;
+    float h = dai_font_line_height(ui->font) + 6.0f;
+    float x, y;
+    next_rect(ui, 0, h, &x, &y);
+    float w = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+
+    uint64_t id = hash_id(title, x, y);
+    bool over = inside(ui, x, y, w, h);
+    if (over) { ui->hot = id; ui->mouse_over_ui = true; }
+    int result = 0;
+    float box = h - 6.0f;
+    bool on_box = enabled && over && ui->input.mouse_x > x + w - box - 6.0f;
+    if (over && ui->input.mouse_down && !ui->prev.mouse_down) {
+        if (on_box) { *enabled = !*enabled; result = 2; }
+        else if (open) { *open = !*open; result = 1; }
+    }
+
+    dai_ui_rect(ui, x, y, w, h, over ? ui->style.button_hover : ui->style.button);
+    dai_ui_rect(ui, x, y, 3.0f, h, ui->style.accent);
+    dai_ui_text(ui, x + 8.0f, y + 2.0f, (open && !*open) ? "\xe2\x96\xb8" : "\xe2\x96\xbe",
+                ui->style.text_dim);
+    dai_ui_text(ui, x + 22.0f, y + 2.0f, title, ui->style.text);
+    if (enabled) {
+        float bx = x + w - box - 4.0f, by = y + 3.0f;
+        dai_ui_rect(ui, bx, by, box, box, ui->style.track);
+        dai_ui_rect_outline(ui, bx, by, box, box, 1.0f, ui->style.panel_border);
+        if (*enabled) dai_ui_rect(ui, bx + 3.0f, by + 3.0f, box - 6.0f, box - 6.0f, ui->style.accent);
+    }
+    return result;
 }
 
 void dai_ui_separator(dai_ui *ui) {

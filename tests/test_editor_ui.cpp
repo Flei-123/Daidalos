@@ -88,6 +88,11 @@ int main() {
         dai_ui_input in{};
         in.mouse_x = mx; in.mouse_y = my; in.mouse_down = down; in.wheel = wheel;
         dai_ui_begin(ui, 1280, 720, &in);
+        // The inspector groups its fields into collapsible components now, and
+        // this test walks down the panel clicking every few pixels - which
+        // folds the very block it is hunting for. Fold state is not what these
+        // checks are about; dai_ui_header has its own test.
+        dai_editor_ui_expand_all(panels);
         dai_editor_ui_toolbar(panels, 0.0f, 0.0f, 1280.0f);
         dai_editor_ui_hierarchy(panels, PANEL_X, PANEL_Y, PANEL_W, 360.0f);
         dai_editor_ui_inspector(panels, INSPECTOR_X, PANEL_Y, PANEL_W, 592.0f);
@@ -192,6 +197,39 @@ int main() {
 
     // the name field types into the document
     CHECK(dai_doc_count(doc) == 4, "the inspector probing changed the node count");
+
+    // ...and the LIVE SCENE has to move with it, not just the document. The
+    // gizmo reads the document, so a missing resync looks like "the gizmo
+    // moves and the object stays" - which is exactly what it did.
+    {
+        dai_entity ent = dai_doc_sync_entity(sync, parent);
+        dai_body body = dai_scene_body(sc, ent);
+        dai_transform t0{};
+        dai_body_get(w, body, &t0);
+        dai_node_desc d0{};
+        dai_doc_get(doc, parent, &d0);
+
+        frame(FIELD_X, pos_y, 0);
+        frame(FIELD_X, pos_y, 1);
+        for (int i = 1; i <= 10; ++i) frame(FIELD_X + (float)i * 3.0f, pos_y, 1);
+        frame(FIELD_X + 30.0f, pos_y, 0);
+
+        dai_node_desc d1{};
+        dai_doc_get(doc, parent, &d1);
+        dai_transform t1{};
+        dai_body_get(w, body, &t1);
+        std::printf("  Dokument x %.3f -> %.3f, Szene x %.3f -> %.3f\n",
+                    d0.position.x, d1.position.x, t0.position.x, t1.position.x);
+        CHECK(d1.position.x > d0.position.x, "the inspector did not change the document");
+        CHECK(std::fabs(t1.position.x - d1.position.x) < 1e-3f,
+              "the body is at x=%.3f while the document says %.3f - the inspector "
+              "moves the gizmo and nothing else", t1.position.x, d1.position.x);
+        // Exactly one step back - the drag was one transaction. Undoing
+        // everything would also undo the nodes this test is built from, and the
+        // failures then show up three sections later.
+        CHECK(dai_editor_undo(ed) == 1, "undo after the inspector drag failed");
+        dai_editor_resync(ed);
+    }
 
     // ---- 5. the toolbar switches gizmo modes ------------------------------
     std::printf("toolbar\n");

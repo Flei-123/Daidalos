@@ -36,6 +36,11 @@ struct dai_editor_ui {
     bool     field_tx_open = false;
     bool     prev_mouse_down = false;
 
+    // Fold state of the inspector's component blocks. Retained because it
+    // cannot be derived from the document - the same reason the hierarchy's
+    // folds live here.
+    int fold_transform = 1, fold_body = 1, fold_render = 1;
+
     char     name_buf[DAI_NODE_NAME_MAX] = { 0 };
     dai_node name_buf_node = DAI_INVALID_NODE;
     char     asset_buf[96] = { 0 };
@@ -142,6 +147,11 @@ dai_editor_ui *dai_editor_ui_create(dai_editor *editor, dai_ui *ui) {
 
 void dai_editor_ui_destroy(dai_editor_ui *p) { delete p; }
 
+void dai_editor_ui_expand_all(dai_editor_ui *p) {
+    if (!p) return;
+    p->fold_transform = p->fold_body = p->fold_render = 1;
+}
+
 uint32_t dai_editor_ui_visible_rows(const dai_editor_ui *p) { return p ? p->visible_rows : 0; }
 
 // ------------------------------------------------------------- hierarchy
@@ -192,63 +202,91 @@ static void inspector_body(dai_editor_ui *p) {
     if (dai_doc_get(d, n, &r) != DAI_OK) return;
     dai_node_desc before = r;
 
+    // ---- header: what this object is --------------------------------------
     if (p->name_buf_node != n) {
         std::snprintf(p->name_buf, sizeof(p->name_buf), "%s", r.name);
         p->name_buf_node = n;
     }
-    if (dai_ui_input_text(p->ui, "Name", p->name_buf, sizeof(p->name_buf))) {
+    if (dai_ui_input_text(p->ui, "Name", p->name_buf, sizeof(p->name_buf)))
         std::snprintf(r.name, sizeof(r.name), "%s", p->name_buf);
-    }
 
     if (p->asset_buf_node != n) {
         std::snprintf(p->asset_buf, sizeof(p->asset_buf), "%s", r.asset);
         p->asset_buf_node = n;
     }
-    if (dai_ui_input_text(p->ui, "Asset", p->asset_buf, sizeof(p->asset_buf))) {
+    if (dai_ui_input_text(p->ui, "Asset", p->asset_buf, sizeof(p->asset_buf)))
         std::snprintf(r.asset, sizeof(r.asset), "%s", p->asset_buf);
+
+    // ---- Transform ---------------------------------------------------------
+    //
+    // Grouped into components, the way an inspector is read: a wall of twelve
+    // unlabelled numeric fields is not the same information laid out worse, it
+    // is different information. These are NOT invented components - each block
+    // is exactly the part of dai_node_desc the engine treats as one thing:
+    // the transform, the rigid body, the renderable.
+    dai_ui_header(p->ui, "Transform", &p->fold_transform, nullptr);
+    if (p->fold_transform) {
+        dai_ui_drag_vec3(p->ui, "Position", &r.position.x, 0.02f);
+
+        // Euler angles are a display convenience only: the document stores a
+        // quaternion, and converting back and forth every frame would drift.
+        // The fields are relative, so they only ever apply a delta.
+        float euler[3] = { 0, 0, 0 };
+        if (dai_ui_drag_vec3(p->ui, "Rotate", euler, 0.5f)) {
+            float rx = euler[0] * 3.14159265f / 180.0f;
+            float ry = euler[1] * 3.14159265f / 180.0f;
+            float rz = euler[2] * 3.14159265f / 180.0f;
+            auto axis_q = [](float ax, float ay, float az, float a) {
+                float sn = std::sin(a * 0.5f);
+                return dai_quat{ ax * sn, ay * sn, az * sn, std::cos(a * 0.5f) };
+            };
+            auto qm = [](dai_quat a, dai_quat b) {
+                return dai_quat{ a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
+                                 a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+                                 a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
+                                 a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z };
+            };
+            dai_quat delta = qm(qm(axis_q(1,0,0,rx), axis_q(0,1,0,ry)), axis_q(0,0,1,rz));
+            r.rotation = qm(delta, r.rotation);
+        }
+        dai_ui_drag_vec3(p->ui, "Scale", &r.scale.x, 0.01f);
     }
 
-    dai_ui_separator(p->ui);
-    dai_ui_drag_vec3(p->ui, "Position", &r.position.x, 0.02f);
-
-    // Euler angles are a display convenience only: the document stores a
-    // quaternion, and converting back and forth every frame would drift. The
-    // fields are relative, so they only ever apply a delta.
-    float euler[3] = { 0, 0, 0 };
-    if (dai_ui_drag_vec3(p->ui, "Rotate", euler, 0.5f)) {
-        float rx = euler[0] * 3.14159265f / 180.0f;
-        float ry = euler[1] * 3.14159265f / 180.0f;
-        float rz = euler[2] * 3.14159265f / 180.0f;
-        auto axis_q = [](float ax, float ay, float az, float a) {
-            float s = std::sin(a * 0.5f);
-            return dai_quat{ ax * s, ay * s, az * s, std::cos(a * 0.5f) };
-        };
-        auto qm = [](dai_quat a, dai_quat b) {
-            return dai_quat{ a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
-                             a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
-                             a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
-                             a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z };
-        };
-        dai_quat delta = qm(qm(axis_q(1,0,0,rx), axis_q(0,1,0,ry)), axis_q(0,0,1,rz));
-        r.rotation = qm(delta, r.rotation);
+    // ---- Rigidbody ---------------------------------------------------------
+    // The checkbox in the header IS r.no_body, inverted: a node without a rigid
+    // body is a group, which is what "remove the component" means here.
+    int has_body = !r.no_body;
+    if (dai_ui_header(p->ui, "Rigidbody", &p->fold_body, &has_body) == 2)
+        r.no_body = !has_body;
+    if (p->fold_body) {
+        if (!has_body) {
+            dai_ui_label(p->ui, "group - no body, children move with it");
+        } else {
+            dai_ui_option(p->ui, "Motion", &r.motion, MOTIONS, 3);
+            dai_ui_option(p->ui, "Shape", &r.shape, SHAPES, 3);
+            dai_ui_drag_vec3(p->ui, "Extent", &r.half_extent.x, 0.01f);
+            dai_ui_drag_float(p->ui, "Friction", &r.friction, 0.005f);
+            dai_ui_drag_float(p->ui, "Bounce", &r.restitution, 0.005f);
+        }
     }
-    dai_ui_drag_vec3(p->ui, "Scale", &r.scale.x, 0.01f);
 
-    dai_ui_separator(p->ui);
-    dai_ui_option(p->ui, "Shape", &r.shape, SHAPES, 3);
-    dai_ui_option(p->ui, "Motion", &r.motion, MOTIONS, 3);
-    dai_ui_drag_vec3(p->ui, "Extent", &r.half_extent.x, 0.01f);
-    dai_ui_drag_float(p->ui, "Friction", &r.friction, 0.005f);
-    dai_ui_drag_float(p->ui, "Bounce", &r.restitution, 0.005f);
-    int no_body = r.no_body;
-    if (dai_ui_checkbox(p->ui, "no rigid body (group)", &no_body)) r.no_body = no_body;
-
-    dai_ui_separator(p->ui);
-    dai_ui_drag_vec3(p->ui, "Colour", &r.color.x, 0.004f);
-    dai_ui_drag_float(p->ui, "Rough", &r.roughness, 0.005f);
-    dai_ui_drag_float(p->ui, "Emissive", &r.emissive, 0.01f);
-    int hidden = r.hidden;
-    if (dai_ui_checkbox(p->ui, "hidden", &hidden)) r.hidden = hidden;
+    // ---- Renderer ----------------------------------------------------------
+    int visible = !r.hidden;
+    if (dai_ui_header(p->ui, "Renderer", &p->fold_render, &visible) == 2)
+        r.hidden = !visible;
+    if (p->fold_render) {
+        // Show what the object IS, not what the document happens to store. A
+        // node that never had a colour set carries 0,0,0 and the scene picked
+        // one from the palette - showing the zeros makes the first drag paint
+        // it black.
+        dai_vec3 shown = r.color;
+        bool implicit = (r.color.x == 0.0f && r.color.y == 0.0f && r.color.z == 0.0f);
+        if (implicit) dai_editor_node_color(p->ed, n, &shown);
+        if (dai_ui_drag_vec3(p->ui, "Colour", &shown.x, 0.004f) || !implicit)
+            r.color = shown;
+        dai_ui_drag_float(p->ui, "Rough", &r.roughness, 0.005f);
+        dai_ui_drag_float(p->ui, "Emissive", &r.emissive, 0.01f);
+    }
 
     // Clamp here rather than in the widgets: these are physical quantities and
     // a negative roughness or a zero scale would reach the renderer as garbage.
@@ -267,8 +305,13 @@ static void inspector_body(dai_editor_ui *p) {
     if (std::memcmp(&before, &r, sizeof(dai_node_desc)) != 0) {
         begin_field_tx(p, "Edit");
         dai_doc_set(d, n, &r);
+        // Straight away, not next frame: the host may not call
+        // dai_editor_advance at all, and an inspector whose numbers move the
+        // gizmo but not the object is worse than one that does nothing.
+        dai_editor_resync(p->ed);
     }
 }
+
 
 void dai_editor_ui_inspector(dai_editor_ui *p, float x, float y, float w, float h) {
     if (!p) return;
@@ -535,12 +578,13 @@ static int assets_body(dai_editor_ui *p, float h, const char **out_path, int *ou
 
 void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
     if (!p) return;
-    const float SIDE = 230.0f, TOP = 34.0f, BOTTOM = 24.0f, M = 6.0f;
-    float col_h = vh - TOP - BOTTOM - M * 2.0f;
-    p->win_hierarchy = dai_ui_window_make(M, TOP + M, SIDE, col_h * 0.52f);
-    p->win_project   = dai_ui_window_make(M, TOP + M + col_h * 0.52f + M,
-                                          SIDE, col_h * 0.48f - M);
-    p->win_inspector = dai_ui_window_make(vw - SIDE - M, TOP + M, SIDE, col_h);
+    const float SIDE = 230.0f;
+    // Docked, like the layout every 3D editor opens with: hierarchy over
+    // project on the left, inspector down the right. Dragging a title bar
+    // pulls a window out of its dock, dropping it near an edge puts it back.
+    p->win_hierarchy = dai_ui_window_docked(DAI_DOCK_LEFT, 1, SIDE);
+    p->win_project   = dai_ui_window_docked(DAI_DOCK_LEFT, 2, SIDE);
+    p->win_inspector = dai_ui_window_docked(DAI_DOCK_RIGHT, 0, SIDE);
     p->layout_ready = true;
     p->layout_w = vw; p->layout_h = vh;
 }
@@ -560,6 +604,8 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     const float TOP = 34.0f, BOTTOM = 24.0f;
 
     if (!p->layout_ready) dai_editor_ui_layout_reset(p, vw, vh);
+    // Docked windows divide up everything between the two bars.
+    dai_ui_dock_area(ui, 0.0f, TOP, vw, vh - TOP - BOTTOM);
     if (p->layout_w != vw || p->layout_h != vh) {
         // Keep the right hand column glued to the right edge on a resize.
         // Anything else leaves the inspector floating in the middle of a wider

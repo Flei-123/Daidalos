@@ -209,6 +209,100 @@ int main() {
         CHECK(body_drawn == 0, "a collapsed window still emitted its body");
     }
 
+    // ---- 7. docking ------------------------------------------------------
+    std::printf("\n[7] Andocken\n");
+    {
+        dai_ui_window d = dai_ui_window_make(300, 300, 200, 160);
+        auto frame = [&](float mx, float my, int down) {
+            dai_ui_input in = mouse(mx, my, down);
+            dai_ui_begin(ui, 800, 600, &in);
+            dai_ui_dock_area(ui, 0, 30, 800, 550);      // below a toolbar
+            dai_ui_window_begin(ui, "Dock", &d);
+            dai_ui_window_end(ui);
+            dai_ui_end(ui);
+        };
+        frame(-1, -1, 0);
+        CHECK(d.dock == DAI_DOCK_NONE, "a fresh window should be floating");
+
+        // Drag the title bar to the left edge and let go there.
+        frame(d.x + 80.0f, d.y + 8.0f, 1);
+        frame(20.0f, 300.0f, 1);
+        frame(20.0f, 300.0f, 0);          // drop
+        frame(-1, -1, 0);
+        std::printf("  nach dem Fallenlassen links: dock=%d slot=%d rect %.0f,%.0f %.0fx%.0f\n",
+                    d.dock, d.dock_slot, d.x, d.y, d.w, d.h);
+        CHECK(d.dock == DAI_DOCK_LEFT, "dropping at the left edge did not dock it");
+        CHECK(std::fabs(d.x) < 1.0f, "a left docked window sits at x=%.1f", d.x);
+        CHECK(std::fabs(d.y - 30.0f) < 1.0f, "it ignored the dock area's top (y=%.1f)", d.y);
+        CHECK(std::fabs(d.h - 550.0f) < 1.0f, "it did not take the full height (%.1f)", d.h);
+        CHECK(std::fabs(d.w - 200.0f) < 1.0f, "docking changed its width to %.1f", d.w);
+
+        // Its width is still its own: the grip drags the split.
+        float gx = d.x + d.w - 4.0f, gy = d.y + d.h - 4.0f;
+        frame(gx, gy, 1);
+        frame(gx + 60.0f, gy, 1);
+        frame(gx + 60.0f, gy, 0);
+        std::printf("  Breite nach dem Ziehen der Kante: %.0f\n", d.w);
+        CHECK(d.w > 240.0f, "the resize grip does not widen a docked window (%.0f)", d.w);
+
+        // Dropping in the top third of an edge takes half of it.
+        frame(d.x + 80.0f, d.y + 8.0f, 1);
+        frame(780.0f, 90.0f, 1);
+        frame(780.0f, 90.0f, 0);
+        frame(-1, -1, 0);
+        std::printf("  rechts oben abgelegt: dock=%d slot=%d h=%.0f\n", d.dock, d.dock_slot, d.h);
+        CHECK(d.dock == DAI_DOCK_RIGHT, "dropping at the right edge did not dock right");
+        CHECK(d.dock_slot == 1, "dropping in the top third should take the upper half");
+        CHECK(std::fabs(d.h - 275.0f) < 1.0f, "the upper half should be 275 tall, is %.0f", d.h);
+        CHECK(std::fabs((d.x + d.w) - 800.0f) < 1.0f, "a right docked window must touch the right edge");
+
+        // Picking it up again releases it.
+        frame(d.x + 80.0f, d.y + 8.0f, 1);
+        frame(400.0f, 300.0f, 1);
+        std::printf("  waehrend des Ziehens: dock=%d\n", d.dock);
+        CHECK(d.dock == DAI_DOCK_NONE, "dragging a docked window did not undock it");
+        frame(400.0f, 300.0f, 0);
+    }
+
+    // ---- 8. component headers -------------------------------------------
+    std::printf("\n[8] Klapp-Kopfzeilen (Inspector-Komponenten)\n");
+    {
+        int open = 1, enabled = 1;
+        int inner_drawn = 0, hit = 0;
+        float hx = 100.0f, hy = 100.0f;
+        auto frame = [&](float mx, float my, int down) {
+            dai_ui_input in = mouse(mx, my, down);
+            dai_ui_begin(ui, 800, 600, &in);
+            dai_ui_panel_begin(ui, hx, hy, 240, 300, nullptr);
+            hit = dai_ui_header(ui, "Rigidbody", &open, &enabled);
+            inner_drawn = 0;
+            if (open) { dai_ui_label(ui, "mass"); inner_drawn = 1; }
+            dai_ui_panel_end(ui);
+            dai_ui_end(ui);
+        };
+        frame(-1, -1, 0);
+        CHECK(inner_drawn == 1, "an open header should show its contents");
+
+        // Click the title: folds.
+        float title_x = hx + 40.0f, title_y = hy + 12.0f;
+        frame(title_x, title_y, 1);
+        frame(title_x, title_y, 0);
+        std::printf("  nach dem Klick auf den Titel: offen=%d, Inhalt=%d\n", open, inner_drawn);
+        CHECK(open == 0, "clicking the header did not fold it");
+        CHECK(inner_drawn == 0, "a folded header still drew its contents");
+        CHECK(enabled == 1, "folding also toggled the component off");
+
+        // Click the checkbox on the right: switches the component off without
+        // unfolding - two things in one bar, and they must not be the same
+        // click.
+        float box_x = hx + 240.0f - 12.0f;
+        frame(box_x, title_y, 1);
+        frame(box_x, title_y, 0);
+        std::printf("  nach dem Klick auf die Box: offen=%d, aktiv=%d\n", open, enabled);
+        CHECK(enabled == 0, "the header checkbox did not switch the component off");
+        CHECK(open == 0, "the checkbox also toggled the fold state");
+    }
+
     dai_ui_destroy(ui);
     dai_font_free(font);
     std::printf("\n==================================\n");

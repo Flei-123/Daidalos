@@ -812,6 +812,81 @@ int main(int argc, char **argv) {
                     s_base, s_tiled, dai_render_material_count(r));
     }
 
+    // ---------------------------------------------------------------- 19
+    // Shadow acne. A surface that nothing shadows must come out EVEN. When the
+    // depth bias is too small for the angle, the shadow map shadows the very
+    // surface that wrote it, in stripes - which is what a wall lit at a
+    // glancing angle looked like: dark diagonal bands across a flat face.
+    //
+    // Measured as banding, not as brightness: walk each scanline across the
+    // face and count how often it swings dark and light again. A clean face
+    // does that never; an acned one does it every few pixels.
+    {
+        // HONEST NOTE: this test is a guard, not the thing that caught the bug.
+        // Justin saw dark bands across a floating crate on his machine; every
+        // scene built here to reproduce it came out perfectly even, with the
+        // old shader as well as the new one. So it stands as a regression
+        // guard - if a future change makes a flat, unshadowed face stripe, this
+        // fails - and the actual fix (normal offset bias + 5x5 PCF) was made
+        // because the shader was missing a standard mechanism, not because
+        // this number moved.
+        std::printf("[19] shadow acne on a glancing surface\n");
+        dai_render_sky(r, 0);
+        dai_render_ambient(r, dai_vec3{ 0.2f, 0.3f, 0.5f }, dai_vec3{ 0.2f, 0.2f, 0.2f }, 0.25f);
+        // Sun almost along the wall: ndl is small, which is exactly where the
+        // constant part of the bias stops being enough.
+        // Exactly the sun the editor ships with, and a face turned 65 degrees
+        // away from it - the angle a crate's front face has in a normal scene.
+        dai_render_light(r, dai_vec3{ 0.42f, 0.80f, 0.42f });
+        // A far cascade, because that is where a shadow texel covers a metre of
+        // wall and the constant bias runs out. Testing this at three metres
+        // with a tight extent proves nothing - it was green before the fix.
+        dai_render_shadow_extent(r, 70.0f);
+        dai_render_camera(r, dai_vec3{ 0, 6.0f, 26.0f }, dai_vec3{ 0, 2.0f, 0 }, dai_vec3{ 0,1,0 },
+                          55.0f, 0.1f, 300.0f);
+
+        dai_render_instance in[3];
+        in[0] = dai_render_instance_default();
+        in[0].position = { 0, -1, 0 }; in[0].scale = { 40, 1, 40 }; in[0].color = { 0.6f,0.6f,0.6f };
+        in[1] = dai_render_instance_default();      // the wall we look at
+        in[1].position = { 0, 2.0f, 0 }; in[1].scale = { 3.0f, 3.0f, 3.0f };
+        in[1].color = { 0.30f, 0.72f, 0.70f };
+        in[2] = dai_render_instance_default();      // a caster, so the map is busy
+        in[2].position = { 6.0f, 2.6f, 3.0f }; in[2].scale = { 1.2f, 1.2f, 1.2f };
+        in[2].color = { 0.88f, 0.72f, 0.28f };
+        dai_render_frame(r, in, 3);
+        Frame f = grab(r); save(r, "vis_19_acne.ppm");
+
+        // The face fills the middle of the frame. Sample well inside it so no
+        // silhouette edge is counted as a swing.
+        uint32_t x0 = f.w * 38 / 100, x1 = f.w * 62 / 100;
+        uint32_t y0 = f.h * 40 / 100, y1 = f.h * 58 / 100;
+        int worst_line = 0, total = 0;
+        float lo = 1.0f, hi = 0.0f;
+        for (uint32_t y = y0; y < y1; ++y) {
+            int swings = 0;
+            bool dark = false;
+            float ref = f.lum(x0, y);
+            for (uint32_t x = x0; x < x1; ++x) {
+                float l = f.lum(x, y);
+                if (l < lo) lo = l;
+                if (l > hi) hi = l;
+                if (!dark && l < ref * 0.80f) { dark = true; ++swings; }
+                else if (dark && l > ref * 0.92f) dark = false;
+                ref = ref * 0.9f + l * 0.1f;
+            }
+            total += swings;
+            if (swings > worst_line) worst_line = swings;
+        }
+        std::printf("     face luminance %.3f..%.3f, %d dark bands (worst line %d)\n",
+                    lo, hi, total, worst_line);
+        CHECK(hi > 0.05f, "the test face is not lit at all (max %.3f) - nothing was measured", hi);
+        CHECK(worst_line <= 1, "%d dark bands on one scanline of a flat, unshadowed face - "
+              "the surface is shadowing itself", worst_line);
+        CHECK(total <= 12, "%d dark bands over the face - shadow acne", total);
+        dai_render_ambient(r, dai_vec3{ 0.2f, 0.3f, 0.5f }, dai_vec3{ 0.2f, 0.2f, 0.2f }, 0.35f);
+    }
+
     dai_render_destroy(r);
     std::printf("\n%d checks passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

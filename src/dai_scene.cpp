@@ -205,6 +205,12 @@ dai_result dai_scene_set_color(dai_scene *s, dai_entity e, dai_vec3 c) {
     return DAI_OK;
 }
 
+dai_result dai_scene_color(const dai_scene *s, dai_entity e, dai_vec3 *out) {
+    if (!s || !out || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
+    *out = s->ents[e].color;
+    return DAI_OK;
+}
+
 dai_result dai_scene_set_visible(dai_scene *s, dai_entity e, int visible) {
     if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
     s->ents[e].visible = visible != 0;

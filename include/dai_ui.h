@@ -101,14 +101,36 @@ DAI_API void dai_ui_mouse(const dai_ui *ui, float *x, float *y, int *down, int *
  * in front no matter what order the host calls them in, and a click that lands
  * on an overlapping window only reaches the topmost one.
  */
+/* Where a window is parked. A docked window keeps its own width (or height, on
+ * the top and bottom edges) and takes the rest of the edge from the dock area,
+ * so dragging the split is just resizing the window. */
+typedef enum dai_ui_dock {
+    DAI_DOCK_NONE = 0,
+    DAI_DOCK_LEFT,
+    DAI_DOCK_RIGHT,
+    DAI_DOCK_TOP,
+    DAI_DOCK_BOTTOM
+} dai_ui_dock;
+
 typedef struct dai_ui_window {
     float x, y, w, h;
     int   collapsed;     /* only the title bar is drawn                    */
     int   open;          /* 0 = not drawn at all; begin() returns 0        */
     float min_w, min_h;
+    int   dock;          /* dai_ui_dock                                    */
+    /* Which part of that edge: 0 = all of it, 1 = first half, 2 = second
+     * half. Two windows can share an edge - hierarchy over project, which is
+     * the layout every 3D editor ships with. */
+    int   dock_slot;
 } dai_ui_window;
 
 DAI_API dai_ui_window dai_ui_window_make(float x, float y, float w, float h);
+/* Docks a window without dragging it there - for a default layout. */
+DAI_API dai_ui_window dai_ui_window_docked(int dock, int slot, float size);
+/* The rectangle docked windows divide up: the surface minus the host's own
+ * bars. Set it once per frame before the windows. Defaults to the whole
+ * surface. */
+DAI_API void dai_ui_dock_area(dai_ui *ui, float x, float y, float w, float h);
 /* Returns 1 when the body is visible and widgets should be emitted. Call
  * dai_ui_window_end() either way. */
 DAI_API int  dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win);
@@ -135,6 +157,12 @@ DAI_API int  dai_ui_checkbox(dai_ui *ui, const char *utf8, int *value);
 DAI_API int  dai_ui_slider(dai_ui *ui, const char *utf8, float *value, float min, float max);
 DAI_API void dai_ui_progress(dai_ui *ui, float fraction, const char *utf8);
 DAI_API void dai_ui_separator(dai_ui *ui);
+
+/* A collapsible section header - the bar a Unity style inspector groups its
+ * components under. `open` is the caller's fold state. Pass `enabled` for a
+ * checkbox on the right (NULL for none); it is the component's on/off switch.
+ * Returns 1 when the header was clicked, 2 when the checkbox was. */
+DAI_API int dai_ui_header(dai_ui *ui, const char *title, int *open, int *enabled);
 
 /* Sprites: any texture, any sub rectangle of it. This is how an atlas is used
  * for icons - one texture, many uv rects, one draw batch. */

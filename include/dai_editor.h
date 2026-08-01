@@ -181,6 +181,16 @@ DAI_API void dai_editor_stop(dai_editor *e);
 DAI_API int  dai_editor_state_get(const dai_editor *e);
 /* Advances the world when playing. Returns the number of ticks stepped. Does
  * nothing while editing or paused, so a frontend can call it unconditionally. */
+/* The colour the node is actually drawn in, palette pick included. Returns 0
+ * when the node has no live entity. */
+DAI_API int dai_editor_node_color(dai_editor *e, dai_node n, dai_vec3 *out);
+
+/* Pushes document changes into the live scene. Incremental (only nodes whose
+ * revision changed) and idempotent, so calling it after an edit and again from
+ * dai_editor_advance costs nothing. A frontend that writes to the document
+ * itself needs this, or its edits are visible in the gizmo and nowhere else. */
+DAI_API uint32_t dai_editor_resync(dai_editor *e);
+
 DAI_API uint32_t dai_editor_advance(dai_editor *e, double real_seconds, float *out_alpha);
 /* Writes the simulated transforms back into the document as one undo step. */
 DAI_API uint32_t dai_editor_apply_sim(dai_editor *e);
