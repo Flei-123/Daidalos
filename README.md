@@ -536,13 +536,6 @@ object whose origin sits outside its mesh gets a box in the wrong place.
 
 Editor:
 - No box select; multi-selection is click by click.
-- **A latent crash in `dai_ui`**, found while adding the asset browser and not
-  fixed yet: after the scrolling test's frame, the NEXT `dai_ui_begin` faults
-  inside `batches.clear()`. It never showed because that test was last in the
-  file and the process exited before another frame started. Reproduce by
-  appending a bare begin/end pair to `tests/test_editor_ui.cpp`. Something is
-  corrupting a batch during a scrolled frame; the asset browser test runs
-  before it until that is found.
 - Joints and compound bodies are deliberately not serialised (see dai_doc.h).
 - Prefab overrides do not exist: an instance's children come from the file, and
   editing one would be silently discarded on the next reload. Moving and
