@@ -1031,6 +1031,70 @@ void dai_render_fog(dai_renderer *r, float density, dai_vec3 color) {
 void dai_render_shadow_extent(dai_renderer *r, float radius) { if (r && radius > 0.1f) r->shadow_radius = radius; }
 void dai_render_exposure(dai_renderer *r, float e) { if (r && e > 0.0f) r->exposure = e; }
 
+dai_result dai_render_resize(dai_renderer *r, uint32_t width, uint32_t height) {
+    if (!r || !width || !height) return DAI_ERR_INVALID_ARG;
+    if (r->width == width && r->height == height) return DAI_OK;
+
+    // Why this has to exist: the finished frame gets blitted onto the window,
+    // stretched from the render resolution to the window size. Leave the render
+    // resolution fixed and a maximised window shows a picture that is both the
+    // wrong shape - a 16:9 frame smeared across a 21:9 monitor - and soft,
+    // because 17 pixel text scaled up 2.4x is a smear of white. Following the
+    // window is what makes it sharp and correctly proportioned.
+    //
+    // Dynamic rendering makes this cheap: there is no render pass and no
+    // framebuffer to rebuild, only three images and the readback buffer.
+    vkDeviceWaitIdle(r->dev);
+
+    for (auto v : { r->color_ms_view, r->color_rt_view, r->depth_view })
+        if (v) vkDestroyImageView(r->dev, v, nullptr);
+    r->color_ms_view = r->color_rt_view = r->depth_view = VK_NULL_HANDLE;
+    if (r->color_ms) { vkDestroyImage(r->dev, r->color_ms, nullptr); vkFreeMemory(r->dev, r->color_ms_mem, nullptr); }
+    if (r->color_rt) { vkDestroyImage(r->dev, r->color_rt, nullptr); vkFreeMemory(r->dev, r->color_rt_mem, nullptr); }
+    if (r->depth)    { vkDestroyImage(r->dev, r->depth, nullptr);    vkFreeMemory(r->dev, r->depth_mem, nullptr); }
+    r->color_ms = r->color_rt = r->depth = VK_NULL_HANDLE;
+    r->color_ms_mem = r->color_rt_mem = r->depth_mem = VK_NULL_HANDLE;
+    vk_free_buffer(r, &r->readback);
+
+    const uint32_t old_w = r->width, old_h = r->height;
+    r->width = width;
+    r->height = height;
+
+    auto rebuild = [&](uint32_t w, uint32_t h) -> bool {
+        if (!make_image(r, w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_SAMPLE_COUNT_1_BIT,
+                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                        VK_IMAGE_ASPECT_COLOR_BIT, &r->color_rt, &r->color_rt_mem, &r->color_rt_view))
+            return false;
+        if (r->samples != VK_SAMPLE_COUNT_1_BIT &&
+            !make_image(r, w, h, VK_FORMAT_R8G8B8A8_UNORM, r->samples,
+                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
+                        &r->color_ms, &r->color_ms_mem, &r->color_ms_view))
+            return false;
+        if (!make_image(r, w, h, VK_FORMAT_D32_SFLOAT, r->samples,
+                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
+                        &r->depth, &r->depth_mem, &r->depth_view))
+            return false;
+        VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        return vk_make_buffer(r, (VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                              host, &r->readback, false);
+    };
+
+    if (!rebuild(width, height)) {
+        // Out of memory at the new size is survivable; a renderer with no
+        // targets at all is not. Go back to what was working.
+        r->width = old_w;
+        r->height = old_h;
+        if (!rebuild(old_w, old_h)) return DAI_ERR_STATE;
+        return DAI_ERR_OUT_OF_MEMORY;
+    }
+
+    // There is no finished frame at the new size yet, so nothing may be read
+    // back or presented until the next one is drawn.
+    r->have_frame = false;
+    return DAI_OK;
+}
+
 dai_result dai_render_readback(dai_renderer *r, uint8_t *rgba, size_t size) {
     if (!r || !rgba) return DAI_ERR_INVALID_ARG;
     if (!r->have_frame) return DAI_ERR_STATE;

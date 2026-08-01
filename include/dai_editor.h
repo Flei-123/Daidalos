@@ -47,6 +47,12 @@ DAI_API dai_doc    *dai_editor_doc(const dai_editor *e);
 DAI_API void dai_editor_camera(dai_editor *e, dai_vec3 eye, dai_vec3 target, dai_vec3 up,
                                float fov_deg, float znear, float zfar,
                                float viewport_w, float viewport_h);
+/* Changes only the viewport size - for a window that was resized. Picking and
+ * the gizmo work in pixels, so they need the new size; the camera's position
+ * and angles must not move, which is why this is not dai_editor_camera with
+ * the same eye and target. */
+DAI_API void dai_editor_camera_viewport(dai_editor *e, float viewport_w, float viewport_h);
+
 /* Builds the world space ray under a pixel. Also used by gameplay code that
  * wants to click on things. */
 DAI_API void dai_editor_ray(const dai_editor *e, float mouse_x, float mouse_y,

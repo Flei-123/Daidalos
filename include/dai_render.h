@@ -389,6 +389,19 @@ DAI_API void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height);
 
 DAI_API dai_result dai_render_frame(dai_renderer *r, const dai_render_instance *inst, uint32_t count);
 
+/* Re-creates the render targets at a new size.
+ *
+ * The frame is blitted onto the window and stretched to fit it, so a renderer
+ * that keeps a fixed resolution while the window changes shows a picture of the
+ * wrong shape and the wrong sharpness - a 16:9 frame smeared across a 21:9
+ * screen, with 17 pixel text scaled up until it is a smear of white. A host
+ * with a resizable window should call this whenever dai_window_size changes.
+ *
+ * Costs a device idle and three image allocations, so call it on the size
+ * actually changing, not every frame. Returns DAI_OK, or DAI_ERR_OUT_OF_MEMORY
+ * with the previous size still working. */
+DAI_API dai_result dai_render_resize(dai_renderer *r, uint32_t width, uint32_t height);
+
 DAI_API dai_result dai_render_readback(dai_renderer *r, uint8_t *rgba, size_t size);
 DAI_API dai_result dai_render_write_ppm(dai_renderer *r, const char *path);
 DAI_API dai_result dai_render_write_png(dai_renderer *r, const char *path); /* zlib-free, stored deflate */

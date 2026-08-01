@@ -153,6 +153,18 @@ int main(int argc, char **argv) {
         uint32_t ww = W, wh = H;
         dai_window_size(win, &ww, &wh);
 
+        // Follow the window. The frame is blitted onto it and stretched, so a
+        // fixed render resolution means a picture of the wrong shape (a 16:9
+        // frame across a 21:9 monitor) drawn with soft, scaled up text - and
+        // the UI, which lays itself out in window pixels, would be drawing into
+        // a buffer of a different size. One resolution for the window, the
+        // renderer and the interface is the only arrangement where all three
+        // agree.
+        if (ww != dai_render_width(r) || wh != dai_render_height(r)) {
+            if (dai_render_resize(r, ww, wh) == DAI_OK)
+                dai_editor_camera_viewport(ed, (float)ww, (float)wh);
+        }
+
         // The UI has to run before the viewport, because "is the pointer over a
         // panel" is only known once the panels have been laid out this frame.
         dai_ui_input in{};

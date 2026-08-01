@@ -748,6 +748,49 @@ render resolution, posts a pointer position, and checks what comes back:
 ok: 21 checks, 0 failures
 ```
 
+## What an ultrawide monitor exposed
+
+Three more, all from one screenshot of the editor filling a 3440x1440 screen,
+and all three the same root cause wearing different clothes.
+
+The renderer drew at a fixed 1440x810 and the finished frame was blitted onto
+the window, stretched to fit. On a 21:9 monitor that meant:
+
+- **Everything was distorted.** A 16:9 frame smeared across a 21:9 screen -
+  boxes came out wider than they are.
+- **The text was a mess.** 17 pixel glyphs scaled up 2.4x are a smear of white,
+  which is what "brutal verbuggt" looked like. The font was innocent - dumping
+  Segoe UI and DejaVu Sans as ASCII art shows both rasterising cleanly. Worth
+  checking before rewriting a rasteriser.
+- **The interface laid itself out for the wrong size.** The UI uses window
+  pixels, the renderer used its own - so the panels were sized for one canvas
+  and drawn into another.
+
+`dai_render_resize` fixes all three by removing the mismatch: the renderer
+follows the window, so window, framebuffer and interface are one resolution and
+nothing is scaled at all. Dynamic rendering makes it cheap - no render pass and
+no framebuffers to rebuild, just three images and the readback buffer. Failing
+to allocate at the new size restores the old one rather than leaving a renderer
+with no targets.
+
+The editor calls it when `dai_window_size` changes, along with
+`dai_editor_camera_viewport` so picking and the gizmo know the new size. That is
+deliberately *not* `dai_editor_camera` with the same eye and target: it would
+recompute the orbit angles and the camera would jerk every time the window was
+resized.
+
+**Dragging is now live.** The gizmo wrote to the document on every mouse move
+but the scene was only synchronised in `dai_editor_drag_end`, so an object sat
+still while being dragged and teleported on release - it felt like dragging a
+number rather than a thing. `dai_editor_drag_update` pushes to the scene every
+frame now. Move, rotate and scale each have their own early returns, so the push
+lives in a wrapper around them rather than at the end of whichever branch was
+remembered. `dai_doc_sync_apply` only touches nodes whose revision changed, so a
+drag costs the handful that are actually moving.
+
+`tools/editor_shot` takes a resolution now, so the ultrawide case can be
+rendered here rather than only on the desk where it broke.
+
 ## What is still missing
 
 Kept honest: things listed here are genuinely absent, and things that got built

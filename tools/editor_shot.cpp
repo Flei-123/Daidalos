@@ -8,6 +8,7 @@
 #include "dai_render.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -61,15 +62,17 @@ int main(int argc, char **argv) {
     dai_doc_sync_apply(sync);
     dai_step(w);
 
-    const uint32_t W = 1280, H = 720;
+    // Overridable, so the ultrawide case Justin actually hit can be rendered
+    // here instead of only on his desk.
+    const uint32_t W = argc > 2 ? (uint32_t)atoi(argv[2]) : 1280;
+    const uint32_t H = argc > 3 ? (uint32_t)atoi(argv[3]) : 720;
     dai_render_desc rd{};
     rd.width = W; rd.height = H; rd.msaa = 4;
     char err[256] = { 0 };
     dai_renderer *r = dai_render_create(&rd, err, sizeof(err));
     if (!r) { std::printf("renderer failed: %s\n", err); return 1; }
 
-    dai_font *font = dai_font_load("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 17.0f,
-                                   nullptr, 0, err, sizeof(err));
+    dai_font *font = dai_font_load_ui(17.0f, err, sizeof(err));
     dai_texture font_tex = 0;
     if (font) {
         uint32_t aw = 0, ah = 0;

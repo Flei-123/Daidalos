@@ -217,6 +217,15 @@ dai_editor *dai_editor_create(dai_doc *doc, dai_doc_sync *sync) {
 void dai_editor_destroy(dai_editor *e) { delete e; }
 dai_doc *dai_editor_doc(const dai_editor *e) { return e ? e->doc : nullptr; }
 
+void dai_editor_camera_viewport(dai_editor *e, float vw, float vh) {
+    // Just the size. Going through dai_editor_camera to change it would also
+    // reset the orbit angles from eye/target, so a window resize would jerk the
+    // camera - which is not what resizing a window should do.
+    if (!e) return;
+    if (vw > 0) e->vw = vw;
+    if (vh > 0) e->vh = vh;
+}
+
 void dai_editor_camera(dai_editor *e, dai_vec3 eye, dai_vec3 target, dai_vec3 up,
                        float fov, float znear, float zfar, float vw, float vh) {
     if (!e) return;
@@ -534,7 +543,22 @@ void dai_editor_drag_begin(dai_editor *e, int axis, float mx, float my) {
     dai_doc_begin(e->doc, name);   // everything until drag_end is one undo step
 }
 
+// Move, rotate and scale each have their own early returns, so the push to the
+// scene lives in a wrapper rather than at the end of one of them.
+static void drag_update_impl(dai_editor *e, float mx, float my);
+
 void dai_editor_drag_update(dai_editor *e, float mx, float my) {
+    if (!e || !e->dragging) return;
+    drag_update_impl(e, mx, my);
+    // Now, not at drag_end. The document moves the moment the pointer does;
+    // without this the object sits still until the button is released and then
+    // teleports - dragging a number instead of a thing. dai_doc_sync_apply only
+    // touches nodes whose revision changed, so a drag costs the handful that
+    // are actually moving.
+    resync(e);
+}
+
+static void drag_update_impl(dai_editor *e, float mx, float my) {
     if (!e || !e->dragging) return;
 
     if (e->drag_screen_rotate) {
