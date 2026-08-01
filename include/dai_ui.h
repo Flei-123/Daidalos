@@ -51,7 +51,11 @@ typedef struct dai_ui_input {
     int      mouse_down;      /* left button held                       */
     int      right_down;      /* right button held - the context menu     */
     float    wheel;
-    uint32_t text[8];         /* code points typed this frame, 0 terminated */
+    uint32_t text[8];         /* code points typed this frame, 0 terminated.
+                                 IMPORTANT: dai_ui does NOT track held keys -
+                                 feed a code point only when it was TYPED
+                                 (edge triggered), or every frame of a held
+                                 key repeats the letter. */
     int      key_backspace, key_enter, key_tab;
 } dai_ui_input;
 

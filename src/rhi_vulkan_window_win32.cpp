@@ -44,6 +44,12 @@ struct dai_window {
     bool keys[256] = {};
     int mouse_x = 0, mouse_y = 0;
     uint32_t buttons = 0;
+
+    // Text events, as they arrived: TranslateMessage turns WM_KEYDOWN into
+    // WM_CHAR with shift, caps lock and dead keys already applied - exactly
+    // what a text field wants, and nothing like "is the key held".
+    uint32_t text[64] = { 0 };
+    uint32_t text_head = 0, text_tail = 0;   // ring: head writes, tail reads
 };
 
 namespace {
@@ -125,6 +131,20 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (wp == VK_ESCAPE) w->open = false;
         return 0;
     case WM_KEYUP: case WM_SYSKEYUP:   set_key(w, wp, false); return 0;
+    case WM_CHAR: {
+        // Control characters arrive here too (backspace, tab, enter) - the
+        // fields handle those as keys, so only printable code points go into
+        // the text stream.
+        uint32_t cp = (uint32_t)wp;
+        if (cp >= 0x20 && cp != 0x7F) {
+            uint32_t next = (w->text_head + 1) % 64;
+            if (next != w->text_tail) {     // a full ring drops the oldest input
+                w->text[w->text_head] = cp;
+                w->text_head = next;
+            }
+        }
+        return 0;
+    }
     case WM_MOUSEMOVE:  w->mouse_x = (int)(short)LOWORD(lp); w->mouse_y = (int)(short)HIWORD(lp); return 0;
     case WM_LBUTTONDOWN: w->buttons |= 1u << 1; return 0;
     case WM_LBUTTONUP:   w->buttons &= ~(1u << 1); return 0;
@@ -372,6 +392,17 @@ dai_result dai_window_present(dai_window *w) {
 }
 
 int dai_window_key_down(dai_window *w, uint32_t code) { return (w && w->keys[key_slot(code)]) ? 1 : 0; }
+
+uint32_t dai_window_text(dai_window *w, uint32_t *out, uint32_t max) {
+    if (!w || !out || !max) return 0;
+    uint32_t n = 0;
+    while (w->text_tail != w->text_head && n + 1 < max) {
+        out[n++] = w->text[w->text_tail];
+        w->text_tail = (w->text_tail + 1) % 64;
+    }
+    out[n] = 0;
+    return n;
+}
 
 float dai_window_wheel(dai_window *w) {
     if (!w) return 0.0f;

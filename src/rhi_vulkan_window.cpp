@@ -13,6 +13,7 @@
 // millisecond and buys the entire property above.
 
 #include "rhi_vulkan.hpp"
+#include "dai_font.h"
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -43,6 +44,11 @@ struct dai_window {
     bool keys[256] = {};                 // hashed keysym -> down
     int mouse_x = 0, mouse_y = 0;
     uint32_t buttons = 0;
+
+    // Text events from XLookupString: one code point per press, shift and
+    // compose already applied - what a text field wants, unlike "held".
+    uint32_t text[64] = { 0 };
+    uint32_t text_head = 0, text_tail = 0;
     float    wheel = 0.0f;
 };
 
@@ -193,6 +199,31 @@ int dai_window_poll(dai_window *w) {
             KeySym ks = XLookupKeysym(&e.xkey, 0);
             w->keys[key_slot((uint32_t)ks)] = (e.type == KeyPress);
             if (e.type == KeyPress && ks == XK_Escape) w->open = false;
+            if (e.type == KeyPress) {
+                // The text half of the same press. Control keys (backspace,
+                // tab, enter) stay out of the stream - the fields read those
+                // as keys.
+                char buf[16];
+                KeySym sym = 0;
+                int n = XLookupString(&e.xkey, buf, (int)sizeof(buf) - 1, &sym, nullptr);
+                if (n > 0) {
+                    // XLookupString answers in the locale's encoding - on a
+                    // UTF-8 locale that is UTF-8, and the decoder the font
+                    // loader already has eats it directly.
+                    uint32_t off = 0;
+                    while (off < (uint32_t)n) {
+                        uint32_t cp = dai_utf8_next(buf, &off);
+                        if (!cp) break;
+                        if (cp >= 0x20 && cp != 0x7F) {
+                            uint32_t next = (w->text_head + 1) % 64;
+                            if (next != w->text_tail) {
+                                w->text[w->text_head] = cp;
+                                w->text_head = next;
+                            }
+                        }
+                    }
+                }
+            }
             break;
         }
         case ButtonPress:
@@ -281,6 +312,17 @@ dai_result dai_window_present(dai_window *w) {
         return DAI_ERR_STATE;
     }
     return DAI_OK;
+}
+
+uint32_t dai_window_text(dai_window *w, uint32_t *out, uint32_t max) {
+    if (!w || !out || !max) return 0;
+    uint32_t n = 0;
+    while (w->text_tail != w->text_head && n + 1 < max) {
+        out[n++] = w->text[w->text_tail];
+        w->text_tail = (w->text_tail + 1) % 64;
+    }
+    out[n] = 0;
+    return n;
 }
 
 int dai_window_key_down(dai_window *w, uint32_t keysym) {

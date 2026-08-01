@@ -374,6 +374,14 @@ typedef enum dai_key {
 
 /* Minimal input. Pass a dai_key; anything else is undefined but harmless. */
 DAI_API int dai_window_key_down(dai_window *w, uint32_t key);
+
+/* Text events, the way the OS actually delivers them: one code point per key
+ * PRESS (with the OS's own repeat), shift and dead keys already resolved.
+ * dai_window_key_down answers "is it held" - the right question for a camera
+ * and the wrong one for a text field, where held means repeating the letter
+ * every frame. Fills `out` with up to `max` code points typed since the last
+ * poll and returns the count, 0 terminated like dai_ui_input.text. */
+DAI_API uint32_t dai_window_text(dai_window *w, uint32_t *out, uint32_t max);
 /* Pointer position IN RENDERER PIXELS, not window pixels. The frame is blitted
  * onto the window and stretched to fit it, so those two only agree when the
  * window happens to be exactly the render resolution. Reporting the mouse in

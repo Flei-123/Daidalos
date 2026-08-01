@@ -209,8 +209,6 @@ int main(int argc, char **argv) {
     int prev_keys[8] = { 0 };
     std::vector<dai_render_instance> inst(4096);
     int prev_f2 = 0, prev_backspace = 0, prev_enter = 0, prev_tab = 0;
-    uint8_t key_was[256] = { 0 };
-    uint8_t keys_now[256] = { 0 };
 
     while (dai_window_poll(win)) {
         auto now = std::chrono::high_resolution_clock::now();
@@ -291,6 +289,15 @@ int main(int argc, char **argv) {
             dai_editor_ui_rename(panels, dai_editor_selected(ed, 0));
         prev_f2 = dai_window_key_down(win, DAI_KEY_F2);
 
+        // Real text events. dai_window_key_down answers "is it held", which
+        // is the camera's question - the inspector's question is "what was
+        // typed", and answering that with held keys repeats every letter for
+        // as long as the finger is down. The window backend saw the key
+        // press events; it hands them over as code points, already
+        // shift-resolved. */
+        uint32_t typed[8] = { 0 };
+        uint32_t ntyped = dai_window_text(win, typed, 8);
+
         // The menu swallows the right button: while one is open, right is not
         // the camera's look button - otherwise dismissing a menu with the same
         // button that summoned it also turns the world.
@@ -299,27 +306,7 @@ int main(int argc, char **argv) {
         in.mouse_down = ci.mouse_left;
         in.right_down = dai_editor_ui_menu_open(panels) ? 0 : ci.mouse_right;
         in.wheel = wheel;
-        // Typed text for the fields: ASCII from the same key state the camera
-        // reads. A window backend with real text events would feed the same
-        // array; this is what it looks like when it does not exist yet.
-        std::memset(keys_now, 0, sizeof(keys_now));
-        for (uint32_t k = 0x20; k < 0x7F; ++k)
-            keys_now[k] = dai_window_key_down(win, k) ? 1 : 0;
-        {
-            int ti = 0;
-            int shift = ci.key_shift;
-            for (uint32_t k = DAI_KEY_A; k <= DAI_KEY_Z && ti < 7; ++k)
-                if (dai_window_key_down(win, k) && !key_was[k & 0xFF]) {
-                    in.text[ti++] = shift ? (k - 0x20) : k;
-                }
-            for (uint32_t k = DAI_KEY_0; k <= DAI_KEY_9 && ti < 7; ++k)
-                if (dai_window_key_down(win, k) && !key_was[k & 0xFF])
-                    in.text[ti++] = k;
-            if (dai_window_key_down(win, DAI_KEY_SPACE) && !key_was[DAI_KEY_SPACE & 0xFF])
-                in.text[ti++] = ' ';
-            in.text[ti] = 0;
-        }
-        std::memcpy(key_was, keys_now, sizeof(key_was));
+        std::memcpy(in.text, typed, sizeof(in.text));
         in.key_backspace = dai_window_key_down(win, DAI_KEY_BACKSPACE) && !prev_backspace;
         prev_backspace = dai_window_key_down(win, DAI_KEY_BACKSPACE);
         in.key_enter = dai_window_key_down(win, DAI_KEY_RETURN) && !prev_enter;
