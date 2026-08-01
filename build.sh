@@ -110,7 +110,12 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
         mkdir -p /tmp/vkinc && cp -r /usr/include/vulkan /tmp/vkinc/ 2>/dev/null || true
         x86_64-w64-mingw32-g++ -std=c++17 -O2 -fno-rtti -fno-exceptions \
             -Iinclude -Isrc -I/tmp/vkinc -c src/rhi_vulkan_window_win32.cpp -o build/rhi_vulkan_window_win32.o
-        echo "   ok: build/rhi_vulkan_window_win32.o"
+        # The updater's Windows half (WinHTTP, the rename trick) is only
+        # compiled on this path, so check it here rather than discover it on
+        # the first Windows build.
+        x86_64-w64-mingw32-g++ -std=c++17 -O2 -fno-rtti -fno-exceptions \
+            -Iinclude -Isrc -c src/dai_update.cpp -o build/dai_update_win32.o
+        echo "   ok: build/rhi_vulkan_window_win32.o, build/dai_update_win32.o"
         ;;
     *)
         echo "-- window backend: none (headless only)"
@@ -127,10 +132,11 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_particles.cpp    -o build/dai_particles.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_font.cpp          -o build/dai_font.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_ui.cpp            -o build/dai_ui.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_update.cpp       -o build/dai_update.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor_ui.cpp     -o build/dai_editor_ui.o
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
            $WINDOW_OBJ build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
-           build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_ui.o \
+           build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_ui.o build/dai_update.o \
            build/dai_editor_ui.o
     VK_OK=1
 else
@@ -222,6 +228,8 @@ if [ "$VK_OK" = "1" ]; then
     # anywhere, including a machine with no GPU and no display.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_fracture.cpp src/dai_fracture.cpp \
         src/dai_gltf_geom.cpp src/dai_gltf_write.cpp src/dai_json.cpp -o build/test_fracture
+    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_update.cpp src/dai_update.cpp \
+        src/dai_json.cpp -o build/test_update
     g++ $FLAGS $ARCH -Iinclude tests/test_particles.cpp $VKLIBS -o build/test_particles
     g++ $FLAGS $ARCH -Iinclude tests/test_skinning.cpp $VKLIBS -o build/test_skinning
     g++ $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui

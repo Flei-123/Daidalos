@@ -578,6 +578,65 @@ The parser it reads back with is the same one the engine uses, shared through
 (`dai_gltf_geom.cpp`, geometry as plain arrays) can be linked without Vulkan.
 `daifracture` and `test_fracture` build and run on a machine with no GPU.
 
+## Staying current
+
+The editor is handed to people who will not rebuild it, so it updates itself.
+`include/dai_update.h` is the whole of it: fetch a manifest, compare versions,
+hash the local files, download what actually differs, verify, install.
+
+Publishing is generated, never typed - a manifest promising a hash the file does
+not have is a manifest the updater will correctly refuse:
+
+```sh
+tools/dai_publish.py 0.2.0 https://jarvis.fleitec.com/dai/ \
+    build/daidalos_editor.exe shaders.pack > dai_version.json
+```
+
+The client side is four calls:
+
+```c
+dai_update_sweep(dir);                        /* delete last update's leftovers */
+dai_update_info u;
+if (dai_update_check(MANIFEST_URL, DAI_VERSION, dir, &u, err, sizeof err) == DAI_OK
+    && u.needed_count) {
+    if (dai_update_download(&u, dir, err, sizeof err))       /* staged, verified */
+        dai_update_commit(&u, dir, "daidalos_editor.exe", err, sizeof err);
+}
+```
+
+Three properties it is built around, each one a way this feature usually goes
+wrong:
+
+*Verified before installed.* A download is hashed and compared to the manifest
+before it is allowed near the install directory. Replacing a working editor with
+a truncated one is worse than being out of date.
+
+*Staged, then committed.* Files land as `<name>.new` and nothing existing moves
+until every one of them is present and correct. Losing the connection halfway
+leaves the old build running, not half of each.
+
+*The rename trick.* Windows will not overwrite a running `.exe` but will rename
+it, so the running file steps aside to `<name>.old`, the new one takes its
+place, and the leftover is swept at the next start.
+
+The version number only says a release happened; the *hashes* decide what gets
+downloaded, so a release that changed one file transfers one file.
+
+Testing an updater means testing the failures, so the transport is injectable
+(`dai_update_set_fetch`) and `test_update` drives the whole flow against bytes
+in memory: corrupt download refused with the install untouched, unreachable
+server reported rather than fatal, interrupted download refused at commit, and a
+manifest naming `../escaped.txt`, `/etc/passwd` or `sub/dir.txt` dropped before
+any of them becomes a path. SHA-256 is checked against the published vectors and
+at lengths 55/56/57/63/64/65/119/120, where message padding either works or
+quietly does not. 53 checks.
+
+It has also been run for real: `dai_publish.py` writing a manifest, a local HTTP
+server, the built in transport fetching it, and the installed binary coming out
+byte identical to the one that was served, with the previous one preserved as
+`.old`. The Windows half (WinHTTP, no extra DLL) is compiled on every build by
+the mingw cross check, so it cannot rot unnoticed.
+
 ## What is still missing
 
 Kept honest: things listed here are genuinely absent, and things that got built
