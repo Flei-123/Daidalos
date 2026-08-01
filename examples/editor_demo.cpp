@@ -160,6 +160,9 @@ int main(int argc, char **argv) {
     if (!r) { std::printf("renderer failed: %s\n", err); return 1; }
     dai_window *win = dai_window_open(r, "Daidalos Editor", W, H, err, sizeof(err));
     if (!win) { std::printf("window failed: %s\n", err); return 1; }
+    // A line in the log that proves WHICH build is running: two editor.exes
+    // on the same machine look identical from the task list.
+    std::printf("editor up: %ux%u, %s\n", W, H, dai_version());
 
     // 13 px, not 17: this is an editor, and the panels are full of numeric
     // fields. On Windows the window is DPI aware now, so 13 px is 13 real
