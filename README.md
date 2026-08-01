@@ -199,6 +199,29 @@ is not playing, and `dai_editor_resync` exposes the same thing for a frontend
 that never calls advance. Both are incremental and idempotent, so doing it
 after an edit and again next frame costs nothing.
 
+The inspector takes typed numbers, not just drags: click a field, type,
+Enter or click away commits - and the axis letter in front of a vec3 is a
+drag handle, the way Unity's X/Y/Z labels work. Rotation shows degrees,
+cached so the quaternion's round trip never fights a half typed number.
+Undo batches by edit: a typed value is one step, like a drag, not one step
+per keystroke. The blocks mirror what the engine treats as one thing, and
+after the component split that is Transform, **Rigidbody** (only the mass
+side: motion, friction, bounce), **Collider** (shape, Is Trigger, size,
+center) and Renderer (mesh by name, colour, rough, emissive) - separate
+because they are: a static level is a collider without a rigidbody, and a
+trigger volume is a collider that reports overlaps instead of blocking.
+During play the inspector and the gizmo read the live body - the document
+holds the pre-play pose, which is exactly what makes Stop exact.
+
+Right click opens a menu: Rename / Duplicate / Delete on a node, New Box /
+New Sphere on empty space, in the hierarchy and in the viewport. The click
+that dismisses a menu cannot also press whatever lies under it, and F2
+renames inline.
+
+A project is a folder of scenes and assets, no more mystical than Unity's:
+the host hands over listing, create and open, and the Project window's
+Projects tab is where "nothing mounted" becomes a project.
+
 Panels dock. A window carries an edge and a slot - the whole edge, its upper
 half or its lower half - so the default layout is hierarchy over project on the
 left and inspector down the right, dragging a title bar pulls a window out,
