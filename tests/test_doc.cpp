@@ -566,6 +566,63 @@ int main() {
         dai_doc_destroy(scene);
     }
 
+    // ---- editing a node must not repaint it black -------------------------
+    //
+    // A node with no colour of its own gets one from the scene's palette when
+    // it spawns. The document still holds zero, and the sync used to push that
+    // zero back on every update - so moving a crate in the editor turned it
+    // black. Nothing crashed, nothing failed to build, the scene just went dark
+    // one object at a time.
+    {
+        dai_doc *cd = dai_doc_create();
+        dai_scene *cs = dai_scene_create(w);
+        dai_doc_sync *cy = dai_doc_sync_create(cd, cs);
+
+        dai_node_desc nd = dai_node_desc_default();
+        std::snprintf(nd.name, sizeof(nd.name), "Uncoloured");
+        nd.motion = DAI_DYNAMIC;
+        dai_node n = dai_doc_add(cd, &nd);
+        dai_doc_sync_apply(cy);
+
+        dai_render_instance inst[16];
+        uint32_t ni = dai_scene_instances(cs, inst, 16, 0.0f);
+        CHECK(ni >= 1, "the uncoloured node did not spawn");
+        dai_vec3 spawned = ni ? inst[0].color : dai_vec3{ 0, 0, 0 };
+        CHECK(spawned.x + spawned.y + spawned.z > 0.01f,
+              "a node with no colour spawned black (%.2f %.2f %.2f)",
+              spawned.x, spawned.y, spawned.z);
+
+        // Move it, exactly as dragging a gizmo does.
+        dai_node_desc edit{};
+        CHECK(dai_doc_get(cd, n, &edit) == DAI_OK, "could not read the node back");
+        edit.position = { 3.0f, 1.0f, 0.0f };
+        dai_doc_set(cd, n, &edit);
+        dai_doc_sync_apply(cy);
+
+        ni = dai_scene_instances(cs, inst, 16, 0.0f);
+        dai_vec3 after = ni ? inst[0].color : dai_vec3{ 0, 0, 0 };
+        CHECK(after.x + after.y + after.z > 0.01f,
+              "moving an uncoloured node painted it black (%.2f %.2f %.2f)",
+              after.x, after.y, after.z);
+        CHECK(std::fabs(after.x - spawned.x) < 0.001f &&
+              std::fabs(after.y - spawned.y) < 0.001f &&
+              std::fabs(after.z - spawned.z) < 0.001f,
+              "moving a node changed its colour");
+
+        // An explicit colour must still win.
+        edit.color = { 0.9f, 0.1f, 0.1f };
+        dai_doc_set(cd, n, &edit);
+        dai_doc_sync_apply(cy);
+        ni = dai_scene_instances(cs, inst, 16, 0.0f);
+        CHECK(ni && inst[0].color.x > 0.8f && inst[0].color.y < 0.2f,
+              "an explicit colour did not reach the scene");
+        std::printf("  uncoloured node keeps its palette colour across edits\n");
+
+        dai_doc_sync_destroy(cy);
+        dai_doc_destroy(cd);
+        dai_scene_destroy(cs);
+    }
+
     dai_doc_sync_destroy(sy);
     dai_doc_destroy(d);
     dai_scene_destroy(sc);

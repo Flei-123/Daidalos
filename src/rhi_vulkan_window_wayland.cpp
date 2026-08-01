@@ -387,8 +387,20 @@ float dai_window_wheel(dai_window *w) {
 
 int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {
     if (!w) return 0;
-    if (x) *x = w->mouse_x;
-    if (y) *y = w->mouse_y;
+    // The finished frame is BLITTED onto the window, stretched from the
+    // renderer's resolution to whatever size the window happens to be. So a
+    // pointer position in window pixels does not address the picture the host
+    // drew - and a host that hit tests a gizmo against it misses by exactly the
+    // stretch factor. Resize the window and the miss grows.
+    //
+    // Handing back window pixels and expecting every caller to divide is how
+    // that bug gets written once per program. The mouse is reported in the
+    // same space as the frame.
+    const dai_renderer *r = w->r;
+    const double sx = (w->width  && r->width)  ? (double)r->width  / (double)w->width  : 1.0;
+    const double sy = (w->height && r->height) ? (double)r->height / (double)w->height : 1.0;
+    if (x) *x = (int)((double)w->mouse_x * sx);
+    if (y) *y = (int)((double)w->mouse_y * sy);
     if (buttons) *buttons = w->buttons;
     return 1;
 }

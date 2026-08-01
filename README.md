@@ -706,6 +706,48 @@ every editor binding, both sides of shift/ctrl/alt reported from the side-less
 virtual key, and an unmapped key (F12) confirmed to touch nothing, because the
 key slot is a hash and a collision would silently press W.
 
+## Three bugs the first Windows session found
+
+Running the editor on someone else's machine surfaced three things a headless
+test suite could not. Two of them were in the engine and had been wrong on Linux
+all along.
+
+**Editing a node painted it black.** A node with no colour of its own gets one
+from the palette when it spawns; the document still holds zero, meaning "none
+chosen". The sync pushed that zero back on every update - so moving a crate
+turned it black, then the next one, then the next. Nothing crashed and nothing
+failed to build, the scene just went dark one object at a time. The sync now
+leaves the colour alone unless the document actually specifies one, and
+`test_doc` moves an uncoloured node and demands the palette colour survive.
+Reverting the fix makes that test fail with `painted it black (0.00 0.00 0.00)`,
+which is the point of writing it.
+
+**The gizmo was offset from the mouse.** The finished frame is blitted onto the
+window and stretched to fit, so window pixels and renderer pixels only agree
+when the window is exactly the render resolution. `dai_window_mouse` handed back
+window pixels, the editor hit tested against what it had drawn, and the miss
+grew with the window - maximise it and the gizmo moves out from under the
+cursor. The mouse is now reported **in the space the frame was drawn in**, in
+all three backends. Handing back raw window pixels and expecting every caller to
+divide is how that bug gets written once per program.
+
+**The interface had no text.** The editor loaded
+`/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` - a hard coded Linux path, so
+on Windows it drew an interface of blank boxes. `dai_font_load_ui` now tries
+`$DAI_FONT`, then the Segoe/Tahoma/Arial faces Windows ships, then the DejaVu
+and Liberation ones Linux ships, and says what it tried when none of them exist.
+
+The mouse fix is verified the same way the keyboard was - by doing it, not by
+asserting it. `win_keytest` resizes its own window to half, equal and double the
+render resolution, posts a pointer position, and checks what comes back:
+
+```
+  window  320x200   pointer (100, 50) -> (100, 50), expected (100, 50)  ok
+  window  640x400   pointer (200,100) -> (100, 50), expected (100, 50)  ok
+  window  160x100   pointer ( 50, 25) -> (100, 50), expected (100, 50)  ok
+ok: 21 checks, 0 failures
+```
+
 ## What is still missing
 
 Kept honest: things listed here are genuinely absent, and things that got built

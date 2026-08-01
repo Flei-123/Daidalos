@@ -41,6 +41,16 @@ DAI_API dai_font *dai_font_load(const char *path, float pixel_height,
                                 char *err, size_t err_len);
 DAI_API void      dai_font_free(dai_font *f);
 
+/* Loads whatever the system's UI font is, without the caller knowing where that
+ * lives. A hard coded /usr/share/fonts path is a program that builds for
+ * Windows, runs, and draws an interface with no text in it - which is exactly
+ * how the editor first arrived there.
+ *
+ * Order: $DAI_FONT if set, then the usual Windows faces, then the usual Linux
+ * and macOS ones. Returns NULL only if none of them exist, and writes the list
+ * it tried into err so the failure is actionable. */
+DAI_API dai_font *dai_font_load_ui(float pixel_height, char *err, size_t err_len);
+
 /* The atlas: 8 bit coverage, tightly packed. Upload it as a texture. */
 DAI_API const uint8_t *dai_font_atlas(const dai_font *f, uint32_t *width, uint32_t *height);
 /* Same pixels expanded to RGBA (white, alpha = coverage) for renderers that

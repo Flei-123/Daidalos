@@ -2,6 +2,8 @@
 
 #include "dai_font.h"
 
+#include <cstdlib>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -435,6 +437,52 @@ dai_font *dai_font_load(const char *path, float pixel_height,
 }
 
 void dai_font_free(dai_font *f) { delete f; }
+
+dai_font *dai_font_load_ui(float pixel_height, char *err, size_t err_len) {
+    // Every one of these is a font that ships with the operating system, so a
+    // program using this needs nothing installed and nothing bundled.
+    static const char *candidates[] = {
+        // Windows
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/tahoma.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/verdana.ttf",
+        // Linux
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        // macOS
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/Library/Fonts/Arial.ttf",
+    };
+
+    const char *override_path = std::getenv("DAI_FONT");
+    if (override_path && override_path[0]) {
+        dai_font *f = dai_font_load(override_path, pixel_height, nullptr, 0, err, err_len);
+        if (f) return f;
+        // An explicit DAI_FONT that does not work is a mistake worth reporting
+        // rather than papering over with a silent fallback.
+        if (err && err_len) {
+            char detail[128];
+            std::snprintf(detail, sizeof(detail), "%s", err);
+            std::snprintf(err, err_len, "DAI_FONT=%s could not be loaded: %s",
+                          override_path, detail);
+        }
+        return nullptr;
+    }
+
+    for (const char *path : candidates) {
+        dai_font *f = dai_font_load(path, pixel_height, nullptr, 0, nullptr, 0);
+        if (f) return f;
+    }
+    if (err && err_len)
+        std::snprintf(err, err_len,
+                      "no system UI font found - tried Segoe UI, Tahoma, Arial, DejaVu Sans, "
+                      "Liberation Sans and FreeSans; set DAI_FONT to a .ttf to override");
+    return nullptr;
+}
 
 const uint8_t *dai_font_atlas(const dai_font *f, uint32_t *w, uint32_t *h) {
     if (!f) return nullptr;

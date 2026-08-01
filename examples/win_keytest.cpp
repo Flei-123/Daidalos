@@ -102,6 +102,53 @@ int main() {
     PostMessageW(hwnd, WM_KEYUP, VK_F12, 0);
     pump(w);
 
+    // ---- the mouse must arrive in RENDERER pixels ---------------------------
+    //
+    // The frame is blitted onto the window and stretched to fit it. When the
+    // two sizes differ - which is any window that has been resized or
+    // maximised - a pointer reported in window pixels does not address the
+    // picture the host drew, and hit testing a gizmo misses by exactly the
+    // stretch factor. That was the bug: "I have to click slightly beside the
+    // gizmo to grab it", and it got worse the bigger the window was.
+    std::printf("  ---- mouse scaling ----\n");
+    {
+        uint32_t rw = dai_render_width(r), rh = dai_render_height(r);
+
+        struct Case { int win_w, win_h; int at_x, at_y; };
+        const Case cases[] = {
+            { (int)rw,      (int)rh,      100, 50 },   // 1:1, must pass through
+            { (int)rw * 2,  (int)rh * 2,  200, 100 },  // maximised-ish: halve it
+            { (int)rw / 2,  (int)rh / 2,   50, 25 },   // smaller: double it
+        };
+        for (const Case &c : cases) {
+            // Resize the client area, not the window: the border would skew it.
+            RECT want{ 0, 0, c.win_w, c.win_h };
+            AdjustWindowRect(&want, (DWORD)GetWindowLongPtrW(hwnd, GWL_STYLE), FALSE);
+            SetWindowPos(hwnd, nullptr, 0, 0, want.right - want.left, want.bottom - want.top,
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            pump(w);
+            pump(w);
+
+            uint32_t ww = 0, wh = 0;
+            dai_window_size(w, &ww, &wh);
+
+            PostMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(c.at_x, c.at_y));
+            pump(w);
+
+            int mx = 0, my = 0;
+            dai_window_mouse(w, &mx, &my, nullptr);
+
+            // What the host should see: the same point, expressed in the space
+            // it actually drew in.
+            const int want_x = ww ? (int)((double)c.at_x * (double)rw / (double)ww) : c.at_x;
+            const int want_y = wh ? (int)((double)c.at_y * (double)rh / (double)wh) : c.at_y;
+            const bool ok = mx == want_x && my == want_y;
+            if (ok) ++g_pass; else ++g_fail;
+            std::printf("  window %4ux%-4u  pointer (%3d,%3d) -> (%3d,%3d), expected (%3d,%3d)  %s\n",
+                        ww, wh, c.at_x, c.at_y, mx, my, want_x, want_y, ok ? "ok" : "MISS");
+        }
+    }
+
     dai_window_close(w);
     dai_render_destroy(r);
 

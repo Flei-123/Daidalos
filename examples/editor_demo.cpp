@@ -66,8 +66,8 @@ int main(int argc, char **argv) {
     dai_window *win = dai_window_open(r, "Daidalos Editor", W, H, err, sizeof(err));
     if (!win) { std::printf("window failed: %s\n", err); return 1; }
 
-    dai_font *font = dai_font_load("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 17.0f,
-                                   nullptr, 0, err, sizeof(err));
+    dai_font *font = dai_font_load_ui(17.0f, err, sizeof(err));
+    if (!font) std::printf("no font: %s\n", err);   // the UI would draw blank boxes
     dai_texture font_tex = 0;
     if (font) {
         uint32_t aw = 0, ah = 0;

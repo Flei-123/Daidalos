@@ -271,7 +271,12 @@ uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
             dai_body_set_transform(s->world, l.body, wp, wr);
             if (s->zero_velocities)
                 dai_body_set_velocity(s->world, l.body, dai_vec3{ 0,0,0 }, dai_vec3{ 0,0,0 });
-            dai_scene_set_color(s->scene, l.entity, r.color);
+            // A zero colour in the document means "no colour was chosen", and
+            // the scene already picked one from the palette when this entity
+            // was spawned. Pushing the zero back would paint it black - which
+            // is what happened on every edit: move a crate, watch it go dark.
+            if (r.color.x != 0.0f || r.color.y != 0.0f || r.color.z != 0.0f)
+                dai_scene_set_color(s->scene, l.entity, r.color);
             dai_scene_set_visible(s->scene, l.entity, !r.hidden);
             dai_scene_set_render(s->scene, l.entity, r.mesh, r.roughness, r.emissive, r.render_flags);
             dai_scene_set_name(s->scene, l.entity, r.name);

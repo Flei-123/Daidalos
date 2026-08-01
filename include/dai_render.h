@@ -373,6 +373,11 @@ typedef enum dai_key {
 
 /* Minimal input. Pass a dai_key; anything else is undefined but harmless. */
 DAI_API int dai_window_key_down(dai_window *w, uint32_t key);
+/* Pointer position IN RENDERER PIXELS, not window pixels. The frame is blitted
+ * onto the window and stretched to fit it, so those two only agree when the
+ * window happens to be exactly the render resolution. Reporting the mouse in
+ * the space the host actually drew in is what makes hit testing a gizmo work
+ * after someone maximises the window. */
 DAI_API int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons);
 /* Wheel notches accumulated since the last call, and resets. Polling a button
  * bit cannot work: a wheel click is a press and a release in the same frame,
