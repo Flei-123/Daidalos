@@ -183,6 +183,28 @@ engine's snapshot ring - `dai_seek_to` restores a snapshot going back and
 replays recorded commands going forward, which lands on bit identical state
 either way.
 
+The inspector is laid out in components, the way Unity's is: Transform,
+Rigidbody and Renderer under collapsible headers, each header's checkbox being
+that component's on/off switch - Rigidbody off is `no_body`, which is what a
+group node is; Renderer off is `hidden`. The blocks are not invented for the
+sake of the metaphor, each one is the part of `dai_node_desc` the engine
+already treats as one thing.
+
+**The document is the truth, and the scene follows it.** Typing a number into
+the inspector used to change the document and nothing else, so the gizmo -
+which reads the document - jumped to the new position while the object stayed
+exactly where it was. Only the gizmo drag path had ever called the
+document-to-scene resync. `dai_editor_advance` now resyncs whenever the editor
+is not playing, and `dai_editor_resync` exposes the same thing for a frontend
+that never calls advance. Both are incremental and idempotent, so doing it
+after an edit and again next frame costs nothing.
+
+Panels dock. A window carries an edge and a slot - the whole edge, its upper
+half or its lower half - so the default layout is hierarchy over project on the
+left and inspector down the right, dragging a title bar pulls a window out,
+dropping it near an edge puts it back with a preview rectangle, and the resize
+grip drags the split because a docked window keeps its own width.
+
 ### Scene layer - `include/dai_scene.h`
 
 The glue between "a body exists" and "here is what it looks like". Spawn an
@@ -339,6 +361,55 @@ rather than a reference image: space has advance but no ink, 'M' is wider than
 'i', a composite glyph (a-umlaut) is not empty, UTF-8 decodes surrogate free,
 and - the one that catches a wrong winding rule - **the middle of an 'o' is
 empty while its edge is solid**.
+
+### Icons - `include/dai_svg.h`, `include/dai_icons.h`
+
+The same argument as the font, one layer up: an icon needs a path, a stroke
+width and a viewBox out of SVG, and that is a few hundred lines. A baked PNG
+sheet has exactly one correct size and turns to porridge the moment a display
+is scaled; librsvg means shipping cairo, pango and glib to draw a play
+triangle. So the icons are vectors, and they are rasterised at startup at the
+size the interface actually draws them at.
+
+`dai_svg` parses an XML subset good enough for icon files - `<path>` with
+every command including arcs, rect/circle/ellipse/line/polyline/polygon, `<g>`
+with inherited presentation attributes, `transform` with translate, scale,
+rotate, matrix and the two skews, `fill-rule`, and stroke with width, caps and
+joins. Colour, gradients, text and CSS are deliberately absent: an icon is
+rasterised to **coverage** and tinted when drawn, so its own colours would be
+thrown away anyway.
+
+```c
+dai_icons *icons = dai_icons_create(16.0f);              // the built-in set
+const uint8_t *rgba = dai_icons_atlas_rgba(icons, &w, &h);
+dai_ui_set_icons(ui, icons, dai_render_texture_create(r, rgba, w, h, 0));
+
+if (dai_ui_icon_button(ui, DAI_ICON_PLAY, "Play", 0)) play();   // tooltip included
+dai_icons_add(icons, "my-icon", "<svg viewBox='0 0 24 24'>...</svg>");
+```
+
+Two things the rasteriser has to get exactly right, and neither is obvious:
+
+**Subpaths keep the direction they were written in.** A donut is an outer ring
+one way round and an inner ring the other, and the non zero rule reads those
+directions to tell a hole from a solid. Normalising them "for consistency"
+fills the hole in. Only the stroker forces an orientation, and it must,
+because there overlapping pieces have to add rather than cancel - a round join
+landing on its own segment with the opposite sign punches a hole exactly where
+the ink should be thickest.
+
+**Coverage accumulates in float.** Four subsamples worth 255/4 = 63.75 each,
+truncated to 63, add up to 252 - so nothing in the image is ever quite solid.
+That is invisible in a screenshot. It is very visible in the test that asks
+whether a 48 px icon was drawn at 48 px or stretched from 16, because the
+answer to that is the count of fully covered pixels, and it was zero.
+
+`tests/test_svg.cpp` reads pixels, not structures - a parser that returns the
+right number of shapes and draws nothing is precisely the failure the font
+had. Is there ink, is it where the path said, is the hole a hole, does an arc
+bulge past its chord, does `fill="none"` mean none in both the attribute and
+the `style` spelling, and is **every one of the built-in icons a drawing
+rather than a blank or a solid block**.
 
 ### UI - `include/dai_ui.h`
 
