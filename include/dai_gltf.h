@@ -77,6 +77,14 @@ DAI_API dai_model *dai_gltf_load_memory(dai_renderer *r, const void *bytes, size
                                         dai_gltf_read_fn sidecar, void *user,
                                         char *err, size_t err_len);
 DAI_API void       dai_model_free(dai_model *m);
+/* Frees the model AND everything the import created inside the renderer: its
+ * meshes, its textures, its materials. Nothing else owns those handles, so a
+ * host that reloads a model wants this rather than dai_model_free - otherwise
+ * every reload leaks a full copy of the geometry.
+ *
+ * Every handle the model handed out is dead afterwards. Anything still drawing
+ * with one must be updated first; the asset layer rebuilds those nodes. */
+DAI_API void       dai_model_release(dai_renderer *r, dai_model *m);
 
 DAI_API dai_model_info        dai_model_get_info(const dai_model *m);
 DAI_API uint32_t              dai_model_node_count(const dai_model *m);

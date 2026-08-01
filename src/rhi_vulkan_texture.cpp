@@ -61,9 +61,14 @@ void tex_barrier(VkCommandBuffer cb, VkImage img, uint32_t mip, uint32_t count,
 // Creates the descriptor set for a material. Called for the default material
 // during startup and for every user material afterwards.
 static bool build_material_set(dai_renderer *r, MaterialEntry &m) {
-    VkDescriptorSetAllocateInfo ai{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-    ai.descriptorPool = r->mat_pool; ai.descriptorSetCount = 1; ai.pSetLayouts = &r->mat_dsl;
-    if (vkAllocateDescriptorSets(r->dev, &ai, &m.set) != VK_SUCCESS) return false;
+    // Rewrite an existing set rather than allocating a second one. Swapping a
+    // texture used to leak a set per call, and the pool is a fixed size - a
+    // few hundred material edits in an editor would run it dry.
+    if (m.set == VK_NULL_HANDLE) {
+        VkDescriptorSetAllocateInfo ai{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        ai.descriptorPool = r->mat_pool; ai.descriptorSetCount = 1; ai.pSetLayouts = &r->mat_dsl;
+        if (vkAllocateDescriptorSets(r->dev, &ai, &m.set) != VK_SUCCESS) return false;
+    }
 
     VkDescriptorImageInfo info[4]{};
     const uint32_t tex[4] = { m.base_tex, m.orm_tex, m.normal_tex, m.emissive_tex };
@@ -83,6 +88,53 @@ static bool build_material_set(dai_renderer *r, MaterialEntry &m) {
 }
 
 extern "C" {
+
+// Points every material that samples `tex` back at the default texture and
+// rebuilds its descriptor set. Without this, destroying a texture leaves a
+// dangling image view in a set the next frame will bind - which is a
+// validation error at best and a GPU fault at worst.
+static void unbind_texture(dai_renderer *r, dai_texture tex) {
+    for (size_t i = 0; i < r->materials.size(); ++i) {
+        MaterialEntry &m = r->materials[i];
+        bool hit = false;
+        if (m.base_tex == tex)     { m.base_tex = 0; hit = true; }
+        if (m.orm_tex == tex)      { m.orm_tex = 0; hit = true; }
+        if (m.normal_tex == tex)   { m.normal_tex = 0; hit = true; }
+        if (m.emissive_tex == tex) { m.emissive_tex = 0; hit = true; }
+        if (hit) {
+            m.p.extra[1] = (m.base_tex || m.orm_tex || m.normal_tex || m.emissive_tex) ? 1.0f : 0.0f;
+            m.p.extra[2] = m.normal_tex ? 1.0f : 0.0f;
+            build_material_set(r, m);
+        }
+    }
+}
+
+void dai_render_texture_destroy(dai_renderer *r, dai_texture tex) {
+    if (!r || !tex || tex >= r->textures.size()) return;   // 0 is the default
+    TextureEntry &t = r->textures[tex];
+    if (!t.image) return;
+    // A frame in flight may still be sampling it. This is not a hot path -
+    // it runs when a model is unloaded, not per frame.
+    vkDeviceWaitIdle(r->dev);
+    unbind_texture(r, tex);
+    if (t.view) vkDestroyImageView(r->dev, t.view, nullptr);
+    if (t.image) vkDestroyImage(r->dev, t.image, nullptr);
+    if (t.mem) vkFreeMemory(r->dev, t.mem, nullptr);
+    t = TextureEntry{};
+    r->free_textures.push_back(tex);
+}
+
+void dai_render_material_destroy(dai_renderer *r, dai_material mat) {
+    if (!r || !mat || mat >= r->materials.size()) return;  // 0 is the default
+    MaterialEntry &m = r->materials[mat];
+    if (!m.set) return;
+    m.base_tex = m.orm_tex = m.normal_tex = m.emissive_tex = 0;
+    m.name[0] = 0;
+    // The descriptor set is kept and rewritten on reuse: allocating from the
+    // pool is the part that is capped, freeing it back is not worth the
+    // bookkeeping when the slot is about to be handed out again.
+    r->free_materials.push_back(mat);
+}
 
 dai_texture dai_render_texture_create(dai_renderer *r, const uint8_t *rgba, uint32_t w, uint32_t h, int srgb) {
     if (!r || !rgba || !w || !h) return 0;
@@ -152,6 +204,12 @@ dai_texture dai_render_texture_create(dai_renderer *r, const uint8_t *rgba, uint
     vi.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, t.mips, 0, 1 };
     if (vkCreateImageView(r->dev, &vi, nullptr, &t.view) != VK_SUCCESS) return 0;
 
+    if (!r->free_textures.empty()) {
+        uint32_t slot = r->free_textures.back();
+        r->free_textures.pop_back();
+        r->textures[slot] = t;
+        return (dai_texture)slot;
+    }
     r->textures.push_back(t);
     return (dai_texture)(r->textures.size() - 1);
 }
@@ -209,6 +267,19 @@ dai_material dai_render_material_create(dai_renderer *r, const dai_material_desc
     m.normal_tex = desc->normal_tex;
     m.emissive_tex = desc->emissive_tex;
     if (desc->name) std::snprintf(m.name, sizeof(m.name), "%s", desc->name);
+    // A recycled slot already owns a descriptor set; reusing it is what keeps
+    // repeated model loads from exhausting the pool.
+    if (!r->free_materials.empty()) {
+        uint32_t slot = r->free_materials.back();
+        r->free_materials.pop_back();
+        m.set = r->materials[slot].set;
+        r->materials[slot] = m;
+        if (!build_material_set(r, r->materials[slot])) {
+            std::snprintf(r->err, sizeof(r->err), "rebinding a recycled material failed");
+            return 0;
+        }
+        return (dai_material)slot;
+    }
     if (!build_material_set(r, m)) {
         std::snprintf(r->err, sizeof(r->err), "out of material descriptor sets (max %u)", DAI_MAX_MATERIALS);
         return 0;
@@ -252,8 +323,10 @@ dai_result dai_render_material_update(dai_renderer *r, dai_material mat,
         m.orm_tex = desc->orm_tex;
         m.normal_tex = desc->normal_tex;
         m.emissive_tex = desc->emissive_tex;
-        // The old set is left to the pool; materials are not hot swapped often
-        // enough for recycling to be worth the bookkeeping.
+        // The set is rewritten in place, so a frame that is still reading it
+        // has to be done first. Only textures need this - the scalars travel
+        // in a push constant and never touch a descriptor.
+        vkDeviceWaitIdle(r->dev);
         if (!build_material_set(r, m)) {
             std::snprintf(r->err, sizeof(r->err), "out of material descriptor sets (max %u)", DAI_MAX_MATERIALS);
             return DAI_ERR_OUT_OF_MEMORY;

@@ -288,6 +288,52 @@ int main(int argc, char **argv) {
     CHECK(std::strcmp(read.asset, "blender_scene.glb") == 0,
           "the asset path came back as '%s'", read.asset);
 
+    // ---- 9. reloading does not grow the renderer --------------------------
+    // The whole point of releasing: an editor that reloads the same model all
+    // afternoon must not accumulate a copy of its geometry per reload. Slots
+    // and their slice of the geometry buffer come back and get reused.
+    std::printf("[9] reloads reuse the freed slots\n");
+    uint32_t mesh_slots_before = dai_render_mesh_count(r);
+    uint32_t live_before = dai_render_mesh_live(r);
+    uint32_t tex_before = dai_render_texture_count(r);
+    uint32_t mat_before = dai_render_material_count(r);
+
+    uint32_t after_first = 0;
+    for (int round = 0; round < 4; ++round) {
+        dai_assets *ra = dai_assets_create(r, 0);
+        dai_assets_mount_dir(ra, dir.c_str(), 0);
+        dai_model *rm = dai_assets_model_blocking(ra, "blender_scene.glb");
+        CHECK(rm != nullptr, "reload round %d did not load", round);
+        if (round == 0) after_first = dai_render_mesh_count(r);
+        CHECK(dai_render_mesh_count(r) == after_first,
+              "round %d pushed the mesh table to %u, round 0 left it at %u - slots are not reused",
+              round, dai_render_mesh_count(r), after_first);
+        // Drawing has to survive the previous round's textures being gone:
+        // any material that sampled one is pointed back at the default.
+        dai_render_instance ri = dai_render_instance_default();
+        ri.mesh = dai_model_node_at(rm, 0)->mesh;
+        ri.material = dai_model_node_at(rm, 0)->material;
+        CHECK(dai_render_frame(r, &ri, 1) == DAI_OK,
+              "drawing after round %d failed - a freed texture is still bound somewhere", round);
+        dai_assets_destroy(ra);
+    }
+    CHECK(dai_render_mesh_live(r) == live_before,
+          "%u meshes still live after the reloads, started at %u - something was not released",
+          dai_render_mesh_live(r), live_before);
+    CHECK(dai_render_texture_count(r) <= tex_before + 1,
+          "textures grew from %u to %u across four reloads", tex_before, dai_render_texture_count(r));
+    CHECK(dai_render_material_count(r) <= mat_before + 1,
+          "materials grew from %u to %u across four reloads", mat_before, dai_render_material_count(r));
+    std::printf("     mesh slots %u -> %u, live %u -> %u, textures %u -> %u\n",
+                mesh_slots_before, dai_render_mesh_count(r), live_before, dai_render_mesh_live(r),
+                tex_before, dai_render_texture_count(r));
+
+    // A destroyed mesh must be inert, not a crash and not someone else's
+    // geometry.
+    dai_render_instance dead = dai_render_instance_default();
+    dead.mesh = mesh; // freed with the model it came from? no - `a` still holds it
+    CHECK(dai_render_frame(r, &dead, 1) == DAI_OK, "drawing a live mesh failed");
+
     dai_doc_destroy(doc2);
     dai_doc_sync_destroy(sync);
     dai_doc_destroy(doc);

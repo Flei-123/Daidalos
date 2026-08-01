@@ -79,6 +79,15 @@ DAI_API dai_mesh dai_render_mesh_create(dai_renderer *r, const dai_vertex *verts
 DAI_API dai_mesh dai_render_mesh_load_obj(dai_renderer *r, const char *path);
 
 DAI_API uint32_t dai_render_mesh_count(dai_renderer *r);
+/* Gives the mesh's slot and its slice of the geometry buffer back. The handle
+ * is dead afterwards - drawing it draws nothing - and the slice is handed to
+ * the next mesh that fits in it, which is what stops an editor that reloads
+ * the same model all afternoon from growing without bound. Builtin meshes are
+ * shared and cannot be destroyed. */
+DAI_API void     dai_render_mesh_destroy(dai_renderer *r, dai_mesh m);
+/* Slots ever handed out vs slots currently alive - they differ once anything
+ * has been freed. */
+DAI_API uint32_t dai_render_mesh_live(dai_renderer *r);
 DAI_API uint32_t dai_render_mesh_tris(dai_renderer *r, dai_mesh m);
 
 /* ---- textures and materials -------------------------------------------- */
@@ -97,6 +106,10 @@ DAI_API dai_texture dai_render_texture_create(dai_renderer *r, const uint8_t *rg
                                               uint32_t w, uint32_t h, int srgb);
 DAI_API dai_texture dai_render_texture_load(dai_renderer *r, const char *path, int srgb);
 DAI_API uint32_t    dai_render_texture_count(dai_renderer *r);
+/* Destroys the image and hands the slot back. Any material still sampling it
+ * is pointed at the default texture first, so no descriptor is left dangling.
+ * Texture 0 is the default and is never destroyed. */
+DAI_API void        dai_render_texture_destroy(dai_renderer *r, dai_texture t);
 
 /* One material model, glTF 2.0 metallic-roughness. Four maps, no node graph:
  *
@@ -142,6 +155,9 @@ DAI_API uint32_t          dai_render_material_count(dai_renderer *r);
  * per frame. Returns DAI_OK, or DAI_ERR_NOT_FOUND for an unknown handle. */
 DAI_API dai_result        dai_render_material_update(dai_renderer *r, dai_material mat,
                                                      const dai_material_desc *desc);
+/* Hands the slot back for reuse. The descriptor set is kept and rewritten by
+ * the next material that lands in this slot. Material 0 is the default. */
+DAI_API void              dai_render_material_destroy(dai_renderer *r, dai_material mat);
 
 /* ---- what to draw ------------------------------------------------------ */
 

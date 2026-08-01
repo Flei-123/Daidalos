@@ -246,6 +246,13 @@ node was first built, so an asset that finished loading afterwards never
 reached the screen. It now re-resolves on every pass and rebuilds the entity
 when the answer moved - which is exactly what asynchronous loading needs.
 
+Unloading gives the geometry back. `dai_model_release` destroys the meshes,
+textures and materials the import created; mesh slots keep their slice of the
+geometry buffer and hand it to the next mesh that fits, textures and material
+slots are recycled outright. Reloading the same model four times leaves the
+mesh table exactly where the first load left it - measured, in test_assets [9],
+because "we free it now" is the kind of claim that quietly stops being true.
+
 ### Skinning and animation
 
 glTF skins and animations import with the rest of the file: joint hierarchies,
@@ -474,10 +481,11 @@ have been struck from the list rather than left in to look modest.
 
 Assets are referenced by path (`asset models/crate.glb` in the scene file),
 resolved through Mnemosyne and the glTF importer, and a scene with imported
-models saves and reopens. What is *not* here yet: nothing releases a mesh, so
-editing the same model over and over in one session grows GPU memory; a node
-resolves to ONE node of a glTF file (`file.glb#Object` picks which), so a
-five part model needs five scene nodes; and there is no asset browser.
+models saves and reopens. Reloading a model releases the old one's meshes,
+textures and materials and reuses the slots, so an editing session does not
+grow. What is *not* here yet: a scene node resolves to ONE node of a glTF file
+(`file.glb#Object` picks which), so a five part model needs five scene nodes;
+and there is no asset browser.
 
 Editor:
 - No box select; multi-selection is click by click.

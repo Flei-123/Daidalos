@@ -269,6 +269,29 @@ dai_mesh dai_render_mesh_create(dai_renderer *r, const dai_vertex *verts, uint32
         for (uint32_t i = 0; i < vcount; ++i) gen[i] = i;
         indices = gen.data(); icount = vcount;
     }
+    // Reuse a freed range that is big enough, smallest first. Reloading the
+    // same model in an editor asks for exactly the same sizes every time, so
+    // this is the difference between a session that grows without bound and
+    // one that does not.
+    uint32_t best = UINT32_MAX;
+    size_t   best_at = 0;
+    for (size_t i = 0; i < r->free_meshes.size(); ++i) {
+        const MeshEntry &c = r->meshes[r->free_meshes[i]];
+        if (c.index_cap < icount || c.vertex_cap < vcount) continue;
+        uint32_t waste = (c.index_cap - icount) + (c.vertex_cap - vcount);
+        if (best == UINT32_MAX || waste < best) { best = waste; best_at = i; }
+    }
+    if (best != UINT32_MAX) {
+        uint32_t slot = r->free_meshes[best_at];
+        r->free_meshes.erase(r->free_meshes.begin() + best_at);
+        MeshEntry &e = r->meshes[slot];
+        std::memcpy((dai_vertex *)r->vbo.mapped + e.vertex_offset, verts, (size_t)vcount * sizeof(dai_vertex));
+        std::memcpy((uint32_t *)r->ibo.mapped + e.first_index, indices, (size_t)icount * sizeof(uint32_t));
+        e.index_count = icount;
+        e.alive = true;
+        return (dai_mesh)slot;
+    }
+
     if (!grow_geometry(r, vcount, icount)) {
         std::snprintf(r->err, sizeof(r->err), "out of geometry memory");
         return DAI_MESH_BOX;
@@ -280,6 +303,9 @@ dai_mesh dai_render_mesh_create(dai_renderer *r, const dai_vertex *verts, uint32
     e.first_index = r->idx_used;
     e.index_count = icount;
     e.vertex_offset = (int32_t)r->vtx_used;
+    e.index_cap = icount;
+    e.vertex_cap = vcount;
+    e.alive = true;
     r->vtx_used += vcount;
     r->idx_used += icount;
     r->meshes.push_back(e);
@@ -297,7 +323,24 @@ dai_mesh dai_render_mesh_load_obj(dai_renderer *r, const char *path) {
                                   m.idx.data(), (uint32_t)m.idx.size());
 }
 
+void dai_render_mesh_destroy(dai_renderer *r, dai_mesh m) {
+    // The builtins are shared by everything; freeing one would make every
+    // instance that never asked for a mesh draw garbage.
+    if (!r || m < DAI_MESH_BUILTIN_COUNT || m >= r->meshes.size()) return;
+    MeshEntry &e = r->meshes[m];
+    if (!e.alive) return;                       // double free is a no-op
+    e.alive = false;
+    e.index_count = 0;                          // draws nothing until reused
+    r->free_meshes.push_back(m);
+}
+
 uint32_t dai_render_mesh_count(dai_renderer *r) { return r ? (uint32_t)r->meshes.size() : 0; }
+uint32_t dai_render_mesh_live(dai_renderer *r) {
+    if (!r) return 0;
+    uint32_t n = 0;
+    for (const MeshEntry &e : r->meshes) if (e.alive) ++n;
+    return n;
+}
 uint32_t dai_render_mesh_tris(dai_renderer *r, dai_mesh m) {
     if (!r || m >= r->meshes.size()) return 0;
     return r->meshes[m].index_count / 3;

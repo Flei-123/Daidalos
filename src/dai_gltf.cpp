@@ -336,6 +336,13 @@ struct Animation {
 };
 
 struct dai_model {
+    // Everything this import created inside the renderer. Nothing else uses
+    // these handles, so the model can give them all back - which is what
+    // dai_model_release does and what a hot reload needs to not leak.
+    std::vector<dai_mesh>     owned_meshes;
+    std::vector<dai_texture>  owned_textures;
+    std::vector<dai_material> owned_materials;
+
     std::vector<dai_model_node> nodes;      // drawable pieces
     std::vector<int> node_of_draw;          // which RawNode each piece came from
     std::vector<int> skin_of_draw;          // and which skin, -1 for rigid
@@ -362,6 +369,11 @@ dai_model *dai_gltf_load_memory(dai_renderer *r, const void *data, size_t size,
     struct { const uint8_t *p; size_t n;
              size_t size() const { return n; } const uint8_t *data() const { return p; } }
         file{ (const uint8_t *)data, size };
+
+    // Collected while importing, moved into the model once it exists.
+    std::vector<dai_mesh>     owned_meshes;
+    std::vector<dai_texture>  owned_textures;
+    std::vector<dai_material> owned_materials;
 
     Loader ld;
     ld.r = r; ld.err = err; ld.err_len = err_len;
@@ -464,6 +476,7 @@ dai_model *dai_gltf_load_memory(dai_renderer *r, const void *data, size_t size,
         }
         dai_texture tex = dai_render_texture_create(r, rgba.data(), w, h, srgb ? 1 : 0);
         tex_cache[key] = tex;
+        if (tex) owned_textures.push_back(tex);
         return tex;
     };
 
@@ -503,7 +516,9 @@ dai_model *dai_gltf_load_memory(dai_renderer *r, const void *data, size_t size,
             if (!std::strcmp(m->str_at("alphaMode", "OPAQUE"), "MASK"))
                 d.alpha_cutoff = (float)m->num_at("alphaCutoff", 0.5);
 
-            materials.push_back(dai_render_material_create(r, &d));
+            dai_material created = dai_render_material_create(r, &d);
+            materials.push_back(created);
+            if (created) owned_materials.push_back(created);
         }
     }
 
@@ -585,6 +600,7 @@ dai_model *dai_gltf_load_memory(dai_renderer *r, const void *data, size_t size,
                     for (int k = 0; k < 3; ++k) { if (q[k] < pr.lo[k]) pr.lo[k] = q[k]; if (q[k] > pr.hi[k]) pr.hi[k] = q[k]; }
                 }
                 pr.mesh = dai_render_mesh_create(r, verts.data(), (uint32_t)verts.size(), idx.data(), (uint32_t)idx.size());
+                if (pr.mesh >= DAI_MESH_BUILTIN_COUNT) owned_meshes.push_back(pr.mesh);
                 int mat = prim->int_at("material", -1);
                 pr.material = (mat >= 0 && (size_t)mat < materials.size()) ? materials[(size_t)mat] : 0;
                 pr.tris = (uint32_t)(idx.size() / 3);
@@ -770,6 +786,9 @@ dai_model *dai_gltf_load_memory(dai_renderer *r, const void *data, size_t size,
     if (model->nodes.empty()) { bmin[0]=bmin[1]=bmin[2]=bmax[0]=bmax[1]=bmax[2]=0; }
     model->info.bounds_min = { bmin[0], bmin[1], bmin[2] };
     model->info.bounds_max = { bmax[0], bmax[1], bmax[2] };
+    model->owned_meshes = std::move(owned_meshes);
+    model->owned_textures = std::move(owned_textures);
+    model->owned_materials = std::move(owned_materials);
     return model;
 }
 
@@ -802,6 +821,19 @@ dai_model *dai_gltf_load(dai_renderer *r, const char *path, char *err, size_t er
 }
 
 void dai_model_free(dai_model *m) { delete m; }
+
+void dai_model_release(dai_renderer *r, dai_model *m) {
+    if (!m) return;
+    if (r) {
+        // Order matters: materials stop referencing textures first, then the
+        // textures go. Freeing the other way round makes unbind_texture walk
+        // materials that are already recycled.
+        for (dai_material mat : m->owned_materials) dai_render_material_destroy(r, mat);
+        for (dai_texture t : m->owned_textures) dai_render_texture_destroy(r, t);
+        for (dai_mesh me : m->owned_meshes) dai_render_mesh_destroy(r, me);
+    }
+    delete m;
+}
 
 dai_model_info dai_model_get_info(const dai_model *m) { return m ? m->info : dai_model_info{}; }
 uint32_t dai_model_node_count(const dai_model *m) { return m ? (uint32_t)m->nodes.size() : 0; }

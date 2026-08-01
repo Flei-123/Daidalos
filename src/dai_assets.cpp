@@ -113,10 +113,14 @@ mne_result model_finalize(void *object, void *user) {
 }
 
 void model_free(void *object, void *user) {
-    (void)user;
     ModelAsset *m = (ModelAsset *)object;
+    dai_assets *a = (dai_assets *)user;
     if (!m) return;
-    if (m->model) dai_model_free(m->model);
+    // Give the meshes and textures back, not just the CPU side struct. This is
+    // what makes a hot reload cost nothing over a long session: Mnemosyne frees
+    // the old asset right after the new one finalised, so the freed ranges are
+    // there for the reload after that.
+    if (m->model) dai_model_release(a ? a->r : nullptr, m->model);
     delete m;
 }
 

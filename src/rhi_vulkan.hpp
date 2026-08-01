@@ -83,6 +83,13 @@ struct MeshEntry {
     uint32_t first_index = 0;
     uint32_t index_count = 0;
     int32_t  vertex_offset = 0;
+    // Geometry lives in one big buffer filled by a bump allocator, so freeing
+    // a mesh cannot hand memory back - but it CAN hand the range back, and a
+    // reload of the same model asks for the same sizes. Capacity is what the
+    // range can hold, index_count what it currently holds.
+    uint32_t index_cap = 0;
+    uint32_t vertex_cap = 0;
+    bool     alive = true;
 };
 
 struct GpuBuffer {
@@ -130,6 +137,9 @@ struct dai_renderer {
     uint32_t vtx_used = 0, idx_used = 0, inst_capacity = 0;
 
     std::vector<MeshEntry> meshes;
+    std::vector<uint32_t>  free_meshes;      // slots whose range can be reused
+    std::vector<uint32_t>  free_textures;
+    std::vector<uint32_t>  free_materials;
     std::vector<TextureEntry> textures;
     std::vector<MaterialEntry> materials;
 
