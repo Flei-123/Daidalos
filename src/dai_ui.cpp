@@ -917,6 +917,16 @@ void dai_ui_row_end(dai_ui *ui) {
 
 void dai_ui_spacing(dai_ui *ui, float px) { if (ui) ui->cursor_y += px; }
 
+void dai_ui_clip_begin(dai_ui *ui, float x, float y, float w, float h) {
+    if (!ui) return;
+    ui->clips.push_back(dai_ui::Clip{ x, y, x + w, y + h });
+}
+
+void dai_ui_clip_end(dai_ui *ui) {
+    if (!ui || ui->clips.empty()) return;
+    ui->clips.pop_back();
+}
+
 float dai_ui_panel_width(const dai_ui *ui) {
     if (!ui) return 0.0f;
     return ui->in_panel ? ui->panel_w : ui->width;

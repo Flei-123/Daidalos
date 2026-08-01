@@ -190,6 +190,10 @@ struct dai_renderer {
     float fog_density = 0.0022f;
     float exposure = 0.55f;
     float clear[3] = { 0.07f, 0.08f, 0.10f };
+    // The rectangle the WORLD pass draws into (pixels). 0 size = the whole
+    // frame. The UI pass always gets the whole frame - panels must be able to
+    // overlap the scene, the scene must not spill over the panels.
+    float world_clip[4] = { 0, 0, 0, 0 };
     float shadow_radius = 30.0f;
     int   sky_enabled = 1;
 

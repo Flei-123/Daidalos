@@ -260,6 +260,7 @@ int main(int argc, char **argv) {
     dai_render_sun(r, dai_vec3{ 0.42f, 0.80f, 0.42f }, dai_vec3{ 1.0f, 0.95f, 0.86f }, 1.3f);
     dai_render_ambient(r, dai_vec3{ 0.24f, 0.40f, 0.72f }, dai_vec3{ 0.26f, 0.24f, 0.20f }, 0.38f);
     dai_render_exposure(r, 0.45f);
+    dai_render_clear_color(r, 0.078f, 0.078f, 0.078f);   // #141414 - the chrome
     dai_render_shadow_extent(r, 24.0f);
     dai_render_sky(r, 1);
 
@@ -491,6 +492,15 @@ int main(int argc, char **argv) {
 
         dai_editor_ui_viewport(panels, &ci);
 
+        // The layout, once, a second in: enough frames for the dock to settle,
+        // early enough to catch it going wrong.
+        static int dump_at = 90;
+        if (dump_at > 0 && --dump_at == 0) {
+            char lay[640];
+            dai_editor_ui_layout_dump(panels, lay, sizeof(lay));
+            std::printf("layout: %s\n", lay);
+        }
+
         // The pointer says what is under it: an I-beam over a field, a resize
         // arrow on a window edge. The UI knows which widget that is; only the
         // window can set the shape.
@@ -501,8 +511,10 @@ int main(int argc, char **argv) {
 
         dai_vec3 eye, look;
         {   // read the camera back out of the editor so both agree exactly
+            float cx, cy, cw2, ch2;
+            dai_editor_ui_viewport_rect(panels, &cx, &cy, &cw2, &ch2);
             dai_vec3 o, d;
-            dai_editor_ray(ed, (float)ww * 0.5f, (float)wh * 0.5f, &o, &d);
+            dai_editor_ray(ed, cx + cw2 * 0.5f, cy + ch2 * 0.5f, &o, &d);
             eye = o;
             look = dai_vec3{ o.x + d.x, o.y + d.y, o.z + d.z };
         }
@@ -510,8 +522,15 @@ int main(int argc, char **argv) {
         // both views: picking, the gizmo and the scene view all project
         // through it, and a game view that overwrote it would leave the scene
         // view pointing wherever the player camera happened to be.
+        // The viewport is the scene window's body rect: the camera projects
+        // into exactly that rectangle, the renderer clips the world to it, and
+        // picking reads clicks in the same pixels. Three sides of one truth.
+        float vrx = 0, vry = 0, vrw = (float)ww, vrh = (float)wh;
+        dai_editor_ui_viewport_rect(panels, &vrx, &vry, &vrw, &vrh);
+        dai_editor_camera_viewport_rect(ed, vrx, vry, vrw, vrh);
+        dai_render_world_clip(r, vrx, vry, vrw, vrh);
         dai_editor_camera(ed, eye, look, dai_vec3{ 0, 1, 0 }, 55.0f, 0.1f, 300.0f,
-                          (float)ww, (float)wh);
+                          vrw, vrh);
 
         // What gets RENDERED is the game camera while the Game tab is up.
         dai_vec3 reye = eye, rlook = look;

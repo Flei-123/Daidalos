@@ -228,6 +228,12 @@ DAI_API void dai_ui_row_end(dai_ui *ui);
  * right at one width and wrong at every other. */
 DAI_API float dai_ui_panel_width(const dai_ui *ui);
 DAI_API void dai_ui_spacing(dai_ui *ui, float pixels);
+/* Clip everything drawn until dai_ui_clip_end to a rectangle. The editor's
+ * wireframes (gizmo, colliders, camera frustums) are UI lines drawn over the
+ * 3D view - without this they spill over the panels when the object sits
+ * behind one. */
+DAI_API void dai_ui_clip_begin(dai_ui *ui, float x, float y, float w, float h);
+DAI_API void dai_ui_clip_end(dai_ui *ui);
 
 /* ---- widgets ----------------------------------------------------------- */
 

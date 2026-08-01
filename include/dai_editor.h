@@ -52,6 +52,12 @@ DAI_API void dai_editor_camera(dai_editor *e, dai_vec3 eye, dai_vec3 target, dai
  * and angles must not move, which is why this is not dai_editor_camera with
  * the same eye and target. */
 DAI_API void dai_editor_camera_viewport(dai_editor *e, float viewport_w, float viewport_h);
+/* The viewport is a rectangle ON the surface, not the surface: the scene view
+ * lives inside its window now. x/y are where its body starts, w/h its size.
+ * Picking, the gizmo and the world clip all speak surface pixels, so every
+ * side of this has to agree. */
+DAI_API void dai_editor_camera_viewport_rect(dai_editor *e, float x, float y,
+                                             float w, float h);
 
 /* Builds the world space ray under a pixel. Also used by gameplay code that
  * wants to click on things. */

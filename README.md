@@ -993,6 +993,59 @@ line, off the right hand edge - which is what the mesh picker did to the whole
 Renderer block. `dai_ui_row_end` exists, and starting a row ends the previous
 one.
 
+## The viewport is a window, and physics is not the mesh
+
+The follow-up session, and again every item is the same lesson one level down.
+
+**Scene and Game are a window now.** Not tabs over a hole in the layout: a
+real window - dockable at any edge, tear-off floating, and filling whatever
+space the other windows leave when left alone. The tabs live in its title bar.
+The world is clipped INTO the window (`dai_render_world_clip` sets the Vulkan
+viewport and scissor for the world pass; the UI pass keeps the whole frame,
+because a panel may cover the scene and never the other way round), the camera
+aspect follows the window, and picking, the gizmo and the collider wireframes
+speak the same pixels (`dai_editor_camera_viewport_rect` + a clip around the
+wire passes). "The 3D is always the background" was the bug report, and it was
+right.
+
+**Docked windows on one edge are a stack.** Dragging the split between
+Hierarchy and Project resizes BOTH - the pixels have to come from somewhere.
+A window alone on an edge gets all of it.
+
+**Removing a component does not remove the model.** Unchecking Box Collider
+used to make the mesh vanish, because the entity WAS the body. Rendering and
+physics are separate now: `dai_scene_spawn_render` gives a physics-less node
+a picture and a transform, `no_collider` becomes a physics **sensor** (Jolt
+`mIsSensor`, Talos `is_sensor` - which also gives Is Trigger its real
+behaviour: reports overlaps, blocks nothing), `no_rigidbody` becomes static.
+
+**Duplicate keeps the colour.** The palette colour comes from the node id, the
+copy has a new id, so duplicating repainted things. The displayed colour is
+baked into the copy.
+
+**Small truths:** F2/F3/F4 were never in the Win32 key map (rename-by-menu
+worked, rename-by-key did not). Checkboxes draw a checkmark, not a blue tile.
+Component headers are #3E3E3E, quieter than buttons. Edit Collider is a real
+toggle button. The dropdown marker is a drawn chevron - the font never had
+U+25B8, so every dropdown wore a '?'.
+
+**Create, at last:** right click makes Empty / Box / Sphere / Capsule /
+Camera. Nodes carry a **script path**; the Project window's "New Script"
+writes a template (init/frame, not an empty file) into the project's assets,
+and picking a .js in the file list assigns it to the selection. Opening a
+project actually opens it: loads `scenes/main.daidalos`, mounts
+`<project>/assets` (glTF models resolve through Mnemosyne and show up in the
+Files tab), and models place as trees of bodies.
+
+**Settings** (gear in the toolbar): UI size (a real font reload through
+`dai_ui_font_set`), three themes, camera speed, gizmo size, snap step.
+
+`tests/test_viewport.cpp` proves the world stays inside its clip and the
+projection's centre moves with the window. `tests/test_ui_window.cpp` section
+7b proves the dock stack shares. The honest remainder: scripts are assigned
+and saved, but nothing RUNS them on a node yet - the QuickJS runtime exists
+(`dai_script`), the per-node binding into play mode is the next step.
+
 ## What is still missing
 
 Kept honest: things listed here are genuinely absent, and things that got built

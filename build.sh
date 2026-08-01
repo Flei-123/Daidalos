@@ -280,6 +280,9 @@ if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_particles.cpp $VKLIBS -o build/test_particles
     g++ $FLAGS $ARCH -Iinclude tests/test_skinning.cpp $VKLIBS -o build/test_skinning
     g++ $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui
+    # The world clipped into the scene window, and picking in the same pixels.
+    g++ $FLAGS $ARCH -Iinclude tests/test_viewport.cpp $VKLIBS -o build/test_viewport && \
+        DAI_SHADER_DIR=shaders ./build/test_viewport
     # Windows and the solid texel every rectangle in the interface is drawn
     # with. Needs no renderer: it reads the atlas and the vertices.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_window.cpp src/dai_ui.cpp src/dai_font.cpp \
