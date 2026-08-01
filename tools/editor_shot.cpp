@@ -72,7 +72,7 @@ int main(int argc, char **argv) {
     dai_renderer *r = dai_render_create(&rd, err, sizeof(err));
     if (!r) { std::printf("renderer failed: %s\n", err); return 1; }
 
-    dai_font *font = dai_font_load_ui(17.0f, err, sizeof(err));
+    dai_font *font = dai_font_load_ui(13.0f, err, sizeof(err));
     dai_texture font_tex = 0;
     if (font) {
         uint32_t aw = 0, ah = 0;

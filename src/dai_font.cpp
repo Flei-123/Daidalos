@@ -138,6 +138,7 @@ struct dai_font {
     std::vector<uint8_t> atlas;
     std::vector<uint8_t> atlas_rgba;
     uint32_t aw = 0, ah = 0;
+    float white_u = 0.0f, white_v = 0.0f;   // centre of the reserved solid block
     std::unordered_map<uint32_t, dai_glyph> glyphs;
 };
 
@@ -407,7 +408,15 @@ dai_font *dai_font_load(const char *path, float pixel_height,
 
     uint32_t atlas_w = 512;
     while (atlas_w < (uint32_t)pixel_height * 4) atlas_w *= 2;
-    uint32_t x = 1, y = 1, row_h = 0;
+    // The first 2x2 texels are reserved and filled SOLID. The UI draws every
+    // solid rectangle - panel backgrounds, buttons, gizmo lines - by pointing
+    // at a texel of this atlas, and the corner used to be an empty border
+    // pixel: alpha 0, so every one of those rectangles was multiplied to
+    // nothing and the whole interface was text floating over the scene with no
+    // background behind it. A reserved white block costs four bytes and makes
+    // "one texture for the entire UI" actually work.
+    const uint32_t WHITE = 2;
+    uint32_t x = WHITE + 1, y = 1, row_h = 0;
     for (const Raster &ras : rasters) {
         if (x + (uint32_t)ras.w + 1 >= atlas_w) { x = 1; y += row_h + 1; row_h = 0; }
         x += (uint32_t)ras.w + 1;
@@ -418,7 +427,17 @@ dai_font *dai_font_load(const char *path, float pixel_height,
 
     f->aw = atlas_w; f->ah = atlas_h;
     f->atlas.assign((size_t)atlas_w * atlas_h, 0);
-    x = 1; y = 1; row_h = 0;
+    for (uint32_t wy = 0; wy < WHITE; ++wy)
+        for (uint32_t wx = 0; wx < WHITE; ++wx)
+            f->atlas[(size_t)wy * atlas_w + wx] = 255;
+    // Sample the middle of the block, so bilinear filtering never reaches the
+    // transparent texels next to it.
+    f->white_u = 0.5f * (float)WHITE / (float)atlas_w;
+    f->white_v = 0.5f * (float)WHITE / (float)atlas_h;
+    // Rewind to exactly where the measuring pass started, reserved block
+    // included - one texel of drift here and a glyph lands on top of the white
+    // block, which turns every panel background into a piece of a letter.
+    x = WHITE + 1; y = 1; row_h = 0;
     for (const Raster &ras : rasters) {
         if (x + (uint32_t)ras.w + 1 >= atlas_w) { x = 1; y += row_h + 1; row_h = 0; }
         for (int gy = 0; gy < ras.h; ++gy)
@@ -487,6 +506,11 @@ dai_font *dai_font_load_ui(float pixel_height, char *err, size_t err_len) {
                       "no system UI font found - tried Segoe UI, Tahoma, Arial, DejaVu Sans, "
                       "Liberation Sans and FreeSans; set DAI_FONT to a .ttf to override");
     return nullptr;
+}
+
+void dai_font_white_uv(const dai_font *f, float *u, float *v) {
+    if (u) *u = f ? f->white_u : 0.0f;
+    if (v) *v = f ? f->white_v : 0.0f;
 }
 
 const uint8_t *dai_font_atlas(const dai_font *f, uint32_t *w, uint32_t *h) {

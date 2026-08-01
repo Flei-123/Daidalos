@@ -229,7 +229,7 @@ void save_snapshot(dai_world *w) {
 
 extern "C" {
 
-const char *dai_version(void) { return "daidalos 0.2.0 (backends: jolt, null)"; }
+const char *dai_version(void) { return "daidalos 0.2.0 (backends: jolt, talos, null)"; }
 
 dai_result dai_create(const dai_config *cfg_in, dai_world **out) {
     if (!out) return DAI_ERR_INVALID_ARG;
@@ -251,11 +251,25 @@ dai_result dai_create(const dai_config *cfg_in, dai_world **out) {
     // DAI_NO_JOLT drops the Jolt backend from the link entirely. That is what
     // makes the WebAssembly build possible today (and it is a second, stricter
     // version of the leak test: the engine has to be complete without it).
-#ifdef DAI_NO_JOLT
-    w->phys = create_null_backend();
+    if (w->cfg.backend == DAI_PHYSICS_NULL) {
+        w->phys = create_null_backend();
+    } else if (w->cfg.backend == DAI_PHYSICS_TALOS) {
+#ifdef DAI_NO_TALOS
+        // Asking for a backend that was not linked in is a configuration
+        // mistake, not something to paper over with a silent fallback: the
+        // caller would get a different simulation than the one they asked for.
+        delete w;
+        return DAI_ERR_STATE;
 #else
-    w->phys = (w->cfg.backend == DAI_PHYSICS_NULL) ? create_null_backend() : create_jolt_backend();
+        w->phys = create_talos_backend();
 #endif
+    } else {
+#ifdef DAI_NO_JOLT
+        w->phys = create_null_backend();
+#else
+        w->phys = create_jolt_backend();
+#endif
+    }
     if (!w->phys) { delete w; return DAI_ERR_OUT_OF_MEMORY; }
     char perr[192] = {0};
     if (!w->phys->init(w->cfg, perr, sizeof(perr))) {

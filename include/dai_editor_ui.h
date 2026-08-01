@@ -25,9 +25,29 @@ typedef struct dai_editor_ui dai_editor_ui;
 DAI_API dai_editor_ui *dai_editor_ui_create(dai_editor *editor, dai_ui *ui);
 DAI_API void           dai_editor_ui_destroy(dai_editor_ui *p);
 
-/* Everything, laid out for a viewport of this size: hierarchy left, inspector
- * right, toolbar top, timeline bottom while playing. */
+/* The whole editor for a surface of this size: a solid toolbar along the top, a
+ * status bar along the bottom, and Hierarchy, Project and Inspector as windows
+ * the user can move, resize, collapse and raise. What no window covers is the
+ * scene view - ask dai_editor_ui_viewport_rect where that ended up. */
 DAI_API void dai_editor_ui_frame(dai_editor_ui *p, float viewport_w, float viewport_h);
+
+/* Puts the three windows back where they started. The layout is the user's, so
+ * it survives every frame - which also means a window dragged somewhere useless
+ * needs a way back. */
+DAI_API void dai_editor_ui_layout_reset(dai_editor_ui *p, float viewport_w, float viewport_h);
+
+/* The part of the surface the scene is visible in, after the bars and the
+ * docked windows. */
+DAI_API void dai_editor_ui_viewport_rect(const dai_editor_ui *p, float *x, float *y,
+                                         float *w, float *h);
+
+/* The bar along the bottom: mode, node count, selection, last undo step. */
+DAI_API void dai_editor_ui_status(dai_editor_ui *p, float x, float y, float w, float h);
+
+/* Did the user ask to place an asset in the Project window this frame? Same
+ * meaning as dai_editor_ui_assets' return value, for the built in layout.
+ * Clears itself when read. */
+DAI_API int dai_editor_ui_take_asset(dai_editor_ui *p, const char **out_path, int *out_as_tree);
 
 /* Or place the pieces yourself. */
 DAI_API void dai_editor_ui_hierarchy(dai_editor_ui *p, float x, float y, float w, float h);

@@ -78,13 +78,32 @@ int main() {
     dai_doc_sync_apply(sync);
     dai_step(w);
 
+    // The panels are placed by hand rather than through dai_editor_ui_frame,
+    // because the default layout is now made of windows the USER moves - a
+    // test that clicks at fixed pixels would be asserting where someone
+    // dragged the inspector to. dai_editor_ui_frame gets its own check below.
+    const float PANEL_X = 8.0f, PANEL_Y = 60.0f, PANEL_W = 240.0f;
+    const float INSPECTOR_X = 1280.0f - PANEL_W - 8.0f;
     auto frame = [&](float mx, float my, int down, float wheel = 0.0f) {
         dai_ui_input in{};
         in.mouse_x = mx; in.mouse_y = my; in.mouse_down = down; in.wheel = wheel;
         dai_ui_begin(ui, 1280, 720, &in);
-        dai_editor_ui_frame(panels, 1280, 720);
+        dai_editor_ui_toolbar(panels, 0.0f, 0.0f, 1280.0f);
+        dai_editor_ui_hierarchy(panels, PANEL_X, PANEL_Y, PANEL_W, 360.0f);
+        dai_editor_ui_inspector(panels, INSPECTOR_X, PANEL_Y, PANEL_W, 592.0f);
+        dai_editor_ui_gizmo(panels);
         dai_ui_end(ui);
     };
+
+    // Widget geometry from the style, not from memory: the editor got compact
+    // (5 px padding instead of 8, tighter rows), and every hard coded offset in
+    // here silently started pointing at the gap between two fields.
+    const dai_ui_style *style = dai_ui_style_of(ui);
+    const float LH   = dai_font_line_height(font);
+    const float PAD  = style->padding;
+    const float SPC  = style->spacing;
+    const float ROW_H = LH + 2.0f;                       // dai_ui_tree_item
+    const float FIRST_ROW_Y = PANEL_Y + PAD + LH + SPC;  // below the panel title
 
     // ---- 1. the panels draw something -------------------------------------
     std::printf("panels\n");
@@ -98,8 +117,8 @@ int main() {
     CHECK(rows_open == 4, "hierarchy shows %u rows, expected 4", rows_open);
 
     // click the fold arrow of the parent row. Rows start below the panel title.
-    float row_x = 8.0f + 12.0f;          // panel x + arrow column
-    float row_y = 60.0f + 34.0f + 6.0f;  // panel y + title height + half a row
+    float row_x = PANEL_X + PAD + 6.0f;              // panel x + arrow column
+    float row_y = FIRST_ROW_Y + ROW_H * 0.5f;
     frame(row_x, row_y, 0);
     frame(row_x, row_y, 1);
     frame(row_x, row_y, 0);
@@ -114,7 +133,7 @@ int main() {
     CHECK(dai_editor_ui_visible_rows(panels) == 4, "unfolding did not restore the rows");
 
     // ---- 3. clicking a row selects it -------------------------------------
-    float label_x = 8.0f + 40.0f;
+    float label_x = PANEL_X + PAD + 30.0f;           // past the arrow column
     frame(label_x, row_y, 1);
     frame(label_x, row_y, 0);
     CHECK(dai_editor_selection_count(ed) == 1, "clicking a row did not select it");
@@ -128,8 +147,7 @@ int main() {
     // Find the Position row by trying each row rather than hard coding a pixel
     // offset: the test would then only be checking my arithmetic, and it would
     // break every time a field is added above it.
-    const float INSPECTOR_X = 1280.0f - 240.0f - 8.0f;
-    const float FIELD_X = INSPECTOR_X + 12.0f + 74.0f + 12.0f;   // past the label column
+    const float FIELD_X = INSPECTOR_X + PAD + style->label_w + 8.0f;   // past the label column
     float pos_y = -1.0f;
     int rows_that_moved_x = 0;
     for (float y = 90.0f; y < 400.0f; y += 4.0f) {
@@ -179,7 +197,7 @@ int main() {
     std::printf("toolbar\n");
     dai_editor_gizmo_mode(ed, DAI_GIZMO_TRANSLATE);
     // buttons sit in a row at the top; find Rotate by walking the row
-    float bx = 8.0f + 8.0f, by = 8.0f + 8.0f + 8.0f;
+    float bx = PAD + 4.0f, by = PAD + (LH + style->row_pad) * 0.5f;
     int switched = 0;
     for (int i = 0; i < 40 && !switched; ++i) {
         float x = bx + (float)i * 12.0f;
@@ -292,6 +310,30 @@ int main() {
     CHECK(rows_after_scroll == 64, "hierarchy lost rows while scrolling (%u)", rows_after_scroll);
     vert_bounds(ui, &x0, &y0, &x1, &y1);
     CHECK(y0 >= -1.0f, "scrolling drew above the window (y=%.1f)", y0);
+
+    // ---- 7b. the built in window layout draws and reports a viewport -------
+    {
+        dai_ui_input in{};
+        in.mouse_x = 640; in.mouse_y = 400;
+        dai_ui_begin(ui, 1280, 720, &in);
+        dai_editor_ui_frame(panels, 1280, 720);
+        dai_ui_end(ui);
+        CHECK(total_verts(ui) > 500, "the window layout drew almost nothing");
+        float vx = 0, vy = 0, vw = 0, vh = 0;
+        dai_editor_ui_viewport_rect(panels, &vx, &vy, &vw, &vh);
+        std::printf("  viewport %.0f,%.0f %.0fx%.0f\n", vx, vy, vw, vh);
+        CHECK(vw > 400.0f && vh > 300.0f, "the layout left no room for the scene: %.0fx%.0f", vw, vh);
+        CHECK(vx > 100.0f, "the hierarchy window does not cut into the viewport (x=%.0f)", vx);
+        CHECK(vx + vw < 1180.0f, "the inspector window does not cut into the viewport");
+        // Moving a window moves the hole in the layout with it.
+        float before_x = vx;
+        dai_editor_ui_layout_reset(panels, 1280, 720);
+        dai_ui_begin(ui, 1280, 720, &in);
+        dai_editor_ui_frame(panels, 1280, 720);
+        dai_ui_end(ui);
+        dai_editor_ui_viewport_rect(panels, &vx, &vy, &vw, &vh);
+        CHECK(std::fabs(vx - before_x) < 1.0f, "a layout reset changed the viewport");
+    }
 
     // ---- 8. play mode is reachable from the toolbar ------------------------
     CHECK(dai_editor_state_get(ed) == DAI_EDITOR_EDIT, "not in edit mode");

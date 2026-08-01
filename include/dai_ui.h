@@ -58,6 +58,10 @@ typedef struct dai_ui_style {
     uint32_t button, button_hover, button_active;
     uint32_t accent, track;
     float    padding, spacing, rounding, border;
+    /* windows and the editor chrome behind them */
+    uint32_t titlebar, titlebar_focused, chrome, shadow;
+    float    label_w;      /* width of the label column in field widgets   */
+    float    row_pad;      /* extra height a widget adds over the text     */
 } dai_ui_style;
 
 DAI_API dai_ui_style dai_ui_style_default(void);
@@ -77,6 +81,44 @@ DAI_API int dai_ui_wants_mouse(const dai_ui *ui);
 DAI_API void dai_ui_mouse(const dai_ui *ui, float *x, float *y, int *down, int *pressed);
 
 /* ---- layout ------------------------------------------------------------ */
+
+/* ---- windows ------------------------------------------------------------
+ *
+ * A panel the user can move, resize, collapse and raise - the arrangement
+ * every 3D editor has. The state lives in the CALLER's struct, not in a
+ * registry inside the UI, for the same reason the rest of this file is
+ * immediate mode: a layout is something the host wants to save, reset and
+ * compute defaults for, and a hidden table it cannot reach makes all three
+ * awkward.
+ *
+ *   static dai_ui_window inspector = dai_ui_window_make(1200, 60, 300, 600);
+ *   if (dai_ui_window_begin(ui, "Inspector", &inspector)) {
+ *       ...widgets...
+ *   }
+ *   dai_ui_window_end(ui);          // always, even when begin returned 0
+ *
+ * Windows are drawn in their own layers, so a window raised by a click ends up
+ * in front no matter what order the host calls them in, and a click that lands
+ * on an overlapping window only reaches the topmost one.
+ */
+typedef struct dai_ui_window {
+    float x, y, w, h;
+    int   collapsed;     /* only the title bar is drawn                    */
+    int   open;          /* 0 = not drawn at all; begin() returns 0        */
+    float min_w, min_h;
+} dai_ui_window;
+
+DAI_API dai_ui_window dai_ui_window_make(float x, float y, float w, float h);
+/* Returns 1 when the body is visible and widgets should be emitted. Call
+ * dai_ui_window_end() either way. */
+DAI_API int  dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win);
+DAI_API void dai_ui_window_end(dai_ui *ui);
+/* Which window is in front, by title. "" when the pointer is over none. */
+DAI_API const char *dai_ui_window_front(const dai_ui *ui);
+/* The largest rectangle no window covers - where a 3D viewport belongs.
+ * Approximated by starting from the full surface and cutting away the docked
+ * edges, which is what an editor layout actually looks like. */
+DAI_API void dai_ui_free_area(const dai_ui *ui, float *x, float *y, float *w, float *h);
 
 /* Opens a panel at x,y; widgets after it stack downwards inside it. */
 DAI_API void dai_ui_panel_begin(dai_ui *ui, float x, float y, float w, float h, const char *title);

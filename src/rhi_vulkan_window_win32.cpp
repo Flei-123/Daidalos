@@ -203,6 +203,35 @@ dai_window *dai_window_open(dai_renderer *r, const char *title, uint32_t width, 
     if (!r->has_surface_ext) return bail("instance was created without VK_KHR_win32_surface");
     if (!r->has_swapchain_ext) return bail("device does not support VK_KHR_swapchain");
 
+    // Per monitor DPI awareness, before the first window exists.
+    //
+    // Without it Windows renders the window at 100% and stretches the result to
+    // the monitor's scaling - on a 150% display every pixel of a 13 px font
+    // becomes 1.5 pixels of blur, and the interface looks twice as large as it
+    // was laid out to be. It is also why the editor looked "not compact" no
+    // matter how small the font was set: it was not the font, it was a
+    // magnifying glass over the whole window.
+    //
+    // Resolved dynamically because SetProcessDpiAwarenessContext only exists on
+    // Windows 10 1703 and later, and linking it statically would refuse to
+    // start on anything older.
+    {
+        static bool dpi_done = false;
+        if (!dpi_done) {
+            dpi_done = true;
+            using SetCtxFn = BOOL(WINAPI *)(void *);
+            if (HMODULE user32 = GetModuleHandleW(L"user32.dll")) {
+                auto set_ctx = (SetCtxFn)(void *)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+                // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == (HANDLE)-4
+                if (!set_ctx || !set_ctx((void *)(intptr_t)-4)) {
+                    using SetAwareFn = BOOL(WINAPI *)(void);
+                    if (auto legacy = (SetAwareFn)(void *)GetProcAddress(user32, "SetProcessDPIAware"))
+                        legacy();
+                }
+            }
+        }
+    }
+
     dai_window *w = new dai_window();
     w->r = r;
     w->width = width ? width : r->width;

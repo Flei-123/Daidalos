@@ -45,6 +45,18 @@ struct dai_editor_ui {
     std::vector<const char *> assets;
     int asset_sel = -1;
 
+    // The layout. Windows the user can move, so their rectangles have to
+    // survive the frame - and be resettable, because a window dragged off the
+    // screen on a monitor you no longer have is otherwise gone for good.
+    dai_ui_window win_hierarchy{};
+    dai_ui_window win_inspector{};
+    dai_ui_window win_project{};
+    const char *pending_asset = nullptr;   // clicked in the Project window
+    int   pending_as_tree = 0;
+    bool  layout_ready = false;
+    float layout_w = 0, layout_h = 0;
+    float view_x = 0, view_y = 0, view_w = 0, view_h = 0;
+
     // viewport interaction
     bool viewport_dragging = false;
     bool prev_viewport_down = false;
@@ -134,13 +146,13 @@ uint32_t dai_editor_ui_visible_rows(const dai_editor_ui *p) { return p ? p->visi
 
 // ------------------------------------------------------------- hierarchy
 
-void dai_editor_ui_hierarchy(dai_editor_ui *p, float x, float y, float w, float h) {
-    if (!p) return;
+// The contents, without deciding where they live. The panel version and the
+// window version both call this - two copies of a tree walk is how the two
+// slowly stop agreeing.
+static void hierarchy_body(dai_editor_ui *p, float h) {
     dai_doc *d = dai_editor_doc(p->ed);
     p->visible_rows = 0;
-
-    dai_ui_panel_begin(p->ui, x, y, w, h, "Hierarchy");
-    dai_ui_scroll_begin(p->ui, "hierarchy", h - 58.0f);
+    dai_ui_scroll_begin(p->ui, "hierarchy", h);
 
     uint32_t n = dai_doc_count(d);
     std::vector<dai_node> all(n);
@@ -151,35 +163,33 @@ void dai_editor_ui_hierarchy(dai_editor_ui *p, float x, float y, float w, float 
         if (r.parent != DAI_INVALID_NODE) continue;      // roots drive the recursion
         draw_subtree(p, d, id, 0);
     }
-
     dai_ui_scroll_end(p->ui);
+}
+
+void dai_editor_ui_hierarchy(dai_editor_ui *p, float x, float y, float w, float h) {
+    if (!p) return;
+    dai_ui_panel_begin(p->ui, x, y, w, h, "Hierarchy");
+    hierarchy_body(p, h - 58.0f);
     dai_ui_panel_end(p->ui);
 }
 
 // -------------------------------------------------------------- inspector
 
-void dai_editor_ui_inspector(dai_editor_ui *p, float x, float y, float w, float h) {
-    if (!p) return;
+static void inspector_body(dai_editor_ui *p) {
     close_field_tx_on_release(p);
     dai_doc *d = dai_editor_doc(p->ed);
-    dai_ui_panel_begin(p->ui, x, y, w, h, "Inspector");
 
     uint32_t sel = dai_editor_selection_count(p->ed);
-    if (sel == 0) {
-        dai_ui_label(p->ui, "nothing selected");
-        dai_ui_panel_end(p->ui);
-        return;
-    }
+    if (sel == 0) { dai_ui_label(p->ui, "nothing selected"); return; }
     if (sel > 1) {
         dai_ui_label_fmt(p->ui, "%u nodes selected", sel);
         dai_ui_label(p->ui, "move them with the gizmo");
-        dai_ui_panel_end(p->ui);
         return;
     }
 
     dai_node n = dai_editor_selected(p->ed, 0);
     dai_node_desc r{};
-    if (dai_doc_get(d, n, &r) != DAI_OK) { dai_ui_panel_end(p->ui); return; }
+    if (dai_doc_get(d, n, &r) != DAI_OK) return;
     dai_node_desc before = r;
 
     if (p->name_buf_node != n) {
@@ -258,6 +268,12 @@ void dai_editor_ui_inspector(dai_editor_ui *p, float x, float y, float w, float 
         begin_field_tx(p, "Edit");
         dai_doc_set(d, n, &r);
     }
+}
+
+void dai_editor_ui_inspector(dai_editor_ui *p, float x, float y, float w, float h) {
+    if (!p) return;
+    dai_ui_panel_begin(p->ui, x, y, w, h, "Inspector");
+    inspector_body(p);
     dai_ui_panel_end(p->ui);
 }
 
@@ -268,8 +284,10 @@ void dai_editor_ui_toolbar(dai_editor_ui *p, float x, float y, float w) {
     dai_doc *d = dai_editor_doc(p->ed);
     int state = dai_editor_state_get(p->ed);
 
-    dai_ui_panel_begin(p->ui, x, y, w, 44.0f, nullptr);
-    dai_ui_row(p->ui, 28.0f);
+    // 34 px tall and flush with the edges: this is the strip along the top of
+    // the window, not a floating panel.
+    dai_ui_panel_begin(p->ui, x, y, w, 34.0f, nullptr);
+    dai_ui_row(p->ui, 24.0f);
 
     int mode = dai_editor_gizmo_mode_get(p->ed);
     if (dai_ui_button(p->ui, mode == DAI_GIZMO_TRANSLATE ? "[Move]" : "Move"))
@@ -295,9 +313,10 @@ void dai_editor_ui_toolbar(dai_editor_ui *p, float x, float y, float w) {
         if (dai_ui_button(p->ui, "Keep")) dai_editor_apply_sim(p->ed);
     }
 
-    const char *undo_name = dai_editor_undo_name(p->ed);
-    dai_ui_label_fmt(p->ui, "%u nodes | undo: %s",
-                     dai_doc_count(d), undo_name && *undo_name ? undo_name : "-");
+    // The way back from a layout the user dragged into a corner.
+    if (dai_ui_button(p->ui, "Layout") && p->layout_ready)
+        dai_editor_ui_layout_reset(p, p->layout_w, p->layout_h);
+    (void)d;
     dai_ui_panel_end(p->ui);
 }
 
@@ -445,6 +464,8 @@ void dai_editor_ui_asset_list(dai_editor_ui *p, const char *const *paths, uint32
 
 int dai_editor_ui_asset_selected(const dai_editor_ui *p) { return p ? p->asset_sel : -1; }
 
+static int assets_body(dai_editor_ui *p, float h, const char **out_path, int *out_as_tree);
+
 int dai_editor_ui_assets(dai_editor_ui *p, float x, float y, float w, float h,
                          const char **out_path, int *out_as_tree) {
     if (out_path) *out_path = nullptr;
@@ -452,11 +473,16 @@ int dai_editor_ui_assets(dai_editor_ui *p, float x, float y, float w, float h,
     if (!p || !p->ui) return 0;
 
     dai_ui_panel_begin(p->ui, x, y, w, h, "Assets");
+    int r = assets_body(p, h, out_path, out_as_tree);
+    dai_ui_panel_end(p->ui);
+    return r;
+}
+
+static int assets_body(dai_editor_ui *p, float h, const char **out_path, int *out_as_tree) {
     if (p->assets.empty()) {
         // An empty browser and a browser nobody filled look the same to the
         // user, so say which it is.
         dai_ui_label(p->ui, "nothing mounted");
-        dai_ui_panel_end(p->ui);
         return 0;
     }
 
@@ -485,7 +511,6 @@ int dai_editor_ui_assets(dai_editor_ui *p, float x, float y, float w, float h,
     dai_ui_separator(p->ui);
     if (p->asset_sel < 0 || p->asset_sel >= (int)p->assets.size()) {
         dai_ui_label(p->ui, "pick one");
-        dai_ui_panel_end(p->ui);
         return 0;
     }
 
@@ -505,22 +530,116 @@ int dai_editor_ui_assets(dai_editor_ui *p, float x, float y, float w, float h,
         if (out_as_tree) *out_as_tree = 1;
         placed = 1;
     }
-    dai_ui_panel_end(p->ui);
     return placed;
+}
+
+void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
+    if (!p) return;
+    const float SIDE = 230.0f, TOP = 34.0f, BOTTOM = 24.0f, M = 6.0f;
+    float col_h = vh - TOP - BOTTOM - M * 2.0f;
+    p->win_hierarchy = dai_ui_window_make(M, TOP + M, SIDE, col_h * 0.52f);
+    p->win_project   = dai_ui_window_make(M, TOP + M + col_h * 0.52f + M,
+                                          SIDE, col_h * 0.48f - M);
+    p->win_inspector = dai_ui_window_make(vw - SIDE - M, TOP + M, SIDE, col_h);
+    p->layout_ready = true;
+    p->layout_w = vw; p->layout_h = vh;
+}
+
+void dai_editor_ui_viewport_rect(const dai_editor_ui *p, float *x, float *y, float *w, float *h) {
+    if (!p) return;
+    if (x) *x = p->view_x;
+    if (y) *y = p->view_y;
+    if (w) *w = p->view_w;
+    if (h) *h = p->view_h;
 }
 
 void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     if (!p) return;
-    const float SIDE = 240.0f;
-    dai_editor_ui_toolbar(p, 8.0f, 8.0f, vw - 16.0f);
-    dai_editor_ui_hierarchy(p, 8.0f, 60.0f, SIDE, vh * 0.5f);
-    // The asset browser is NOT in the default layout: it needs a list only the
-    // host can produce, and a panel that always says "nothing mounted" is
-    // worse than no panel. Place it yourself, under the hierarchy is the
-    // obvious spot.
-    dai_editor_ui_inspector(p, vw - SIDE - 8.0f, 60.0f, SIDE, vh - 128.0f);
-    dai_editor_ui_timeline(p, 8.0f + SIDE + 8.0f, vh - 52.0f, vw - 2.0f * (SIDE + 16.0f));
+    dai_ui *ui = p->ui;
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    const float TOP = 34.0f, BOTTOM = 24.0f;
+
+    if (!p->layout_ready) dai_editor_ui_layout_reset(p, vw, vh);
+    if (p->layout_w != vw || p->layout_h != vh) {
+        // Keep the right hand column glued to the right edge on a resize.
+        // Anything else leaves the inspector floating in the middle of a wider
+        // window, which is exactly what a 21:9 monitor did to it.
+        float dx = vw - p->layout_w;
+        if (p->win_inspector.x + p->win_inspector.w > p->layout_w - 40.0f)
+            p->win_inspector.x += dx;
+        float dh = vh - p->layout_h;
+        if (p->win_inspector.y + p->win_inspector.h > p->layout_h - 60.0f)
+            p->win_inspector.h += dh;
+        if (p->win_project.y + p->win_project.h > p->layout_h - 60.0f)
+            p->win_project.h += dh;
+        p->layout_w = vw; p->layout_h = vh;
+    }
+
+    // The chrome: solid bars top and bottom. Everything between them that no
+    // window covers is the scene view - the editor is a frame around a hole.
+    dai_ui_rect(ui, 0, 0, vw, TOP, st->chrome);
+    dai_ui_rect(ui, 0, vh - BOTTOM, vw, BOTTOM, st->chrome);
+    dai_ui_rect(ui, 0, vh - BOTTOM, vw, 1.0f, st->panel_border);
+
+    dai_editor_ui_toolbar(p, 0.0f, 0.0f, vw);
+
+    if (dai_ui_window_begin(ui, "Hierarchy", &p->win_hierarchy))
+        hierarchy_body(p, p->win_hierarchy.h - 40.0f);
+    dai_ui_window_end(ui);
+
+    if (dai_ui_window_begin(ui, "Project", &p->win_project)) {
+        const char *pick = nullptr; int as_tree = 0;
+        if (assets_body(p, p->win_project.h, &pick, &as_tree)) {
+            p->pending_asset = pick;
+            p->pending_as_tree = as_tree;
+        }
+    }
+    dai_ui_window_end(ui);
+
+    if (dai_ui_window_begin(ui, "Inspector", &p->win_inspector))
+        inspector_body(p);
+    dai_ui_window_end(ui);
+
+    // What is left over is where the 3D view is actually visible. The host
+    // needs it for a viewport aware camera, and the timeline sits at its foot.
+    float fx = 0, fy = 0, fw = vw, fh = vh;
+    dai_ui_free_area(ui, &fx, &fy, &fw, &fh);
+    if (fy < TOP) { fh -= (TOP - fy); fy = TOP; }
+    if (fy + fh > vh - BOTTOM) fh = vh - BOTTOM - fy;
+    p->view_x = fx; p->view_y = fy; p->view_w = fw; p->view_h = fh;
+
+    dai_editor_ui_timeline(p, fx + 8.0f, vh - BOTTOM - 50.0f, fw - 16.0f);
+    dai_editor_ui_status(p, 0.0f, vh - BOTTOM, vw, BOTTOM);
     dai_editor_ui_gizmo(p);
+}
+
+void dai_editor_ui_status(dai_editor_ui *p, float x, float y, float w, float h) {
+    if (!p) return;
+    dai_ui *ui = p->ui;
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    dai_doc *d = dai_editor_doc(p->ed);
+    int state = dai_editor_state_get(p->ed);
+    const char *state_name = state == DAI_EDITOR_PLAY ? "PLAY"
+                           : state == DAI_EDITOR_EDIT ? "EDIT" : "PAUSED";
+    char buf[192];
+    std::snprintf(buf, sizeof(buf), "%s   %u nodes   selection %u   undo: %s",
+                  state_name, dai_doc_count(d), dai_editor_selection_count(p->ed),
+                  dai_editor_undo_name(p->ed) && *dai_editor_undo_name(p->ed)
+                      ? dai_editor_undo_name(p->ed) : "-");
+    dai_ui_text(ui, x + 8.0f, y + 3.0f, buf, st->text_dim);
+    char right[96];
+    std::snprintf(right, sizeof(right), "viewport %.0fx%.0f", p->view_w, p->view_h);
+    float rw = dai_ui_text_width(ui, right);
+    dai_ui_text(ui, x + w - rw - 8.0f, y + 3.0f, right, st->text_dim);
+}
+
+int dai_editor_ui_take_asset(dai_editor_ui *p, const char **out_path, int *out_as_tree) {
+    if (!p || !p->pending_asset) return 0;
+    if (out_path) *out_path = p->pending_asset;
+    if (out_as_tree) *out_as_tree = p->pending_as_tree;
+    p->pending_asset = nullptr;
+    p->pending_as_tree = 0;
+    return 1;
 }
 
 } // extern "C"

@@ -5,9 +5,14 @@
 // JPH::BodyID, no Jolt header. Gameplay and engine code only ever see
 // dai_vec3 / dai_quat / uint32_t slot indices.
 //
-// Two implementations exist:
-//   physics_jolt.cpp  - the real one
+// Three implementations exist:
+//   physics_jolt.cpp  - Jolt Physics
+//   physics_talos.cpp - Talos, through its C API
 //   physics_null.cpp  - gravity only, no collisions
+//
+// Two real backends is what turns "swappable" from a claim into a fact: the
+// null backend proves nothing leaked into the header, the second real one
+// proves the header is actually sufficient to run a game.
 //
 // The null backend is not a toy: it is the leak test. If the engine still
 // compiles and runs against it, no physics detail has escaped this header.
@@ -93,5 +98,6 @@ public:
 
 IPhysicsBackend *create_jolt_backend();
 IPhysicsBackend *create_null_backend();
+IPhysicsBackend *create_talos_backend();
 
 } // namespace dai

@@ -12,6 +12,7 @@ cd "$(dirname "$0")"
 
 JOLT_SRC=${JOLT_SRC:-/root/projects/JoltPhysics}
 JOLT_LIB=${JOLT_LIB:-/root/projects/jolt-build}
+TALOS=${TALOS:-/root/projects/talos}
 AULOS=${AULOS:-/root/projects/aulos}
 MNEMOSYNE=${MNEMOSYNE:-/root/projects/mnemosyne}
 
@@ -33,14 +34,37 @@ fi
 
 mkdir -p build
 
+echo "-- physics backend availability"
+# Deciding this BEFORE the engine core is compiled, because dai_engine.cpp is
+# what refuses DAI_PHYSICS_TALOS when the backend was not linked in.
+if [ -f "${TALOS:-/root/projects/talos}/TalC/talos.h" ] && [ -f "${TALOS:-/root/projects/talos}/build/libtalos.a" ]; then
+    ENGINE_DEFS=""
+else
+    ENGINE_DEFS="-DDAI_NO_TALOS"
+fi
+
 echo "-- engine core (no Jolt include path - this is the leak test)"
-g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_engine.cpp -o build/dai_engine.o
+g++ $FLAGS $ARCH $ENGINE_DEFS -Iinclude -Isrc -c src/dai_engine.cpp -o build/dai_engine.o
 
 echo "-- physics backend: null"
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/physics_null.cpp -o build/physics_null.o
 
 echo "-- physics backend: jolt"
 g++ $FLAGS $ARCH $JOLT_DEFS -Iinclude -Isrc -I"$JOLT_SRC" -c src/physics_jolt.cpp -o build/physics_jolt.o
+
+# Second real backend: Talos through its C API. Optional the same way audio is
+# - without it the engine still builds and DAI_PHYSICS_TALOS is refused rather
+# than silently answered with Jolt.
+TALOS_OBJ=""
+TALOS_LIB=""
+if [ -f "$TALOS/TalC/talos.h" ] && [ -f "$TALOS/build/libtalos.a" ]; then
+    echo "-- physics backend: talos ($TALOS)"
+    g++ $FLAGS $ARCH -Iinclude -Isrc -I"$TALOS/TalC" -c src/physics_talos.cpp -o build/physics_talos.o
+    TALOS_OBJ=build/physics_talos.o
+    TALOS_LIB="$TALOS/build/libtalos.a"
+else
+    echo "-- physics backend: talos SKIPPED (no $TALOS/build/libtalos.a - run talos/build.sh)"
+fi
 
 echo "-- audio"
 g++ $FLAGS $ARCH $AUDIO_FLAGS -Iinclude -Isrc -c src/dai_audio.cpp -o build/dai_audio.o
@@ -55,7 +79,7 @@ g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc.cpp -o build/dai_doc.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_text.cpp -o build/dai_doc_text.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_sync.cpp -o build/dai_doc_sync.o
 
-ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o \
+ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o ${TALOS_OBJ} \
        build/dai_audio.o build/dai_scene.o build/dai_input.o build/dai_editor.o \
        build/dai_doc.o build/dai_doc_text.o build/dai_doc_sync.o
 
@@ -164,12 +188,16 @@ else
     echo "-- assets: skipped (no Mnemosyne at $MNEMOSYNE)"
 fi
 
-LIBS="build/libdaidalos.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lpthread -lm"
-VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB -L$JOLT_LIB -lJolt -lvulkan ${X11_LIB:-} -lpthread -lm"
+LIBS="build/libdaidalos.a $AUDIO_LIB ${TALOS_LIB:-} -L$JOLT_LIB -lJolt -lpthread -lm"
+VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB ${TALOS_LIB:-} -L$JOLT_LIB -lJolt -lvulkan ${X11_LIB:-} -lpthread -lm"
 
 # --- backend leak tests -------------------------------------------------
 # Same idea as the Jolt one, for the renderer: the RHI must be swappable for
 # D3D12/Metal/an emitter into someone else's engine by replacing rhi_*.cpp.
+echo "-- leak test: no talos.h outside src/physics_talos.cpp"
+if grep -l "talos\.h\|tal_world\|tal_body_id" src/*.cpp src/*.hpp include/*.h 2>/dev/null | grep -v "^src/physics_talos.cpp"; then
+    echo "   !! a Talos type escaped the backend (files listed above)"; exit 1
+fi
 echo "-- leak test: no Vulkan outside src/rhi_vulkan*"
 if grep -l "vulkan/vulkan.h\|VkDevice\|vkCmd" src/*.cpp src/*.hpp include/*.h 2>/dev/null | grep -v "^src/rhi_vulkan"; then
     echo "   !! a Vulkan type escaped the backend (files listed above)"; exit 1
@@ -217,6 +245,10 @@ g++ $FLAGS $ARCH -Iinclude tests/test_editor.cpp $LIBS -o build/test_editor
 g++ $FLAGS $ARCH -Iinclude tests/test_doc.cpp $LIBS -o build/test_doc
 g++ $FLAGS $ARCH -Iinclude tests/test_play.cpp $LIBS -o build/test_play
 g++ $FLAGS $ARCH -Iinclude tests/test_cam.cpp $LIBS -o build/test_cam
+if [ -n "${TALOS_LIB:-}" ]; then
+    # The second real backend, held to the same claims as the first.
+    g++ $FLAGS $ARCH -Iinclude tests/test_talos.cpp $LIBS -o build/test_talos
+fi
 if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_script.cpp $SCRIPT_LIB $VKLIBS -o build/test_script
 fi
@@ -239,6 +271,10 @@ if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_particles.cpp $VKLIBS -o build/test_particles
     g++ $FLAGS $ARCH -Iinclude tests/test_skinning.cpp $VKLIBS -o build/test_skinning
     g++ $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui
+    # Windows and the solid texel every rectangle in the interface is drawn
+    # with. Needs no renderer: it reads the atlas and the vertices.
+    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_window.cpp src/dai_ui.cpp src/dai_font.cpp \
+        -o build/test_ui_window
     g++ $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
     if [ -n "$ASSETS_LIB" ]; then

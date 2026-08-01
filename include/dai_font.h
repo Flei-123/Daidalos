@@ -51,6 +51,13 @@ DAI_API void      dai_font_free(dai_font *f);
  * it tried into err so the failure is actionable. */
 DAI_API dai_font *dai_font_load_ui(float pixel_height, char *err, size_t err_len);
 
+/* Where the solid texel is. Every atlas reserves a small block of full
+ * coverage, so a UI that draws its rectangles from this texture needs no second
+ * texture and no pipeline switch between text and panels. Without it the
+ * obvious choice - "point at the empty border pixel" - draws with alpha 0, and
+ * an entire interface renders as text on nothing. */
+DAI_API void dai_font_white_uv(const dai_font *f, float *u, float *v);
+
 /* The atlas: 8 bit coverage, tightly packed. Upload it as a texture. */
 DAI_API const uint8_t *dai_font_atlas(const dai_font *f, uint32_t *width, uint32_t *height);
 /* Same pixels expanded to RGBA (white, alpha = coverage) for renderers that

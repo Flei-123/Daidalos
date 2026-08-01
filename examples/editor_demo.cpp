@@ -66,7 +66,10 @@ int main(int argc, char **argv) {
     dai_window *win = dai_window_open(r, "Daidalos Editor", W, H, err, sizeof(err));
     if (!win) { std::printf("window failed: %s\n", err); return 1; }
 
-    dai_font *font = dai_font_load_ui(17.0f, err, sizeof(err));
+    // 13 px, not 17: this is an editor, and the panels are full of numeric
+    // fields. On Windows the window is DPI aware now, so 13 px is 13 real
+    // pixels instead of 13 stretched to 20 by the desktop scaling.
+    dai_font *font = dai_font_load_ui(13.0f, err, sizeof(err));
     if (!font) std::printf("no font: %s\n", err);   // the UI would draw blank boxes
     dai_texture font_tex = 0;
     if (font) {

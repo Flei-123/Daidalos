@@ -72,7 +72,12 @@ typedef struct dai_quat { float x, y, z, w; } dai_quat;
  * physics_jolt.cpp. */
 typedef enum dai_physics_backend {
     DAI_PHYSICS_JOLT = 0,
-    DAI_PHYSICS_NULL = 1
+    DAI_PHYSICS_NULL = 1,
+    /* Talos (github.com/Flei-123/talos) through its C API. Same contract as
+     * Jolt: bodies, joints, contacts, raycasts, save/restore. A saved backend
+     * state is NOT portable between backends - that has always been true and
+     * is why dai_save writes body descriptions, not a physics blob. */
+    DAI_PHYSICS_TALOS = 2
 } dai_physics_backend;
 
 typedef struct dai_config {
