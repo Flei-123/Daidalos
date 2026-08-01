@@ -117,7 +117,9 @@ typedef struct dai_material_desc {
     float       normal_strength; /* 0 -> 1                                     */
     float       occlusion;       /* how much of orm.r is applied, 0 -> 1       */
     float       alpha_cutoff;    /* >0 enables alpha testing                   */
-    float       uv_scale;        /* tiling, 0 -> 1                             */
+    dai_vec2    uv_scale;        /* tiling per axis, 0 -> 1                    */
+    dai_vec2    uv_offset;       /* scrolling; the sampler repeats, so any      *
+                                  * value works and 1.0 is one full wrap        */
     dai_texture base_color_tex;
     dai_texture orm_tex;
     dai_texture normal_tex;
@@ -134,6 +136,12 @@ typedef enum dai_material_flags {
 DAI_API dai_material_desc dai_material_desc_default(void);
 DAI_API dai_material      dai_render_material_create(dai_renderer *r, const dai_material_desc *desc);
 DAI_API uint32_t          dai_render_material_count(dai_renderer *r);
+/* Rewrites an existing material in place - same handle, same descriptor set
+ * unless the textures changed. This is what animates a material: bump
+ * uv_offset every frame for water or lava instead of leaking a new material
+ * per frame. Returns DAI_OK, or DAI_ERR_NOT_FOUND for an unknown handle. */
+DAI_API dai_result        dai_render_material_update(dai_renderer *r, dai_material mat,
+                                                     const dai_material_desc *desc);
 
 /* ---- what to draw ------------------------------------------------------ */
 
@@ -150,6 +158,12 @@ typedef struct dai_render_instance {
     uint32_t material;     /* dai_material, 0 = default                       */
     uint32_t joint_offset; /* first joint matrix for this instance            */
     uint32_t joint_count;  /* 0 = not skinned                                 */
+    /* Per instance UV. Tiling: 0,0 falls back to the material's uv_scale, so
+     * a zero initialised instance keeps whatever the material says. Offset is
+     * ADDED to the material's, which is what lets a hundred conveyor belts
+     * share one material and still scroll out of phase. */
+    dai_vec2 uv_scale;
+    dai_vec2 uv_offset;
 } dai_render_instance;
 
 /* Uploads joint matrices for the NEXT frame. Instances index into this array

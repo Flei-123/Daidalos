@@ -660,6 +660,158 @@ int main(int argc, char **argv) {
         CHECK(dai_render_last_culled(r) > 350, "looking away only culled %u of 400", dai_render_last_culled(r));
     }
 
+
+    // UV transform: tiling per axis, scrolling, and the instance overriding the
+    // material. The old model was a single uv_scale float, which could not tile
+    // 4x1 (a conveyor belt) and could not scroll at all. These checks pin the
+    // three rules: instance tiling wins when set, offsets ADD, and a zero
+    // initialised instance changes nothing.
+    {
+        std::printf("[18] uv tiling, scrolling and per instance override\n");
+        dai_render_sky(r, 0);
+        dai_render_clear_color(r, 0, 0, 0);
+        dai_render_light(r, dai_vec3{ 0.0f, 0.0f, 1.0f });
+        dai_render_ambient(r, dai_vec3{ 0.5f, 0.5f, 0.5f }, dai_vec3{ 0.5f, 0.5f, 0.5f }, 0.5f);
+        dai_render_exposure(r, 1.0f);
+        dai_render_camera(r, dai_vec3{ 0, 8, 0.001f }, dai_vec3{ 0,0,0 }, dai_vec3{ 0,0,-1 }, 45.0f, 0.1f, 100.0f);
+
+        const uint8_t px4[16] = {
+            255,0,0,255,     0,255,0,255,
+            0,0,255,255,     255,255,0,255
+        };
+        dai_texture tex = dai_render_texture_create(r, px4, 2, 2, 0);
+
+        // colour changes along the middle scanline, counted only where the
+        // plane actually is - a proxy for "how many times does the texture
+        // repeat across the quad"
+        auto stripes = [](const Frame &f) {
+            uint32_t y = f.h / 2, n = 0;
+            char prev = f.hue(f.w / 4, y);
+            for (uint32_t x = f.w / 4; x < f.w * 3 / 4; ++x) {
+                char h = f.hue(x, y);
+                if (h != '.' && prev != '.' && h != prev) ++n;
+                prev = h;
+            }
+            return n;
+        };
+
+        dai_material_desc md = dai_material_desc_default();
+        md.base_color_tex = tex;
+        md.name = "uv_test";
+        dai_material mat = dai_render_material_create(r, &md);
+        CHECK(mat != 0, "material creation failed: %s", dai_render_last_error(r));
+
+        dai_render_instance in = dai_render_instance_default();
+        in.mesh = DAI_MESH_PLANE;
+        in.scale = { 3, 1, 3 };
+        in.material = mat;
+
+        dai_render_frame(r, &in, 1);
+        Frame base = grab(r); save(r, "vis_18_uv_1x1.ppm");
+        uint32_t s_base = stripes(base);
+
+        // ---- material tiling, per axis ----
+        md.uv_scale = { 4, 1 };
+        CHECK(dai_render_material_update(r, mat, &md) == DAI_OK, "material_update failed");
+        dai_render_frame(r, &in, 1);
+        Frame tiled = grab(r); save(r, "vis_18_uv_4x1.ppm");
+        uint32_t s_tiled = stripes(tiled);
+        CHECK(s_tiled > s_base + 1, "4x1 tiling gave %u stripes, 1x1 gave %u - uv_scale.x does nothing",
+              s_tiled, s_base);
+
+        // the Y axis must be independent, or this is still a single float
+        md.uv_scale = { 1, 4 };
+        dai_render_material_update(r, mat, &md);
+        dai_render_frame(r, &in, 1);
+        Frame tiled_y = grab(r);
+        CHECK(stripes(tiled_y) <= s_base + 1,
+              "tiling 1x4 changed the horizontal stripe count to %u (1x1: %u) - the axes are coupled",
+              stripes(tiled_y), s_base);
+        CHECK(tiled_y.px != tiled.px, "tiling 4x1 and 1x4 render identically - one axis is ignored");
+
+        // ---- scrolling ----
+        md.uv_scale = { 1, 1 };
+        md.uv_offset = { 0.5f, 0.0f };
+        dai_render_material_update(r, mat, &md);
+        dai_render_frame(r, &in, 1);
+        Frame scrolled = grab(r); save(r, "vis_18_uv_scroll.ppm");
+        CHECK(scrolled.px != base.px, "a 0.5 uv_offset changed nothing - scrolling is not applied");
+        CHECK(stripes(scrolled) <= s_base + 1,
+              "scrolling changed the stripe count (%u vs %u) - offset is being scaled, not added",
+              stripes(scrolled), s_base);
+
+        // half a texture across a 2x2 texture swaps the columns: what was on
+        // the left is now on the right
+        CHECK(base.hue(base.w/4, base.h/2) == scrolled.hue(scrolled.w*3/4, scrolled.h/2),
+              "scrolling by 0.5 did not move the left half to the right (%c -> %c)",
+              base.hue(base.w/4, base.h/2), scrolled.hue(scrolled.w*3/4, scrolled.h/2));
+
+        // ---- instance overrides material tiling ----
+        md.uv_scale = { 1, 1 };
+        md.uv_offset = { 0, 0 };
+        dai_render_material_update(r, mat, &md);
+        dai_render_instance ov = in;
+        ov.uv_scale = { 4, 1 };
+        dai_render_frame(r, &ov, 1);
+        Frame inst_tiled = grab(r);
+        CHECK(inst_tiled.px == tiled.px,
+              "instance uv_scale 4x1 does not match material uv_scale 4x1 - the override path differs");
+
+        // ---- a zero initialised instance must not change anything ----
+        dai_render_instance zero = in;
+        zero.uv_scale = { 0, 0 };
+        zero.uv_offset = { 0, 0 };
+        dai_render_frame(r, &zero, 1);
+        CHECK(grab(r).px == base.px,
+              "an instance with uv_scale 0,0 changed the image - the fallback to the material is broken");
+
+        // ---- offsets add: material 0.25 + instance 0.25 == material 0.5 ----
+        md.uv_offset = { 0.25f, 0.0f };
+        dai_render_material_update(r, mat, &md);
+        dai_render_instance half = in;
+        half.uv_offset = { 0.25f, 0.0f };
+        dai_render_frame(r, &half, 1);
+        Frame added = grab(r);
+        CHECK(added.px == scrolled.px,
+              "material 0.25 + instance 0.25 is not the same as material 0.5 - offsets do not add");
+
+        // ---- two instances, one material, different phase ----
+        md.uv_offset = { 0, 0 };
+        dai_render_material_update(r, mat, &md);
+        dai_render_instance pair[2];
+        pair[0] = in; pair[0].position = { -1.8f, 0, 0 }; pair[0].scale = { 1.5f, 1, 1.5f };
+        pair[1] = in; pair[1].position = {  1.8f, 0, 0 }; pair[1].scale = { 1.5f, 1, 1.5f };
+        dai_render_frame(r, pair, 2);
+        Frame same_phase = grab(r);
+
+        pair[1].uv_offset = { 0.5f, 0.0f };
+        dai_render_frame(r, pair, 2);
+        Frame two = grab(r); save(r, "vis_18_uv_two_phases.ppm");
+
+        CHECK(two.px != same_phase.px,
+              "offsetting one of two instances changed nothing - the offset is not read per instance");
+        // The decisive part: the OTHER instance must be untouched. Comparing the
+        // left half of the image is independent of where exactly the quads land,
+        // which a hue sample on a texel boundary is not.
+        bool left_untouched = true;
+        for (uint32_t y = 0; y < two.h && left_untouched; ++y)
+            for (uint32_t x = 0; x < two.w / 2; ++x)
+                if (std::memcmp(two.at(x, y), same_phase.at(x, y), 4) != 0) { left_untouched = false; break; }
+        CHECK(left_untouched,
+              "scrolling the right instance also changed the left one - the offset leaked across instances");
+
+        uint32_t before = dai_render_material_count(r);
+        for (int i = 0; i < 32; ++i) {
+            md.uv_offset = { i * 0.03f, 0.0f };
+            dai_render_material_update(r, mat, &md);
+        }
+        CHECK(dai_render_material_count(r) == before,
+              "32 material updates created %u new materials - animating a material leaks",
+              dai_render_material_count(r) - before);
+        std::printf("     stripes 1x1: %u | 4x1: %u | materials still %u\n",
+                    s_base, s_tiled, dai_render_material_count(r));
+    }
+
     dai_render_destroy(r);
     std::printf("\n%d checks passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

@@ -20,6 +20,7 @@ layout(location = 9) in uint  iFlags;
 layout(location = 10) in uvec4 inJoints;
 layout(location = 11) in vec4  inWeights;
 layout(location = 12) in uvec2 iSkin;      // x = first joint matrix, y = joint count
+layout(location = 13) in vec4  iUV;        // xy = tiling override (0,0 = use material), zw = offset
 
 layout(set = 0, binding = 0) uniform Frame {
     mat4 viewproj;
@@ -46,8 +47,9 @@ layout(location = 5) out vec2 vUV;
 layout(push_constant) uniform Mat {
     vec4 base_color;
     vec4 emissive;
-    vec4 scalars;      // metallic, roughness, normal strength, uv scale
+    vec4 scalars;      // metallic, roughness, normal strength, unused
     vec4 extra;
+    vec4 uv;           // tiling xy, offset zw
 } M;
 
 layout(set = 0, binding = 2) readonly buffer Joints { mat4 joint[]; } J;
@@ -84,7 +86,11 @@ void main() {
     vWorld  = world;
     vMat    = iMat.yz;
     vFlags  = iFlags;
-    vUV     = inUV * M.scalars.w;
+    // Tiling: the instance wins when it says anything, otherwise the material.
+    // Offset: both are applied, so one material can define the tiling for a
+    // hundred conveyor belts while each belt scrolls at its own phase.
+    vec2 tiling = (iUV.x != 0.0 || iUV.y != 0.0) ? iUV.xy : M.uv.xy;
+    vUV     = inUV * tiling + M.uv.zw + iUV.zw;
 
     gl_Position = F.viewproj * vec4(world, 1.0);
 }

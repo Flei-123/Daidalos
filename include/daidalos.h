@@ -60,6 +60,7 @@ typedef enum dai_result {
     DAI_ERR_TOO_OLD      = -7   /* rollback target is outside the snapshot ring */
 } dai_result;
 
+typedef struct dai_vec2 { float x, y; } dai_vec2;
 typedef struct dai_vec3 { float x, y, z; } dai_vec3;
 typedef struct dai_quat { float x, y, z, w; } dai_quat;
 

@@ -45,8 +45,9 @@ layout(set = 1, binding = 3) uniform sampler2D uEmissive;
 layout(push_constant) uniform Mat {
     vec4 base_color;   // rgb, w = alpha cutoff
     vec4 emissive;     // rgb, w = flags
-    vec4 scalars;      // metallic, roughness, normal strength, uv scale
+    vec4 scalars;      // metallic, roughness, normal strength, unused
     vec4 extra;        // occlusion strength, has_maps, has_normal_map, unused
+    vec4 uv;           // tiling xy, offset zw - applied in the vertex stage
 } M;
 
 layout(location = 0) out vec4 outColor;

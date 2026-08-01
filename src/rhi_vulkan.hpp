@@ -52,13 +52,14 @@ struct TextureEntry {
     uint32_t width = 0, height = 0, mips = 1;
 };
 
-// Push constant block, must match the shaders. 64 bytes: well inside the
+// Push constant block, must match the shaders. 80 bytes: still well inside the
 // 128 byte guarantee, so no uniform buffer traffic per material switch.
 struct MaterialPush {
     float base_color[4];   // rgb + alpha cutoff
     float emissive[4];     // rgb + flags as float
-    float scalars[4];      // metallic, roughness, normal strength, uv scale
-    float extra[4];        // occlusion, has_maps, has_normal_map, unused
+    float scalars[4];      // metallic, roughness, normal strength, unused
+    float extra[4];        // occlusion, has_maps, has_normal_map, shadow cascade
+    float uv[4];           // tiling x, tiling y, offset x, offset y
 };
 
 struct MaterialEntry {

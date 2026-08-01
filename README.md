@@ -318,8 +318,14 @@ lavapipe, on a GPU through the identical code path).
   the vertex stage by the instance's `param`.
 - **materials**: glTF 2.0 metallic-roughness - base colour, ORM (occlusion /
   roughness / metallic packed), tangent space normal map, emissive, alpha
-  cutoff, uv scale. Cook-Torrance GGX. Tangent frame from screen space
-  derivatives, so assets never need baked tangents.
+  cutoff. Cook-Torrance GGX. Tangent frame from screen space derivatives, so
+  assets never need baked tangents.
+- **uv transform**: per axis tiling and an offset, on the material *and* per
+  instance. `uv_offset` animated per frame is a scrolling conveyor belt, a
+  river or lava; the instance offset is added to the material's, so a hundred
+  belts share one material and still run out of phase. The instance's
+  `uv_scale` overrides the material's when it is non zero, and a zero
+  initialised instance therefore changes nothing.
 - **textures**: PNG loaded by the engine's own DEFLATE decoder, full mip chains
   built on the GPU, sRGB vs linear decided by the slot rather than the artist.
 - **lighting**: directional sun, hemisphere ambient, Cook-Torrance GGX,

@@ -16,6 +16,7 @@ layout(location = 9) in uint  iFlags;
 layout(location = 10) in uvec4 inJoints;
 layout(location = 11) in vec4  inWeights;
 layout(location = 12) in uvec2 iSkin;      // x = first joint matrix, y = joint count
+layout(location = 13) in vec4  iUV;        // unused here, the layout is shared
 
 layout(set = 0, binding = 0) uniform Frame {
     mat4 viewproj;
@@ -37,6 +38,7 @@ layout(push_constant) uniform Mat {
     vec4 emissive;
     vec4 scalars;
     vec4 extra;      // w = which cascade this pass is filling
+    vec4 uv;         // tiling xy, offset zw - unused in a depth only pass
 } M;
 
 layout(set = 0, binding = 2) readonly buffer Joints { mat4 joint[]; } J;

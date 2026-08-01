@@ -40,7 +40,7 @@ import path all speak:
 | **emissive** | sRGB | RGB | Emission |
 
 Scalars (`base_color`, `metallic`, `roughness`, `normal_strength`,
-`occlusion`, `emissive`, `uv_scale`, `alpha_cutoff`) **multiply** their map. A
+`occlusion`, `emissive`, `alpha_cutoff`) **multiply** their map. A
 material can therefore be:
 
 - pure numbers (no textures at all - red rough plastic is three floats),
@@ -49,6 +49,40 @@ material can therefore be:
 
 `dai_material_desc_default()` gives the neutral values, so a partially filled
 description is never a broken one.
+
+### The UV transform
+
+Two `dai_vec2` on the material, `uv_scale` and `uv_offset`:
+
+```c
+md.uv_scale  = { 4, 1 };      /* four repeats along U, one along V */
+md.uv_offset = { t * 0.5f, 0 };
+dai_render_material_update(r, mat, &md);   /* per frame, no new material */
+```
+
+`uv_scale` is per axis on purpose. A conveyor belt is long and narrow and needs
+`4x1`; a single float cannot express that, which is what the first version got
+wrong. The sampler wraps, so an offset of 1.0 is exactly one full repeat and the
+value can grow forever without a modulo - though wrapping it keeps float
+precision sane over a long session.
+
+The same two values exist on `dai_render_instance`:
+
+| | material | instance | result |
+|---|---|---|---|
+| `uv_scale` | 4,1 | 0,0 | 4,1 - the instance says nothing, the material wins |
+| `uv_scale` | 4,1 | 2,2 | 2,2 - the instance overrides |
+| `uv_offset` | 0.25,0 | 0.25,0 | 0.5,0 - offsets **add** |
+
+Adding rather than overriding is the whole point of the offset: one belt
+material, a hundred belts, each at its own phase, still one draw call because
+nothing about the material changed. Tiling overrides instead, because two
+objects wanting different tiling from the same material is a different object,
+not a different phase.
+
+It costs 16 bytes per instance in the vertex stream and one `vec4` in the push
+constant block (80 of the guaranteed 128 bytes used), so there is no extra
+buffer traffic and no extra descriptor set.
 
 ### Why ORM is one texture
 

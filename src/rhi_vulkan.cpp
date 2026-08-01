@@ -206,7 +206,7 @@ VkShaderModule load_module(dai_renderer *r, const char *name, bool *ok) {
 // vertex layout shared by the mesh and shadow pipelines
 struct VertexLayout {
     VkVertexInputBindingDescription binds[2];
-    VkVertexInputAttributeDescription attrs[13];
+    VkVertexInputAttributeDescription attrs[14];
     VkPipelineVertexInputStateCreateInfo vi{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
     VertexLayout() {
         binds[0] = { 0, sizeof(dai_vertex), VK_VERTEX_INPUT_RATE_VERTEX };
@@ -224,8 +224,11 @@ struct VertexLayout {
         attrs[10] = { 10, 0, VK_FORMAT_R8G8B8A8_UINT,     offsetof(dai_vertex, joints) };
         attrs[11] = { 11, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(dai_vertex, weights) };
         attrs[12] = { 12, 1, VK_FORMAT_R32G32_UINT,       offsetof(dai_render_instance, joint_offset) };
+        // uv_scale and uv_offset are adjacent floats, so one vec4 attribute
+        // carries both and the instance stream grows by 16 bytes, not 32.
+        attrs[13] = { 13, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(dai_render_instance, uv_scale) };
         vi.vertexBindingDescriptionCount = 2; vi.pVertexBindingDescriptions = binds;
-        vi.vertexAttributeDescriptionCount = 13; vi.pVertexAttributeDescriptions = attrs;
+        vi.vertexAttributeDescriptionCount = 14; vi.pVertexAttributeDescriptions = attrs;
     }
 };
 

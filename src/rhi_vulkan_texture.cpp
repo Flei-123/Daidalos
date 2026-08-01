@@ -178,7 +178,8 @@ dai_material_desc dai_material_desc_default(void) {
     d.roughness = 1.0f;
     d.normal_strength = 1.0f;
     d.occlusion = 1.0f;
-    d.uv_scale = 1.0f;
+    d.uv_scale = { 1.0f, 1.0f };
+    d.uv_offset = { 0.0f, 0.0f };
     return d;
 }
 
@@ -192,7 +193,13 @@ dai_material dai_render_material_create(dai_renderer *r, const dai_material_desc
     m.p.scalars[0] = desc->metallic;
     m.p.scalars[1] = desc->roughness <= 0.0f ? 1.0f : desc->roughness;
     m.p.scalars[2] = desc->normal_strength;
-    m.p.scalars[3] = desc->uv_scale <= 0.0f ? 1.0f : desc->uv_scale;
+    m.p.scalars[3] = 0.0f;
+    // 0 means "not set" rather than "collapse every UV to a point", which is
+    // never what anyone wants and is what a zero initialised desc would ask for.
+    m.p.uv[0] = desc->uv_scale.x <= 0.0f ? 1.0f : desc->uv_scale.x;
+    m.p.uv[1] = desc->uv_scale.y <= 0.0f ? 1.0f : desc->uv_scale.y;
+    m.p.uv[2] = desc->uv_offset.x;
+    m.p.uv[3] = desc->uv_offset.y;
     m.p.extra[0] = desc->occlusion;
     m.p.extra[1] = (desc->base_color_tex || desc->orm_tex || desc->normal_tex || desc->emissive_tex) ? 1.0f : 0.0f;
     m.p.extra[2] = desc->normal_tex ? 1.0f : 0.0f;
@@ -208,6 +215,51 @@ dai_material dai_render_material_create(dai_renderer *r, const dai_material_desc
     }
     r->materials.push_back(m);
     return (dai_material)(r->materials.size() - 1);
+}
+
+dai_result dai_render_material_update(dai_renderer *r, dai_material mat,
+                                      const dai_material_desc *desc) {
+    if (!r || !desc) return DAI_ERR_INVALID_ARG;
+    if (mat >= r->materials.size()) return DAI_ERR_NOT_FOUND;
+    MaterialEntry &m = r->materials[mat];
+
+    // Textures unchanged -> the descriptor set stays valid and this is a pure
+    // memory write. That is the fast path, and it is the one an animated
+    // uv_offset takes every single frame.
+    bool tex_changed = m.base_tex != desc->base_color_tex || m.orm_tex != desc->orm_tex ||
+                       m.normal_tex != desc->normal_tex || m.emissive_tex != desc->emissive_tex;
+
+    m.p.base_color[0] = desc->base_color.x; m.p.base_color[1] = desc->base_color.y;
+    m.p.base_color[2] = desc->base_color.z; m.p.base_color[3] = desc->alpha_cutoff;
+    m.p.emissive[0] = desc->emissive.x; m.p.emissive[1] = desc->emissive.y;
+    m.p.emissive[2] = desc->emissive.z; m.p.emissive[3] = (float)desc->flags;
+    m.p.scalars[0] = desc->metallic;
+    m.p.scalars[1] = desc->roughness <= 0.0f ? 1.0f : desc->roughness;
+    m.p.scalars[2] = desc->normal_strength;
+    m.p.scalars[3] = 0.0f;
+    m.p.uv[0] = desc->uv_scale.x <= 0.0f ? 1.0f : desc->uv_scale.x;
+    m.p.uv[1] = desc->uv_scale.y <= 0.0f ? 1.0f : desc->uv_scale.y;
+    m.p.uv[2] = desc->uv_offset.x;
+    m.p.uv[3] = desc->uv_offset.y;
+    m.p.extra[0] = desc->occlusion;
+    m.p.extra[1] = (desc->base_color_tex || desc->orm_tex || desc->normal_tex || desc->emissive_tex) ? 1.0f : 0.0f;
+    m.p.extra[2] = desc->normal_tex ? 1.0f : 0.0f;
+    m.p.extra[3] = 0.0f;
+    if (desc->name) std::snprintf(m.name, sizeof(m.name), "%s", desc->name);
+
+    if (tex_changed) {
+        m.base_tex = desc->base_color_tex;
+        m.orm_tex = desc->orm_tex;
+        m.normal_tex = desc->normal_tex;
+        m.emissive_tex = desc->emissive_tex;
+        // The old set is left to the pool; materials are not hot swapped often
+        // enough for recycling to be worth the bookkeeping.
+        if (!build_material_set(r, m)) {
+            std::snprintf(r->err, sizeof(r->err), "out of material descriptor sets (max %u)", DAI_MAX_MATERIALS);
+            return DAI_ERR_OUT_OF_MEMORY;
+        }
+    }
+    return DAI_OK;
 }
 
 void dai_render_particle_atlas(dai_renderer *r, dai_texture tex, uint32_t cols, uint32_t rows) {
