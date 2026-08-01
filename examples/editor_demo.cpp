@@ -209,6 +209,8 @@ int main(int argc, char **argv) {
     int prev_keys[8] = { 0 };
     std::vector<dai_render_instance> inst(4096);
     int prev_f2 = 0, prev_backspace = 0, prev_enter = 0, prev_tab = 0;
+    int prev_edit_keys[6] = { 0 };
+    int prev_ctrl_a = 0;
 
     while (dai_window_poll(win)) {
         auto now = std::chrono::high_resolution_clock::now();
@@ -227,15 +229,17 @@ int main(int argc, char **argv) {
         ci.mouse_right = (buttons & (1u << 3)) ? 1 : 0;
         if (dai_editor_ui_menu_open(panels)) ci.mouse_right = 0;
         ci.wheel = wheel;
-        ci.key_w = dai_window_key_down(win, DAI_KEY_W);
-        ci.key_a = dai_window_key_down(win, DAI_KEY_A);
-        ci.key_s = dai_window_key_down(win, DAI_KEY_S);
-        ci.key_d = dai_window_key_down(win, DAI_KEY_D);
-        ci.key_q = dai_window_key_down(win, DAI_KEY_Q);
-        ci.key_e = dai_window_key_down(win, DAI_KEY_E);
+        // The camera reads held keys; a field being typed into owns them first.
+        int type_lock = dai_ui_text_active(ui);
+        ci.key_w = !type_lock && dai_window_key_down(win, DAI_KEY_W);
+        ci.key_a = !type_lock && dai_window_key_down(win, DAI_KEY_A);
+        ci.key_s = !type_lock && dai_window_key_down(win, DAI_KEY_S);
+        ci.key_d = !type_lock && dai_window_key_down(win, DAI_KEY_D);
+        ci.key_q = !type_lock && dai_window_key_down(win, DAI_KEY_Q);
+        ci.key_e = !type_lock && dai_window_key_down(win, DAI_KEY_E);
         ci.key_shift = dai_window_key_down(win, DAI_KEY_SHIFT_L) || dai_window_key_down(win, DAI_KEY_SHIFT_R);
         ci.key_alt = dai_window_key_down(win, DAI_KEY_ALT_L) || dai_window_key_down(win, DAI_KEY_ALT_R);
-        ci.key_focus = dai_window_key_down(win, DAI_KEY_F);
+        ci.key_focus = !type_lock && dai_window_key_down(win, DAI_KEY_F);
         ci.dt = dt;
 
         // W/E/R switch gizmo mode, but only when the camera is not flying -
@@ -248,16 +252,22 @@ int main(int argc, char **argv) {
             dai_window_key_down(win, DAI_KEY_SPACE),
         };
         auto pressed = [&](int i) { return keys[i] && !prev_keys[i]; };
-        if (!ci.mouse_right && !ctrl) {
+        // While a field is being typed into, the keyboard belongs to the field.
+        // Otherwise renaming an object to "Wide Crate" switches the gizmo to
+        // rotate, duplicates the selection and starts play mode on the way.
+        int typing = dai_ui_text_active(ui);
+        if (!ci.mouse_right && !ctrl && !typing) {
             if (pressed(0)) dai_editor_gizmo_mode(ed, DAI_GIZMO_TRANSLATE);
             if (pressed(1)) dai_editor_gizmo_mode(ed, DAI_GIZMO_ROTATE);
             if (pressed(2)) dai_editor_gizmo_mode(ed, DAI_GIZMO_SCALE);
         }
-        if (ctrl && pressed(3)) dai_editor_undo(ed);
-        if (ctrl && pressed(4)) dai_editor_redo(ed);
-        if (ctrl && pressed(6)) dai_editor_duplicate_selection(ed);
-        if (pressed(5)) dai_editor_delete_selection(ed);
-        if (pressed(7)) {
+        if (ctrl && pressed(3) && !typing) dai_editor_undo(ed);
+        if (ctrl && pressed(4) && !typing) dai_editor_redo(ed);
+        if (ctrl && pressed(6) && !typing) dai_editor_duplicate_selection(ed);
+        // Not while a field is being typed into: Delete belongs to the caret
+        // then, not to the scene.
+        if (pressed(5) && !dai_ui_text_active(ui)) dai_editor_delete_selection(ed);
+        if (pressed(7) && !typing) {
             if (dai_editor_state_get(ed) == DAI_EDITOR_PLAY) dai_editor_pause(ed);
             else dai_editor_play(ed);
         }
@@ -284,7 +294,7 @@ int main(int argc, char **argv) {
         // The UI has to run before the viewport, because "is the pointer over a
         // panel" is only known once the panels have been laid out this frame.
         // F2 renames the selection, in the hierarchy where the name lives.
-        if (dai_window_key_down(win, DAI_KEY_F2) && !prev_f2 &&
+        if (dai_window_key_down(win, DAI_KEY_F2) && !prev_f2 && !dai_ui_text_active(ui) &&
             dai_editor_selection_count(ed) > 0)
             dai_editor_ui_rename(panels, dai_editor_selected(ed, 0));
         prev_f2 = dai_window_key_down(win, DAI_KEY_F2);
@@ -313,11 +323,38 @@ int main(int argc, char **argv) {
         prev_enter = dai_window_key_down(win, DAI_KEY_RETURN);
         in.key_tab = dai_window_key_down(win, DAI_KEY_TAB) && !prev_tab;
         prev_tab = dai_window_key_down(win, DAI_KEY_TAB);
+        // The rest of what a real text field needs. Edge triggered, like the
+        // three above: a held arrow key that moves the caret every frame is
+        // not "repeat", it is a caret that teleports.
+        {
+            static const uint32_t EDGE_KEYS[6] = { DAI_KEY_LEFT, DAI_KEY_RIGHT, DAI_KEY_HOME,
+                                                   DAI_KEY_END, DAI_KEY_DELETE, DAI_KEY_ESCAPE };
+            int *out[6] = { &in.key_left, &in.key_right, &in.key_home,
+                            &in.key_end, &in.key_delete, &in.key_escape };
+            for (int i = 0; i < 6; ++i) {
+                int now = dai_window_key_down(win, EDGE_KEYS[i]);
+                *out[i] = now && !prev_edit_keys[i];
+                prev_edit_keys[i] = now;
+            }
+        }
+        in.key_shift = ci.key_shift;
+        in.key_ctrl = ctrl;
+        {
+            int a_now = ctrl && dai_window_key_down(win, DAI_KEY_A);
+            in.key_select_all = a_now && !prev_ctrl_a;
+            prev_ctrl_a = a_now;
+        }
+        in.double_click = dai_window_double_click(win);
         dai_ui_begin(ui, (float)ww, (float)wh, &in);
         dai_editor_ui_frame(panels, (float)ww, (float)wh);
         dai_ui_end(ui);
 
         dai_editor_ui_viewport(panels, &ci);
+
+        // The pointer says what is under it: an I-beam over a field, a resize
+        // arrow on a window edge. The UI knows which widget that is; only the
+        // window can set the shape.
+        dai_window_cursor(win, dai_ui_cursor(ui));
 
         float alpha = 1.0f;
         dai_editor_advance(ed, dt, &alpha);
@@ -329,9 +366,24 @@ int main(int argc, char **argv) {
             eye = o;
             look = dai_vec3{ o.x + d.x, o.y + d.y, o.z + d.z };
         }
+        // The EDITOR camera is always updated from the editor's own state, in
+        // both views: picking, the gizmo and the scene view all project
+        // through it, and a game view that overwrote it would leave the scene
+        // view pointing wherever the player camera happened to be.
         dai_editor_camera(ed, eye, look, dai_vec3{ 0, 1, 0 }, 55.0f, 0.1f, 300.0f,
                           (float)ww, (float)wh);
-        dai_render_camera(r, eye, look, dai_vec3{ 0, 1, 0 }, 55.0f, 0.1f, 300.0f);
+
+        // What gets RENDERED is the game camera while the Game tab is up.
+        dai_vec3 reye = eye, rlook = look;
+        float rfov = 55.0f;
+        if (dai_editor_ui_view(panels) == DAI_VIEW_GAME) {
+            dai_vec3 ge{}, gl{};
+            float gf = 60.0f;
+            if (dai_editor_ui_game_camera(panels, &ge, &gl, &gf)) {
+                reye = ge; rlook = gl; rfov = gf;
+            }
+        }
+        dai_render_camera(r, reye, rlook, dai_vec3{ 0, 1, 0 }, rfov, 0.1f, 300.0f);
 
         uint32_t n = dai_scene_instances(sc, inst.data(), (uint32_t)inst.size(), alpha);
 

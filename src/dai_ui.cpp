@@ -50,7 +50,7 @@ struct dai_ui {
     bool in_panel = false;
     float row_height = 0;
     bool in_row = false;
-    float row_start_y = 0;
+    float row_start_y = 0, row_start_x = 0;
 
     // interaction bookkeeping: one hot widget, one active widget, addressed by
     // a hash of the label plus its position - stable across frames, and it does
@@ -73,26 +73,31 @@ struct dai_ui {
     struct ScrollFrame { uint64_t id; float x, y, w, h, start_y; };
     std::vector<ScrollFrame> scroll_stack;
 
-    uint32_t text_cursor = 0;       // caret in the active text field
     float    drag_accum = 0.0f;     // sub-step remainder of a drag_float
+    int      cursor_want = DAI_CURSOR_ARROW;   // what the pointer should look like
 
     // ---- icons ------------------------------------------------------------
     dai_icons  *icons = nullptr;
     dai_texture icon_tex = 0;
 
-    // ---- numeric fields ----------------------------------------------------
-    // A number being typed: one at a time, shared by every num_field on
-    // screen. The value in `live` is what the widget writes back when the
-    // field loses focus.
-    struct NumEdit {
+    // ---- the one text editor -----------------------------------------------
+    // Numeric fields, the name field, the rename row in the hierarchy: all
+    // three are a byte buffer, a caret and a selection. There used to be three
+    // half implementations of that, which is why only one of them could put
+    // the caret in the middle of the text. Now there is one, and Home, Ctrl+A
+    // and drag-select work in every field that exists.
+    struct Edit {
         uint64_t id = 0;
-        char     buf[48] = { 0 };
-        uint32_t cursor = 0;
+        char     buf[128] = { 0 };
+        uint32_t cursor = 0;      // caret, as a byte offset into buf
+        uint32_t anchor = 0;      // the other end of the selection
         bool     editing = false;
-        bool     just_clicked = false;   // eat the drag frame the click lands on
-        float    live = 0.0f;
-        float    prev_live = 0.0f;
-    } num;
+        bool     numeric = false; // digits, one leading sign, one dot
+        bool     dragging = false;// selecting with the mouse held
+        bool     opened_now = false;
+        float    text_x = 0;      // where buf is drawn, for caret hit testing
+        float    scroll = 0;      // horizontal scroll when the text is too long
+    } edit;
 
     // An open menu swallows every hit test outside its own rectangle - see
     // dai_ui_popup_menu. popup_was_open is written at the end of a frame and
@@ -121,6 +126,8 @@ struct dai_ui {
     bool  dock_area_set = false;
     uint64_t drag_win = 0;          // window being moved
     uint64_t size_win = 0;          // window being resized
+    int      size_edge = 0;         // 1 left, 2 right, 4 top, 8 bottom
+    float    size_fx = 0, size_fy = 0;   // the edges that stay put while dragging
     float    drag_dx = 0, drag_dy = 0;
     int      win_depth = 0;         // inside dai_ui_window_begin/end
 
@@ -240,19 +247,23 @@ dai_ui_style dai_ui_style_default(void) {
     // darker, blue accent. The point is not the brand - it is that an editor
     // spends all day next to the viewport, and its surface has to be neutral
     // enough that a colour in the scene is still the colour you picked.
-    s.panel        = rgba(56, 56, 56, 240);
-    s.panel_border = rgba(35, 35, 35, 255);
-    s.text         = rgba(210, 210, 210, 255);
-    s.text_dim     = rgba(140, 140, 140, 255);
-    s.button       = rgba(64, 64, 64, 255);
-    s.button_hover = rgba(74, 74, 74, 255);
-    s.button_active= rgba(58, 114, 176, 255);
-    s.accent       = rgba(62, 125, 231, 255);
-    s.track        = rgba(42, 42, 42, 255);
+    // The three greys are Unity's, measured off the real editor rather than
+    // guessed: #333333 panels, #141414 the chrome behind them, #2A2A2A the
+    // inside of every field. Everything else is derived from those so a panel,
+    // a button and a text box read as one surface instead of three themes.
+    s.panel        = rgba(0x33, 0x33, 0x33, 255);
+    s.panel_border = rgba(0x14, 0x14, 0x14, 255);
+    s.text         = rgba(0xD2, 0xD2, 0xD2, 255);
+    s.text_dim     = rgba(0x9E, 0x9E, 0x9E, 255);
+    s.button       = rgba(0x50, 0x50, 0x50, 255);
+    s.button_hover = rgba(0x5D, 0x5D, 0x5D, 255);
+    s.button_active= rgba(0x2C, 0x5D, 0x87, 255);   // Unity's selection blue
+    s.accent       = rgba(0x2C, 0x5D, 0x87, 255);
+    s.track        = rgba(0x2A, 0x2A, 0x2A, 255);   // text fields
     // Editor chrome: the surface the viewport is a hole in.
-    s.titlebar         = rgba(62, 62, 62, 255);
-    s.titlebar_focused = rgba(76, 76, 76, 255);
-    s.chrome           = rgba(45, 45, 45, 255);
+    s.titlebar         = rgba(0x21, 0x21, 0x21, 255);
+    s.titlebar_focused = rgba(0x2D, 0x2D, 0x2D, 255);
+    s.chrome           = rgba(0x14, 0x14, 0x14, 255);
     s.shadow           = rgba(0, 0, 0, 90);
     // Compact by default. A 13 px font with 8 px of padding and 6 px between
     // every widget is not a dense editor, it is a phone app: the inspector ran
@@ -295,6 +306,7 @@ void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in)
     ui->blocked = false;
     ui->win_depth = 0;
     ui->tooltip_on = false;
+    ui->cursor_want = DAI_CURSOR_ARROW;
     // An open popup swallows every hit test below its own layer. The flag
     // comes from the END of the previous frame, so the click that closes the
     // menu cannot also press the button it lands on.
@@ -330,7 +342,10 @@ void dai_ui_end(dai_ui *ui) {
         ui->cur_layer = save_layer;
         ui->clips.swap(save_clips);
     }
-    if (!ui->input.mouse_down) { ui->active = 0; ui->drag_win = 0; ui->size_win = 0; }
+    if (!ui->input.mouse_down) {
+        ui->active = 0; ui->drag_win = 0; ui->size_win = 0; ui->size_edge = 0;
+        ui->edit.dragging = false;
+    }
     // A window the host stopped drawing loses its slot in the z order rather
     // than sitting there forever blocking clicks with a stale rectangle.
     ui->wins.erase(std::remove_if(ui->wins.begin(), ui->wins.end(),
@@ -364,6 +379,11 @@ void dai_ui_mouse(const dai_ui *ui, float *x, float *y, int *down, int *pressed)
 }
 
 int dai_ui_wants_mouse(const dai_ui *ui) { return ui && ui->mouse_over_ui ? 1 : 0; }
+
+void dai_ui_claim_mouse(dai_ui *ui) { if (ui) ui->mouse_over_ui = true; }
+int  dai_ui_cursor(const dai_ui *ui) { return ui ? ui->cursor_want : DAI_CURSOR_ARROW; }
+void dai_ui_cursor_set(dai_ui *ui, int cursor) { if (ui) ui->cursor_want = cursor; }
+int  dai_ui_text_active(const dai_ui *ui) { return ui && ui->edit.editing ? 1 : 0; }
 
 // ---------------------------------------------------------------- drawing
 
@@ -541,8 +561,24 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
         int edge = dock_hit(ui, mx, my, &slot);
         if (edge != DAI_DOCK_NONE) { win->dock = edge; win->dock_slot = slot; }
     } else if (ui->size_win == id && ui->input.mouse_down) {
-        win->w = mx - win->x + ui->drag_dx;
-        win->h = my - win->y + ui->drag_dy;
+        // Any edge, and any two of them at a corner. The opposite edge is
+        // pinned (size_fx/size_fy), which is what makes dragging the LEFT side
+        // of the inspector widen it instead of sliding the whole window - and
+        // the left side is the only one a right docked window even has.
+        if (ui->size_edge & 2) win->w = mx - win->x + ui->drag_dx;
+        if (ui->size_edge & 1) {
+            float nx = mx - ui->drag_dx;
+            if (ui->size_fx - nx < win->min_w) nx = ui->size_fx - win->min_w;
+            win->w = ui->size_fx - nx;
+            win->x = nx;
+        }
+        if (ui->size_edge & 8) win->h = my - win->y + ui->drag_dy;
+        if (ui->size_edge & 4) {
+            float ny = my - ui->drag_dy;
+            if (ui->size_fy - ny < win->min_h) ny = ui->size_fy - win->min_h;
+            win->h = ui->size_fy - ny;
+            win->y = ny;
+        }
     }
     if (win->w < win->min_w) win->w = win->min_w;
     if (win->h < win->min_h) win->h = win->min_h;
@@ -588,8 +624,8 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
     ui->cur_layer = ui->layer_of(id);
     ui->win_depth++;
 
-    bool over_win = !ui->blocked && mx >= win->x && mx < win->x + win->w &&
-                    my >= win->y && my < win->y + full_h;
+    bool over_win = !ui->blocked && mx >= win->x - 3.0f && mx < win->x + win->w + 3.0f &&
+                    my >= win->y - 3.0f && my < win->y + full_h + 3.0f;
     if (over_win) ui->mouse_over_ui = true;
 
     bool over_bar = over_win && my < win->y + bar && mx >= win->x && mx < win->x + win->w;
@@ -599,16 +635,42 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
     // special grip you have to aim for in one corner is a workaround for a
     // missing border hit test.
     const float EDGE = 6.0f;
-    bool over_grip = over_win && !win->collapsed &&
-                     (mx >= win->x + win->w - EDGE || my >= win->y + full_h - EDGE);
+    // Which edges the pointer is on, as a mask. The hot zone straddles the
+    // border (half in, half out) so you do not have to aim at a 1 px line.
+    int edge_mask = 0;
+    if (!win->collapsed && !ui->blocked && !ui->in_popup &&
+        mx >= win->x - EDGE * 0.5f && mx <= win->x + win->w + EDGE * 0.5f &&
+        my >= win->y - EDGE * 0.5f && my <= win->y + full_h + EDGE * 0.5f) {
+        if (mx <= win->x + EDGE * 0.5f)             edge_mask |= 1;
+        if (mx >= win->x + win->w - EDGE)           edge_mask |= 2;
+        if (my <= win->y + EDGE * 0.5f)             edge_mask |= 4;
+        if (my >= win->y + full_h - EDGE)           edge_mask |= 8;
+    }
+    bool over_grip = edge_mask != 0;
+    // The pointer says what the edge does before you press it. A resize border
+    // you can only find by trial is a border nobody finds.
+    if (over_grip || ui->size_win == id) {
+        int m = ui->size_win == id ? ui->size_edge : edge_mask;
+        int cur = DAI_CURSOR_ARROW;
+        bool horiz = (m & 3) != 0, vert = (m & 12) != 0;
+        if (horiz && vert) {
+            bool nwse = ((m & 1) && (m & 4)) || ((m & 2) && (m & 8));
+            cur = nwse ? DAI_CURSOR_SIZE_NWSE : DAI_CURSOR_SIZE_NESW;
+        } else if (horiz) cur = DAI_CURSOR_SIZE_WE;
+        else if (vert)    cur = DAI_CURSOR_SIZE_NS;
+        if (cur != DAI_CURSOR_ARROW) ui->cursor_want = cur;
+    }
 
     if (pressed && over_win) {
         ui->raise(id);
         ui->cur_layer = ui->layer_of(id);
         if (over_grip) {
             ui->size_win = id;
-            ui->drag_dx = win->x + win->w - mx;
-            ui->drag_dy = win->y + full_h - my;
+            ui->size_edge = edge_mask;
+            ui->size_fx = win->x + win->w;      // the pinned right edge
+            ui->size_fy = win->y + full_h;      // the pinned bottom edge
+            ui->drag_dx = (edge_mask & 1) ? mx - win->x : win->x + win->w - mx;
+            ui->drag_dy = (edge_mask & 4) ? my - win->y : win->y + full_h - my;
         } else if (over_bar) {
             // The fold arrow is a button, not a drag handle.
             if (mx < win->x + bar) win->collapsed = !win->collapsed;
@@ -727,12 +789,26 @@ void dai_ui_panel_end(dai_ui *ui) {
 
 void dai_ui_row(dai_ui *ui, float height) {
     if (!ui) return;
+    if (ui->in_row) dai_ui_row_end(ui);     // two rows in a row are two rows
     ui->in_row = true;
     ui->row_height = height > 0 ? height : dai_font_line_height(ui->font) + ui->style.row_pad;
     ui->row_start_y = ui->cursor_y;
+    ui->row_start_x = ui->cursor_x;
+}
+
+void dai_ui_row_end(dai_ui *ui) {
+    if (!ui || !ui->in_row) return;
+    ui->in_row = false;
+    ui->cursor_x = ui->row_start_x;
+    ui->cursor_y = ui->row_start_y + ui->row_height + ui->style.spacing;
 }
 
 void dai_ui_spacing(dai_ui *ui, float px) { if (ui) ui->cursor_y += px; }
+
+float dai_ui_panel_width(const dai_ui *ui) {
+    if (!ui) return 0.0f;
+    return ui->in_panel ? ui->panel_w : ui->width;
+}
 
 namespace {
 
@@ -1117,55 +1193,331 @@ int dai_ui_option(dai_ui *ui, const char *label, int *value,
     return changed;
 }
 
+} // extern "C"
+
+namespace {
+
+// ---- the shared text editor ---------------------------------------------
+//
+// One caret, one selection, one buffer - reused by every field on screen. The
+// rules are the ones every other text box on the machine follows, which is the
+// whole point: an inspector field that needs a special trick to fix a typo is
+// a field people retype from scratch.
+//
+//   click            focus and select ALL (so typing replaces the value)
+//   click again      put the caret where you clicked
+//   drag             select a range
+//   double click     select all again
+//   arrows/Home/End  move, +Shift extends the selection
+//   Ctrl+A           select all
+//   Backspace/Del    the selection, or one code point
+//   Enter / Tab      commit;  Escape  cancel;  click away  commit
+
+size_t utf8_prev(const char *s, size_t i) {
+    if (i == 0) return 0;
+    size_t n = 1;
+    while (n < i && ((unsigned char)s[i - n] & 0xC0) == 0x80) ++n;
+    return i - n;
+}
+size_t utf8_next(const char *s, size_t len, size_t i) {
+    if (i >= len) return len;
+    size_t n = 1;
+    while (i + n < len && ((unsigned char)s[i + n] & 0xC0) == 0x80) ++n;
+    return i + n;
+}
+
+float text_w_n(dai_ui *ui, const char *s, size_t n) {
+    char tmp[160];
+    if (n >= sizeof(tmp)) n = sizeof(tmp) - 1;
+    std::memcpy(tmp, s, n);
+    tmp[n] = 0;
+    return dai_ui_text_width(ui, tmp);
+}
+
+// The byte offset whose x is closest to mx. Measured with the real font, not
+// with an average character width, or the caret lands a letter off on any
+// proportional font - which is every font.
+uint32_t caret_at(dai_ui *ui, const char *s, float x0, float mx) {
+    size_t len = std::strlen(s);
+    size_t best = 0;
+    float bestd = 1e9f;
+    for (size_t i = 0;; ) {
+        float d = std::fabs(mx - (x0 + text_w_n(ui, s, i)));
+        if (d < bestd) { bestd = d; best = i; }
+        if (i >= len) break;
+        i = utf8_next(s, len, i);
+    }
+    return (uint32_t)best;
+}
+
+void edit_selection(const dai_ui *ui, uint32_t *lo, uint32_t *hi) {
+    uint32_t a = ui->edit.cursor, b = ui->edit.anchor;
+    *lo = a < b ? a : b;
+    *hi = a < b ? b : a;
+}
+
+bool edit_erase_selection(dai_ui *ui) {
+    uint32_t lo, hi;
+    edit_selection(ui, &lo, &hi);
+    if (hi <= lo) return false;
+    char *b = ui->edit.buf;
+    size_t len = std::strlen(b);
+    std::memmove(b + lo, b + hi, len - hi + 1);
+    ui->edit.cursor = ui->edit.anchor = lo;
+    return true;
+}
+
+// Numeric fields accept digits, ONE leading sign and ONE dot. Letters are not
+// silently swallowed by atof() later, they are refused here - a field that
+// eats keystrokes and then keeps the old value is worse than one that beeps.
+bool edit_accepts(const dai_ui *ui, uint32_t cp) {
+    if (!ui->edit.numeric) return cp >= 0x20 && cp != 0x7F;
+    const char *b = ui->edit.buf;
+    if (cp >= '0' && cp <= '9') return true;
+    if (cp == '-') return ui->edit.cursor == 0 && std::strchr(b, '-') == nullptr;
+    if (cp == '.' || cp == ',') return std::strchr(b, '.') == nullptr;
+    return false;
+}
+
+int edit_insert_cp(dai_ui *ui, uint32_t cp) {
+    if (cp == ',' && ui->edit.numeric) cp = '.';
+    char enc[5];
+    int n = 0;
+    if (cp < 0x80) { enc[n++] = (char)cp; }
+    else if (cp < 0x800) { enc[n++] = (char)(0xC0 | (cp >> 6)); enc[n++] = (char)(0x80 | (cp & 0x3F)); }
+    else if (cp < 0x10000) { enc[n++] = (char)(0xE0 | (cp >> 12)); enc[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); enc[n++] = (char)(0x80 | (cp & 0x3F)); }
+    else { enc[n++] = (char)(0xF0 | (cp >> 18)); enc[n++] = (char)(0x80 | ((cp >> 12) & 0x3F)); enc[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); enc[n++] = (char)(0x80 | (cp & 0x3F)); }
+    enc[n] = 0;
+    char *b = ui->edit.buf;
+    size_t len = std::strlen(b);
+    if (len + (size_t)n + 1 > sizeof(ui->edit.buf)) return 0;
+    std::memmove(b + ui->edit.cursor + n, b + ui->edit.cursor, len - ui->edit.cursor + 1);
+    std::memcpy(b + ui->edit.cursor, enc, (size_t)n);
+    ui->edit.cursor += (uint32_t)n;
+    ui->edit.anchor = ui->edit.cursor;
+    return 1;
+}
+
+void edit_open(dai_ui *ui, uint64_t id, const char *text, bool numeric, bool select_all) {
+    dai_ui::Edit &e = ui->edit;
+    e.id = id;
+    e.editing = true;
+    e.numeric = numeric;
+    e.opened_now = true;
+    e.scroll = 0;
+    std::snprintf(e.buf, sizeof(e.buf), "%s", text ? text : "");
+    uint32_t len = (uint32_t)std::strlen(e.buf);
+    if (select_all) { e.anchor = 0; e.cursor = len; }
+    else            { e.anchor = e.cursor = len; }
+}
+
+void edit_close(dai_ui *ui) {
+    ui->edit.editing = false;
+    ui->edit.dragging = false;
+    ui->edit.id = 0;
+}
+
+// Returns 1 when the buffer changed. *commit on Enter/Tab, *cancel on Escape.
+int edit_keys(dai_ui *ui, bool *commit, bool *cancel) {
+    dai_ui::Edit &e = ui->edit;
+    const dai_ui_input &in = ui->input;
+    *commit = false;
+    *cancel = false;
+    int changed = 0;
+    size_t len = std::strlen(e.buf);
+    bool shift = in.key_shift != 0;
+
+    if (in.key_select_all) { e.anchor = 0; e.cursor = (uint32_t)len; }
+
+    if (in.key_left) {
+        uint32_t lo, hi; edit_selection(ui, &lo, &hi);
+        if (!shift && hi > lo) e.cursor = lo;
+        else e.cursor = (uint32_t)utf8_prev(e.buf, e.cursor);
+        if (!shift) e.anchor = e.cursor;
+    }
+    if (in.key_right) {
+        uint32_t lo, hi; edit_selection(ui, &lo, &hi);
+        if (!shift && hi > lo) e.cursor = hi;
+        else e.cursor = (uint32_t)utf8_next(e.buf, len, e.cursor);
+        if (!shift) e.anchor = e.cursor;
+    }
+    if (in.key_home) { e.cursor = 0; if (!shift) e.anchor = 0; }
+    if (in.key_end)  { e.cursor = (uint32_t)len; if (!shift) e.anchor = e.cursor; }
+
+    if (in.key_backspace) {
+        if (edit_erase_selection(ui)) changed = 1;
+        else if (e.cursor > 0) {
+            size_t p = utf8_prev(e.buf, e.cursor);
+            std::memmove(e.buf + p, e.buf + e.cursor, len - e.cursor + 1);
+            e.cursor = e.anchor = (uint32_t)p;
+            changed = 1;
+        }
+    }
+    if (in.key_delete) {
+        len = std::strlen(e.buf);
+        if (edit_erase_selection(ui)) changed = 1;
+        else if (e.cursor < len) {
+            size_t nx = utf8_next(e.buf, len, e.cursor);
+            std::memmove(e.buf + e.cursor, e.buf + nx, len - nx + 1);
+            e.anchor = e.cursor;
+            changed = 1;
+        }
+    }
+    for (int i = 0; i < 8 && in.text[i]; ++i) {
+        uint32_t cp = in.text[i];
+        if (cp == '\r' || cp == '\n' || cp == '\t' || cp == 0x1B || cp == 8) continue;
+        if (!edit_accepts(ui, cp)) continue;
+        edit_erase_selection(ui);
+        changed |= edit_insert_cp(ui, cp);
+    }
+    if (in.key_enter || in.key_tab) *commit = true;
+    if (in.key_escape) *cancel = true;
+    return changed;
+}
+
+// Selection block, text, caret - clipped to the box, scrolled so the caret is
+// always visible. A value longer than its field otherwise puts the caret
+// somewhere off screen and typing looks like nothing is happening.
+void edit_draw(dai_ui *ui, float x, float y, float w, float h, uint32_t col, float pad) {
+    dai_ui::Edit &e = ui->edit;
+    float avail = w - pad * 2.0f;
+    if (avail < 8.0f) avail = 8.0f;
+    float caret_w = text_w_n(ui, e.buf, e.cursor);
+    float full = dai_ui_text_width(ui, e.buf);
+    if (full <= avail) e.scroll = 0.0f;
+    else {
+        if (caret_w - e.scroll > avail) e.scroll = caret_w - avail;
+        if (caret_w - e.scroll < 0.0f)  e.scroll = caret_w;
+        if (full - e.scroll < avail)    e.scroll = full - avail;
+        if (e.scroll < 0.0f) e.scroll = 0.0f;
+    }
+    float tx = x + pad - e.scroll;
+    e.text_x = tx;
+
+    ui->clips.push_back(dai_ui::Clip{ x + 1.0f, y, x + w - 1.0f, y + h });
+    uint32_t lo, hi;
+    edit_selection(ui, &lo, &hi);
+    if (hi > lo) {
+        float sx0 = tx + text_w_n(ui, e.buf, lo);
+        float sx1 = tx + text_w_n(ui, e.buf, hi);
+        dai_ui_rect(ui, sx0, y + 2.0f, sx1 - sx0, h - 4.0f, rgba(0x2C, 0x5D, 0x87, 255));
+    }
+    float ty = y + (h - dai_font_line_height(ui->font)) * 0.5f;
+    dai_ui_text(ui, tx, ty, e.buf, col);
+    dai_ui_rect(ui, tx + caret_w, y + 2.0f, 1.0f, h - 4.0f, rgba(0xE0, 0xE0, 0xE0, 255));
+    ui->clips.pop_back();
+}
+
+// The whole field: hit testing, focus, mouse selection, keys, drawing.
+// `live` mirrors the buffer back on every keystroke (a name field), otherwise
+// the caller reads it on commit (a numeric field parses it).
+int text_field_impl(dai_ui *ui, uint64_t id, float x, float y, float w, float h,
+                    char *buf, size_t buf_size, bool numeric, bool live,
+                    int *commit_out, uint32_t text_col, float pad) {
+    if (commit_out) *commit_out = 0;
+    bool over = inside_chk(ui, x, y, w, h);
+    bool editing = ui->edit.editing && ui->edit.id == id;
+    if (over) {
+        ui->hot = id;
+        ui->mouse_over_ui = true;
+        ui->cursor_want = DAI_CURSOR_TEXT;
+    }
+    int changed = 0;
+    bool pressed = ui->input.mouse_down && !ui->prev.mouse_down;
+    float mx = ui->input.mouse_x;
+
+    auto commit_now = [&]() {
+        if (!live) {
+            std::snprintf(buf, buf_size, "%s", ui->edit.buf);
+            changed = 1;
+        }
+        if (commit_out) *commit_out = 1;
+        edit_close(ui);
+        editing = false;
+    };
+
+    if (pressed) {
+        if (over && !editing) {
+            // First click: the whole value is selected, so typing replaces it -
+            // which is what an inspector field is for.
+            edit_open(ui, id, buf, numeric, true);
+            editing = true;
+            ui->edit.dragging = true;
+            ui->edit.anchor = 0;
+            ui->edit.cursor = (uint32_t)std::strlen(ui->edit.buf);
+        } else if (over && editing) {
+            if (ui->input.double_click) {
+                ui->edit.anchor = 0;
+                ui->edit.cursor = (uint32_t)std::strlen(ui->edit.buf);
+            } else {
+                uint32_t c = caret_at(ui, ui->edit.buf, ui->edit.text_x, mx);
+                ui->edit.cursor = ui->edit.anchor = c;
+                ui->edit.dragging = true;
+            }
+        } else if (editing) {
+            commit_now();
+        }
+    }
+    // Dragging the pointer selects - but not on the frame the field was opened
+    // by that same click, or a click with one pixel of jitter unselects the
+    // value it just selected.
+    if (editing && ui->edit.dragging && ui->input.mouse_down && !pressed && !ui->edit.opened_now) {
+        ui->edit.cursor = caret_at(ui, ui->edit.buf, ui->edit.text_x, mx);
+    }
+    if (editing) {
+        bool commit = false, cancel = false;
+        changed |= edit_keys(ui, &commit, &cancel);
+        if (live) {
+            std::snprintf(buf, buf_size, "%s", ui->edit.buf);
+        }
+        if (cancel) { edit_close(ui); editing = false; }
+        else if (commit) commit_now();
+    }
+
+    if (editing) {
+        edit_draw(ui, x, y, w, h, text_col ? text_col : ui->style.text, pad);
+    }
+    if (editing) ui->edit.opened_now = false;
+    return changed;
+}
+
+} // namespace
+
+extern "C" {
+
 int dai_ui_input_text(dai_ui *ui, const char *label, char *buf, size_t buf_size) {
     if (!ui || !buf || buf_size < 2) return 0;
     float h = widget_height(ui), x, y, w;
     field_rect(ui, label, &x, &y, &w, h);
     uint64_t id = hash_id(label ? label : "text", x, y);
-    bool over = inside_chk(ui, x, y, w, h);
-    if (over) { ui->hot = id; ui->mouse_over_ui = true; }
-    if (ui->input.mouse_down && !ui->prev.mouse_down) {
-        // Clicking anywhere else drops focus - otherwise typing would keep
-        // going into a field the user has visibly left.
-        if (over) { ui->active = id; ui->text_cursor = (uint32_t)std::strlen(buf); }
-        else if (ui->active == id) ui->active = 0;
-    }
+    float by = y + 1.0f, bh = h - 2.0f;
+    bool editing = ui->edit.editing && ui->edit.id == id;
 
-    int changed = 0;
-    if (ui->active == id) {
-        size_t len = std::strlen(buf);
-        if (ui->input.key_backspace && len > 0) {
-            // Step back over a whole UTF-8 sequence, not one byte, or a
-            // backspace on a non ASCII name leaves a broken code point behind.
-            size_t n = 1;
-            while (n < len && ((unsigned char)buf[len - n] & 0xC0) == 0x80) ++n;
-            buf[len - n] = 0;
-            changed = 1;
-        }
-        for (int i = 0; i < 8 && ui->input.text[i]; ++i) {
-            uint32_t cp = ui->input.text[i];
-            char enc[5];
-            int n = 0;
-            if (cp < 0x80) { enc[n++] = (char)cp; }
-            else if (cp < 0x800) { enc[n++] = (char)(0xC0 | (cp >> 6)); enc[n++] = (char)(0x80 | (cp & 0x3F)); }
-            else if (cp < 0x10000) { enc[n++] = (char)(0xE0 | (cp >> 12)); enc[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); enc[n++] = (char)(0x80 | (cp & 0x3F)); }
-            else { enc[n++] = (char)(0xF0 | (cp >> 18)); enc[n++] = (char)(0x80 | ((cp >> 12) & 0x3F)); enc[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); enc[n++] = (char)(0x80 | (cp & 0x3F)); }
-            enc[n] = 0;
-            size_t cur = std::strlen(buf);
-            if (cur + (size_t)n + 1 <= buf_size) { std::memcpy(buf + cur, enc, (size_t)n + 1); changed = 1; }
-        }
-        if (ui->input.key_enter) ui->active = 0;
-    }
+    dai_ui_rect(ui, x, by, w, bh, ui->style.track);
+    dai_ui_rect_outline(ui, x, by, w, bh, 1.0f,
+                        editing ? ui->style.accent : ui->style.panel_border);
+    int changed = text_field_impl(ui, id, x, by, w, bh, buf, buf_size, false, true,
+                                  nullptr, ui->style.text, 4.0f);
+    if (!(ui->edit.editing && ui->edit.id == id))
+        dai_ui_text(ui, x + 4.0f, by + (bh - dai_font_line_height(ui->font)) * 0.5f, buf,
+                    ui->style.text);
+    return changed;
+}
 
-    bool focused = (ui->active == id);
-    dai_ui_rect(ui, x, y + 2.0f, w, h - 4.0f, focused ? ui->style.button_active : ui->style.track);
-    dai_ui_rect_outline(ui, x, y + 2.0f, w, h - 4.0f, 1.0f,
-                        focused ? ui->style.accent : ui->style.panel_border);
-    dai_ui_text(ui, x + 7.0f, y + ui->style.row_pad * 0.5f, buf, ui->style.text);
-    if (focused) {
-        float caret = x + 7.0f + dai_ui_text_width(ui, buf) + 1.0f;
-        dai_ui_rect(ui, caret, y + 5.0f, 1.5f, h - 10.0f, ui->style.accent);
-    }
+int dai_ui_text_field(dai_ui *ui, const char *id_str, float x, float y, float w, float h,
+                      char *buf, size_t buf_size, int *commit) {
+    if (commit) *commit = 0;
+    if (!ui || !buf || buf_size < 2) return 0;
+    uint64_t id = hash_id(id_str ? id_str : "field", x, y);
+    bool editing = ui->edit.editing && ui->edit.id == id;
+    dai_ui_rect(ui, x, y, w, h, ui->style.track);
+    dai_ui_rect_outline(ui, x, y, w, h, 1.0f,
+                        editing ? ui->style.accent : ui->style.panel_border);
+    int changed = text_field_impl(ui, id, x, y, w, h, buf, buf_size, false, true,
+                                  commit, ui->style.text, 4.0f);
+    if (!(ui->edit.editing && ui->edit.id == id))
+        dai_ui_text(ui, x + 4.0f, y + (h - dai_font_line_height(ui->font)) * 0.5f, buf,
+                    ui->style.text);
     return changed;
 }
 
@@ -1267,61 +1619,28 @@ int dai_ui_tree_rename(dai_ui *ui, char *buf, size_t buf_size, int depth,
     float indent = 12.0f * (float)(depth < 0 ? 0 : depth) + 14.0f;
 
     uint64_t id = hash_id("rename", x, y);
-    bool over = inside_chk(ui, x + indent, y, w - indent, h);
-    if (over) ui->mouse_over_ui = true;
-
-    bool focused = ui->active == id;
-    if (!focused) {
-        if (over && ui->input.mouse_down && !ui->prev.mouse_down) {
-            ui->active = id;
-            focused = true;
-        } else if (ui->active == 0) {
-            // The row was just created: grab focus without waiting for a
-            // click, or the first typed letter goes nowhere.
-            ui->active = id;
-            focused = true;
-        }
+    // The row was just created: take focus without waiting for a click, with
+    // the name selected - F2 then typing replaces it, like every file manager.
+    if (!ui->edit.editing) {
+        edit_open(ui, id, buf, false, true);
+        ui->edit.opened_now = false;
     }
+    bool focused = ui->edit.editing && ui->edit.id == id;
 
-    int result = 0;
-    if (focused) {
-        if (ui->input.mouse_down && !ui->prev.mouse_down && !over) {
-            ui->active = 0;
-            result = 1;                     // click away = commit
-        } else {
-            size_t len = std::strlen(buf);
-            if (ui->input.key_backspace && len > 0) {
-                size_t n = 1;
-                while (n < len && ((unsigned char)buf[len - n] & 0xC0) == 0x80) ++n;
-                buf[len - n] = 0;
-            }
-            for (int i = 0; i < 8 && ui->input.text[i]; ++i) {
-                uint32_t cp = ui->input.text[i];
-                char enc[5];
-                int nb = 0;
-                if (cp < 0x80) { enc[nb++] = (char)cp; }
-                else if (cp < 0x800) { enc[nb++] = (char)(0xC0 | (cp >> 6)); enc[nb++] = (char)(0x80 | (cp & 0x3F)); }
-                else if (cp < 0x10000) { enc[nb++] = (char)(0xE0 | (cp >> 12)); enc[nb++] = (char)(0x80 | ((cp >> 6) & 0x3F)); enc[nb++] = (char)(0x80 | (cp & 0x3F)); }
-                else { enc[nb++] = (char)(0xF0 | (cp >> 18)); enc[nb++] = (char)(0x80 | ((cp >> 12) & 0x3F)); enc[nb++] = (char)(0x80 | ((cp >> 6) & 0x3F)); enc[nb++] = (char)(0x80 | (cp & 0x3F)); }
-                enc[nb] = 0;
-                size_t cur = std::strlen(buf);
-                if (cur + (size_t)nb + 1 <= buf_size) std::memcpy(buf + cur, enc, (size_t)nb + 1);
-            }
-            if (ui->input.key_enter) { ui->active = 0; result = 1; }
-        }
-    }
-
-    dai_ui_rect(ui, x + indent, y + 1.0f, w - indent, h - 2.0f,
-                focused ? ui->style.button_active : ui->style.track);
+    dai_ui_rect(ui, x + indent, y + 1.0f, w - indent, h - 2.0f, ui->style.track);
     dai_ui_rect_outline(ui, x + indent, y + 1.0f, w - indent, h - 2.0f, 1.0f,
                         ui->style.accent);
-    dai_ui_text(ui, x + indent + 4.0f, y + 1.0f, buf, ui->style.text);
-    if (focused) {
-        float caret = x + indent + 4.0f + dai_ui_text_width(ui, buf) + 1.0f;
-        dai_ui_rect(ui, caret, y + 3.0f, 1.5f, h - 6.0f, ui->style.accent);
+    int commit = 0;
+    text_field_impl(ui, id, x + indent, y + 1.0f, w - indent, h - 2.0f, buf, buf_size,
+                    false, true, &commit, ui->style.text, 4.0f);
+    if (!(ui->edit.editing && ui->edit.id == id)) {
+        dai_ui_text(ui, x + indent + 4.0f, y + 1.0f, buf, ui->style.text);
+        // Focus went somewhere else entirely (another field): that is a commit
+        // too, or the row would sit there forever waiting for an Enter.
+        if (!focused) commit = 1;
     }
     (void)has_children; (void)open;
-    return result;
+    return commit;
 }
 
 // ------------------------------------------------------------- scrolling
@@ -1381,7 +1700,7 @@ int num_field_at(dai_ui *ui, float x, float y, float w, float h, float *value,
                  float step, float min, float max, const char *id_str,
                  bool with_label, uint32_t accent, const char *axis);
 
-int dai_ui_num_editing(const dai_ui *ui) { return ui ? ui->num.editing : 0; }
+int dai_ui_num_editing(const dai_ui *ui) { return ui && ui->edit.editing ? 1 : 0; }
 
 int dai_ui_right_down(const dai_ui *ui) { return ui ? ui->input.right_down : 0; }
 int dai_ui_right_pressed(const dai_ui *ui) {
@@ -1482,46 +1801,6 @@ void num_fmt(char *buf, size_t n, float v) {
     std::snprintf(buf, n, "%s", trim_number(v).c_str());
 }
 
-// One shared text editing pass for every numeric field. Returns 1 when the
-// buffer changed, and sets *commit when the value should be parsed and
-// written back (Enter, or the field losing focus).
-int num_edit(dai_ui *ui, uint64_t id, bool *commit) {
-    *commit = false;
-    if (!ui->num.editing || ui->num.id != id) return 0;
-    char *buf = ui->num.buf;
-    size_t len = std::strlen(buf);
-    int changed = 0;
-
-    if (ui->input.key_backspace && ui->num.cursor > 0 && len > 0) {
-        size_t n = 1;
-        while (n < ui->num.cursor && ((unsigned char)buf[ui->num.cursor - n] & 0xC0) == 0x80) ++n;
-        std::memmove(buf + ui->num.cursor - n, buf + ui->num.cursor, len - ui->num.cursor + 1);
-        ui->num.cursor -= (uint32_t)n;
-        changed = 1;
-    }
-    for (int i = 0; i < 8 && ui->input.text[i]; ++i) {
-        uint32_t cp = ui->input.text[i];
-        // Numbers only, and one sign up front and one dot. Accepting letters
-        // here would just be atof() failing later, silently keeping the old
-        // value - a field that eats your keystrokes and changes nothing is
-        // worse than one that refuses them.
-        bool ok = (cp >= '0' && cp <= '9') ||
-                  (cp == '-' && ui->num.cursor == 0 && std::strchr(buf, '-') == nullptr) ||
-                  ((cp == '.' || cp == ',') && std::strchr(buf, '.') == nullptr);
-        if (!ok) continue;
-        if (cp == ',') cp = '.';
-        if (len + 1 >= sizeof(ui->num.buf)) continue;
-        std::memmove(buf + ui->num.cursor + 1, buf + ui->num.cursor, len - ui->num.cursor + 1);
-        buf[ui->num.cursor] = (char)cp;
-        ++ui->num.cursor;
-        ++len;
-        changed = 1;
-    }
-    if (ui->input.key_enter) *commit = true;
-    if (ui->input.key_tab) *commit = true;
-    return changed;
-}
-
 float num_parse(const char *buf, float fallback) {
     if (!buf || !*buf) return fallback;
     char *end = nullptr;
@@ -1553,61 +1832,49 @@ int num_field_at_impl(dai_ui *ui, float x, float y, float w, float h, float *val
                       bool with_label, uint32_t accent, const char *axis) {
     uint64_t id = hash_id(id_str, x, y);
     float mx = ui->input.mouse_x, my = ui->input.mouse_y;
-    bool editing = ui->num.editing && ui->num.id == id;
+    bool editing = ui->edit.editing && ui->edit.id == id;
 
-    // The axis letter in front of the box. Hovered and dragged, it changes
-    // the value - Unity's behaviour, and the reason the letter is not just
-    // drawn inside the drag area.
+    // The axis letter sits OUTSIDE the box, the way Unity draws it, and it is
+    // a handle: hover it and drag sideways to change the value. That is why it
+    // is not just decoration painted inside the field.
     float lw = 0.0f;
     bool axis_over = false;
     if (axis) {
-        lw = 14.0f;
-        axis_over = mx >= x && mx < x + lw && my >= y && my < y + h;
+        lw = 13.0f;
+        axis_over = !ui->in_popup && !ui->blocked &&
+                    mx >= x && mx < x + lw && my >= y && my < y + h;
     }
-    bool over = inside_chk(ui, x + lw, y, w - lw, h);
-    if (over || axis_over) { ui->hot = id; ui->mouse_over_ui = true; }
+    float bx = x + lw, bw = w - lw;
+    if (axis_over) { ui->hot = id; ui->mouse_over_ui = true; ui->cursor_want = DAI_CURSOR_SIZE_WE; }
 
     int changed = 0;
 
-    // ---- click: starts editing. Clicking anywhere else commits whatever is
-    //      in the buffer - the old behaviour dropped your half typed number.
-    if (ui->input.mouse_down && !ui->prev.mouse_down) {
-        if (over && !editing) {
-            ui->num.id = id;
-            ui->num.editing = true;
-            ui->num.just_clicked = true;
-            num_fmt(ui->num.buf, sizeof(ui->num.buf), *value);
-            ui->num.cursor = (uint32_t)std::strlen(ui->num.buf);
-            editing = true;
-        } else if (editing) {
-            float v = num_parse(ui->num.buf, *value);
-            if (min < max) v = v < min ? min : (v > max ? max : v);
-            if (v != *value) { *value = v; changed = 1; }
-            ui->num.editing = false;
-            editing = false;
-        }
+    // ---- the box is a real text field
+    dai_ui_rect(ui, bx, y + 1.0f, bw, h - 2.0f, ui->style.track);
+    dai_ui_rect_outline(ui, bx, y + 1.0f, bw, h - 2.0f, 1.0f,
+                        editing ? ui->style.accent : ui->style.panel_border);
+
+    char buf[64];
+    num_fmt(buf, sizeof(buf), *value);
+    int commit = 0;
+    int typed = text_field_impl(ui, id, bx, y + 1.0f, bw, h - 2.0f, buf, sizeof(buf),
+                                true, false, &commit, ui->style.text, 5.0f);
+    editing = ui->edit.editing && ui->edit.id == id;
+    if (typed) {
+        float v = num_parse(buf, *value);
+        if (min < max) v = v < min ? min : (v > max ? max : v);
+        if (v != *value) { *value = v; changed = 1; }
     }
 
-    if (editing) {
-        bool commit = false;
-        num_edit(ui, id, &commit);
-        if (commit) {
-            float v = num_parse(ui->num.buf, *value);
-            if (min < max) v = v < min ? min : (v > max ? max : v);
-            if (v != *value) { *value = v; changed = 1; }
-            ui->num.editing = false;
-            editing = false;
-        }
-    }
-
-    // ---- axis drag: hold the letter, move sideways. Not while typing - the
-    //      same click must not do both.
+    // ---- axis drag: hold the letter, move sideways. Never while typing - one
+    //      click must not do both.
     if (axis && !editing) {
         if (axis_over && ui->input.mouse_down && !ui->prev.mouse_down) {
             ui->active = id;
             ui->drag_accum = 0.0f;
         }
         if (ui->active == id && ui->input.mouse_down) {
+            ui->cursor_want = DAI_CURSOR_SIZE_WE;
             float dx = mx - ui->prev.mouse_x;
             if (dx != 0.0f) {
                 float v = *value + dx * step;
@@ -1618,33 +1885,17 @@ int num_field_at_impl(dai_ui *ui, float x, float y, float w, float h, float *val
         if (ui->active == id && !ui->input.mouse_down) ui->active = 0;
     }
 
-    // ---- draw
     bool dragging = axis && ui->active == id;
-    dai_ui_rect(ui, x, y + 2.0f, w, h - 4.0f,
-                editing ? ui->style.button_active
-                        : (dragging || over || axis_over ? ui->style.button_hover
-                                                         : ui->style.track));
     if (axis) {
         uint32_t col = accent ? accent : ui->style.text_dim;
-        if (axis_over || dragging) col = accent ? accent : ui->style.accent;
-        dai_ui_text(ui, x + 3.0f, y + ui->style.row_pad * 0.5f, axis, col);
-        // The colon is the hint that the letter is a handle.
-        if (axis_over || dragging)
-            dai_ui_text(ui, x + 10.0f, y + ui->style.row_pad * 0.5f, ":", col);
+        if (axis_over || dragging) col = 0xFFFFFFFFu;
+        dai_ui_text(ui, x + 2.0f, y + (h - dai_font_line_height(ui->font)) * 0.5f, axis, col);
     }
-
-    if (editing) {
-        dai_ui_rect_outline(ui, x, y + 2.0f, w, h - 4.0f, 1.0f, ui->style.accent);
-        dai_ui_text(ui, x + lw + 5.0f, y + ui->style.row_pad * 0.5f, ui->num.buf,
+    if (!editing) {
+        char shown[64];
+        num_fmt(shown, sizeof(shown), *value);
+        dai_ui_text(ui, bx + 5.0f, y + (h - dai_font_line_height(ui->font)) * 0.5f, shown,
                     ui->style.text);
-        char before[48];
-        std::memcpy(before, ui->num.buf, ui->num.cursor < sizeof(before) ? ui->num.cursor + 1 : sizeof(before));
-        before[sizeof(before) - 1] = 0;
-        float caret = x + lw + 5.0f + dai_ui_text_width(ui, before) + 1.0f;
-        dai_ui_rect(ui, caret, y + 5.0f, 1.5f, h - 10.0f, ui->style.accent);
-    } else {
-        dai_ui_text(ui, x + lw + 5.0f, y + ui->style.row_pad * 0.5f,
-                    trim_number(*value).c_str(), ui->style.text);
     }
     (void)with_label;
     return changed;

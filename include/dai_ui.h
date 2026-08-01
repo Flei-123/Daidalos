@@ -57,7 +57,39 @@ typedef struct dai_ui_input {
                                  (edge triggered), or every frame of a held
                                  key repeats the letter. */
     int      key_backspace, key_enter, key_tab;
+    /* The rest of what a real text field needs. All EDGE triggered (the frame
+     * the key went down, OS repeat included) except the two modifiers, which
+     * are "held" - a text field that only knows backspace is a toy: you cannot
+     * fix a typo in the middle of a number without retyping it. */
+    int      key_left, key_right, key_home, key_end, key_delete, key_escape;
+    int      key_shift, key_ctrl;    /* held */
+    int      key_select_all;         /* Ctrl+A, edge triggered */
+    int      double_click;           /* the press this frame was a double click */
 } dai_ui_input;
+
+/* What the pointer should look like where it is. The UI knows which widget is
+ * under it - the host owns the window and is the only one who can set a system
+ * cursor - so the UI reports and the host applies:
+ *
+ *     dai_window_cursor(win, dai_ui_cursor(ui));
+ *
+ * A resize edge that does not change the pointer is an edge you have to
+ * discover by trial. */
+typedef enum dai_ui_cursor {
+    DAI_CURSOR_ARROW = 0,
+    DAI_CURSOR_TEXT,        /* I-beam: over a text or numeric field  */
+    DAI_CURSOR_SIZE_WE,     /* vertical split / horizontal drag      */
+    DAI_CURSOR_SIZE_NS,
+    DAI_CURSOR_SIZE_NWSE,   /* bottom right / top left corner        */
+    DAI_CURSOR_SIZE_NESW,
+    DAI_CURSOR_HAND
+} dai_ui_cursor_kind;
+
+DAI_API int dai_ui_cursor(const dai_ui *ui);
+/* Widgets that draw themselves (the editor's gizmo overlay, collider handles)
+ * ask for a cursor too. Last writer of the frame wins, which is right: the
+ * frontmost thing under the pointer is drawn last. */
+DAI_API void dai_ui_cursor_set(dai_ui *ui, int cursor);
 
 typedef struct dai_ui_style {
     uint32_t panel, panel_border, text, text_dim;
@@ -82,6 +114,11 @@ DAI_API void dai_ui_end(dai_ui *ui);
 DAI_API uint32_t dai_ui_draws(dai_ui *ui, const dai_ui_draw **out);
 /* True when the pointer is over UI, so the game can ignore that click. */
 DAI_API int dai_ui_wants_mouse(const dai_ui *ui);
+/* "That click was mine." For code that draws its own interactive chrome (the
+ * Scene/Game tabs, collider handles) instead of using the widgets above -
+ * without it the same click also lands in the 3D view behind it and clears the
+ * selection. */
+DAI_API void dai_ui_claim_mouse(dai_ui *ui);
 /* The pointer state this frame, for code that draws its own interactive
  * widgets (the editor timeline) instead of using the ones above. */
 DAI_API void dai_ui_mouse(const dai_ui *ui, float *x, float *y, int *down, int *pressed);
@@ -162,6 +199,15 @@ DAI_API void dai_ui_free_area(const dai_ui *ui, float *x, float *y, float *w, fl
 DAI_API void dai_ui_panel_begin(dai_ui *ui, float x, float y, float w, float h, const char *title);
 DAI_API void dai_ui_panel_end(dai_ui *ui);
 DAI_API void dai_ui_row(dai_ui *ui, float height);      /* next widgets go side by side */
+/* Back to stacking downwards. A row that never ends is why a panel with two
+ * buttons in it used to draw everything after them on the same line, off the
+ * right hand edge - starting a new row ends the previous one too. */
+DAI_API void dai_ui_row_end(dai_ui *ui);
+/* Width of the panel or window the layout is currently inside, in pixels. A
+ * panel that wants to size its own label column needs it - the label column is
+ * a FRACTION of the panel in every real inspector, not a fixed number that is
+ * right at one width and wrong at every other. */
+DAI_API float dai_ui_panel_width(const dai_ui *ui);
 DAI_API void dai_ui_spacing(dai_ui *ui, float pixels);
 
 /* ---- widgets ----------------------------------------------------------- */
@@ -267,6 +313,22 @@ DAI_API int  dai_ui_drag_vec3(dai_ui *ui, const char *label, float *xyz, float s
 /* Editable text. Returns 1 on every change. Uses dai_ui_input::text and
  * key_backspace, which the host fills from its window backend. */
 DAI_API int  dai_ui_input_text(dai_ui *ui, const char *label, char *buf, size_t buf_size);
+/* A real text field, laid out by the caller.
+ *
+ * "Real" is not a mood: one click selects the whole value (so typing replaces
+ * it, which is what an inspector field is for), a second click puts the caret
+ * where you clicked, dragging selects a range, double click selects all again,
+ * and Left/Right/Home/End/Shift+arrows/Ctrl+A/Delete all do what they do in
+ * every other text box on the machine. Enter and Tab commit, Escape cancels.
+ *
+ * Returns 1 the frame the buffer changed. `commit` (optional) is set on the
+ * frame the user finished - Enter, Tab, or clicking away. */
+DAI_API int  dai_ui_text_field(dai_ui *ui, const char *id, float x, float y, float w, float h,
+                               char *buf, size_t buf_size, int *commit);
+/* Is any field being typed into? A host that also reads the keyboard for
+ * shortcuts needs it, or Delete both removes the selected object and a
+ * character from the name being typed. */
+DAI_API int  dai_ui_text_active(const dai_ui *ui);
 
 /* One row of a hierarchy. `depth` indents, `open` is the caller's fold state
  * (pass NULL for a leaf). Returns 1 when the row itself was clicked. */

@@ -68,6 +68,40 @@ DAI_API void dai_editor_ui_timeline(dai_editor_ui *p, float x, float y, float w)
  * always on top of the scene instead of buried in it. */
 DAI_API void dai_editor_ui_gizmo(dai_editor_ui *p);
 
+/* ---- scene view / game view --------------------------------------------
+ *
+ * Unity's two tabs, and they are two different questions: the scene view is
+ * where you build (editor camera, gizmos, collider wireframes), the game view
+ * is what the player sees (the camera in the scene, no editor furniture).
+ * Pressing Play switches to Game and Stop switches back, which is what every
+ * muscle memory expects.
+ *
+ * The host renders: ask which view is up, and where the game camera is. */
+#define DAI_VIEW_SCENE 0
+#define DAI_VIEW_GAME  1
+DAI_API int  dai_editor_ui_view(const dai_editor_ui *p);
+DAI_API void dai_editor_ui_view_set(dai_editor_ui *p, int view);
+/* The camera the game view renders from: the node tagged "MainCamera", or the
+ * first camera node in the scene. Returns 0 when the scene has none - the host
+ * should then draw the "No cameras rendering" message Unity draws, rather than
+ * quietly showing the editor camera and calling it the game. */
+DAI_API int  dai_editor_ui_game_camera(const dai_editor_ui *p, dai_vec3 *eye,
+                                       dai_vec3 *look, float *fov_deg);
+/* Adds a camera node at the current editor camera - "Align with view", which
+ * is the only sane way to place a camera. Returns the node. */
+DAI_API dai_node dai_editor_ui_add_camera(dai_editor_ui *p);
+
+/* ---- colliders ----------------------------------------------------------
+ *
+ * The green wireframe every 3D editor draws around the selection, plus the
+ * face handles of Edit Collider mode. Separate from the gizmo because it is a
+ * different thing: the gizmo moves the OBJECT, these resize what it can hit,
+ * and confusing the two is how a collider ends up silently matching the mesh
+ * forever. */
+DAI_API void dai_editor_ui_colliders(dai_editor_ui *p);
+DAI_API int  dai_editor_ui_collider_edit(const dai_editor_ui *p);
+DAI_API void dai_editor_ui_collider_edit_set(dai_editor_ui *p, int on);
+
 /* Feeds a viewport click to the editor: gizmo handles win over objects, a drag
  * continues until release, an empty click clears the selection. Does nothing
  * while the pointer is over a panel. Returns 1 if it consumed the input. */

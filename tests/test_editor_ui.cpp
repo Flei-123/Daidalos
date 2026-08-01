@@ -380,6 +380,149 @@ int main() {
     CHECK(total_verts(ui) > 500, "the timeline frame produced nothing");
     dai_editor_stop(ed);
 
+    // ---- 9. the collider is not the mesh ----------------------------------
+    //
+    // The whole point of this session: resizing a Box Collider resizes what
+    // the object can hit, NOT the model. Before, the render scale was derived
+    // from the collision half extent, so the two could never disagree - which
+    // is not a simplification, it is a missing feature: "the crate looks 2 m
+    // wide and collides as 1.9 m" is a thing every game needs.
+    std::printf("collider vs mesh\n");
+    {
+        dai_node_desc c = dai_node_desc_default();
+        std::snprintf(c.name, sizeof(c.name), "Crate");
+        c.motion = DAI_STATIC;
+        c.position = { 0, 0, -20 };
+        c.half_extent = { 0.5f, 0.5f, 0.5f };
+        dai_node crate = dai_doc_add(doc, &c);
+        dai_doc_sync_apply(sync);
+        dai_step(w);
+
+        auto instance_scale = [&](dai_node node, dai_vec3 *out) {
+            dai_entity ent = dai_doc_sync_entity(sync, node);
+            dai_body body = dai_scene_body(sc, ent);
+            std::vector<dai_render_instance> inst(256);
+            uint32_t n = dai_scene_instances(sc, inst.data(), (uint32_t)inst.size(), 1.0f);
+            dai_transform t{};
+            if (dai_body_get(w, body, &t) != DAI_OK) return false;
+            for (uint32_t i = 0; i < n; ++i) {
+                dai_vec3 d{ inst[i].position.x - t.position.x, inst[i].position.y - t.position.y,
+                            inst[i].position.z - t.position.z };
+                if (std::fabs(d.x) + std::fabs(d.y) + std::fabs(d.z) < 1e-3f) {
+                    *out = inst[i].scale;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        dai_vec3 mesh0{};
+        CHECK(instance_scale(crate, &mesh0), "the crate has no render instance");
+
+        // Grow the collider by hand, the way the inspector does it.
+        dai_node_desc big{};
+        dai_doc_get(doc, crate, &big);
+        big.render_extent = big.half_extent;         // pin the mesh, as the inspector does
+        big.half_extent = { 1.5f, 1.5f, 1.5f };
+        dai_doc_set(doc, crate, &big);
+        dai_editor_resync(ed);
+        dai_step(w);
+
+        dai_vec3 mesh1{};
+        CHECK(instance_scale(crate, &mesh1), "the crate lost its render instance");
+        CHECK(std::fabs(mesh1.x - mesh0.x) < 1e-4f && std::fabs(mesh1.y - mesh0.y) < 1e-4f,
+              "growing the collider from 0.5 to 1.5 changed the drawn mesh from %.3f to %.3f",
+              mesh0.x, mesh1.x);
+
+        // ...and the collision shape really did grow: a point 1 m out is
+        // inside the new box and was outside the old one.
+        dai_node_desc chk{};
+        dai_doc_get(doc, crate, &chk);
+        CHECK(std::fabs(chk.half_extent.x - 1.5f) < 1e-4f, "the collider did not grow");
+
+        // The mesh can be resized on its own, and the collider does not follow.
+        big.render_extent = { 3.0f, 3.0f, 3.0f };
+        big.mesh = DAI_MESH_BOX;
+        dai_doc_set(doc, crate, &big);
+        dai_editor_resync(ed);
+        dai_step(w);
+        dai_vec3 mesh2{};
+        CHECK(instance_scale(crate, &mesh2), "the crate lost its render instance again");
+        CHECK(mesh2.x > mesh1.x * 1.5f, "the mesh size field did not resize the mesh (%.3f -> %.3f)",
+              mesh1.x, mesh2.x);
+        dai_doc_get(doc, crate, &chk);
+        CHECK(std::fabs(chk.half_extent.x - 1.5f) < 1e-4f,
+              "resizing the mesh moved the collider too");
+
+        // A collider centre offsets the collision box, not the model: the body
+        // moves, and the mesh is drawn back where the object is.
+        dai_vec3 mesh_pos_before{}, mesh_pos_after{};
+        auto instance_pos = [&](dai_node node, dai_vec3 *out) {
+            std::vector<dai_render_instance> inst(256);
+            uint32_t n = dai_scene_instances(sc, inst.data(), (uint32_t)inst.size(), 1.0f);
+            dai_entity ent = dai_doc_sync_entity(sync, node);
+            dai_body body = dai_scene_body(sc, ent);
+            dai_transform t{};
+            if (dai_body_get(w, body, &t) != DAI_OK) return false;
+            for (uint32_t i = 0; i < n; ++i) {
+                if (std::fabs(inst[i].position.z - (-20.0f)) < 3.0f) { *out = inst[i].position; return true; }
+            }
+            (void)n;
+            return false;
+        };
+        CHECK(instance_pos(crate, &mesh_pos_before), "no instance to measure");
+        big.collider_center = { 2.0f, 0, 0 };
+        dai_doc_set(doc, crate, &big);
+        dai_editor_resync(ed);
+        dai_step(w);
+        CHECK(instance_pos(crate, &mesh_pos_after), "no instance after the centre offset");
+        CHECK(std::fabs(mesh_pos_after.x - mesh_pos_before.x) < 1e-3f,
+              "a collider centre offset moved the MODEL by %.3f",
+              mesh_pos_after.x - mesh_pos_before.x);
+        dai_transform bt{};
+        dai_body_get(w, dai_scene_body(sc, dai_doc_sync_entity(sync, crate)), &bt);
+        CHECK(std::fabs(bt.position.x - 2.0f) < 1e-3f,
+              "the collider centre did not move the collision body (x=%.3f)", bt.position.x);
+
+        // The green wireframe is drawn for the selection, and only in the
+        // scene view.
+        dai_editor_select(ed, crate, 0);
+        dai_ui_input gin{};
+        dai_ui_begin(ui, 1280, 720, &gin);
+        dai_editor_ui_colliders(panels);
+        dai_ui_end(ui);
+        uint32_t wire = total_verts(ui);
+        CHECK(wire > 0, "no collider wireframe was drawn for the selection");
+        dai_editor_ui_view_set(panels, DAI_VIEW_GAME);
+        dai_ui_begin(ui, 1280, 720, &gin);
+        dai_editor_ui_colliders(panels);
+        dai_ui_end(ui);
+        CHECK(total_verts(ui) == 0, "the game view drew editor wireframes");
+        dai_editor_ui_view_set(panels, DAI_VIEW_SCENE);
+
+        dai_editor_deselect_all(ed);
+        dai_doc_remove(doc, crate);
+        dai_doc_sync_apply(sync);
+    }
+
+    // ---- 10. the game view needs a camera, and can get one ----------------
+    {
+        dai_vec3 eye{}, look{};
+        float fov = 0.0f;
+        CHECK(dai_editor_ui_game_camera(panels, &eye, &look, &fov) == 0,
+              "a scene with no camera reported one");
+        dai_node cam = dai_editor_ui_add_camera(panels);
+        CHECK(cam != DAI_INVALID_NODE, "adding a camera failed");
+        CHECK(dai_editor_ui_game_camera(panels, &eye, &look, &fov) == 1,
+              "the camera node is not found by the game view");
+        CHECK(fov > 10.0f && fov < 120.0f, "the game camera has a nonsense field of view (%.1f)", fov);
+        float dx = look.x - eye.x, dy = look.y - eye.y, dz = look.z - eye.z;
+        CHECK(std::fabs(std::sqrt(dx*dx + dy*dy + dz*dz) - 1.0f) < 1e-3f,
+              "the game camera's look point is not one unit ahead of it");
+        dai_doc_remove(doc, cam);
+        dai_doc_sync_apply(sync);
+    }
+
     dai_editor_ui_destroy(panels);
     dai_editor_destroy(ed);
     dai_doc_sync_destroy(sync);

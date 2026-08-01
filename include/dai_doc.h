@@ -86,6 +86,15 @@ typedef struct dai_node_desc {
      * not a thing yet - there is nowhere to record the override, so a reload
      * would silently discard it. */
     char     prefab[96];
+    /* Half size of the DRAWN mesh, in the node's own units. {0,0,0} means
+     * "the same as the collider", which is what every scene written before
+     * this field existed means, and what a freshly made box means.
+     *
+     * It exists because a collider is not a model. Resizing a Box Collider in
+     * Unity does not resize the cube - it resizes what the cube can hit - and
+     * an editor where the two are the same value has no way to say "this crate
+     * is 2 m wide and its collision box is 1.9 m so it slides through doors". */
+    dai_vec3 render_extent;
     dai_vec3 color;             /* 0,0,0 -> stable colour from the id           */
     float    roughness;         /* 0 -> 1 (matte)                               */
     float    emissive;
@@ -178,6 +187,21 @@ DAI_API dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
 /* Writes into `buf`; returns the number of bytes the text needs (excluding the
  * terminator), so a too small buffer is a size query, not a failure. */
 DAI_API size_t     dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size);
+
+/* ---- whole document snapshots ------------------------------------------
+ *
+ * A copy of every node, outside the undo stack. Play mode is what needs it:
+ * pressing Play must be free, and pressing Stop must put the scene back the
+ * way it was *including* everything the user dragged around while it ran -
+ * Unity throws those away, and it is right to, because a change you made to
+ * watch the physics is not a change to the scene.
+ *
+ * Restoring does NOT push an undo step: play mode is not an edit. */
+typedef struct dai_doc_state dai_doc_state;
+DAI_API dai_doc_state *dai_doc_state_capture(const dai_doc *d);
+DAI_API void           dai_doc_state_free(dai_doc_state *s);
+/* Returns the number of nodes that had to be changed back. */
+DAI_API uint32_t       dai_doc_state_restore(dai_doc *d, const dai_doc_state *s);
 
 /* ---- runtime sync ------------------------------------------------------ */
 

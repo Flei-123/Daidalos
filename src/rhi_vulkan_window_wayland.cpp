@@ -405,6 +405,17 @@ int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {
     return 1;
 }
 
+void dai_window_cursor(dai_window *w, int cursor) {
+    // Wayland has no "set the cursor" call: a client owns the pointer surface
+    // and has to load a cursor theme, make a surface and attach the right
+    // frame to it. That is a feature of its own, not three lines here, and the
+    // editor runs on X11 and Win32 - so this is a documented no-op rather than
+    // a stub that pretends.
+    (void)w; (void)cursor;
+}
+
+int dai_window_double_click(dai_window *w) { (void)w; return 0; }
+
 void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height) {
     if (!w) return;
     if (width) *width = w->width;

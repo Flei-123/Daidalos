@@ -116,7 +116,47 @@ bool same_record(const dai_node_desc &a, const dai_node_desc &b) {
 
 } // namespace
 
+struct dai_doc_state {
+    std::vector<std::pair<dai_node, dai_node_desc>> nodes;
+};
+
 extern "C" {
+
+dai_doc_state *dai_doc_state_capture(const dai_doc *d) {
+    if (!d) return nullptr;
+    dai_doc_state *s = new dai_doc_state();
+    s->nodes.reserve(d->nodes.size());
+    for (const auto &kv : d->nodes)
+        if (kv.second.alive) s->nodes.push_back({ kv.first, kv.second.d });
+    return s;
+}
+
+void dai_doc_state_free(dai_doc_state *s) { delete s; }
+
+uint32_t dai_doc_state_restore(dai_doc *d, const dai_doc_state *s) {
+    if (!d || !s) return 0;
+    uint32_t changed = 0;
+    std::unordered_set<dai_node> wanted;
+    for (const auto &kv : s->nodes) {
+        wanted.insert(kv.first);
+        auto it = d->nodes.find(kv.first);
+        if (it != d->nodes.end() && it->second.alive && same_record(it->second.d, kv.second))
+            continue;
+        daidoc::Node &n = d->nodes[kv.first];
+        n.d = kv.second;
+        n.alive = true;
+        n.rev = ++d->rev_counter;      // the sync layer keys off this
+        ++changed;
+    }
+    // Anything created after the snapshot goes away again.
+    for (auto &kv : d->nodes) {
+        if (!kv.second.alive || wanted.count(kv.first)) continue;
+        kv.second.alive = false;
+        kv.second.rev = ++d->rev_counter;
+        ++changed;
+    }
+    return changed;
+}
 
 dai_node_desc dai_node_desc_default(void) {
     dai_node_desc d{};

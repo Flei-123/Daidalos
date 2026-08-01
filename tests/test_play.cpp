@@ -164,6 +164,49 @@ int main() {
           "the abandoned drag was left in the document");
     dai_editor_stop(ed);
 
+    // ---- 7. edits made WHILE playing are a rehearsal ----------------------
+    // The one that started this: press play, drag a crate somewhere, press
+    // stop - and the crate is somewhere else forever. Unity throws those
+    // changes away, because a thing you moved to watch it fall is not an edit
+    // to the scene. Only "Keep" (apply_sim, tested above) survives.
+    {
+        dai_vec3 start = world_of(doc, faller);
+        uint32_t nodes_before = dai_doc_count(doc);
+        uint32_t undo_depth = dai_editor_undo_depth(ed);
+        dai_editor_play(ed);
+        run_for(ed, 10);
+
+        dai_editor_select(ed, faller, 0);
+        dai_editor_move_selection(ed, dai_vec3{ 4, 0, 0 });        // "a drag while playing"
+        CHECK(std::fabs(world_of(doc, faller).x - (start.x + 4.0f)) < 1e-3f,
+              "moving during play did not move the object at all");
+
+        // ...and a whole new object, which must not survive either
+        dai_node_desc extra = dai_node_desc_default();
+        extra.position = { 9, 9, 9 };
+        dai_node ghost = dai_doc_add(doc, &extra);
+        CHECK(dai_doc_valid(doc, ghost), "the node added during play was not added");
+
+        dai_editor_stop(ed);
+        dai_vec3 after = world_of(doc, faller);
+        CHECK(near3(after, start, 1e-3f),
+              "stop left the object at (%.3f %.3f %.3f) - it was moved DURING play and the "
+              "document kept it, which is the bug this test exists for",
+              after.x, after.y, after.z);
+        CHECK(!dai_doc_valid(doc, ghost), "an object created during play survived stop");
+        CHECK(dai_doc_count(doc) == nodes_before, "the node count changed across play/stop");
+        CHECK(dai_editor_undo_depth(ed) >= undo_depth,
+              "undo history went backwards across play mode");
+
+        // and the live body is back where the document says, not where the
+        // rehearsal left it
+        dai_transform bt{};
+        dai_body_get(w, dai_scene_body(sc, dai_doc_sync_entity(sync, faller)), &bt);
+        CHECK(near3(bt.position, start, 1e-3f),
+              "the body is at (%.3f %.3f %.3f), the document says (%.3f %.3f %.3f)",
+              bt.position.x, bt.position.y, bt.position.z, start.x, start.y, start.z);
+    }
+
     dai_editor_destroy(ed);
     dai_doc_sync_destroy(sync);
     dai_doc_destroy(doc);

@@ -185,6 +185,12 @@ int main() {
     rec.shape = DAI_SHAPE_SPHERE;
     rec.emissive = 1.5f;
     rec.user_data = 4242;
+    // The fields that used to be silently dropped by the writer: a trigger
+    // volume that saves as a solid wall is a bug you only notice in play mode,
+    // and the mesh size is the whole reason a collider can differ from a model.
+    rec.trigger = 1;
+    rec.collider_center = { 0.0f, 0.25f, 0.0f };
+    rec.render_extent = { 0.75f, 0.75f, 0.75f };
     dai_doc_set(d, spaced, &rec);
 
     size_t need = dai_doc_to_text(d, nullptr, 0);
@@ -207,6 +213,9 @@ int main() {
           (double)back.position.x, (double)back.position.z);
     CHECK(back.color.y == 0.5f && back.shape == DAI_SHAPE_SPHERE && back.emissive == 1.5f &&
           back.user_data == 4242, "non default fields lost");
+    CHECK(back.trigger == 1, "Is Trigger did not survive being saved");
+    CHECK(back.collider_center.y == 0.25f, "the collider centre did not survive being saved");
+    CHECK(back.render_extent.x == 0.75f, "the mesh size did not survive being saved");
     dai_doc_get(d2, kid, &back);
     CHECK(back.parent == parent, "hierarchy lost across the round trip");
 
