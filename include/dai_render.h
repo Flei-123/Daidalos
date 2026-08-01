@@ -425,6 +425,13 @@ DAI_API int dai_window_double_click(dai_window *w);
 
 /* ---- frame ------------------------------------------------------------- */
 
+/* The world draws into THIS rectangle of the frame (pixels); the UI pass is
+ * unaffected. Default is the whole frame. This is what puts the 3D view
+ * INSIDE the scene window instead of behind the whole editor: the host reads
+ * the window's body rect, clips the world to it, and sets the camera's aspect
+ * to match. */
+DAI_API void dai_render_world_clip(dai_renderer *r, float x, float y, float w, float h);
+
 DAI_API dai_result dai_render_frame(dai_renderer *r, const dai_render_instance *inst, uint32_t count);
 
 /* Re-creates the render targets at a new size.

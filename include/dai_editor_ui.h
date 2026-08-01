@@ -158,6 +158,11 @@ DAI_API void dai_editor_ui_settings_host(dai_editor_ui *p,
                                          void (*apply_font)(float px, void *user),
                                          float current_px, void *user);
 
+/* Where every window is, one line: "Hierarchy dock=1 slot=1 0,34 230x528 | ...".
+ * For the field report "the layout looks wrong" - a screenshot of a maximised
+ * window on a monitor across the room is not data. */
+DAI_API void dai_editor_ui_layout_dump(const dai_editor_ui *p, char *out, size_t n);
+
 /* Number of rows the hierarchy currently shows - folded subtrees excluded. */
 DAI_API uint32_t dai_editor_ui_visible_rows(const dai_editor_ui *p);
 

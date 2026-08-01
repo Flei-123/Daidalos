@@ -94,6 +94,10 @@ struct dai_editor {
     dai_vec3 eye{ 0, 5, 10 }, target{ 0, 0, 0 }, up{ 0, 1, 0 };
     float fov = 55.0f, znear = 0.1f, zfar = 500.0f;
     float vw = 1280.0f, vh = 720.0f;
+    // Where the viewport's pixel (0,0) sits on the surface. The 3D view lives
+    // inside the scene WINDOW, so the pixel the user clicked and the pixel
+    // the camera maths mean are only the same when this offset is applied.
+    float vx = 0.0f, vy = 0.0f;
 
     // Camera orientation is kept as yaw/pitch, not as a target point. Storing a
     // target and rotating it drifts: repeated look-around would slowly change
@@ -234,6 +238,13 @@ void dai_editor_camera_viewport(dai_editor *e, float vw, float vh) {
     if (vw > 0) e->vw = vw;
     if (vh > 0) e->vh = vh;
 }
+void dai_editor_camera_viewport_rect(dai_editor *e, float x, float y, float w, float h) {
+    if (!e) return;
+    if (w > 0) e->vw = w;
+    if (h > 0) e->vh = h;
+    e->vx = x;
+    e->vy = y;
+}
 
 void dai_editor_camera(dai_editor *e, dai_vec3 eye, dai_vec3 target, dai_vec3 up,
                        float fov, float znear, float zfar, float vw, float vh) {
@@ -263,8 +274,8 @@ void dai_editor_ray(const dai_editor *e, float mx, float my, dai_vec3 *origin, d
     camera_basis(e, &fwd, &right, &upv);
     float t = std::tan(e->fov * PI / 360.0f);
     float aspect = e->vw / (e->vh > 0 ? e->vh : 1.0f);
-    float ndc_x = (2.0f * mx / e->vw) - 1.0f;
-    float ndc_y = 1.0f - (2.0f * my / e->vh);          // pixels grow downwards
+    float ndc_x = (2.0f * (mx - e->vx) / e->vw) - 1.0f;
+    float ndc_y = 1.0f - (2.0f * (my - e->vy) / e->vh); // pixels grow downwards
     dai_vec3 d = norm(add(add(fwd, mul(right, ndc_x * t * aspect)), mul(upv, ndc_y * t)));
     if (origin) *origin = e->eye;
     if (dir) *dir = d;
@@ -281,8 +292,8 @@ int dai_editor_project(const dai_editor *e, dai_vec3 world, float *out_x, float 
     float aspect = e->vw / (e->vh > 0 ? e->vh : 1.0f);
     float ndc_x = dot(v, right) / (z * t * aspect);
     float ndc_y = dot(v, upv) / (z * t);
-    if (out_x) *out_x = (ndc_x + 1.0f) * 0.5f * e->vw;
-    if (out_y) *out_y = (1.0f - ndc_y) * 0.5f * e->vh;
+    if (out_x) *out_x = e->vx + (ndc_x + 1.0f) * 0.5f * e->vw;
+    if (out_y) *out_y = e->vy + (1.0f - ndc_y) * 0.5f * e->vh;
     return 1;
 }
 

@@ -126,7 +126,12 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     }
 
     // ---- 2. uniforms
-    float aspect = (float)r->width / (float)r->height;
+    // The aspect belongs to the rectangle the world is drawn into, not to the
+    // frame - a scene window that is 800x600 on a 3440x1440 desktop is not a
+    // 21:9 camera.
+    float vw = r->world_clip[2] > 0.0f ? r->world_clip[2] : (float)r->width;
+    float vh = r->world_clip[3] > 0.0f ? r->world_clip[3] : (float)r->height;
+    float aspect = vw / vh;
     Mat4 view = mat_look_at(r->eye, r->target, r->up);
     Mat4 proj = mat_perspective(r->fov, aspect, r->znear, r->zfar);
     Mat4 viewproj = mat_mul(proj, view);
@@ -175,7 +180,7 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         float mid = (n + f) * 0.5f;
         float half_fov = r->fov * 3.14159265f / 360.0f;
         float t = tanf(half_fov);
-        float aspect_r = (float)r->width / (float)r->height;
+        float aspect_r = vw / vh;
         float rn = n * t * sqrtf(1.0f + aspect_r * aspect_r);
         float rf = f * t * sqrtf(1.0f + aspect_r * aspect_r);
         float radius = sqrtf(fmaxf(rn * rn + n * n, rf * rf + f * f));
@@ -354,7 +359,19 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     ri.layerCount = 1; ri.colorAttachmentCount = 1; ri.pColorAttachments = &ca;
     ri.pDepthAttachment = &da;
     vkCmdBeginRendering(r->cmd, &ri);
-    set_vp(r->cmd, r->width, r->height);
+    // World into its rectangle, UI over the whole frame. A scene window that
+    // is smaller than the editor shows the world in exactly its body - the
+    // rest of the frame keeps the clear colour and whatever the UI draws.
+    if (r->world_clip[2] > 0.0f && r->world_clip[3] > 0.0f) {
+        VkViewport vp{ r->world_clip[0], r->world_clip[1], r->world_clip[2], r->world_clip[3],
+                       0.0f, 1.0f };
+        VkRect2D sc{ { (int32_t)r->world_clip[0], (int32_t)r->world_clip[1] },
+                     { (uint32_t)r->world_clip[2], (uint32_t)r->world_clip[3] } };
+        vkCmdSetViewport(r->cmd, 0, 1, &vp);
+        vkCmdSetScissor(r->cmd, 0, 1, &sc);
+    } else {
+        set_vp(r->cmd, r->width, r->height);
+    }
     vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->dset, 0, nullptr);
 
     if (r->sky_enabled) {
@@ -394,7 +411,10 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->particles.buf, &poff);
         vkCmdDraw(r->cmd, 6, r->particle_count, 0, 0);
     }
-    // UI last of all: screen space, no depth, one batch per texture
+    // UI last of all: screen space, no depth, one batch per texture. Full
+    // frame again - a panel may cover the scene, the scene may not cover a
+    // panel.
+    set_vp(r->cmd, r->width, r->height);
     if (r->ui_vertex_count && r->pipe_ui) {
         vkCmdBindPipeline(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipe_ui);
         MaterialPush pc{};

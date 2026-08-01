@@ -1502,6 +1502,22 @@ static int assets_body(dai_editor_ui *p, float h, const char **out_path, int *ou
     return placed;
 }
 
+void dai_editor_ui_layout_dump(const dai_editor_ui *p, char *out, size_t n) {
+    if (!p || !out || !n) return;
+    const dai_ui_window *ws[5] = { &p->win_hierarchy, &p->win_project, &p->win_inspector,
+                                   &p->win_scene, &p->win_settings };
+    const char *names[5] = { "Hierarchy", "Project", "Inspector", "Scene", "Settings" };
+    size_t used = 0;
+    for (int i = 0; i < 5 && used + 80 < n; ++i) {
+        const dai_ui_window *w = ws[i];
+        int wro = std::snprintf(out + used, n - used,
+                                "%s dock=%d slot=%d vp=%d fl=%d open=%d %.0f,%.0f %.0fx%.0f | ",
+                                names[i], w->dock, w->dock_slot, w->viewport, w->floated,
+                                w->open, w->x, w->y, w->w, w->h);
+        used += wro > 0 ? (size_t)wro : 0;
+    }
+}
+
 void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
     if (!p) return;
     const float SIDE = 230.0f;
@@ -1765,21 +1781,6 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         if (p->view_h < 8.0f) p->view_h = 8.0f;
     }
 
-    // Everything the scene window does NOT cover gets a chrome backdrop when
-    // it is not filling - the 3D belongs inside its window, not smeared under
-    // every panel it left behind.
-    if (!filling) {
-        float wx0 = p->win_scene.x, wy0 = p->win_scene.y;
-        float wx1 = wx0 + p->win_scene.w, wy1 = wy0 + p->win_scene.h;
-        float cx0 = fx, cy0 = fy, cx1 = fx + fw, cy1 = fy + fh;
-        if (cy0 < wy0) dai_ui_rect(ui, cx0, cy0, cx1 - cx0, wy0 - cy0, st->chrome);
-        if (cy1 > wy1) dai_ui_rect(ui, cx0, wy1, cx1 - cx0, cy1 - wy1, st->chrome);
-        if (cx0 < wx0) dai_ui_rect(ui, cx0, wy0 > cy0 ? wy0 : cy0, wx0 - cx0,
-                                   (wy1 < cy1 ? wy1 : cy1) - (wy0 > cy0 ? wy0 : cy0), st->chrome);
-        if (cx1 > wx1) dai_ui_rect(ui, wx1, wy0 > cy0 ? wy0 : cy0, cx1 - wx1,
-                                   (wy1 < cy1 ? wy1 : cy1) - (wy0 > cy0 ? wy0 : cy0), st->chrome);
-    }
-
     if (p->view == DAI_VIEW_GAME && !dai_editor_ui_game_camera(p, nullptr, nullptr, nullptr)) {
         // Unity's message, and it means the same thing here.
         const char *msg = "No camera in the scene - right click the viewport, New Camera";
@@ -1794,9 +1795,14 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     dai_editor_ui_timeline(p, p->view_x + 8.0f, vh - BOTTOM - 50.0f, p->view_w - 16.0f);
     dai_editor_ui_status(p, 0.0f, vh - BOTTOM, vw, BOTTOM);
     if (p->view == DAI_VIEW_SCENE) {
+        // The wireframes are UI lines over the 3D - clipped to the window the
+        // 3D lives in, or an object behind the inspector draws its gizmo on
+        // the inspector.
+        dai_ui_clip_begin(ui, p->view_x, p->view_y, p->view_w, p->view_h);
         dai_editor_ui_colliders(p);
         draw_cameras(p);
         dai_editor_ui_gizmo(p);
+        dai_ui_clip_end(ui);
     }
 
     // Settings, on top of the rest.

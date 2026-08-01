@@ -1098,6 +1098,18 @@ dai_result dai_render_resize(dai_renderer *r, uint32_t width, uint32_t height) {
     return DAI_OK;
 }
 
+void dai_render_world_clip(dai_renderer *r, float x, float y, float w, float h) {
+    if (!r) return;
+    if (w <= 0.0f || h <= 0.0f) { r->world_clip[2] = r->world_clip[3] = 0.0f; return; }
+    // Clamp to the frame: a window half off the right edge clips, not wraps.
+    if (x < 0.0f) { w += x; x = 0.0f; }
+    if (y < 0.0f) { h += y; y = 0.0f; }
+    if (x + w > (float)r->width)  w = (float)r->width - x;
+    if (y + h > (float)r->height) h = (float)r->height - y;
+    r->world_clip[0] = x; r->world_clip[1] = y;
+    r->world_clip[2] = w; r->world_clip[3] = h;
+}
+
 dai_result dai_render_readback(dai_renderer *r, uint8_t *rgba, size_t size) {
     if (!r || !rgba) return DAI_ERR_INVALID_ARG;
     if (!r->have_frame) return DAI_ERR_STATE;
