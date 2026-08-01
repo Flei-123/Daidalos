@@ -24,6 +24,8 @@ CXX=${CXX:-x86_64-w64-mingw32-g++-posix}
 JOLT_SRC=${JOLT_SRC:-/root/projects/JoltPhysics}
 JOLT_LIB=${JOLT_LIB:-/root/projects/jolt-build-win}
 MNEMOSYNE=${MNEMOSYNE:-/root/projects/mnemosyne}
+TALOS=${TALOS:-/root/projects/talos}
+TALOS_WIN_LIB=${TALOS_WIN_LIB:-$TALOS/build-win/libtalos.a}
 OUT=build-win
 
 FLAGS="-std=c++17 -O2 -fno-rtti -fno-exceptions -Wall -Wno-unused-function -DUNICODE -D_UNICODE -DDAI_NO_AUDIO"
@@ -65,12 +67,28 @@ CORE="dai_engine dai_scene dai_input dai_doc dai_doc_text dai_doc_sync dai_edito
       dai_editor_ui dai_meshgen dai_image dai_inflate dai_json dai_gltf dai_gltf_geom \
       dai_gltf_write dai_fracture dai_particles dai_font dai_ui dai_update \
       dai_audio physics_jolt physics_null"
+# The Talos backend needs its own include path and its own mingw built library
+# (tools/build_talos_win.sh). Without one, the engine is compiled with
+# -DDAI_NO_TALOS and refuses DAI_PHYSICS_TALOS instead of quietly giving out
+# Jolt.
+TALOS_DEFS="-DDAI_NO_TALOS"
+TALOS_LINK=""
+if [ -f "$TALOS_WIN_LIB" ] && [ -f "$TALOS/TalC/talos.h" ]; then
+    echo "-- physics backend: talos ($TALOS_WIN_LIB)"
+    $CXX $FLAGS $ARCH -Iinclude -Isrc -I"$TALOS/TalC" -c src/physics_talos.cpp -o "$OUT/physics_talos.o"
+    TALOS_DEFS=""
+    TALOS_LINK="$TALOS_WIN_LIB"
+    EXTRA_OBJS="$OUT/physics_talos.o"
+else
+    echo "-- physics backend: talos SKIPPED (no $TALOS_WIN_LIB)"
+    EXTRA_OBJS=""
+fi
 OBJS=""
 for f in $CORE; do
-    $CXX $FLAGS $ARCH $JOLT_DEFS -Iinclude -Isrc -I"$JOLT_SRC" -I"$VKINC" -c "src/$f.cpp" -o "$OUT/$f.o"
+    $CXX $FLAGS $ARCH $JOLT_DEFS $TALOS_DEFS -Iinclude -Isrc -I"$JOLT_SRC" -I"$VKINC" -c "src/$f.cpp" -o "$OUT/$f.o"
     OBJS="$OBJS $OUT/$f.o"
 done
-x86_64-w64-mingw32-ar rcs "$OUT/libdaidalos.a" $OBJS
+x86_64-w64-mingw32-ar rcs "$OUT/libdaidalos.a" $OBJS $EXTRA_OBJS
 echo "   ok: $OUT/libdaidalos.a"
 
 echo "-- renderer (vulkan, win32 surface)"
@@ -103,7 +121,7 @@ fi
 # -static so the .exe runs on a machine with no mingw runtime beside it. The
 # whole point is handing over one file.
 LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a $ASSETS \
-      -L$JOLT_LIB -lJolt -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 \
+      ${TALOS_LINK:-} -L$JOLT_LIB -lJolt -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 \
       -static -static-libgcc -static-libstdc++ -lpthread"
 
 echo "-- programs"
