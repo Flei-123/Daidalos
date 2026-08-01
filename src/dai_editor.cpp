@@ -736,6 +736,12 @@ uint32_t dai_editor_duplicate_selection(dai_editor *e) {
     for (dai_node n : all) {
         dai_node_desc rec{};
         if (dai_doc_get(e->doc, n, &rec) != DAI_OK) continue;
+        // A copy gets a new id, and the palette colour comes FROM the id -
+        // so duplicating a node that never had a colour chosen repainted it.
+        // Bake the colour it is actually drawn in: a copy must look like the
+        // original, that is the entire point of copying it.
+        if (rec.color.x == 0.0f && rec.color.y == 0.0f && rec.color.z == 0.0f)
+            dai_editor_node_color(e, n, &rec.color);
         auto it = map.find(rec.parent);
         if (it != map.end()) rec.parent = it->second;
         dai_node c = dai_doc_add(e->doc, &rec);
@@ -1041,7 +1047,7 @@ int dai_editor_live_position(const dai_editor *e, dai_node n, dai_vec3 *out) {
     dai_scene *sc = dai_doc_sync_scene(e->sync);
     if (!ent || !sc) return 0;
     dai_body b = dai_scene_body(sc, ent);
-    if (!b) return 0;
+    if (!b) return 0;       // render-only node: nothing simulates it, the doc pose stands
     dai_transform t{};
     if (dai_body_get(editor_world(e), b, &t) != DAI_OK) return 0;
     *out = t.position;

@@ -191,6 +191,9 @@ int main() {
     rec.trigger = 1;
     rec.collider_center = { 0.0f, 0.25f, 0.0f };
     rec.render_extent = { 0.75f, 0.75f, 0.75f };
+    rec.no_collider = 1;
+    rec.no_rigidbody = 1;
+    std::snprintf(rec.script, sizeof(rec.script), "spin.js");
     dai_doc_set(d, spaced, &rec);
 
     size_t need = dai_doc_to_text(d, nullptr, 0);
@@ -216,6 +219,9 @@ int main() {
     CHECK(back.trigger == 1, "Is Trigger did not survive being saved");
     CHECK(back.collider_center.y == 0.25f, "the collider centre did not survive being saved");
     CHECK(back.render_extent.x == 0.75f, "the mesh size did not survive being saved");
+    CHECK(back.no_collider == 1 && back.no_rigidbody == 1,
+          "the component toggles did not survive being saved");
+    CHECK(std::strcmp(back.script, "spin.js") == 0, "the script path did not survive being saved");
     dai_doc_get(d2, kid, &back);
     CHECK(back.parent == parent, "hierarchy lost across the round trip");
 
@@ -370,8 +376,10 @@ int main() {
           "the restored body is in the wrong place (%.2f %.2f %.2f)",
           t.position.x, t.position.y, t.position.z);
 
-    // a node with no_body is a pure transform node: no entity, but children
-    // still hang off it
+    // a node with no_body is a pure transform/graphics node: no BODY, but it
+    // still renders - removing the physics from a crate must not make the
+    // crate vanish, which is exactly what it used to do. Children still hang
+    // off it.
     dai_node_desc grp = dai_node_desc_default();
     snprintf(grp.name, sizeof(grp.name), "Group");
     grp.no_body = 1;
@@ -379,7 +387,18 @@ int main() {
     dai_node group = dai_doc_add(d, &grp);
     dai_node under = add_named(d, "Under", { 0, 0, 0 }, group);
     dai_doc_sync_apply(sy);
-    CHECK(dai_doc_sync_entity(sy, group) == DAI_INVALID_ENTITY, "a no_body node got a rigid body");
+    dai_entity ge = dai_doc_sync_entity(sy, group);
+    CHECK(ge != DAI_INVALID_ENTITY, "a no_body node is not rendered - the mesh vanishes");
+    CHECK(dai_scene_body(sc, ge) == DAI_INVALID_BODY, "a no_body node got a rigid body");
+    {
+        // and it is drawn where the document puts it
+        std::vector<dai_render_instance> inst(64);
+        uint32_t ni = dai_scene_instances(sc, inst.data(), 64, 1.0f);
+        int found = 0;
+        for (uint32_t i = 0; i < ni; ++i)
+            if (std::fabs(inst[i].position.y - 100.0f) < 0.5f) found = 1;
+        CHECK(found, "the render-only node is not in the instance list");
+    }
     dai_body ub = dai_scene_body(sc, dai_doc_sync_entity(sy, under));
     dai_body_get(w, ub, &t);
     CHECK(near3(t.position, dai_vec3{ 0, 100, 0 }, 1e-3f),

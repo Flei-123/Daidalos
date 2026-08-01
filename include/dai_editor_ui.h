@@ -133,6 +133,16 @@ DAI_API void dai_editor_ui_project_host(dai_editor_ui *p,
 /* Reloads the list from the host - after a project was created on disk. */
 DAI_API void dai_editor_ui_projects_refresh(dai_editor_ui *p);
 
+/* "New Script" in the Project window: the host writes the file (it owns the
+ * disk - the editor cannot know where projects live) and the list refresh
+ * makes it show up. The name comes without an extension. */
+DAI_API void dai_editor_ui_script_host(dai_editor_ui *p,
+                                       int (*create)(const char *name, void *user),
+                                       void *user);
+/* Which project is open ("" when none) - the host shows it in the title bar
+ * and knows which folder "save" means. */
+DAI_API const char *dai_editor_ui_project(const dai_editor_ui *p);
+
 /* The mesh picker: the host hands over its renderer's inventory, the Project
  * window shows it, and the renderer component edits the selection's mesh.
  * Names come from a host function so the engine needs no renderer include. */
@@ -140,6 +150,13 @@ typedef const char *(*dai_editor_ui_mesh_name_fn)(uint32_t mesh, void *user);
 DAI_API void dai_editor_ui_mesh_host(dai_editor_ui *p,
                                      dai_editor_ui_mesh_name_fn name,
                                      uint32_t mesh_count, void *user);
+
+/* The Settings window can change the font size, and the font is the host's
+ * (it loaded it, it owns the texture). When the user picks a size the host
+ * gets the pixel value and should reload the font and call dai_ui_font_set. */
+DAI_API void dai_editor_ui_settings_host(dai_editor_ui *p,
+                                         void (*apply_font)(float px, void *user),
+                                         float current_px, void *user);
 
 /* Number of rows the hierarchy currently shows - folded subtrees excluded. */
 DAI_API uint32_t dai_editor_ui_visible_rows(const dai_editor_ui *p);

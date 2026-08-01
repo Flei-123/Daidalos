@@ -70,7 +70,14 @@ typedef struct dai_node_desc {
     float    restitution;
     int      no_sleeping;
     int      no_body;           /* 1 = pure transform/graphics node, no rigid
-                                   body. Groups and markers need this.          */
+                                   body. Groups and markers need this. Such a
+                                   node still RENDERS - rendering is not part
+                                   of physics.                                   */
+    int      no_collider;       /* 1 = nothing can hit this (the shape stays as
+                                   the rigidbody's volume, as a sensor).        */
+    int      no_rigidbody;      /* 1 = a collider with nothing driving it: the
+                                   body is static whatever `motion` says.       */
+    char     script[96];        /* path of the JS behaviour, e.g. "spin.js"     */
 
     /* graphics */
     uint32_t mesh;              /* 0xFFFFFFFF -> derive from shape              */

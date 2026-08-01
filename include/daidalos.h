@@ -134,6 +134,11 @@ typedef struct dai_body_desc {
     float      linear_damping;   /* NOTE: Jolt defaults to 0.05, we default to 0 */
     float      angular_damping;
     int        no_sleeping;      /* 0 = may sleep (default), 1 = never sleeps */
+    int        sensor;           /* 1 = reports overlaps, blocks NOTHING. This is
+                                    Unity's "Is Trigger", and also what a node
+                                    with the collider component removed but the
+                                    rigidbody kept is: a thing that moves and
+                                    hits nothing. */
     uint32_t   user_data;        /* free for the host                        */
     /* only for DAI_SHAPE_COMPOUND */
     const dai_compound_part *parts;

@@ -57,6 +57,13 @@ DAI_API dai_world *dai_scene_world(dai_scene *s);
 
 /* Creates the body and remembers how to draw it. */
 DAI_API dai_entity dai_scene_spawn(dai_scene *s, const dai_entity_desc *desc);
+/* A renderable WITHOUT a body: what a node with every physics component
+ * removed still is - it has a mesh, it has a transform, it collides with
+ * nothing and nothing moves it. Removing a Box Collider in Unity does not
+ * make the model vanish, and now it does not here either. */
+DAI_API dai_entity dai_scene_spawn_render(dai_scene *s, const dai_entity_desc *desc);
+DAI_API dai_result dai_scene_set_transform(dai_scene *s, dai_entity e, dai_vec3 pos,
+                                           dai_quat rot);
 /* Attaches render data to a body that already exists. */
 DAI_API dai_entity dai_scene_attach(dai_scene *s, dai_body b, const dai_entity_desc *desc);
 DAI_API dai_result dai_scene_remove(dai_scene *s, dai_entity e);

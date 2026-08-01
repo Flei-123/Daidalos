@@ -178,6 +178,9 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
         if (!feq(r.restitution, def.restitution)) put(s, "  restitution %s\n", fstr(r.restitution).c_str());
         if (r.no_sleeping != def.no_sleeping)   put(s, "  nosleep %d\n", r.no_sleeping);
         if (r.no_body != def.no_body)           put(s, "  nobody %d\n", r.no_body);
+        if (r.no_collider != def.no_collider)   put(s, "  nocollider %d\n", r.no_collider);
+        if (r.no_rigidbody != def.no_rigidbody) put(s, "  norigidbody %d\n", r.no_rigidbody);
+        if (r.script[0])                        put(s, "  script %s\n", r.script);
         if (r.mesh != def.mesh)             put(s, "  mesh %u\n", (unsigned)r.mesh);
         if (r.asset[0])                     put(s, "  asset %s\n", r.asset);
         if (r.prefab[0])                    put(s, "  prefab %s\n", r.prefab);
@@ -277,6 +280,11 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "extent") { ok = parse_floats(after, &rec.half_extent.x, 3); }
         else if (key == "center") { ok = parse_floats(after, &rec.collider_center.x, 3); }
         else if (key == "trigger") { ok = parse_i32(after, &rec.trigger); }
+        else if (key == "nocollider") { ok = parse_i32(after, &rec.no_collider); }
+        else if (key == "norigidbody") { ok = parse_i32(after, &rec.no_rigidbody); }
+        else if (key == "script") { std::string v = rest_of_line(after);
+            if (v.size() >= sizeof(rec.script)) { ok = false; }
+            else std::snprintf(rec.script, sizeof(rec.script), "%s", v.c_str()); }
         else if (key == "rextent") { ok = parse_floats(after, &rec.render_extent.x, 3); }
         else if (key == "density")     { ok = parse_floats(after, &rec.density, 1); }
         else if (key == "friction")    { ok = parse_floats(after, &rec.friction, 1); }
