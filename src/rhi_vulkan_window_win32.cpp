@@ -50,6 +50,64 @@ namespace {
 
 uint32_t key_slot(uint32_t code) { return (code ^ (code >> 8)) & 0xFF; }
 
+// Windows hands out virtual key codes; the engine's API is dai_key. Translating
+// here rather than in the host is the whole point - otherwise every program
+// would need an #ifdef around every key it cares about.
+//
+// Letters and digits are the easy half: VK_A..VK_Z are the ASCII capitals, so
+// lower casing them lands exactly on DAI_KEY_A..Z. The rest is a small table.
+uint32_t dai_key_from_vk(WPARAM vk) {
+    if (vk >= 'A' && vk <= 'Z') return (uint32_t)vk + 0x20;   // -> lower case
+    if (vk >= '0' && vk <= '9') return (uint32_t)vk;
+    switch (vk) {
+    case VK_SPACE:   return DAI_KEY_SPACE;
+    case VK_ESCAPE:  return DAI_KEY_ESCAPE;
+    case VK_TAB:     return DAI_KEY_TAB;
+    case VK_RETURN:  return DAI_KEY_RETURN;
+    case VK_BACK:    return DAI_KEY_BACKSPACE;
+    case VK_DELETE:  return DAI_KEY_DELETE;
+    case VK_LEFT:    return DAI_KEY_LEFT;
+    case VK_UP:      return DAI_KEY_UP;
+    case VK_RIGHT:   return DAI_KEY_RIGHT;
+    case VK_DOWN:    return DAI_KEY_DOWN;
+    case VK_F1:      return DAI_KEY_F1;
+    case VK_F5:      return DAI_KEY_F5;
+    case VK_LSHIFT:  return DAI_KEY_SHIFT_L;
+    case VK_RSHIFT:  return DAI_KEY_SHIFT_R;
+    case VK_LCONTROL:return DAI_KEY_CTRL_L;
+    case VK_RCONTROL:return DAI_KEY_CTRL_R;
+    case VK_LMENU:   return DAI_KEY_ALT_L;
+    case VK_RMENU:   return DAI_KEY_ALT_R;
+    default: return 0;
+    }
+}
+
+// A plain WM_KEYDOWN for shift/ctrl/alt reports the side-less VK_SHIFT and
+// friends, so both sides get set. A host asking "either shift" then works
+// without knowing which key the user actually pressed.
+void set_key(dai_window *w, WPARAM vk, bool down);
+
+void set_key(dai_window *w, WPARAM vk, bool down) {
+    // The side-less modifiers: set both, so "is shift held" is one question.
+    switch (vk) {
+    case VK_SHIFT:
+        w->keys[key_slot(DAI_KEY_SHIFT_L)] = down;
+        w->keys[key_slot(DAI_KEY_SHIFT_R)] = down;
+        return;
+    case VK_CONTROL:
+        w->keys[key_slot(DAI_KEY_CTRL_L)] = down;
+        w->keys[key_slot(DAI_KEY_CTRL_R)] = down;
+        return;
+    case VK_MENU:
+        w->keys[key_slot(DAI_KEY_ALT_L)] = down;
+        w->keys[key_slot(DAI_KEY_ALT_R)] = down;
+        return;
+    default: break;
+    }
+    uint32_t k = dai_key_from_vk(vk);
+    if (k) w->keys[key_slot(k)] = down;
+}
+
 LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     dai_window *w = (dai_window *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (!w) return DefWindowProcW(hwnd, msg, wp, lp);
@@ -63,10 +121,10 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // Virtual key codes are what the host gets here, mapped through the same
     // hash the other backends use, so dai_window_key_down stays one function.
     case WM_KEYDOWN: case WM_SYSKEYDOWN:
-        w->keys[key_slot((uint32_t)wp)] = true;
+        set_key(w, wp, true);
         if (wp == VK_ESCAPE) w->open = false;
         return 0;
-    case WM_KEYUP: case WM_SYSKEYUP:   w->keys[key_slot((uint32_t)wp)] = false; return 0;
+    case WM_KEYUP: case WM_SYSKEYUP:   set_key(w, wp, false); return 0;
     case WM_MOUSEMOVE:  w->mouse_x = (int)(short)LOWORD(lp); w->mouse_y = (int)(short)HIWORD(lp); return 0;
     case WM_LBUTTONDOWN: w->buttons |= 1u << 1; return 0;
     case WM_LBUTTONUP:   w->buttons &= ~(1u << 1); return 0;

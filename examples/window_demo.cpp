@@ -9,7 +9,6 @@
 #include "daidalos.h"
 #include "dai_scene.h"
 #include "dai_render.h"
-#include <X11/keysym.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -60,11 +59,11 @@ int main(int argc, char **argv) {
     std::vector<dai_render_instance> inst(4096);
     int frames = 0;
     while (dai_window_poll(win)) {
-        if (dai_window_key_down(win, XK_a)) cam.yaw -= 0.03f;
-        if (dai_window_key_down(win, XK_d)) cam.yaw += 0.03f;
-        if (dai_window_key_down(win, XK_w)) cam.distance = fmaxf(4.0f, cam.distance - 0.3f);
-        if (dai_window_key_down(win, XK_s)) cam.distance += 0.3f;
-        if (dai_window_key_down(win, XK_space) && (frames % 12) == 0) {
+        if (dai_window_key_down(win, DAI_KEY_A)) cam.yaw -= 0.03f;
+        if (dai_window_key_down(win, DAI_KEY_D)) cam.yaw += 0.03f;
+        if (dai_window_key_down(win, DAI_KEY_W)) cam.distance = fmaxf(4.0f, cam.distance - 0.3f);
+        if (dai_window_key_down(win, DAI_KEY_S)) cam.distance += 0.3f;
+        if (dai_window_key_down(win, DAI_KEY_SPACE) && (frames % 12) == 0) {
             dai_entity_desc d = dai_entity_desc_default();
             d.body.shape = DAI_SHAPE_BOX; d.body.motion = DAI_DYNAMIC;
             d.body.half_extent = { 0.5f, 0.5f, 0.5f };

@@ -686,8 +686,25 @@ writes it out, and fails if the frame comes back black - a window that presented
 nothing and a frame that rendered nothing would otherwise both look like
 success.
 
-Still to do: the editor itself. `examples/editor_demo.cpp` uses X11 keysyms
-directly and needs porting before it can be built here.
+### The editor runs on Windows too
+
+It used to ask for keys as X11 keysyms - fine on X11, meaningless on Windows,
+where the window procedure is handed virtual key codes. The fix was not an
+`#ifdef` around every key: **key codes are now the engine's own vocabulary**
+(`dai_key` in `dai_render.h`), and each backend maps its own numbers onto them.
+
+The values *are* the X11 keysyms, which for letters and digits is just ASCII, so
+the X11 backend needs no translation at all and Win32 maps onto it. That is a
+load bearing claim and an invisible one - if a value drifted nothing would fail
+to compile, X11 would just quietly stop matching - so `test_keys` asserts all 32
+against the real X11 headers on every build.
+
+Proving the Windows half needed the keys actually pressed, so `win_keytest.exe`
+posts real `WM_KEYDOWN` messages to its own window and reads them back through
+`dai_window_key_down`. Run on the RTX 3060 machine: **18 checks, 0 failures** -
+every editor binding, both sides of shift/ctrl/alt reported from the side-less
+virtual key, and an unmapped key (F12) confirmed to touch nothing, because the
+key slot is a hash and a collision would silently press W.
 
 ## What is still missing
 

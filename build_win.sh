@@ -107,7 +107,7 @@ LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a $ASSETS \
       -static -static-libgcc -static-libstdc++ -lpthread"
 
 echo "-- programs"
-for src in examples/win_smoke.cpp; do
+for src in examples/win_smoke.cpp examples/win_keytest.cpp examples/editor_demo.cpp examples/window_demo.cpp; do
     [ -f "$src" ] || continue
     name=$(basename "$src" .cpp)
     $CXX $FLAGS $ARCH -Iinclude -Isrc -I"$VKINC" ${ASSETS:+-I$MNEMOSYNE/include} \

@@ -309,8 +309,7 @@ DAI_API void dai_render_exposure(dai_renderer *r, float exposure);
  * headless tests and the on screen build byte identical - and it means a
  * window backend is ~300 lines instead of a rewrite.
  *
- * Linux/X11 today. A Win32 or Wayland version is another file with the same
- * four functions. */
+ * X11, Wayland and Win32 today, one file each, same four functions. */
 typedef struct dai_window dai_window;
 
 DAI_API dai_window *dai_window_open(dai_renderer *r, const char *title,
@@ -322,9 +321,58 @@ DAI_API int  dai_window_poll(dai_window *w);
 /* Blits the last rendered frame to the screen. */
 DAI_API dai_result dai_window_present(dai_window *w);
 
-/* Minimal input: key codes are X11 keysyms (XK_w, XK_Escape, ...) so no
- * translation table has to exist before the engine is useful. */
-DAI_API int dai_window_key_down(dai_window *w, uint32_t keysym);
+/* Key codes. These ARE the X11 keysym values, which for letters and digits are
+ * just ASCII - the X11 backend therefore needs no translation at all, and every
+ * other backend maps its own codes onto these when a key arrives.
+ *
+ * The alternative was letting each backend hand out its own numbers, which is
+ * what this used to do: the host then had to spell every key twice, once as
+ * XK_w and once as 'W', inside an #ifdef. A key code is part of the engine's
+ * API, not an artefact of whatever windowing system happens to be underneath.
+ *
+ * Letters are lower case; the backend normalises so a shifted 'W' still reads
+ * as DAI_KEY_W. */
+typedef enum dai_key {
+    DAI_KEY_SPACE     = 0x0020,
+    DAI_KEY_0         = 0x0030,   /* .. DAI_KEY_9 are 0x30 + digit  */
+    DAI_KEY_9         = 0x0039,
+    DAI_KEY_A         = 0x0061,   /* .. DAI_KEY_Z are 0x61 + letter */
+    DAI_KEY_D         = 0x0064,
+    DAI_KEY_E         = 0x0065,
+    DAI_KEY_F         = 0x0066,
+    DAI_KEY_G         = 0x0067,
+    DAI_KEY_Q         = 0x0071,
+    DAI_KEY_R         = 0x0072,
+    DAI_KEY_S         = 0x0073,
+    DAI_KEY_W         = 0x0077,
+    DAI_KEY_X         = 0x0078,
+    DAI_KEY_Y         = 0x0079,
+    DAI_KEY_Z         = 0x007A,
+
+    DAI_KEY_ESCAPE    = 0xFF1B,
+    DAI_KEY_TAB       = 0xFF09,
+    DAI_KEY_RETURN    = 0xFF0D,
+    DAI_KEY_BACKSPACE = 0xFF08,
+    DAI_KEY_DELETE    = 0xFFFF,
+    DAI_KEY_LEFT      = 0xFF51,
+    DAI_KEY_UP        = 0xFF52,
+    DAI_KEY_RIGHT     = 0xFF53,
+    DAI_KEY_DOWN      = 0xFF54,
+    DAI_KEY_F1        = 0xFFBE,
+    DAI_KEY_F5        = 0xFFC2,
+
+    /* Modifiers come in pairs because X11 reports them that way. A backend that
+     * cannot tell the sides apart - Win32 for a plain shift - sets both. */
+    DAI_KEY_SHIFT_L   = 0xFFE1,
+    DAI_KEY_SHIFT_R   = 0xFFE2,
+    DAI_KEY_CTRL_L    = 0xFFE3,
+    DAI_KEY_CTRL_R    = 0xFFE4,
+    DAI_KEY_ALT_L     = 0xFFE9,
+    DAI_KEY_ALT_R     = 0xFFEA
+} dai_key;
+
+/* Minimal input. Pass a dai_key; anything else is undefined but harmless. */
+DAI_API int dai_window_key_down(dai_window *w, uint32_t key);
 DAI_API int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons);
 /* Wheel notches accumulated since the last call, and resets. Polling a button
  * bit cannot work: a wheel click is a press and a release in the same frame,

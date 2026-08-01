@@ -17,7 +17,6 @@
 #include "dai_editor_ui.h"
 #include "dai_render.h"
 
-#include <X11/keysym.h>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -112,25 +111,25 @@ int main(int argc, char **argv) {
         ci.mouse_middle = (buttons & (1u << 2)) ? 1 : 0;
         ci.mouse_right = (buttons & (1u << 3)) ? 1 : 0;
         ci.wheel = wheel;
-        ci.key_w = dai_window_key_down(win, XK_w);
-        ci.key_a = dai_window_key_down(win, XK_a);
-        ci.key_s = dai_window_key_down(win, XK_s);
-        ci.key_d = dai_window_key_down(win, XK_d);
-        ci.key_q = dai_window_key_down(win, XK_q);
-        ci.key_e = dai_window_key_down(win, XK_e);
-        ci.key_shift = dai_window_key_down(win, XK_Shift_L) || dai_window_key_down(win, XK_Shift_R);
-        ci.key_alt = dai_window_key_down(win, XK_Alt_L) || dai_window_key_down(win, XK_Alt_R);
-        ci.key_focus = dai_window_key_down(win, XK_f);
+        ci.key_w = dai_window_key_down(win, DAI_KEY_W);
+        ci.key_a = dai_window_key_down(win, DAI_KEY_A);
+        ci.key_s = dai_window_key_down(win, DAI_KEY_S);
+        ci.key_d = dai_window_key_down(win, DAI_KEY_D);
+        ci.key_q = dai_window_key_down(win, DAI_KEY_Q);
+        ci.key_e = dai_window_key_down(win, DAI_KEY_E);
+        ci.key_shift = dai_window_key_down(win, DAI_KEY_SHIFT_L) || dai_window_key_down(win, DAI_KEY_SHIFT_R);
+        ci.key_alt = dai_window_key_down(win, DAI_KEY_ALT_L) || dai_window_key_down(win, DAI_KEY_ALT_R);
+        ci.key_focus = dai_window_key_down(win, DAI_KEY_F);
         ci.dt = dt;
 
         // W/E/R switch gizmo mode, but only when the camera is not flying -
         // otherwise pressing W to walk forward would also change the tool.
-        int ctrl = dai_window_key_down(win, XK_Control_L) || dai_window_key_down(win, XK_Control_R);
+        int ctrl = dai_window_key_down(win, DAI_KEY_CTRL_L) || dai_window_key_down(win, DAI_KEY_CTRL_R);
         int keys[8] = {
-            ci.key_w, ci.key_e, dai_window_key_down(win, XK_r),
-            dai_window_key_down(win, XK_z), dai_window_key_down(win, XK_y),
-            dai_window_key_down(win, XK_Delete), dai_window_key_down(win, XK_d),
-            dai_window_key_down(win, XK_space),
+            ci.key_w, ci.key_e, dai_window_key_down(win, DAI_KEY_R),
+            dai_window_key_down(win, DAI_KEY_Z), dai_window_key_down(win, DAI_KEY_Y),
+            dai_window_key_down(win, DAI_KEY_DELETE), dai_window_key_down(win, DAI_KEY_D),
+            dai_window_key_down(win, DAI_KEY_SPACE),
         };
         auto pressed = [&](int i) { return keys[i] && !prev_keys[i]; };
         if (!ci.mouse_right && !ctrl) {
@@ -146,7 +145,7 @@ int main(int argc, char **argv) {
             if (dai_editor_state_get(ed) == DAI_EDITOR_PLAY) dai_editor_pause(ed);
             else dai_editor_play(ed);
         }
-        if (ctrl && dai_window_key_down(win, XK_s) && scene_path) {
+        if (ctrl && dai_window_key_down(win, DAI_KEY_S) && scene_path) {
             if (dai_doc_save(doc, scene_path) == DAI_OK) std::printf("saved %s\n", scene_path);
         }
         std::memcpy(prev_keys, keys, sizeof(keys));
