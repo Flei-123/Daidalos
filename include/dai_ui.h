@@ -164,6 +164,9 @@ DAI_API void dai_ui_claim_mouse(dai_ui *ui);
 /* The pointer state this frame, for code that draws its own interactive
  * widgets (the editor timeline) instead of using the ones above. */
 DAI_API void dai_ui_mouse(const dai_ui *ui, float *x, float *y, int *down, int *pressed);
+/* The wheel delta fed this frame. The scroll region handles its own; a list
+ * drawn by hand (a file browser column) reads it here. */
+DAI_API float dai_ui_wheel(const dai_ui *ui);
 /* The right button, held this frame and pressed this frame. The context menu
  * is the only consumer of the right button in the whole UI, so these are
  * top level rather than buried in the input struct. */

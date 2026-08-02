@@ -7,9 +7,12 @@
 #include "dai_editor_ui.h"
 #include "dai_dock.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -151,6 +154,16 @@ struct dai_editor_ui {
     std::string proj_current;
     char   proj_name_buf[64] = { 0 };
     int    proj_tab = 0;              // 0 = files, 1 = projects
+
+    // The Files half, Unity's two column browser: the folder tree left, the
+    // chosen folder's contents right. The tree is derived from the flat asset
+    // list every frame - only this UI state survives between frames.
+    std::string proj_dir;                       // the folder being shown
+    std::set<std::string> proj_folds = { "" };  // expanded folders, root always
+    float proj_tree_w = 170.0f;
+    float proj_tree_scroll = 0.0f, proj_list_scroll = 0.0f;
+    int   proj_tree_drag = 0;
+    char  proj_search[64] = { 0 };
 
     // ---- scripts -----------------------------------------------------------
     int (*script_create)(const char *name, void *user) = nullptr;
@@ -319,6 +332,10 @@ dai_editor_ui *dai_editor_ui_create(dai_editor *editor, dai_ui *ui) {
     p->ed = editor;
     p->ui = ui;
     p->dock = dai_dock_create();
+    // Scene and Game are two views of ONE rendered world, and the host draws
+    // that world once per frame into a single rectangle - the two tabs stay
+    // in one leaf no matter where the user drags them.
+    dai_dock_lock_pair(p->dock, "Scene", "Game");
     return p;
 }
 
@@ -1623,6 +1640,28 @@ void dai_editor_ui_viewport_rect(const dai_editor_ui *p, float *x, float *y, flo
     if (h) *h = p->view_h;
 }
 
+// ---- asset paths: the list is flat, the browser is a tree -------------------
+static std::string parent_of(const std::string &s) {
+    size_t slash = s.find_last_of('/');
+    return slash == std::string::npos ? std::string() : s.substr(0, slash);
+}
+static std::string base_of(const std::string &s) {
+    size_t slash = s.find_last_of('/');
+    return slash == std::string::npos ? s : s.substr(slash + 1);
+}
+
+// The path to a folder opens in the tree: every ancestor expanded.
+static void project_expand_to(dai_editor_ui *p, const std::string &dir) {
+    p->proj_folds.insert("");
+    size_t pos = 0;
+    while (pos < dir.size()) {
+        size_t slash = dir.find('/', pos);
+        p->proj_folds.insert(dir.substr(0, slash));
+        if (slash == std::string::npos) break;
+        pos = slash + 1;
+    }
+}
+
 // The two right click menus of the hierarchy and the viewport. They are run
 // LAST in the frame so they paint above every window, and they mutate through
 // the document like every other edit.
@@ -1639,7 +1678,23 @@ static void run_context_menus(dai_editor_ui *p) {
     };
     int ppick = dai_ui_popup_menu(p->ui, &p->menu_project, PROJ_ITEMS, 4);
     if (ppick == 0) { p->proj_tab = 0; p->script_focus = 1; }
-    else if (ppick == 1 && p->folder_create) p->folder_create("New Folder", p->script_user);
+    else if (ppick == 1 && p->folder_create) {
+        // Like every file manager: New Folder, New Folder 2, ... - in the
+        // folder the browser is showing, not blindly at the root.
+        std::string base = p->proj_dir.empty() ? std::string() : p->proj_dir + "/";
+        for (int i = 0; i < 10; ++i) {
+            char name[128];
+            if (i == 0) std::snprintf(name, sizeof(name), "%sNew Folder", base.c_str());
+            else        std::snprintf(name, sizeof(name), "%sNew Folder %d", base.c_str(), i);
+            if (p->folder_create(name, p->script_user)) {
+                p->proj_dir = name;
+                project_expand_to(p, p->proj_dir);
+                p->proj_list_scroll = 0.0f;
+                p->want_refresh = 1;
+                break;
+            }
+        }
+    }
     else if (ppick == 2) p->want_save = 1;
     else if (ppick == 3) p->want_refresh = 1;
 
@@ -1720,19 +1775,175 @@ static void run_context_menus(dai_editor_ui *p) {
     }
 }
 
-// The project window's body, so it can live in a dock panel of any size.
-static void project_body(dai_editor_ui *p, float h) {
-    dai_ui *ui = p->ui;
-    dai_ui_row(ui, 22.0f);
-    if (dai_ui_button(ui, p->proj_tab == 0 ? "[Files]" : "Files")) p->proj_tab = 0;
-    if (dai_ui_button(ui, p->proj_tab == 1 ? "[Projects]" : "Projects")) {
-        p->proj_tab = 1;
-        dai_editor_ui_projects_refresh(p);
-    }
-    dai_ui_row_end(ui);
-    dai_ui_separator(ui);
+// ---- the project window, Unity's two column browser -------------------------
+// The folder tree on the left, the chosen folder's contents on the right, a
+// breadcrumb and a search field along the top. The data is the host's flat
+// list of asset paths; the tree is derived from it every frame.
 
+// One clickable row of the browser: hover, selection, icon, label. Returns 1
+// the frame it is left-clicked. An open popup menu eats every click.
+static int browser_row(dai_editor_ui *p, float x, float y, float w, float h,
+                       const char *icon, const char *label, int selected) {
+    dai_ui *ui = p->ui;
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    float mx = 0, my = 0;
+    int pressed = 0;
+    dai_ui_mouse(ui, &mx, &my, nullptr, &pressed);
+    bool over = mx >= x && mx < x + w && my >= y && my < y + h;
+    if (selected)  dai_ui_rect(ui, x, y, w, h, st->accent);
+    else if (over) dai_ui_rect(ui, x, y, w, h, st->button_hover);
+    float tx = x + 4.0f;
+    if (icon && dai_ui_has_icon(ui, icon)) {
+        dai_ui_icon_at(ui, icon, tx, y + (h - 13.0f) * 0.5f, 13.0f,
+                       selected ? st->text : st->text_dim);
+        tx += 19.0f;
+    }
+    dai_ui_text(ui, tx, y + 3.0f, label, st->text);
+    return over && pressed && !dai_ui_popup_active(ui);
+}
+
+static int browser_button(dai_editor_ui *p, float x, float y, float w, float h,
+                          const char *label) {
+    dai_ui *ui = p->ui;
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    float mx = 0, my = 0;
+    int pressed = 0;
+    dai_ui_mouse(ui, &mx, &my, nullptr, &pressed);
+    bool over = mx >= x && mx < x + w && my >= y && my < y + h;
+    dai_ui_rect(ui, x, y, w, h, over ? st->button_hover : st->titlebar);
+    dai_ui_rect_outline(ui, x, y, w, h, 1.0f, st->panel_border);
+    float tw = dai_ui_text_width(ui, label);
+    dai_ui_text(ui, x + (w - tw) * 0.5f, y + 5.0f, label, st->text);
+    return over && pressed && !dai_ui_popup_active(ui);
+}
+
+// One folder row of the tree, then its visible children. `ry` walks down the
+// column; the clip rect cuts whatever the panel cannot show.
+static void project_tree_rows(dai_editor_ui *p, const std::set<std::string> &folders,
+                              const std::string &dir, int depth, float px, float tree_w,
+                              float cols_y, float cols_h, float &ry, int &rows) {
+    dai_ui *ui = p->ui;
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    const float ROW = 20.0f;
+    float mx = 0, my = 0;
+    int pressed = 0;
+    dai_ui_mouse(ui, &mx, &my, nullptr, &pressed);
+    int clicks_ok = !dai_ui_popup_active(ui);
+
+    bool has_kids = false;
+    for (const auto &f : folders)
+        if (parent_of(f) == dir) { has_kids = true; break; }
+    bool open = p->proj_folds.count(dir) != 0;
+    ++rows;
+    if (ry + ROW > cols_y && ry < cols_y + cols_h) {
+        bool over = mx >= px && mx < px + tree_w && my >= ry && my < ry + ROW;
+        int selected = p->proj_dir == dir;
+        if (selected)  dai_ui_rect(ui, px, ry, tree_w, ROW, st->accent);
+        else if (over) dai_ui_rect(ui, px, ry, tree_w, ROW, st->button_hover);
+        float indent = 6.0f + 12.0f * (float)depth;
+        if (has_kids)
+            dai_ui_text(ui, px + indent, ry + 3.0f, open ? "v" : ">", st->text_dim);
+        std::string label = dir.empty() ? "Assets" : base_of(dir);
+        float text_x = px + indent + 14.0f;
+        if (dai_ui_has_icon(ui, DAI_ICON_FOLDER)) {
+            dai_ui_icon_at(ui, DAI_ICON_FOLDER, text_x, ry + 3.5f, 13.0f,
+                           selected ? st->text : st->text_dim);
+            text_x += 19.0f;
+        }
+        dai_ui_text(ui, text_x, ry + 3.0f, label.c_str(), st->text);
+        if (over && pressed && clicks_ok) {
+            if (has_kids && mx < px + indent + 14.0f) {
+                // The chevron folds, the name selects: hitting the triangle
+                // must not lose the folder you were in.
+                if (open) p->proj_folds.erase(dir);
+                else      p->proj_folds.insert(dir);
+            } else {
+                p->proj_dir = dir;
+                p->proj_list_scroll = 0.0f;
+                if (has_kids) p->proj_folds.insert(dir);
+            }
+        }
+    }
+    ry += ROW;
+    if (!open) return;
+    for (const auto &f : folders)
+        if (parent_of(f) == dir)
+            project_tree_rows(p, folders, f, depth + 1, px, tree_w, cols_y, cols_h,
+                              ry, rows);
+}
+
+// The project window's body, so it can live in a dock panel of any size.
+static void project_body(dai_editor_ui *p, float px, float py, float pw, float ph) {
+    dai_ui *ui = p->ui;
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    float mx = 0, my = 0;
+    int down = 0, pressed = 0;
+    dai_ui_mouse(ui, &mx, &my, &down, &pressed);
+    float wheel = dai_ui_wheel(ui);
+    int clicks_ok = !dai_ui_popup_active(ui);
+    int right_pressed = dai_ui_right_pressed(ui);
+
+    // ---- top bar: breadcrumb left, search and the mode switch right ---------
+    const float BAR = 26.0f;
+    float by = py + 3.0f;
+    if (p->proj_tab == 0) {
+        float bx = px + 4.0f;
+        // The breadcrumb: Assets / models / props - every segment a button.
+        std::vector<std::string> segs;
+        segs.push_back(std::string());
+        if (!p->proj_dir.empty()) {
+            size_t pos = 0;
+            while (pos < p->proj_dir.size()) {
+                size_t slash = p->proj_dir.find('/', pos);
+                segs.push_back(p->proj_dir.substr(pos, slash == std::string::npos
+                                                          ? slash : slash - pos));
+                if (slash == std::string::npos) break;
+                pos = slash + 1;
+            }
+        }
+        std::string acc;
+        for (size_t i = 0; i < segs.size(); ++i) {
+            if (i > 0) { if (i > 1) acc += "/"; acc += segs[i]; }
+            std::string target = i == 0 ? std::string() : acc;
+            const char *label = i == 0 ? "Assets" : segs[i].c_str();
+            float tw = dai_ui_text_width(ui, label) + 14.0f;
+            if (browser_row(p, bx, by, tw, BAR - 4.0f, nullptr, label,
+                            (int)i == (int)segs.size() - 1) && clicks_ok) {
+                p->proj_dir = target;
+                p->proj_list_scroll = 0.0f;
+            }
+            bx += tw;
+            if (i + 1 < segs.size()) {
+                dai_ui_text(ui, bx + 1.0f, by + 3.0f, "/", st->text_dim);
+                bx += 10.0f;
+            }
+        }
+        // The mode switch and the search field, right aligned.
+        float pw_btn = dai_ui_text_width(ui, "Projects") + 16.0f;
+        float right = px + pw - 4.0f;
+        if (browser_row(p, right - pw_btn, by, pw_btn, BAR - 4.0f, nullptr,
+                        "Projects", 0) && clicks_ok) {
+            p->proj_tab = 1;
+            dai_editor_ui_projects_refresh(p);
+        }
+        right -= pw_btn + 6.0f;
+        float sw = right - 20.0f - bx;
+        if (sw > 170.0f) sw = 170.0f;
+        if (sw >= 70.0f)
+            dai_ui_text_field(ui, "projsearch", right - sw, by + 1.0f, sw, BAR - 6.0f,
+                              p->proj_search, sizeof(p->proj_search), nullptr);
+    } else {
+        float bw = dai_ui_text_width(ui, "< Files") + 16.0f;
+        if (browser_row(p, px + 4.0f, by, bw, BAR - 4.0f, nullptr, "< Files", 0) &&
+            clicks_ok)
+            p->proj_tab = 0;
+        dai_ui_text(ui, px + 4.0f + bw + 10.0f, by + 3.0f, "Projects", st->text);
+    }
+    dai_ui_rect(ui, px, py + BAR, pw, 1.0f, st->panel_border);
+
+    // ---- the Projects list keeps the flow layout it always had --------------
     if (p->proj_tab == 1) {
+        dai_ui_spacing(ui, BAR + 4.0f);
         if (p->proj_current.empty()) dai_ui_label(ui, "no project open");
         else dai_ui_label_fmt(ui, "open: %s", p->proj_current.c_str());
         dai_ui_separator(ui);
@@ -1757,28 +1968,205 @@ static void project_body(dai_editor_ui *p, float h) {
                 p->proj_tab = 0;
             }
         }
-    } else {
-        const char *pick = nullptr;
-        int as_tree = 0;
-        if (assets_body(p, h, &pick, &as_tree)) {
-            p->pending_asset = pick;
-            p->pending_as_tree = as_tree;
+        return;
+    }
+
+    // ---- the folder tree, derived from the flat asset list -------------------
+    std::set<std::string> folders;
+    for (const char *a : p->assets) {
+        std::string sa = a ? a : "";
+        for (size_t slash = sa.find('/'); slash != std::string::npos;
+             slash = sa.find('/', slash + 1))
+            folders.insert(sa.substr(0, slash));
+    }
+    // The folder being shown exists even with nothing in it (a fresh one).
+    if (!p->proj_dir.empty()) {
+        folders.insert(p->proj_dir);
+        for (std::string anc = parent_of(p->proj_dir); !anc.empty();
+             anc = parent_of(anc))
+            folders.insert(anc);
+    }
+
+    const float cols_y = py + BAR + 1.0f;
+    const float cols_h = ph - BAR - 1.0f;
+    float tree_w = p->proj_tree_w;
+    float max_tree = pw * 0.5f;
+    if (tree_w > max_tree) tree_w = max_tree;
+    if (tree_w < 100.0f) tree_w = pw > 200.0f ? 100.0f : max_tree;
+    float list_x = px + tree_w + 5.0f;
+    float list_w = px + pw - list_x;
+
+    // The divider between the columns drags, like every other split.
+    bool over_div = mx >= px + tree_w && mx < px + tree_w + 5.0f &&
+                    my >= cols_y && my < cols_y + cols_h;
+    if (over_div || p->proj_tree_drag) dai_ui_cursor_set(ui, DAI_CURSOR_SIZE_WE);
+    if (over_div && pressed && clicks_ok) { p->proj_tree_drag = 1; dai_ui_claim_mouse(ui); }
+    if (p->proj_tree_drag && down) { p->proj_tree_w = mx - px; dai_ui_claim_mouse(ui); }
+    else if (!down) p->proj_tree_drag = 0;
+    dai_ui_rect(ui, px + tree_w + 2.0f, cols_y, 1.0f, cols_h, st->panel_border);
+
+    // ---- the tree column ------------------------------------------------------
+    {
+        dai_ui_clip_begin(ui, px, cols_y, tree_w, cols_h);
+        if (mx >= px && mx < px + tree_w && my >= cols_y && my < cols_y + cols_h)
+            p->proj_tree_scroll -= wheel * 32.0f;
+        if (p->proj_tree_scroll < 0.0f) p->proj_tree_scroll = 0.0f;
+        float ry = cols_y + 2.0f - p->proj_tree_scroll;
+        int rows = 0;
+        project_tree_rows(p, folders, std::string(), 0, px, tree_w, cols_y, cols_h,
+                          ry, rows);
+        float max_off = (float)rows * 20.0f + 4.0f - cols_h;
+        if (max_off < 0.0f) max_off = 0.0f;
+        if (p->proj_tree_scroll > max_off) p->proj_tree_scroll = max_off;
+        dai_ui_clip_end(ui);
+    }
+
+    // ---- the contents of the current folder -----------------------------------
+    std::vector<std::string> subfolders;
+    std::vector<int> files;
+    bool searching = p->proj_search[0] != 0;
+    if (!searching)
+        for (const auto &f : folders)
+            if (parent_of(f) == p->proj_dir) subfolders.push_back(base_of(f));
+    std::string needle;
+    for (const char *c = p->proj_search; *c; ++c)
+        needle += (char)std::tolower((unsigned char)*c);
+    for (size_t i = 0; i < p->assets.size(); ++i) {
+        std::string sa = p->assets[i] ? p->assets[i] : "";
+        if (searching) {
+            std::string low;
+            for (char c : sa) low += (char)std::tolower((unsigned char)c);
+            if (low.find(needle) == std::string::npos) continue;
+        } else if (parent_of(sa) != p->proj_dir) continue;
+        files.push_back((int)i);
+    }
+    if (!searching)
+        std::sort(files.begin(), files.end(), [&](int a, int b) {
+            return std::strcmp(p->assets[(size_t)a], p->assets[(size_t)b]) < 0;
+        });
+
+    int sel_valid = p->asset_sel >= 0 && p->asset_sel < (int)p->assets.size();
+    float strip_h = (sel_valid || p->script_focus) ? 28.0f : 0.0f;
+    float list_h = cols_h - strip_h;
+    const float ROW = 20.0f;
+    {
+        dai_ui_clip_begin(ui, list_x, cols_y, list_w, list_h);
+        if (mx >= list_x && mx < list_x + list_w && my >= cols_y && my < cols_y + list_h)
+            p->proj_list_scroll -= wheel * 32.0f;
+        if (p->proj_list_scroll < 0.0f) p->proj_list_scroll = 0.0f;
+        float ry = cols_y + 2.0f - p->proj_list_scroll;
+        int rows = 0;
+        if (p->assets.empty()) {
+            dai_ui_text(ui, list_x + 8.0f, ry + 4.0f,
+                        "nothing mounted - open or create a project", st->text_dim);
+            ++rows;
+        } else if (subfolders.empty() && files.empty()) {
+            dai_ui_text(ui, list_x + 8.0f, ry + 4.0f,
+                        searching ? "no matches" : "empty folder - right click to create",
+                        st->text_dim);
+            ++rows;
         }
-        if (p->script_create) {
-            dai_ui_separator(ui);
-            dai_ui_label(ui, "New script");
-            dai_ui_input_text(ui, "Name", p->script_name_buf, sizeof(p->script_name_buf));
-            if (dai_ui_button(ui, "Create script") && p->script_name_buf[0]) {
-                if (p->script_create(p->script_name_buf, p->script_user))
+        for (const std::string &name : subfolders) {
+            ++rows;
+            if (ry + ROW > cols_y && ry < cols_y + list_h) {
+                if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
+                                DAI_ICON_FOLDER, name.c_str(), 0) && clicks_ok) {
+                    p->proj_dir = p->proj_dir.empty() ? name : p->proj_dir + "/" + name;
+                    project_expand_to(p, p->proj_dir);
+                    p->proj_list_scroll = 0.0f;
+                }
+            }
+            ry += ROW;
+        }
+        for (int fi : files) {
+            ++rows;
+            if (ry + ROW > cols_y && ry < cols_y + list_h) {
+                std::string full = p->assets[(size_t)fi] ? p->assets[(size_t)fi] : "";
+                std::string label = searching ? full : base_of(full);
+                int selected = fi == p->asset_sel;
+                bool over = mx >= list_x + 2.0f && mx < list_x + list_w - 4.0f &&
+                            my >= ry && my < ry + ROW;
+                if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
+                                DAI_ICON_FILE, label.c_str(), selected) && clicks_ok)
+                    p->asset_sel = fi;
+                // A right click selects what it landed on, then the menu opens.
+                if (over && right_pressed && clicks_ok) p->asset_sel = fi;
+            }
+            ry += ROW;
+        }
+        float max_off = (float)rows * ROW + 4.0f - list_h;
+        if (max_off < 0.0f) max_off = 0.0f;
+        if (p->proj_list_scroll > max_off) p->proj_list_scroll = max_off;
+        dai_ui_clip_end(ui);
+    }
+
+    // ---- the bottom strip: what the selection can do ---------------------------
+    if (strip_h > 0.0f) {
+        float sy = py + ph - strip_h;
+        dai_ui_rect(ui, list_x, sy - 1.0f, list_w, 1.0f, st->panel_border);
+        if (p->script_focus) {
+            dai_ui_text(ui, list_x + 4.0f, sy + 7.0f, "New script:", st->text_dim);
+            float fx = list_x + 76.0f;
+            float fw = list_x + list_w - fx - 148.0f;
+            if (fw > 40.0f)
+                dai_ui_text_field(ui, "newscript", fx, sy + 3.0f, fw, 22.0f,
+                                  p->script_name_buf, sizeof(p->script_name_buf), nullptr);
+            if (browser_button(p, list_x + list_w - 140.0f, sy + 3.0f, 66.0f, 22.0f,
+                               "Create") && p->script_create && p->script_name_buf[0]) {
+                // The script lands in the folder the browser shows.
+                std::string name = p->proj_dir.empty()
+                    ? p->script_name_buf
+                    : p->proj_dir + "/" + p->script_name_buf;
+                if (p->script_create(name.c_str(), p->script_user)) {
                     p->script_name_buf[0] = 0;
+                    p->script_focus = 0;
+                    p->want_refresh = 1;
+                }
+            }
+            if (browser_button(p, list_x + list_w - 68.0f, sy + 3.0f, 64.0f, 22.0f,
+                               "Cancel"))
+                p->script_focus = 0;
+        } else if (sel_valid) {
+            const char *pick = p->assets[(size_t)p->asset_sel];
+            std::string base = base_of(pick ? pick : "");
+            dai_ui_text(ui, list_x + 4.0f, sy + 7.0f, base.c_str(), st->text_dim);
+            size_t plen = pick ? std::strlen(pick) : 0;
+            if (plen > 3 && std::strcmp(pick + plen - 3, ".js") == 0) {
+                // A script is not placed, it is ATTACHED - the same click as
+                // typing its name into the Script block.
+                if (browser_button(p, list_x + list_w - 148.0f, sy + 3.0f, 144.0f, 22.0f,
+                                   "Assign to selection") &&
+                    dai_editor_selection_count(p->ed) > 0) {
+                    dai_node n = dai_editor_selected(p->ed, 0);
+                    dai_node_desc r{};
+                    if (dai_doc_get(dai_editor_doc(p->ed), n, &r) == DAI_OK) {
+                        dai_doc_begin(dai_editor_doc(p->ed), "Assign script");
+                        std::snprintf(r.script, sizeof(r.script), "%s", pick);
+                        dai_doc_set(dai_editor_doc(p->ed), n, &r);
+                        dai_doc_commit(dai_editor_doc(p->ed));
+                        p->script_buf_node = DAI_INVALID_NODE;
+                    }
+                }
+            } else {
+                // Two buttons because the difference is physical, not cosmetic:
+                // one body for the whole model, or one body per piece.
+                if (browser_button(p, list_x + list_w - 148.0f, sy + 3.0f, 70.0f, 22.0f,
+                                   "Place")) {
+                    p->pending_asset = pick;
+                    p->pending_as_tree = 0;
+                }
+                if (browser_button(p, list_x + list_w - 72.0f, sy + 3.0f, 68.0f, 22.0f,
+                                   "As tree")) {
+                    p->pending_asset = pick;
+                    p->pending_as_tree = 1;
+                }
             }
         }
     }
-    // Right click anywhere in the empty part of the panel: the Create menu,
-    // the way Unity's project window does it.
-    float mx = 0, my = 0;
-    dai_ui_mouse(ui, &mx, &my, nullptr, nullptr);
-    if (dai_ui_right_pressed(ui) && dai_ui_root_hovered(ui, "Project") &&
+
+    // Right click anywhere in the panel: the Create menu, the way Unity's
+    // project window does it.
+    if (right_pressed && dai_ui_root_hovered(ui, "Project") &&
         !p->menu_project.open && !p->menu_node.open && !p->menu_canvas.open)
         dai_ui_popup_open(&p->menu_project, mx, my);
 }
@@ -1830,7 +2218,7 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     }
     if (dai_dock_panel(p->dock, "Project", &px, &py, &pw, &ph)) {
         dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
-        project_body(p, ph);
+        project_body(p, px, py, pw, ph);
         dai_ui_panel_end(ui);
         dai_dock_panel_end(p->dock);
     }

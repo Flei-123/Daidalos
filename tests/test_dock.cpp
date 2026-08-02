@@ -249,6 +249,157 @@ int main() {
           ix3, iw3, hx, hw);
     no_overlaps("after tab docking");
 
+    // ---- 10. a locked pair cannot be separated ------------------------------
+    std::printf("lock pair\n");
+    dai_dock_reset(dock);
+    dai_dock_lock_pair(dock, "Scene", "Game");
+    frame(-1, -1, 0);
+    frame(-1, -1, 0);
+    {
+        // Drag the Game tab onto the Hierarchy's tab bar: without the lock it
+        // would stack there and the two views would live in different leaves.
+        dai_dock_focus(dock, "Game");
+        frame(-1, -1, 0);
+        float gx, gy, gw, gh, hx2, hy2, hw2, hh2;
+        dai_dock_panel(dock, "Game", &gx, &gy, &gw, &gh);
+        dai_dock_panel_end(dock);
+        dai_dock_panel(dock, "Hierarchy", &hx2, &hy2, &hw2, &hh2);
+        dai_dock_panel_end(dock);
+        // The Game tab is the second of the bar: past "Scene"'s width.
+        float scene_tab = dai_ui_text_width(ui, "Scene") + 26.0f;
+        float game_tab = dai_ui_text_width(ui, "Game") + 26.0f;
+        float tabx = gx + scene_tab + game_tab * 0.5f, taby = gy - 10.0f;
+        float barx = hx2 + hw2 * 0.5f, bary = hy2 - 10.0f;
+        frame(tabx, taby, 1);
+        frame(tabx - 40.0f, taby + 80.0f, 1);
+        frame(barx, bary, 1);
+        frame(barx, bary, 0);
+        frame(-1, -1, 0);
+        char dump[1024];
+        dai_dock_dump(dock, dump, sizeof(dump));
+        std::printf("  %s\n", dump);
+        const char *g = std::strstr(dump, "\"Game\"");
+        CHECK(g != nullptr, "Game vanished from the layout");
+        if (g) {
+            const char *open = g;
+            while (open > dump && std::strncmp(open, "{ leaf", 6) != 0) --open;
+            const char *close = std::strstr(g, "}");
+            bool same = close && std::strstr(open, "\"Scene\"") &&
+                        std::strstr(open, "\"Scene\"") < close;
+            CHECK(same, "dragging Game away left Scene behind - the pair was split");
+        }
+        no_overlaps("after dragging a locked tab");
+    }
+
+    // ---- 11. a separated layout from disk is fused on load -------------------
+    std::printf("lock pair restore\n");
+    {
+        dai_dock *dock3 = dai_dock_create();
+        dai_dock_add(dock3, "Scene", DAI_DOCK_NONE, 0.0f);
+        dai_dock_add_tab(dock3, "Game", "Scene");
+        dai_dock_add(dock3, "Hierarchy", DAI_DOCK_LEFT, 0.20f);
+        dai_dock_lock_pair(dock3, "Scene", "Game");
+        // A layout file written before the lock existed: Scene and Game in
+        // two leaves. One frame later they must share one again.
+        CHECK(dai_dock_from_text(dock3,
+              "dock 1\n{ h 0.5000 { leaf 0 \"Scene\" } { leaf 0 \"Game\" } }\n") == DAI_OK,
+              "could not stage a separated layout");
+        dai_ui_input in{};
+        in.mouse_x = -1; in.mouse_y = -1;
+        dai_ui_begin(ui, W, H, &in);
+        dai_dock_begin(dock3, ui, 0, 30, W, H - 30);
+        dai_dock_end(dock3);
+        dai_ui_end(ui);
+        char dump[1024];
+        dai_dock_dump(dock3, dump, sizeof(dump));
+        std::printf("  %s\n", dump);
+        const char *g = std::strstr(dump, "\"Game\"");
+        bool fused = false;
+        if (g) {
+            const char *open = g;
+            while (open > dump && std::strncmp(open, "{ leaf", 6) != 0) --open;
+            const char *close = std::strstr(g, "}");
+            fused = close && std::strstr(open, "\"Scene\"") &&
+                    std::strstr(open, "\"Scene\"") < close;
+        }
+        CHECK(fused, "a separated layout from disk was not fused back");
+        dai_dock_destroy(dock3);
+    }
+
+    // ---- 12. the leaf menu: right click and the kebab button -----------------
+    std::printf("leaf menu\n");
+    dai_dock_reset(dock);
+    frame(-1, -1, 0);
+    frame(-1, -1, 0);
+    auto frame_r = [&](float mx, float my, int down, int rdown) {
+        rects.clear();
+        dai_ui_input in{};
+        in.mouse_x = mx; in.mouse_y = my; in.mouse_down = down; in.right_down = rdown;
+        dai_ui_begin(ui, W, H, &in);
+        dai_dock_begin(dock, ui, 0, 30, W, H - 30);
+        for (const char *t : ALL) {
+            float x, y, w, h;
+            if (!dai_dock_panel(dock, t, &x, &y, &w, &h)) continue;
+            rects.push_back(R{ x, y, w, h });
+            dai_dock_panel_end(dock);
+        }
+        dai_dock_end(dock);
+        dai_ui_end(ui);
+    };
+    float row_h = dai_font_line_height(font) + 8.0f;
+    {
+        // Right click the Hierarchy's tab: the menu opens on it, item 0 is
+        // Close Tab.
+        float hx2, hy2, hw2, hh2;
+        dai_dock_panel(dock, "Hierarchy", &hx2, &hy2, &hw2, &hh2);
+        dai_dock_panel_end(dock);
+        float tx = hx2 + 20.0f, ty = hy2 - 10.0f;
+        frame_r(tx, ty, 0, 1);                                // right press opens it
+        frame_r(tx, ty, 0, 0);
+        frame_r(-1, -1, 0, 0);                                // it stays open
+        frame_r(tx + 12.0f, ty + 4.0f + row_h * 0.5f, 1, 0);  // item 0: Close Tab
+        frame_r(-1, -1, 0, 0);
+        CHECK(dai_dock_is_open(dock, "Hierarchy") == 0,
+              "Close Tab in the leaf menu did not close the hierarchy");
+        no_overlaps("after Close Tab from the leaf menu");
+
+        // Reopen it: right click the Scene bar, Add Tab: Hierarchy is item 1
+        // (Scene and Game are in that leaf already).
+        float sx2, sy2, sw2, sh2;
+        dai_dock_panel(dock, "Scene", &sx2, &sy2, &sw2, &sh2);
+        dai_dock_panel_end(dock);
+        float tx2 = sx2 + 20.0f, ty2 = sy2 - 10.0f;
+        frame_r(tx2, ty2, 0, 1);
+        frame_r(tx2, ty2, 0, 0);
+        frame_r(-1, -1, 0, 0);
+        frame_r(tx2 + 12.0f, ty2 + 4.0f + row_h * 1.5f, 1, 0);  // item 1: Add Tab
+        frame_r(-1, -1, 0, 0);
+        CHECK(dai_dock_is_open(dock, "Hierarchy") == 1,
+              "Add Tab did not reopen the closed panel");
+        CHECK(dai_dock_visible(dock, "Hierarchy") == 1,
+              "the re-added tab was not selected");
+        no_overlaps("after Add Tab from the leaf menu");
+    }
+    {
+        // The kebab button at the bar's right end: press, release, menu.
+        float px2, py2, pw2, ph2;
+        dai_dock_panel(dock, "Project", &px2, &py2, &pw2, &ph2);
+        dai_dock_panel_end(dock);
+        float kx = px2 + pw2 - 9.0f, ky = py2 - 10.0f;
+        frame_r(kx, ky, 1, 0);            // press the kebab - nothing yet
+        CHECK(dai_dock_is_open(dock, "Project") == 1,
+              "the kebab press alone closed something");
+        frame_r(kx, ky, 0, 0);            // release: the menu opens
+        frame_r(-1, -1, 0, 0);
+        // The popup is clamped to the screen; the Project bar sits at the
+        // right edge, so click well inside where it must have landed.
+        frame_r(W - 100.0f, ky + 4.0f + row_h * 0.5f, 1, 0);  // item 0: Close Tab
+        frame_r(-1, -1, 0, 0);
+        CHECK(dai_dock_is_open(dock, "Project") == 0,
+              "the kebab menu did not open on release (Project never closed)");
+        no_overlaps("after the kebab menu");
+    }
+
     dai_dock_destroy(dock);
     dai_ui_destroy(ui);
     dai_font_free(font);
