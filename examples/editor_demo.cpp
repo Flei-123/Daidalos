@@ -190,6 +190,7 @@ static const char *mesh_name_of(uint32_t mesh, void *) {
     case DAI_MESH_BOX:     return "Box (builtin)";
     case DAI_MESH_SPHERE:  return "Sphere (builtin)";
     case DAI_MESH_CAPSULE: return "Capsule (builtin)";
+    case DAI_MESH_CYLINDER: return "Cylinder (builtin)";
     case DAI_MESH_PLANE:   return "Plane (builtin)";
     default: break;
     }
@@ -309,7 +310,7 @@ int main(int argc, char **argv) {
                       55.0f, 0.1f, 300.0f, (float)W, (float)H);
     dai_editor_ui *panels = dai_editor_ui_create(ed, ui);
     dai_editor_ui_project_host(panels, project_list, project_create, project_open, nullptr);
-    dai_editor_ui_mesh_host(panels, mesh_name_of, 4, nullptr);   // the builtins
+    dai_editor_ui_mesh_host(panels, mesh_name_of, DAI_MESH_BUILTIN_COUNT, nullptr);
     dai_editor_ui_script_host(panels, script_create, nullptr);
     dai_editor_ui_folder_host(panels, folder_create, nullptr);
     g_psettings = &psettings;
