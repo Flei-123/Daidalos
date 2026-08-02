@@ -105,6 +105,39 @@ struct dai_ui {
     // cannot fall through to whatever was underneath it.
     bool in_popup = false;
     bool popup_was_open = false;
+
+    // ---- roots and hit testing ---------------------------------------------
+    // A "root" is anything that can overlap something else: a window, a popup,
+    // a dock panel. Only the FRONTMOST root under the pointer may react to it -
+    // otherwise two things that overlap both take the same click, which is
+    // exactly the bug where the scene view swallowed the panels behind it.
+    struct Root { uint64_t id; float x, y, w, h; int layer; };
+    std::vector<Root> roots;          // this frame, in submit order
+    std::vector<uint64_t> root_stack; // currently open roots
+    uint64_t hover_root = 0;          // decided at the END of the last frame
+    uint64_t hover_root_next = 0;
+    int      hover_root_layer = -1;
+
+    // The popup stack. A popup is a root with a high layer that also BLOCKS
+    // everything below it: the click that closes a menu must not press the
+    // button it lands on.
+    struct Popup { uint64_t id; float x, y, w, h; };
+    std::vector<Popup> popups;
+    uint64_t popup_open_id = 0;       // the one dropdown that is open
+    int      popup_nav = -1;          // highlighted row, keyboard only
+    uint64_t popup_opened_frame_id = 0;
+
+    std::vector<int> layer_stack;
+
+    // Is the widget currently being laid out allowed to react to the pointer?
+    // Inside a root: only if that root is the frontmost one under the pointer.
+    // Outside every root (a toolbar drawn straight onto the surface): yes -
+    // such a widget cannot be overlapped by anything that is not a root.
+    bool root_ok() const {
+        if (root_stack.empty()) return true;
+        for (uint64_t id : root_stack) if (id == hover_root) return true;
+        return false;
+    }
     // What the icon under the pointer means. Collected during the frame and
     // drawn at the very end, on top of everything - a tooltip emitted in place
     // would be painted over by the next window.
@@ -236,6 +269,17 @@ bool inside(const dai_ui *ui, float x, float y, float w, float h) {
     // button through the window lying on top of it still highlights it, and
     // clicking presses both.
     if (ui->blocked) return false;
+    // Same rule, generalised: a widget only reacts if the root it belongs to
+    // is the frontmost root under the pointer. Windows had their own version
+    // of this (covered_by_higher); everything else - dock panels, popups,
+    // the viewport - had none, which is why they fought over clicks.
+    if (!ui->root_ok()) return false;
+    if (!ui->clips.empty()) {
+        // A widget scrolled out of its panel must not react either.
+        const dai_ui::Clip &c = ui->clips.back();
+        if (ui->input.mouse_x < c.x0 || ui->input.mouse_x >= c.x1 ||
+            ui->input.mouse_y < c.y0 || ui->input.mouse_y >= c.y1) return false;
+    }
     return ui->input.mouse_x >= x && ui->input.mouse_x < x + w &&
            ui->input.mouse_y >= y && ui->input.mouse_y < y + h;
 }
@@ -322,6 +366,12 @@ void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in)
     // menu cannot also press the button it lands on.
     ui->in_popup = ui->popup_was_open;
     ui->popup_was_open = false;
+    ui->roots.clear();
+    ui->root_stack.clear();
+    ui->layer_stack.clear();
+    ui->hover_root_next = 0;
+    ui->hover_root_layer = -1;
+    ui->popups.clear();
     if (!ui->dock_area_set) { ui->dock_x = 0; ui->dock_y = 0; ui->dock_w = width; ui->dock_h = height; }
     ui->dock_area_set = false;
     for (auto &w : ui->wins) w.seen = false;
@@ -356,6 +406,9 @@ void dai_ui_end(dai_ui *ui) {
         ui->active = 0; ui->drag_win = 0; ui->size_win = 0; ui->size_edge = 0;
         ui->edit.dragging = false;
     }
+    // Who is in front under the pointer, for the NEXT frame. Cannot be decided
+    // any earlier: the last root submitted may well be the one on top.
+    ui->hover_root = ui->hover_root_next;
     // A window the host stopped drawing loses its slot in the z order rather
     // than sitting there forever blocking clicks with a stale rectangle.
     ui->wins.erase(std::remove_if(ui->wins.begin(), ui->wins.end(),
@@ -391,6 +444,46 @@ void dai_ui_mouse(const dai_ui *ui, float *x, float *y, int *down, int *pressed)
 int dai_ui_wants_mouse(const dai_ui *ui) { return ui && ui->mouse_over_ui ? 1 : 0; }
 
 void dai_ui_claim_mouse(dai_ui *ui) { if (ui) ui->mouse_over_ui = true; }
+
+void dai_ui_root_begin(dai_ui *ui, const char *id_str, float x, float y, float w, float h) {
+    if (!ui) return;
+    uint64_t id = hash_id(id_str ? id_str : "root", 0, 0);
+    int layer = ui->cur_layer;
+    ui->roots.push_back(dai_ui::Root{ id, x, y, w, h, layer });
+    ui->root_stack.push_back(id);
+    // Frontmost wins, and later-submitted wins a tie: within one layer the
+    // host's own order is the z order.
+    float mx = ui->input.mouse_x, my = ui->input.mouse_y;
+    if (mx >= x && mx < x + w && my >= y && my < y + h && layer >= ui->hover_root_layer) {
+        ui->hover_root_next = id;
+        ui->hover_root_layer = layer;
+    }
+}
+
+void dai_ui_root_end(dai_ui *ui) {
+    if (ui && !ui->root_stack.empty()) ui->root_stack.pop_back();
+}
+
+int dai_ui_root_hovered(const dai_ui *ui, const char *id_str) {
+    if (!ui) return 0;
+    return ui->hover_root == hash_id(id_str ? id_str : "root", 0, 0) ? 1 : 0;
+}
+
+void dai_ui_layer_push(dai_ui *ui, int layer) {
+    if (!ui) return;
+    ui->layer_stack.push_back(ui->cur_layer);
+    ui->cur_layer = layer;
+}
+
+void dai_ui_layer_pop(dai_ui *ui) {
+    if (!ui || ui->layer_stack.empty()) return;
+    ui->cur_layer = ui->layer_stack.back();
+    ui->layer_stack.pop_back();
+}
+
+int dai_ui_popup_active(const dai_ui *ui) {
+    return ui && (ui->popup_open_id != 0 || ui->popup_was_open) ? 1 : 0;
+}
 int  dai_ui_cursor(const dai_ui *ui) { return ui ? ui->cursor_want : DAI_CURSOR_ARROW; }
 void dai_ui_cursor_set(dai_ui *ui, int cursor) { if (ui) ui->cursor_want = cursor; }
 int  dai_ui_text_active(const dai_ui *ui) { return ui && ui->edit.editing ? 1 : 0; }
@@ -419,6 +512,26 @@ void dai_ui_rect_outline(dai_ui *ui, float x, float y, float w, float h, float t
 void dai_ui_line(dai_ui *ui, float x0, float y0, float x1, float y1,
                  float thickness, uint32_t color) {
     if (!ui) return;
+    // Lines go through quad4, which is not axis aligned and therefore cannot
+    // be cut the way a rectangle is. So the SEGMENT is clipped instead, before
+    // the quad exists - Liang-Barsky, exact, and it is what stopped a scrolled
+    // hierarchy from drawing its fold arrows above the panel and a gizmo from
+    // drawing over the inspector.
+    if (!ui->clips.empty()) {
+        const dai_ui::Clip &c = ui->clips.back();
+        float p[4] = { -(x1 - x0), (x1 - x0), -(y1 - y0), (y1 - y0) };
+        float q[4] = { x0 - c.x0, c.x1 - x0, y0 - c.y0, c.y1 - y0 };
+        float t0 = 0.0f, t1 = 1.0f;
+        for (int i = 0; i < 4; ++i) {
+            if (p[i] == 0.0f) { if (q[i] < 0.0f) return; continue; }
+            float t = q[i] / p[i];
+            if (p[i] < 0.0f) { if (t > t1) return; if (t > t0) t0 = t; }
+            else             { if (t < t0) return; if (t < t1) t1 = t; }
+        }
+        float ox0 = x0, oy0 = y0, odx = x1 - x0, ody = y1 - y0;
+        x0 = ox0 + t0 * odx; y0 = oy0 + t0 * ody;
+        x1 = ox0 + t1 * odx; y1 = oy0 + t1 * ody;
+    }
     float dx = x1 - x0, dy = y1 - y0;
     float len = std::sqrt(dx*dx + dy*dy);
     if (len < 1e-4f) return;
@@ -713,8 +826,11 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
     }
 
     ui->blocked = ui->covered_by_higher(id, mx, my);
-    ui->cur_layer = ui->layer_of(id);
+    ui->cur_layer = DAI_LAYER_WINDOW + ui->layer_of(id);
     ui->win_depth++;
+    // A window is a root: everything inside it is only live while it is the
+    // frontmost thing under the pointer.
+    dai_ui_root_begin(ui, title ? title : "window", win->x, win->y, win->w, full_h);
 
     bool over_win = !ui->blocked && mx >= win->x - 3.0f && mx < win->x + win->w + 3.0f &&
                     my >= win->y - 3.0f && my < win->y + full_h + 3.0f;
@@ -784,12 +900,24 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
     dai_ui_rect_outline(ui, win->x, win->y, win->w, full_h, st.border,
                         focused ? st.accent : st.panel_border);
 
-    dai_ui_text(ui, win->x + 5.0f, win->y + 3.0f, win->collapsed ? "\xe2\x96\xb8" : "\xe2\x96\xbe",
-                st.text_dim);
+    // The window menu button - Unity's ⋮, and the reason the fold arrow is
+    // gone: collapsing a docked window does nothing useful, and the arrow was
+    // drawn with a glyph this font does not have, so it showed up as a '?'.
+    {
+        float bx = win->x + 4.0f, by = win->y + 3.0f, bs = bar - 6.0f;
+        bool over_btn = !ui->blocked && mx >= bx && mx < bx + bs && my >= by && my < by + bs;
+        if (over_btn) dai_ui_rect(ui, bx, by, bs, bs, st.button_hover);
+        uint32_t col = over_btn ? st.text : st.text_dim;
+        float cx = bx + bs * 0.5f, cy = by + bs * 0.5f;
+        for (int i = -1; i <= 1; ++i)
+            dai_ui_rect(ui, cx - 1.0f, cy - 1.0f + (float)i * 4.0f, 2.0f, 2.0f, col);
+        if (over_btn && pressed) win->menu_wanted = 1;
+    }
     // A viewport window's bar belongs to its tabs - printing the title there
     // too would draw "Scene" under the Scene tab.
     if (!win->viewport)
         dai_ui_text(ui, win->x + bar, win->y + 3.0f, title ? title : "", st.text);
+    (void)0;
 
     if (win->collapsed) return 0;
 
@@ -818,6 +946,7 @@ int dai_ui_window_begin(dai_ui *ui, const char *title, dai_ui_window *win) {
 
 void dai_ui_window_end(dai_ui *ui) {
     if (!ui) return;
+    dai_ui_root_end(ui);
     if (ui->win_depth > 0) {
         ui->win_depth--;
         if (!ui->clips.empty()) ui->clips.pop_back();
@@ -1207,7 +1336,14 @@ int dai_ui_header_icon(dai_ui *ui, const char *icon, const char *title,
         dai_ui_icon_at(ui, chev, tx, y + (h - isz) * 0.5f, isz, ui->style.text_dim);
         tx += isz + 3.0f;
     } else {
-        dai_ui_text(ui, tx, y + 2.0f, folded ? "\xe2\x96\xb8" : "\xe2\x96\xbe", ui->style.text_dim);
+        float ax = tx + 5.0f, ay = y + h * 0.5f;
+        if (folded) {
+            dai_ui_line(ui, ax - 1.5f, ay - 3.5f, ax + 2.5f, ay, 1.6f, ui->style.text_dim);
+            dai_ui_line(ui, ax + 2.5f, ay, ax - 1.5f, ay + 3.5f, 1.6f, ui->style.text_dim);
+        } else {
+            dai_ui_line(ui, ax - 3.5f, ay - 1.5f, ax, ay + 2.5f, 1.6f, ui->style.text_dim);
+            dai_ui_line(ui, ax, ay + 2.5f, ax + 3.5f, ay - 1.5f, 1.6f, ui->style.text_dim);
+        }
         tx += 14.0f;
     }
     if (icon && dai_ui_has_icon(ui, icon)) {
@@ -1335,23 +1471,127 @@ int dai_ui_option(dai_ui *ui, const char *label, int *value,
     if (!ui || !value || !items || count <= 0) return 0;
     float h = widget_height(ui), x, y, w;
     field_rect(ui, label, &x, &y, &w, h);
-    uint64_t id = hash_id(label ? label : "opt", x, y);
-    bool over = inside_chk(ui, x, y, w, h);
-    if (over) { ui->hot = id; ui->mouse_over_ui = true; }
-    int changed = 0;
-    if (over && ui->input.mouse_down && !ui->prev.mouse_down) {
-        *value = (*value + 1) % count;
-        changed = 1;
-    }
+    return dai_ui_option_at(ui, label ? label : "opt", x, y, w, h, value, items, count);
+}
+
+int dai_ui_option_at(dai_ui *ui, const char *id_str, float x, float y, float w, float h,
+                     int *value, const char *const *items, int count) {
+    if (!ui || !value || !items || count <= 0) return 0;
+    uint64_t id = hash_id(id_str ? id_str : "opt", x, y);
     if (*value < 0) *value = 0;
     if (*value >= count) *value = count - 1;
-    dai_ui_rect(ui, x, y + 2.0f, w, h - 4.0f, over ? ui->style.button_hover : ui->style.button);
-    dai_ui_text(ui, x + 7.0f, y + ui->style.row_pad * 0.5f, items[*value], ui->style.text);
-    // A chevron, drawn - the "?" the old "▸" glyph fell back to looked like an
-    // error, and it was one: the font simply does not have that code point.
-    float cx = x + w - 12.0f, cy = y + h * 0.5f;
-    dai_ui_line(ui, cx - 3.0f, cy - 2.5f, cx + 1.0f, cy + 1.5f, 1.5f, ui->style.text_dim);
-    dai_ui_line(ui, cx + 1.0f, cy + 1.5f, cx + 5.0f, cy - 2.5f, 1.5f, ui->style.text_dim);
+
+    bool open = (ui->popup_open_id == id);
+    bool over = open ? inside(ui, x, y, w, h) : inside_chk(ui, x, y, w, h);
+    if (over) { ui->hot = id; ui->mouse_over_ui = true; }
+    int changed = 0;
+    bool pressed = ui->input.mouse_down && !ui->prev.mouse_down;
+
+    if (over && pressed && !open) {
+        // Opening is a state change that has to survive the frame - which is
+        // the whole reason the old version was a click-to-cycle button: an
+        // immediate mode widget with no retained state cannot stay open.
+        ui->popup_open_id = id;
+        ui->popup_nav = *value;
+        ui->popup_opened_frame_id = id;
+        open = true;
+    }
+
+    // ---- the closed field
+    dai_ui_rect(ui, x, y + 1.0f, w, h - 2.0f,
+                open ? ui->style.button_hover : (over ? ui->style.button_hover : ui->style.track));
+    dai_ui_rect_outline(ui, x, y + 1.0f, w, h - 2.0f, 1.0f,
+                        open ? ui->style.accent : ui->style.panel_border);
+    dai_ui_text(ui, x + 6.0f, y + (h - dai_font_line_height(ui->font)) * 0.5f,
+                items[*value], ui->style.text);
+    {   // the arrow, drawn: the font has no U+25BE, and a missing glyph is
+        // what put a '?' in every dropdown in this editor for weeks
+        float cx = x + w - 11.0f, cy = y + h * 0.5f;
+        dai_ui_line(ui, cx - 3.5f, cy - 2.0f, cx, cy + 2.0f, 1.5f, ui->style.text_dim);
+        dai_ui_line(ui, cx, cy + 2.0f, cx + 3.5f, cy - 2.0f, 1.5f, ui->style.text_dim);
+    }
+    if (!open) return 0;
+
+    // ---- the open list: its own root, its own layer, above everything
+    float row = dai_font_line_height(ui->font) + 6.0f;
+    float lh = row * (float)count + 4.0f;
+    float lx = x, ly = y + h;
+    float lw = w < 90.0f ? 90.0f : w;
+    for (int i = 0; i < count; ++i) {
+        float tw = dai_ui_text_width(ui, items[i]) + 28.0f;
+        if (tw > lw) lw = tw;
+    }
+    if (ly + lh > ui->height) {           // no room below: flip above the field
+        float above = y - lh;
+        ly = above >= 0.0f ? above : ui->height - lh - 2.0f;
+    }
+    if (lx + lw > ui->width) lx = ui->width - lw - 2.0f;
+    if (lx < 0) lx = 0;
+    if (ly < 0) ly = 0;
+
+    int save_layer = ui->cur_layer;
+    std::vector<dai_ui::Clip> save_clips;
+    save_clips.swap(ui->clips);                 // a list is never clipped by its panel
+    bool save_blocked = ui->blocked;
+    bool save_in_popup = ui->in_popup;
+    ui->blocked = false;
+    ui->in_popup = false;
+    ui->cur_layer = DAI_LAYER_POPUP;
+    dai_ui_root_begin(ui, "##dropdown", lx, ly, lw, lh);
+
+    dai_ui_rect(ui, lx + 2.0f, ly + 3.0f, lw, lh, ui->style.shadow);
+    dai_ui_rect(ui, lx, ly, lw, lh, ui->style.panel);
+    dai_ui_rect_outline(ui, lx, ly, lw, lh, 1.0f, ui->style.accent);
+
+    float mx = ui->input.mouse_x, my = ui->input.mouse_y;
+    bool over_list = mx >= lx && mx < lx + lw && my >= ly && my < ly + lh;
+    int hovered = over_list ? (int)((my - ly - 2.0f) / row) : -1;
+    if (hovered >= count) hovered = -1;
+    if (hovered >= 0) ui->popup_nav = hovered;
+
+    // Keyboard: the highlight moves, the VALUE does not - committing on every
+    // arrow press is the cycling behaviour again, just with a list drawn.
+    if (ui->input.key_down_arrow || ui->input.key_up_arrow) {
+        ui->popup_nav += ui->input.key_down_arrow ? 1 : -1;
+        if (ui->popup_nav < 0) ui->popup_nav = 0;
+        if (ui->popup_nav >= count) ui->popup_nav = count - 1;
+    }
+    if (ui->input.key_home) ui->popup_nav = 0;
+    if (ui->input.key_end)  ui->popup_nav = count - 1;
+
+    for (int i = 0; i < count; ++i) {
+        float ry = ly + 2.0f + row * (float)i;
+        bool sel = (i == *value);
+        if (i == ui->popup_nav)
+            dai_ui_rect(ui, lx + 1.0f, ry, lw - 2.0f, row, ui->style.accent);
+        if (sel) {   // a tick on the current value, like every real dropdown
+            float cx = lx + 8.0f, cy = ry + row * 0.5f;
+            dai_ui_line(ui, cx - 3.0f, cy, cx - 1.0f, cy + 3.0f, 1.6f, ui->style.text);
+            dai_ui_line(ui, cx - 1.0f, cy + 3.0f, cx + 4.0f, cy - 3.5f, 1.6f, ui->style.text);
+        }
+        dai_ui_text(ui, lx + 18.0f, ry + 3.0f, items[i], ui->style.text);
+    }
+
+    int commit = -1;
+    if (pressed && ui->popup_opened_frame_id != id) {
+        if (hovered >= 0) commit = hovered;
+        else if (!over_list) { ui->popup_open_id = 0; }   // click outside = cancel
+    }
+    if (ui->input.key_enter && ui->popup_nav >= 0) commit = ui->popup_nav;
+    if (ui->input.key_escape) ui->popup_open_id = 0;
+    if (commit >= 0) {
+        if (commit != *value) { *value = commit; changed = 1; }
+        ui->popup_open_id = 0;
+    }
+
+    dai_ui_root_end(ui);
+    ui->cur_layer = save_layer;
+    ui->clips.swap(save_clips);
+    ui->blocked = save_blocked;
+    ui->in_popup = save_in_popup;
+    ui->mouse_over_ui = true;
+    if (ui->popup_open_id == id) ui->popup_was_open = true;   // blocks everyone else
+    ui->popup_opened_frame_id = 0;
     return changed;
 }
 
@@ -1763,8 +2003,16 @@ int dai_ui_tree_item_ex(dai_ui *ui, const char *label, int depth,
             dai_ui_icon_at(ui, chev, x + indent + 1.0f, y + (h - isz) * 0.5f, isz,
                            ui->style.text_dim);
         } else {
-            dai_ui_text(ui, x + indent + 2.0f, y + 1.0f, *open ? "\xe2\x96\xbe" : "\xe2\x96\xb8",
-                        ui->style.text_dim);
+            // Drawn, not typed: this font has no U+25B8/U+25BE, and a missing
+            // glyph renders as a '?' - which is what the hierarchy showed.
+            float ax = x + indent + 4.0f, ay = y + h * 0.5f;
+            if (*open) {
+                dai_ui_line(ui, ax - 3.0f, ay - 1.5f, ax, ay + 2.5f, 1.5f, ui->style.text_dim);
+                dai_ui_line(ui, ax, ay + 2.5f, ax + 3.0f, ay - 1.5f, 1.5f, ui->style.text_dim);
+            } else {
+                dai_ui_line(ui, ax - 1.5f, ay - 3.0f, ax + 2.5f, ay, 1.5f, ui->style.text_dim);
+                dai_ui_line(ui, ax + 2.5f, ay, ax - 1.5f, ay + 3.0f, 1.5f, ui->style.text_dim);
+            }
         }
     }
     dai_ui_text(ui, x + indent + arrow_w + 2.0f, y + 1.0f, label, ui->style.text);
