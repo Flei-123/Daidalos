@@ -79,6 +79,12 @@ DAI_API int  dai_dock_is_open(const dai_dock *d, const char *title);
 /* Every registered panel, for a Window menu. */
 DAI_API uint32_t dai_dock_panels(const dai_dock *d, const char **out, uint32_t max);
 
+/* Two tabs that can never be separated into different leaves: dragging one
+ * takes the other with it, however it lands. Scene and Game are the case this
+ * exists for - the host renders one world per frame, so the two views of it
+ * must share a leaf. Survives dai_dock_reset. */
+DAI_API void dai_dock_lock_pair(dai_dock *d, const char *a, const char *b);
+
 /* Throws the layout away and re-applies the registration order. */
 DAI_API void dai_dock_reset(dai_dock *d);
 

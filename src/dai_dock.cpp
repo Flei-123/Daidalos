@@ -6,6 +6,8 @@
 
 #include "dai_dock.h"
 
+#include "dai_icons.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -117,6 +119,19 @@ struct dai_dock {
     int   panel_depth = 0;
     bool  prev_down = false;
 
+    // Two tabs that must stay in one leaf (Scene and Game): the host renders
+    // one world per frame, so the two views of it cannot live apart.
+    std::string lock_a, lock_b;
+
+    // The leaf menu: the kebab button at the bar's right end, or a right
+    // click anywhere on the bar. Opens on RELEASE for the left button (it is
+    // a button), immediately for the right one.
+    dai_ui_popup leaf_menu{};
+    Node *menu_leaf = nullptr;
+    std::string menu_tab;
+    int   menu_bar_pressed = 0;      // this frame's press was the menu's
+    int   menu_pending = 0;          // left press on the kebab, awaiting release
+
     Node *find(const std::string &t, int *idx) {
         Node *n = find_tab(root, t, idx);
         if (n) return n;
@@ -225,6 +240,71 @@ void add_tab_to(Node *leaf, const std::string &title, bool select, int at = -1) 
     else if (leaf->selected >= at) leaf->selected++;   // keep pointing at the same tab
     if (leaf->selected >= (int)leaf->tabs.size()) leaf->selected = (int)leaf->tabs.size() - 1;
     if (leaf->selected < 0) leaf->selected = 0;
+}
+
+// Scene and Game are two views of ONE world, and the host renders that world
+// once per frame into a single rectangle - so the two tabs can never live in
+// different leaves. Whatever just moved (a drop, a restored layout), the
+// partner follows. `keep` is the tab whose location wins: the one that was
+// just dragged, or the first of the pair on a restore.
+void enforce_pair(dai_dock *d, const std::string &keep) {
+    if (!d || d->lock_a.empty() || d->lock_b.empty()) return;
+    const std::string &win   = keep == d->lock_b ? d->lock_b : d->lock_a;
+    const std::string &other = keep == d->lock_b ? d->lock_a : d->lock_b;
+    Node *wk = d->find(win, nullptr);
+    Node *ok = d->find(other, nullptr);
+    if (!wk || !ok || wk == ok) return;
+    remove_tab(d, other);
+    wk = d->find(win, nullptr);      // the tree may have shifted under it
+    if (wk) add_tab_to(wk, other, false);
+}
+
+void layout(Node *n, Rect r);   // defined just below; the menu relayouts after Add Tab
+
+// The panel's own menu, Unity's tab context menu: close this tab, or pull
+// another panel into this leaf as a tab. Runs from dai_dock_end so it draws
+// above every panel.
+void run_leaf_menu(dai_dock *d) {
+    if (!d->leaf_menu.open) return;
+    dai_ui *ui = d->ui;
+    // The leaf the menu belongs to can vanish under it (its last tab closed).
+    std::vector<Node *> all;
+    collect_leaves(d->root, &all);
+    for (auto &f : d->floats) collect_leaves(f.root, &all);
+    if (std::find(all.begin(), all.end(), d->menu_leaf) == all.end()) {
+        dai_ui_popup_close(&d->leaf_menu);
+        d->menu_leaf = nullptr;
+        return;
+    }
+    std::vector<dai_ui_menu_item> items;
+    std::vector<std::string> storage;
+    std::vector<int> addable;                    // item index - 1 -> regs index
+    items.push_back({ DAI_ICON_CLOSE, "Close Tab", nullptr });
+    for (size_t i = 0; i < d->regs.size(); ++i) {
+        const std::string &t = d->regs[i].title;
+        if (find_tab(d->menu_leaf, t.c_str(), nullptr)) continue;  // already here
+        storage.push_back("Add Tab: " + t);
+        items.push_back({ DAI_ICON_PLUS, storage.back().c_str(), nullptr });
+        addable.push_back((int)i);
+    }
+    int pick = dai_ui_popup_menu(ui, &d->leaf_menu, items.data(), (uint32_t)items.size());
+    if (pick == -2) return;
+    if (pick == 0) {
+        // "Close Tab" - the closed list remembers it, so Add Tab can undo it.
+        if (!d->is_closed(d->menu_tab)) d->closed.push_back(d->menu_tab);
+        remove_tab(d, d->menu_tab);
+    } else if (pick > 0 && pick - 1 < (int)addable.size()) {
+        const std::string &t = d->regs[(size_t)addable[(size_t)(pick - 1)]].title;
+        auto it = std::find(d->closed.begin(), d->closed.end(), t);
+        if (it != d->closed.end()) d->closed.erase(it);
+        // A panel is a singleton: adding it here MOVES it here.
+        remove_tab(d, t);
+        add_tab_to(d->menu_leaf, t, true);
+        enforce_pair(d, t);
+        layout(d->root, d->area);
+        for (auto &f : d->floats) layout(f.root, f.rect);
+    }
+    d->menu_leaf = nullptr;
 }
 
 // ---- layout ---------------------------------------------------------------
@@ -354,6 +434,12 @@ void dai_dock_add_tab(dai_dock *d, const char *title, const char *next_to) {
     if (host) add_tab_to(host, title, false);
 }
 
+void dai_dock_lock_pair(dai_dock *d, const char *a, const char *b) {
+    if (!d || !a || !b) return;
+    d->lock_a = a;
+    d->lock_b = b;
+}
+
 void dai_dock_reset(dai_dock *d) {
     if (!d) return;
     free_tree(d->root);
@@ -434,6 +520,10 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
         }
     }
 
+    // A restored layout may have split a locked pair apart (a file written
+    // before the lock existed): fuse it back before anyone sees it.
+    enforce_pair(d, d->lock_a);
+
     layout(d->root, d->area);
     for (auto &f : d->floats) {
         // Keep floating windows on the surface: one dragged off the bottom can
@@ -488,7 +578,7 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
             if (!hit(sr, mx, my)) continue;
             dai_ui_cursor_set(ui, n->axis == 1 ? DAI_CURSOR_SIZE_WE : DAI_CURSOR_SIZE_NS);
             dai_ui_claim_mouse(ui);
-            if (pressed) d->split_drag = n;
+            if (pressed && !dai_ui_popup_active(ui)) d->split_drag = n;
             break;
         }
     }
@@ -541,8 +631,81 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
         }
     }
 
-    if (pressed && hit_float) hit_float->z = ++d->next_z;
-    if (pressed && hit_leaf && hit_tab >= 0) {
+    // ---- the leaf menu: the kebab button, or a right click on the bar ----
+    // Unity puts the panel's own menu there (Close Tab, Add Tab). A button
+    // that only ever drew itself is why "the three dots do nothing".
+    d->menu_bar_pressed = 0;
+    {
+        int right_pressed = dai_ui_right_pressed(ui);
+        if ((pressed || right_pressed) && !d->dragging && !d->leaf_menu.open) {
+            Node *bar_leaf = nullptr;
+            int   bar_tab = -1;
+            bool  consumed = false;      // a floating window eats what is under it
+            auto probe = [&](Node *leaf) -> bool {
+                Rect lr = leaf->rect;
+                if (my < lr.y || my >= lr.y + TAB_H || mx < lr.x || mx >= lr.x + lr.w)
+                    return false;
+                bool on_dots = mx >= lr.x + lr.w - 18.0f;
+                float tx0 = 0, tw0 = 0;
+                int t = tab_at(ui, leaf, mx, &tx0, &tw0);
+                if (right_pressed || on_dots) { bar_leaf = leaf; bar_tab = t; }
+                return true;
+            };
+            for (auto it = order.rbegin(); it != order.rend(); ++it) {
+                if (!hit(it->second->rect, mx, my)) continue;
+                consumed = true;
+                std::vector<Node *> fl;
+                collect_leaves(it->second->root, &fl);
+                for (Node *leaf : fl) if (probe(leaf)) break;
+                break;
+            }
+            if (!bar_leaf && !consumed)
+                for (Node *leaf : leaves) { if (probe(leaf)) break; }
+            if (bar_leaf) {
+                int sel = bar_tab >= 0 ? bar_tab : bar_leaf->selected;
+                if (sel >= 0 && sel < (int)bar_leaf->tabs.size()) {
+                    if (right_pressed) {
+                        // A right click selects the tab it landed on, like Unity.
+                        if (bar_tab >= 0) bar_leaf->selected = bar_tab;
+                        d->menu_tab = bar_leaf->tabs[(size_t)sel];
+                        d->menu_leaf = bar_leaf;
+                        dai_ui_popup_open(&d->leaf_menu, mx, my);
+                    } else {
+                        // The kebab is a button: it opens on release, or the
+                        // press that opened it would count as a click on the
+                        // first item.
+                        d->menu_pending = 1;
+                        d->menu_leaf = bar_leaf;
+                        d->menu_tab = bar_leaf->tabs[(size_t)sel];
+                    }
+                    d->menu_bar_pressed = 1;
+                    d->split_drag = nullptr;   // the kebab corner can sit on a splitter
+                    dai_ui_claim_mouse(ui);
+                }
+            }
+        }
+        // The kebab click completes on release, still over the button.
+        if (d->menu_pending && !down) {
+            Node *leaf = d->menu_leaf;
+            std::vector<Node *> all;
+            collect_leaves(d->root, &all);
+            for (auto &f : d->floats) collect_leaves(f.root, &all);
+            bool alive = std::find(all.begin(), all.end(), leaf) != all.end();
+            Rect lr = alive ? leaf->rect : Rect{ 0, 0, 0, 0 };
+            if (alive && my >= lr.y && my < lr.y + TAB_H &&
+                mx >= lr.x + lr.w - 18.0f && mx < lr.x + lr.w)
+                dai_ui_popup_open(&d->leaf_menu, mx, my);
+            else
+                d->menu_leaf = nullptr;
+            d->menu_pending = 0;
+        } else if (d->menu_pending) {
+            dai_ui_claim_mouse(ui);
+        }
+    }
+
+    if (pressed && hit_float && !d->menu_bar_pressed) hit_float->z = ++d->next_z;
+    if (pressed && hit_leaf && hit_tab >= 0 && !d->menu_bar_pressed &&
+        !dai_ui_popup_active(ui)) {
         hit_leaf->selected = hit_tab;
         d->drag_armed = true;
         d->drag_title = hit_leaf->tabs[(size_t)hit_tab];
@@ -550,7 +713,8 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
         d->grab_dx = mx - hit_x;
         d->grab_dy = my - hit_leaf->rect.y;
         dai_ui_claim_mouse(ui);
-    } else if (pressed && hit_float) {
+    } else if (pressed && hit_float && !d->menu_bar_pressed &&
+               !dai_ui_popup_active(ui)) {
         // Pressed the title area of a floating window: move the whole thing.
         d->drag_float = hit_float;
         d->grab_dx = mx - hit_float->rect.x;
@@ -645,6 +809,9 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
                 }
             }
         }
+        // The dragged tab landed wherever it landed; its locked partner
+        // follows it there - the two can never end up in different leaves.
+        enforce_pair(d, title);
         d->dragging = false;
         d->drag_armed = false;
         d->drag_title.clear();
@@ -687,7 +854,7 @@ void dai_dock_panel_end(dai_dock *d) {
 
 void dai_dock_end(dai_dock *d) {
     if (!d || !d->ui) return;
-    if (!d->dragging) return;
+    if (!d->dragging) { run_leaf_menu(d); return; }
     dai_ui *ui = d->ui;
     const dai_ui_style *st = dai_ui_style_of(ui);
     dai_ui_layer_push(ui, DAI_LAYER_DOCK_PREVIEW);

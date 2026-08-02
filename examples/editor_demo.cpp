@@ -106,9 +106,10 @@ static int script_create(const char *name, void *) {
     if (!name || !*name || !g_assets_dir[0]) return 0;
     for (const char *c = name; *c; ++c) {
         bool ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
-                  (*c >= '0' && *c <= '9') || *c == '-' || *c == '_';
+                  (*c >= '0' && *c <= '9') || *c == '-' || *c == '_' || *c == '/';
         if (!ok) return 0;
     }
+    if (std::strstr(name, "..")) return 0;   // never escape the assets folder
     char path[640];
     std::snprintf(path, sizeof(path), "%s/%s.js", g_assets_dir, name);
     FILE *f = std::fopen(path, "wb");

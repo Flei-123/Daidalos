@@ -442,6 +442,8 @@ void dai_ui_mouse(const dai_ui *ui, float *x, float *y, int *down, int *pressed)
     if (pressed) *pressed = (ui->input.mouse_down && !ui->prev.mouse_down) ? 1 : 0;
 }
 
+float dai_ui_wheel(const dai_ui *ui) { return ui ? ui->input.wheel : 0.0f; }
+
 int dai_ui_wants_mouse(const dai_ui *ui) { return ui && ui->mouse_over_ui ? 1 : 0; }
 
 void dai_ui_claim_mouse(dai_ui *ui) { if (ui) ui->mouse_over_ui = true; }
