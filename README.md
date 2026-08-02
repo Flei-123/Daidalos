@@ -1046,6 +1046,59 @@ projection's centre moves with the window. `tests/test_ui_window.cpp` section
 and saved, but nothing RUNS them on a node yet - the QuickJS runtime exists
 (`dai_script`), the per-node binding into play mode is the next step.
 
+## Panels tile, and the deep end of getting there
+
+The editor was rebuilt around the model Unity's editor actually uses, after
+reading its source (UnityCsReference is public) rather than guessing from the
+outside. Three findings decided everything else:
+
+**A layout is a tree, not a set of edges.** `ContainerWindow` → a tree of
+`SplitView`s → `DockArea` leaves that hold a list of tabs. Every rectangle is
+disjoint from every other, so a docked panel *cannot* overlap another one -
+that is not a rule the code enforces, it is a state the data cannot represent.
+The old system here docked to edges and let the rest float, which is why the
+scene view ended up lying on top of the inspector and swallowing its clicks.
+`dai_dock` is the tree: split nodes with a ratio, leaves with tabs, floating
+roots for what has been torn out. `tests/test_dock.cpp` checks every visible
+rectangle against every other after splits, tab drags, tear-offs and drops.
+
+**Scene and Game are ordinary windows.** Nothing about them is special in
+Unity; they are two `EditorWindow`s that happen to sit in one `DockArea`. Here
+they are two tabs of one leaf, the 3D is rendered into that leaf's body
+(`dai_render_world_clip`), and Play just selects the other tab.
+
+**A drag has three outcomes, and the third is a new window.** Unity searches
+the window edges first (70 px), then tab bars (39 px), then view edges (a third
+of the child, capped at 300 px) - and if nothing claims the drop, the tab
+becomes a floating `ContainerWindow` of its own. That is why "drop it nowhere"
+has to be a *supported* gesture rather than a cancelled drag.
+
+Two more things came out of the same reading:
+
+**Popups have to be drawn last and hit-tested first.** In an immediate mode UI
+the order widgets are submitted in is the order they are laid out in, which is
+almost never the order they should be painted in. So: draw layers, sorted at
+the end of the frame; a *hover root* decided at the end of one frame and used
+by the next (one frame of lag, invisible, and unavoidable - who is on top is
+not known until everyone has been laid out); and one hit-test rule, geometry ∧
+clip rectangle ∧ "is my root the frontmost one", which replaced three ad-hoc
+rules that each covered a different third of the problem. Dropdowns are real
+now: a list over everything, arrow keys moving a highlight, Enter to commit,
+Escape and click-outside to cancel. The old one added one to the index per
+click - a counter with a label.
+
+**A '?' is a missing glyph.** The fold arrows and the dropdown marker were
+U+25B8/U+25BE, which this font does not have. Missing glyphs render as '?', so
+every window and every dropdown wore one for weeks. They are drawn as lines
+now - and `dai_ui_line` clips its segment (Liang-Barsky) instead of hoping,
+because a line is not axis aligned and the rectangle clipper cannot cut it: a
+scrolled tree was drawing its arrows above the panel, and gizmo lines were
+drawing over the inspector.
+
+The fold button is gone entirely, replaced by the window menu button - Unity
+made the same call, and for the same reason: collapsing a docked panel does
+nothing anybody wants.
+
 ## What is still missing
 
 Kept honest: things listed here are genuinely absent, and things that got built
