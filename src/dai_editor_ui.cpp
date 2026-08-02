@@ -172,6 +172,8 @@ struct dai_editor_ui {
 
     // ---- settings ----------------------------------------------------------
     float settings_font_px = 13.0f;
+    int   settings_tab = 0;
+    void (*proj_settings_host)(void *user) = nullptr;
     int   settings_theme = 0;
     float settings_gizmo_px = 90.0f;
     float settings_snap = 0.0f;
@@ -379,6 +381,12 @@ void dai_editor_ui_script_host(dai_editor_ui *p,
 
 const char *dai_editor_ui_project(const dai_editor_ui *p) {
     return p ? p->proj_current.c_str() : "";
+}
+
+void dai_editor_ui_project_settings_host(dai_editor_ui *p, void (*draw)(void *user), void *user) {
+    if (!p) return;
+    p->proj_settings_host = draw;
+    if (user) p->proj_user = user;
 }
 
 void dai_editor_ui_folder_host(dai_editor_ui *p,
@@ -1279,6 +1287,28 @@ static int view_tab(dai_editor_ui *p, float x, float y, float w, float h,
 static void settings_body(dai_editor_ui *p) {
     dai_ui *ui = p->ui;
     fit_label_column(ui);
+
+    // Two halves, and the split is the point (it is Unity's): what is above
+    // describes THIS DESK and lives outside the project; what is below
+    // describes the GAME and lives in the project, in version control, the
+    // same for everyone on the team.
+    dai_ui_row(ui, 22.0f);
+    if (dai_ui_button(ui, p->settings_tab == 0 ? "[Preferences]" : "Preferences")) p->settings_tab = 0;
+    if (dai_ui_button(ui, p->settings_tab == 1 ? "[Project Settings]" : "Project Settings")) p->settings_tab = 1;
+    dai_ui_row_end(ui);
+    dai_ui_separator(ui);
+    if (p->settings_tab == 1) {
+        dai_ui_label(ui, "These belong to the project, not to you:");
+        dai_ui_label(ui, "they are saved in settings/project.txt and");
+        dai_ui_label(ui, "shared with everyone who opens it.");
+        dai_ui_separator(ui);
+        if (p->proj_settings_host) {
+            p->proj_settings_host(p->proj_user);
+        } else {
+            dai_ui_label(ui, "no project open");
+        }
+        return;
+    }
 
     dai_ui_label(ui, "Appearance");
     // Font size is the ONE thing the host owns (it made the font and the

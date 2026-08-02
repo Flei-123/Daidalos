@@ -144,6 +144,11 @@ DAI_API void dai_editor_ui_script_host(dai_editor_ui *p,
 DAI_API void dai_editor_ui_folder_host(dai_editor_ui *p,
                                        int (*create)(const char *name, void *user),
                                        void *user);
+/* The Project Settings half of the Settings panel. The editor does not know
+ * what a project setting IS - gravity and tick rate belong to the host's
+ * project layer - so the host draws that half with plain dai_ui widgets. */
+DAI_API void dai_editor_ui_project_settings_host(dai_editor_ui *p,
+                                                 void (*draw)(void *user), void *user);
 DAI_API int  dai_editor_ui_take_save(dai_editor_ui *p);
 DAI_API int  dai_editor_ui_take_refresh(dai_editor_ui *p);
 

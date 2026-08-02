@@ -74,6 +74,7 @@ g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_scene.cpp -o build/dai_scene.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_input.cpp -o build/dai_input.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor.cpp -o build/dai_editor.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_dock.cpp -o build/dai_dock.o
+g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_project.cpp -o build/dai_project.o
 
 echo "-- scene document (editor truth: stable ids, generic undo)"
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc.cpp -o build/dai_doc.o
@@ -82,7 +83,7 @@ g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_sync.cpp -o build/dai_doc_sync.o
 
 ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o ${TALOS_OBJ} \
        build/dai_audio.o build/dai_scene.o build/dai_input.o build/dai_editor.o \
-       build/dai_doc.o build/dai_doc_text.o build/dai_doc_sync.o
+       build/dai_doc.o build/dai_doc_text.o build/dai_doc_sync.o build/dai_project.o
 
 echo "-- shaders"
 if command -v glslangValidator >/dev/null 2>&1; then
@@ -296,6 +297,9 @@ if [ "$VK_OK" = "1" ]; then
     # rewrite exists for.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_dock.cpp src/dai_dock.cpp src/dai_ui.cpp \
         src/dai_font.cpp src/dai_svg.cpp src/dai_icons.cpp -o build/test_dock && ./build/test_dock
+    # A folder is a project: creation, validation, settings round trip.
+    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_project.cpp src/dai_project.cpp \
+        -o build/test_project && ./build/test_project
     g++ $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
     if [ -n "$ASSETS_LIB" ]; then
