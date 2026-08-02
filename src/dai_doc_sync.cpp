@@ -82,7 +82,10 @@ void forget(dai_doc_sync *s, dai_node n) {
 dai_vec3 scaled_he(int shape, dai_vec3 he, dai_vec3 ws) {
     switch (shape) {
     case DAI_SHAPE_SPHERE:  return { he.x * std::fabs(ws.x), he.y, he.z };
-    case DAI_SHAPE_CAPSULE: return { he.x * std::fabs(ws.x), he.y * std::fabs(ws.y), he.z };
+    // A cylinder scales like a capsule: one radius, one height. Squashing it
+    // on Z alone would be an ellipse, and neither backend has one.
+    case DAI_SHAPE_CAPSULE:
+    case DAI_SHAPE_CYLINDER: return { he.x * std::fabs(ws.x), he.y * std::fabs(ws.y), he.z };
     default:                return { he.x * std::fabs(ws.x), he.y * std::fabs(ws.y),
                                      he.z * std::fabs(ws.z) };
     }
@@ -102,6 +105,9 @@ dai_vec3 render_scale_of(const dai_node_desc &r, dai_vec3 ws) {
     switch (r.shape) {
     case DAI_SHAPE_SPHERE:
     case DAI_SHAPE_CAPSULE: return { he.x, he.x, he.x };
+    // The cylinder mesh takes its half height from the scale, so it is the one
+    // round shape whose Y is not the radius - see shape_to_mesh.
+    case DAI_SHAPE_CYLINDER: return { he.x, he.y, he.x };
     default:                return he;
     }
 }

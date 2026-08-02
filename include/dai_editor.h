@@ -199,6 +199,25 @@ DAI_API int dai_editor_node_color(dai_editor *e, dai_node n, dai_vec3 *out);
  * body (a group node), and the caller should then show the document. */
 DAI_API int dai_editor_live_position(const dai_editor *e, dai_node n, dai_vec3 *out);
 
+/* The FULL transform the drawn object really has - position, orientation and
+ * scale - in every editor state, with the collider centre offset already taken
+ * back out so it describes the OBJECT and not its collision volume.
+ *
+ * This exists because dai_editor_live_position only answers half the question,
+ * and half an answer is worse than none here: the green collider wireframe was
+ * built from the live POSITION and the DOCUMENT rotation, so the moment a body
+ * turned - a crate tipping over during play - the frame stopped agreeing with
+ * the mesh it is supposed to outline. Measured on a cube given 4 rad/s of spin:
+ * after 30 ticks the document said 89.98 degrees about Y and the body said
+ * -24.59, a 114 degree lie drawn in green.
+ *
+ * Scale is never simulated, so it always comes from the document. Any of the
+ * three outputs may be NULL. Returns 0 when the node does not exist, and 0 with
+ * nothing written when it has no live body while playing - the caller should
+ * then fall back to dai_doc_world_transform. */
+DAI_API int dai_editor_live_transform(const dai_editor *e, dai_node n,
+                                      dai_vec3 *pos, dai_quat *rot, dai_vec3 *scale);
+
 /* The name used for picking paths and for status lines: "Player" is better
  * than "node 7", and a Unity user looks for the tag too. Writes "tag name",
  * "name", or the id, into buf. */

@@ -177,9 +177,27 @@ int main() {
         run_for(ed, 10);
 
         dai_editor_select(ed, faller, 0);
+        // Where the object IS when the nudge happens - it has been falling for
+        // ten ticks, so this is nowhere near what the document says.
+        dai_vec3 live_before{};
+        CHECK(dai_editor_live_position(ed, faller, &live_before) != 0, "no live pose during play");
         dai_editor_move_selection(ed, dai_vec3{ 4, 0, 0 });        // "a drag while playing"
-        CHECK(std::fabs(world_of(doc, faller).x - (start.x + 4.0f)) < 1e-3f,
-              "moving during play did not move the object at all");
+
+        // This used to read the DOCUMENT, and the document used to be what a
+        // move during play wrote to. Both were wrong, and they hid each other:
+        // the object moved relative to its pre-play pose rather than to where
+        // it actually was, so dragging a falling crate upwards twice put it
+        // higher each time. The object still has to move - that half was never
+        // in question - it just has to move from where it IS, and leave the
+        // document alone so Stop can still be exact.
+        dai_vec3 live_after{};
+        dai_editor_live_position(ed, faller, &live_after);
+        CHECK(std::fabs(live_after.x - (live_before.x + 4.0f)) < 1e-3f,
+              "moving during play moved the object to %.3f, expected %.3f",
+              live_after.x, live_before.x + 4.0f);
+        CHECK(std::fabs(world_of(doc, faller).x - start.x) < 1e-3f,
+              "moving during play wrote %.3f into the document; it must stay at %.3f until Stop",
+              world_of(doc, faller).x, start.x);
 
         // ...and a whole new object, which must not survive either
         dai_node_desc extra = dai_node_desc_default();

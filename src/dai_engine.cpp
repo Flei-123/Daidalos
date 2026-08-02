@@ -384,6 +384,10 @@ float shape_volume(int shape, dai_vec3 he) {
     switch (shape) {
     case DAI_SHAPE_SPHERE:  return 4.18879f * he.x * he.x * he.x;
     case DAI_SHAPE_CAPSULE: return 3.14159f * he.x * he.x * (2.0f * he.y) + 4.18879f * he.x * he.x * he.x;
+    // Its own case, not the box fallback: a cylinder leaves half_extent.z
+    // unused, and 8*x*y*z with z left at zero weights it as nothing - a merged
+    // group would then put its origin as if the cylinder were not there.
+    case DAI_SHAPE_CYLINDER: return 3.14159f * he.x * he.x * (2.0f * he.y);
     default:                return 8.0f * he.x * he.y * he.z;
     }
 }

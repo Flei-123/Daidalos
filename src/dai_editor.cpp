@@ -80,9 +80,18 @@ void plane_axes(int axis, dai_vec3 *u, dai_vec3 *v) {
 
 struct DragItem {
     dai_node n;
-    dai_vec3 wpos;
+    dai_vec3 wpos;       // where the object WAS when the drag started - live,
+                         // not documented: during play the document holds the
+                         // pre-play pose and adding a mouse delta to that is
+                         // how a dragged object used to teleport
     dai_quat wrot;
     dai_vec3 scale;      // local
+    // Where this drag wants the object to end up. Filled every update; while
+    // playing it is written to the BODY after the resync, because during play
+    // the body is the truth and the document must stay untouched.
+    dai_vec3 target_pos;
+    dai_quat target_rot;
+    bool     has_target = false;
 };
 
 } // namespace
@@ -139,6 +148,11 @@ struct dai_editor {
 
 namespace {
 
+dai_world *editor_world(const dai_editor *e) {
+    dai_scene *sc = e->sync ? dai_doc_sync_scene(e->sync) : nullptr;
+    return sc ? dai_scene_world(sc) : nullptr;
+}
+
 // where a ray meets a plane; false when they are parallel or it is behind us
 bool ray_plane(dai_vec3 o, dai_vec3 d, dai_vec3 p, dai_vec3 n, dai_vec3 *out) {
     float denom = dot(d, n);
@@ -191,9 +205,52 @@ void capture(dai_editor *e, std::vector<DragItem> &out) {
         DragItem it{};
         it.n = n;
         it.scale = rec.scale;
-        dai_doc_world_transform(e->doc, n, &it.wpos, &it.wrot, nullptr);
+        // The pose the object is ACTUALLY at, which during play is the body and
+        // not the document. Capturing the document here is what made a dragged
+        // object "spawn" higher every time: the crate had fallen to y = 6.65
+        // while the document still said 8.0, so a 1.85 m drag put it at 9.85 -
+        // a 3.2 m jump - and the next drag started from 9.85 again.
+        if (!dai_editor_live_transform(e, n, &it.wpos, &it.wrot, nullptr))
+            dai_doc_world_transform(e->doc, n, &it.wpos, &it.wrot, nullptr);
         out.push_back(it);
     }
+}
+
+// The body sits at the COLLIDER; a centre offset moved it away from the node.
+// A pose meant for the OBJECT therefore has to be pushed back out by that
+// offset before it can be written to the body, or every drag during play would
+// walk the object off by one offset.
+void set_live_transform(dai_editor *e, dai_node n, dai_vec3 pos, dai_quat rot) {
+    if (!e->sync) return;
+    dai_scene *sc = dai_doc_sync_scene(e->sync);
+    dai_entity ent = dai_doc_sync_entity(e->sync, n);
+    if (!sc || !ent) return;
+    dai_body b = dai_scene_body(sc, ent);
+    if (b == DAI_INVALID_BODY) return;      // render-only node: nothing to move
+    dai_node_desc rec{};
+    if (dai_doc_get(e->doc, n, &rec) == DAI_OK &&
+        (rec.collider_center.x || rec.collider_center.y || rec.collider_center.z)) {
+        dai_vec3 ws{ 1, 1, 1 };
+        dai_doc_world_transform(e->doc, n, nullptr, nullptr, &ws);
+        dai_vec3 off = qrot(rot, dai_vec3{ rec.collider_center.x * ws.x,
+                                           rec.collider_center.y * ws.y,
+                                           rec.collider_center.z * ws.z });
+        pos = add(pos, off);
+    }
+    dai_body_set_transform(editor_world(e), b, pos, rot);
+}
+
+// Where a drag writes its result. Editing: the document, which the sync layer
+// then pushes into the world - that is what makes the edit undoable. Playing or
+// paused: the BODY, and the document is left exactly as Play found it, so Stop
+// still restores the scene and the drag stays the rehearsal it is meant to be.
+void drag_write(dai_editor *e, DragItem &it, dai_vec3 pos, const dai_quat *rot) {
+    it.target_pos = pos;
+    it.target_rot = rot ? *rot : it.wrot;
+    it.has_target = true;
+    if (e->state != DAI_EDITOR_EDIT) return;    // pushed to the body after resync
+    dai_doc_set_world_position(e->doc, it.n, pos);
+    if (rot) dai_doc_set_world_rotation(e->doc, it.n, *rot);
 }
 
 // A node whose ancestor is also selected must not be moved twice: the ancestor
@@ -576,6 +633,14 @@ void dai_editor_drag_update(dai_editor *e, float mx, float my) {
     // touches nodes whose revision changed, so a drag costs the handful that
     // are actually moving.
     resync(e);
+    // While playing the body is the truth, and it is written AFTER the resync
+    // on purpose: a scale change rebuilds the body at the document pose, and
+    // this is what puts it back where the object is. Nothing here touches the
+    // document, so Stop still restores the scene exactly.
+    if (e->state != DAI_EDITOR_EDIT)
+        for (DragItem &it : e->drag_items)
+            if (it.has_target && !ancestor_selected(e, it.n))
+                set_live_transform(e, it.n, it.target_pos, it.target_rot);
 }
 
 static void drag_update_impl(dai_editor *e, float mx, float my) {
@@ -589,11 +654,11 @@ static void drag_update_impl(dai_editor *e, float mx, float my) {
         dai_vec3 axis = e->drag_axis <= DAI_AXIS_Z ? axis_vector(e->drag_axis)
                                                    : e->drag_plane_normal;
         dai_quat q = qaxis(axis, angle);
-        for (const DragItem &it : e->drag_items) {
+        for (DragItem &it : e->drag_items) {
             if (ancestor_selected(e, it.n)) continue;
             dai_vec3 rel = qrot(q, sub(it.wpos, e->drag_center));
-            dai_doc_set_world_position(e->doc, it.n, add(e->drag_center, rel));
-            dai_doc_set_world_rotation(e->doc, it.n, qmul(q, it.wrot));
+            dai_quat wr = qmul(q, it.wrot);
+            drag_write(e, it, add(e->drag_center, rel), &wr);
         }
         return;
     }
@@ -615,11 +680,11 @@ static void drag_update_impl(dai_editor *e, float mx, float my) {
         if (e->snap_rotate > 0.0f)
             angle = snap_to(angle, e->snap_rotate * PI / 180.0f);
         dai_quat q = qaxis(axis, angle);
-        for (const DragItem &it : e->drag_items) {
+        for (DragItem &it : e->drag_items) {
             if (ancestor_selected(e, it.n)) continue;
             dai_vec3 rel = qrot(q, sub(it.wpos, e->drag_center));
-            dai_doc_set_world_position(e->doc, it.n, add(e->drag_center, rel));
-            dai_doc_set_world_rotation(e->doc, it.n, qmul(q, it.wrot));
+            dai_quat wr = qmul(q, it.wrot);
+            drag_write(e, it, add(e->drag_center, rel), &wr);
         }
         return;
     }
@@ -650,17 +715,24 @@ static void drag_update_impl(dai_editor *e, float mx, float my) {
         } else {
             mask = { factor, factor, factor };
         }
-        for (const DragItem &it : e->drag_items) {
+        for (DragItem &it : e->drag_items) {
             if (ancestor_selected(e, it.n)) continue;
             dai_node_desc rec{};
             if (dai_doc_get(e->doc, it.n, &rec) != DAI_OK) continue;
             rec.scale = { it.scale.x * mask.x, it.scale.y * mask.y, it.scale.z * mask.z };
+            // Size is the one thing the simulation does not own, so it goes to
+            // the document even during play - a collision shape is immutable
+            // and the sync layer has to rebuild the body to resize it. That
+            // rebuild spawns the body at the DOCUMENT pose, which during play
+            // is the pre-play one, so the target below puts it back where the
+            // object actually is. Stop still discards all of it.
             dai_doc_set(e->doc, it.n, &rec);
             // Multiple objects scale away from the shared centre; a single one
             // stays put because it *is* the centre.
             dai_vec3 rel = sub(it.wpos, e->drag_center);
-            dai_doc_set_world_position(e->doc, it.n,
-                add(e->drag_center, dai_vec3{ rel.x * mask.x, rel.y * mask.y, rel.z * mask.z }));
+            drag_write(e, it,
+                add(e->drag_center, dai_vec3{ rel.x * mask.x, rel.y * mask.y, rel.z * mask.z }),
+                nullptr);
         }
         return;
     }
@@ -675,9 +747,9 @@ static void drag_update_impl(dai_editor *e, float mx, float my) {
         delta.y = snap_to(delta.y, e->snap_translate);
         delta.z = snap_to(delta.z, e->snap_translate);
     }
-    for (const DragItem &it : e->drag_items) {
+    for (DragItem &it : e->drag_items) {
         if (ancestor_selected(e, it.n)) continue;
-        dai_doc_set_world_position(e->doc, it.n, add(it.wpos, delta));
+        drag_write(e, it, add(it.wpos, delta), nullptr);
     }
 }
 
@@ -705,6 +777,20 @@ int dai_editor_dragging(const dai_editor *e) { return (e && e->dragging) ? 1 : 0
 
 void dai_editor_move_selection(dai_editor *e, dai_vec3 delta) {
     if (!e || e->selection.empty()) return;
+    // The same rule the gizmo follows: while playing the object is where the
+    // simulation put it, so a nudge is relative to THAT and lands on the body.
+    // Reading the document here moved things relative to the pre-play pose,
+    // which looks like the object jumping somewhere else entirely.
+    if (e->state != DAI_EDITOR_EDIT) {
+        for (dai_node n : e->selection) {
+            if (ancestor_selected(e, n)) continue;
+            dai_vec3 p{};
+            dai_quat r{ 0, 0, 0, 1 };
+            if (!dai_editor_live_transform(e, n, &p, &r, nullptr)) continue;
+            set_live_transform(e, n, add(p, delta), r);
+        }
+        return;
+    }
     dai_doc_begin(e->doc, "Move");
     for (dai_node n : e->selection) {
         if (ancestor_selected(e, n)) continue;
@@ -986,13 +1072,6 @@ extern "C" {
 
 // -------------------------------------------------------------- play mode
 
-namespace {
-dai_world *editor_world(const dai_editor *e) {
-    dai_scene *sc = e->sync ? dai_doc_sync_scene(e->sync) : nullptr;
-    return sc ? dai_scene_world(sc) : nullptr;
-}
-} // namespace
-
 void dai_editor_play(dai_editor *e) {
     if (!e || e->state == DAI_EDITOR_PLAY) return;
     dai_world *w = editor_world(e);
@@ -1038,19 +1117,29 @@ void dai_editor_stop(dai_editor *e) {
 
 int dai_editor_state_get(const dai_editor *e) { return e ? e->state : DAI_EDITOR_EDIT; }
 
-int dai_editor_live_position(const dai_editor *e, dai_node n, dai_vec3 *out) {
-    if (!e || !out) return 0;
+int dai_editor_live_transform(const dai_editor *e, dai_node n,
+                              dai_vec3 *pos, dai_quat *rot, dai_vec3 *scale) {
+    if (!e) return 0;
+    dai_node_desc rec{};
+    if (dai_doc_get(e->doc, n, &rec) != DAI_OK) return 0;
+
+    // Scale is never simulated - Jolt shapes are immutable, so a resize is a
+    // rebuild, not a motion - and it therefore always comes from the document,
+    // in both states.
+    dai_vec3 wp{}, ws{ 1, 1, 1 };
+    dai_quat wr{ 0, 0, 0, 1 };
+    dai_doc_world_transform(e->doc, n, &wp, &wr, &ws);
+    if (scale) *scale = ws;
+
     // Editing: the document is the truth and the scene follows it, so asking
     // costs a doc lookup. Playing or paused: the document still holds the
     // pre-play pose - that is the whole reason Stop can be exact - and the
-    // truth is the body, so a panel asking "where is the object" must ask
-    // the body, or it shows a frozen ghost of where play started.
+    // truth is the body, so anything asking "where is the object, and which
+    // way is it facing" must ask the body, or it draws a frozen ghost of where
+    // play started.
     if (e->state == DAI_EDITOR_EDIT) {
-        dai_node_desc d{};
-        if (dai_doc_get(e->doc, n, &d) != DAI_OK) return 0;
-        dai_vec3 ws{ 1, 1, 1 };
-        dai_quat qr{ 0, 0, 0, 1 };
-        dai_doc_world_transform(e->doc, n, out, &qr, &ws);
+        if (pos) *pos = wp;
+        if (rot) *rot = wr;
         return 1;
     }
     if (!e->sync) return 0;
@@ -1061,21 +1150,30 @@ int dai_editor_live_position(const dai_editor *e, dai_node n, dai_vec3 *out) {
     if (!b) return 0;       // render-only node: nothing simulates it, the doc pose stands
     dai_transform t{};
     if (dai_body_get(editor_world(e), b, &t) != DAI_OK) return 0;
-    *out = t.position;
+
+    if (rot) *rot = t.rotation;
+    if (!pos) return 1;
+    *pos = t.position;
     // A collider centre offset puts the body somewhere the object is not. The
-    // inspector asks where the OBJECT is.
-    dai_node_desc rec{};
-    if (dai_doc_get(e->doc, n, &rec) == DAI_OK &&
-        (rec.collider_center.x || rec.collider_center.y || rec.collider_center.z)) {
-        dai_vec3 wp{}, ws{ 1, 1, 1 };
-        dai_quat wr{ 0, 0, 0, 1 };
-        dai_doc_world_transform(e->doc, n, &wp, &wr, &ws);
+    // caller asks where the OBJECT is. The offset is undone with the BODY's
+    // rotation, not the document's - undoing it with a stale orientation was
+    // the second half of the same bug, and it moved the wireframe sideways as
+    // well as leaving it unturned.
+    if (rec.collider_center.x || rec.collider_center.y || rec.collider_center.z) {
         dai_vec3 off = qrot(t.rotation, dai_vec3{ rec.collider_center.x * ws.x,
                                                   rec.collider_center.y * ws.y,
                                                   rec.collider_center.z * ws.z });
-        out->x -= off.x; out->y -= off.y; out->z -= off.z;
+        pos->x -= off.x; pos->y -= off.y; pos->z -= off.z;
     }
     return 1;
+}
+
+// Kept as the narrow question it always was, now answered by the full one:
+// two implementations of "where is this really" is exactly how the wireframe
+// and the mesh drifted apart in the first place.
+int dai_editor_live_position(const dai_editor *e, dai_node n, dai_vec3 *out) {
+    if (!e || !out) return 0;
+    return dai_editor_live_transform(e, n, out, nullptr, nullptr);
 }
 
 void dai_editor_node_label(const dai_editor *e, dai_node n, char *buf, size_t len) {

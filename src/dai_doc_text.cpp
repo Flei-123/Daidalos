@@ -275,7 +275,14 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "pos")    { ok = parse_floats(after, &rec.position.x, 3); }
         else if (key == "rot")    { ok = parse_floats(after, &rec.rotation.x, 4); }
         else if (key == "scale")  { ok = parse_floats(after, &rec.scale.x, 3); }
-        else if (key == "shape")  { ok = parse_i32(after, &rec.shape); }
+        // Range checked, unlike every other integer here, because an out of
+        // range shape does not fail - it falls through to the backend's
+        // default and quietly becomes a box. A scene written by a newer build
+        // (a shape this one does not have) would then load, look wrong and say
+        // nothing, which is the worst of the three possible outcomes.
+        else if (key == "shape")  { ok = parse_i32(after, &rec.shape) &&
+                                         rec.shape >= DAI_SHAPE_BOX &&
+                                         rec.shape <= DAI_SHAPE_CYLINDER; }
         else if (key == "motion") { ok = parse_i32(after, &rec.motion); }
         else if (key == "extent") { ok = parse_floats(after, &rec.half_extent.x, 3); }
         else if (key == "center") { ok = parse_floats(after, &rec.collider_center.x, 3); }
