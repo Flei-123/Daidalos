@@ -1,0 +1,2 @@
+daidalos-project-settings 1
+# project settings - shared, belongs in version control

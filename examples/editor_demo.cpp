@@ -17,6 +17,7 @@
 #include "dai_editor_ui.h"
 #include "dai_render.h"
 #include "dai_assets.h"
+#include "dai_project.h"
 
 #include <chrono>
 #include <cstdio>
@@ -36,79 +37,61 @@
 static char g_projects_root[512] = { 0 };
 static char g_scene_path[512] = { 0 };
 
+static dai_project *g_project = nullptr;
+static char g_assets_dir[512] = { 0 };
+
+// The project list, from disk, through the project layer - it knows what a
+// project is (assets/, scenes/, settings/) so this does not have to.
 static const char *project_list(uint32_t index, void *) {
     static std::vector<std::string> names;
-#ifdef _WIN32
     if (index == 0) {
         names.clear();
-        std::string pat = std::string(g_projects_root) + "\\*";
-        WIN32_FIND_DATAA fd{};
-        HANDLE h = FindFirstFileA(pat.c_str(), &fd);
-        if (h != INVALID_HANDLE_VALUE) {
-            do {
-                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
-                if (fd.cFileName[0] == '.') continue;
-                names.push_back(fd.cFileName);
-            } while (FindNextFileA(h, &fd));
-            FindClose(h);
-        }
+        char buf[64][DAI_PROJECT_NAME_MAX];
+        uint32_t n = dai_project_list(g_projects_root, buf[0], 64, DAI_PROJECT_NAME_MAX);
+        if (n > 64) n = 64;
+        for (uint32_t i = 0; i < n; ++i) names.push_back(buf[i]);
     }
-#endif
     if (index >= names.size()) return nullptr;
     return names[index].c_str();
 }
 
-static int project_path(const char *name, char *out, size_t n) {
-    if (!name || !*name) return 0;
-    for (const char *c = name; *c; ++c) {
-        // A project name is a folder name. Anything else is how "my project"
-        // becomes ../somewhere.
-        bool ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
-                  (*c >= '0' && *c <= '9') || *c == '-' || *c == '_' || *c == ' ';
-        if (!ok) return 0;
-    }
-    size_t rl = std::strlen(g_projects_root), nl = std::strlen(name);
-    if (rl + 1 + nl + 1 > n) return 0;
-    std::memcpy(out, g_projects_root, rl);
-    out[rl] = '/';
-    std::memcpy(out + rl + 1, name, nl + 1);
+// Opening a project is the ONE thing that decides where everything else comes
+// from: the scene, the assets, the settings. The editor never runs without
+// one - that is why this is called before the first frame as well as from the
+// project window.
+static int open_project_path(const char *path) {
+    char err[256] = { 0 };
+    dai_project *np = dai_project_open(path, err, sizeof(err));
+    if (!np) { std::printf("project: %s\n", err); return 0; }
+    if (g_project) dai_project_close(g_project);
+    g_project = np;
+    std::snprintf(g_scene_path, sizeof(g_scene_path), "%s", dai_project_scene_path(g_project));
+    std::snprintf(g_assets_dir, sizeof(g_assets_dir), "%s", dai_project_asset_dir(g_project));
+    dai_prefs pr = dai_prefs_default();
+    dai_prefs_load(&pr);
+    std::snprintf(pr.last_project, sizeof(pr.last_project), "%s", dai_project_path(g_project));
+    dai_prefs_save(&pr);
     return 1;
 }
 
 static int project_create(const char *name, void *) {
-    char path[512];
-    if (!project_path(name, path, sizeof(path))) return 0;
-#ifdef _WIN32
-    CreateDirectoryA(g_projects_root, nullptr);
-    if (!CreateDirectoryA(path, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
-        return 0;
-    std::string scenes = std::string(path) + "/scenes";
-    std::string assets = std::string(path) + "/assets";
-    CreateDirectoryA(scenes.c_str(), nullptr);
-    CreateDirectoryA(assets.c_str(), nullptr);
-#endif
-    if (std::strlen(path) + 22 <= sizeof(g_scene_path)) {
-        std::snprintf(g_scene_path, sizeof(g_scene_path), "%s/scenes/main.daidalos", path);
-    }
-    return 1;
+    char err[256] = { 0 };
+    dai_project *np = dai_project_create(g_projects_root, name, err, sizeof(err));
+    if (!np) { std::printf("project: %s\n", err); return 0; }
+    std::string path = dai_project_path(np);
+    dai_project_close(np);
+    return open_project_path(path.c_str());
 }
 
 static int project_open(const char *name, void *) {
-    char path[512];
-    if (!project_path(name, path, sizeof(path))) return 0;
-    if (std::strlen(path) + 22 <= sizeof(g_scene_path)) {
-        std::snprintf(g_scene_path, sizeof(g_scene_path), "%s/scenes/main.daidalos", path);
-    }
-    return 1;
+    char path[640];
+    std::snprintf(path, sizeof(path), "%s/%s", g_projects_root, name);
+    return open_project_path(path);
 }
 
-// "New Script" in the Project window. A behaviour is a file in assets/, and a
-// template beats an empty file: the first script you ever write should not
-// start with figuring out what the entry point is called.
-static char g_assets_dir[512] = { 0 };
 static int folder_create(const char *name, void *) {
     if (!name || !*name || !g_assets_dir[0]) return 0;
-    char path[512];
+    char path[640];
     std::snprintf(path, sizeof(path), "%s/%s", g_assets_dir, name);
 #ifdef _WIN32
     return CreateDirectoryA(path, nullptr) ? 1 : 0;
@@ -117,6 +100,8 @@ static int folder_create(const char *name, void *) {
 #endif
 }
 
+// "New Script" writes a template, because the first script anyone writes
+// should not start with guessing what the entry point is called.
 static int script_create(const char *name, void *) {
     if (!name || !*name || !g_assets_dir[0]) return 0;
     for (const char *c = name; *c; ++c) {
@@ -124,33 +109,54 @@ static int script_create(const char *name, void *) {
                   (*c >= '0' && *c <= '9') || *c == '-' || *c == '_';
         if (!ok) return 0;
     }
-    char path[512];
+    char path[640];
     std::snprintf(path, sizeof(path), "%s/%s.js", g_assets_dir, name);
-#ifdef _WIN32
-    HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return 0;
-    const char *tpl =
-        "// A Daidalos behaviour. The engine calls the globals it finds:\r\n"
-        "//   init()   once when play starts\r\n"
-        "//   frame()  every rendered frame\r\n"
-        "// `state.<name>` holds numbers the inspector or the game can set.\r\n"
-        "\r\n"
-        "function init() {\r\n"
-        "}\r\n"
-        "\r\n"
-        "function frame() {\r\n"
-        "}\r\n";
-    DWORD wrote = 0;
-    WriteFile(h, tpl, (DWORD)std::strlen(tpl), &wrote, nullptr);
-    CloseHandle(h);
-    return 1;
-#else
-    FILE *f = std::fopen(path, "wx");
+    FILE *f = std::fopen(path, "wb");
     if (!f) return 0;
-    std::fputs("// Daidalos behaviour: init() once, frame() per frame.\n", f);
+    std::fputs("// A Daidalos behaviour. The engine calls the globals it finds:\n"
+               "//   init()   once when play starts\n"
+               "//   frame()  every rendered frame\n"
+               "\n"
+               "function init() {\n}\n"
+               "\n"
+               "function frame() {\n}\n", f);
     std::fclose(f);
     return 1;
-#endif
+}
+
+// The Project Settings half of the settings panel: gravity, tick rate, tags -
+// the values that belong to the project and are the same for everyone who
+// opens it. Drawn by the host because the host is what owns dai_project.
+static dai_project_settings *g_psettings = nullptr;
+static dai_ui *g_ui_for_settings = nullptr;
+static void draw_project_settings(void *) {
+    if (!g_psettings || !g_ui_for_settings || !g_project) return;
+    dai_ui *ui = g_ui_for_settings;
+    dai_project_settings &ps = *g_psettings;
+    dai_project_settings before = ps;
+    dai_ui_label_fmt(ui, "Project: %s", dai_project_name(g_project));
+    dai_ui_num_vec3(ui, "Gravity", &ps.gravity[0], 0.05f);
+    float hz = (float)ps.tick_hz;
+    if (dai_ui_num_field(ui, "Tick Hz", &hz, 1.0f, 10.0f, 240.0f, "tickhz"))
+        ps.tick_hz = (int)(hz + 0.5f);
+    float mb = (float)ps.max_bodies;
+    if (dai_ui_num_field(ui, "Max bodies", &mb, 16.0f, 16.0f, 100000.0f, "maxbodies"))
+        ps.max_bodies = (int)(mb + 0.5f);
+    static const char *const BACKENDS[] = { "Jolt", "Talos", "None" };
+    dai_ui_option(ui, "Physics", &ps.physics_backend, BACKENDS, 3);
+    dai_ui_num_field(ui, "Friction", &ps.default_friction, 0.01f, 0.0f, 10.0f, "psfric");
+    dai_ui_num_field(ui, "Bounce", &ps.default_restitution, 0.01f, 0.0f, 1.0f, "psrest");
+    dai_ui_input_text(ui, "App name", ps.app_name, sizeof(ps.app_name));
+    dai_ui_separator(ui);
+    dai_ui_label(ui, "Tags");
+    for (int i = 0; i < 4; ++i) {
+        char lbl[16];
+        std::snprintf(lbl, sizeof(lbl), "Tag %d", i);
+        dai_ui_input_text(ui, lbl, ps.tags[i], DAI_PROJECT_TAG_MAX);
+    }
+    if (std::memcmp(&before, &ps, sizeof(ps)) != 0)
+        dai_project_settings_save(g_project, &ps);
+    dai_ui_label(ui, "Changes are saved immediately.");
 }
 
 // The settings window's font swap needs what main() owns, so main() publishes
@@ -200,8 +206,27 @@ int main(int argc, char **argv) {
     std::snprintf(g_projects_root, sizeof(g_projects_root), "projects");
 #endif
 
+    // Unity cannot run without a project, and neither can this: the scene, the
+    // assets and half the settings only mean something relative to one. Last
+    // one used, else the first one on disk, else a fresh "Untitled".
+    dai_prefs prefs = dai_prefs_default();
+    dai_prefs_load(&prefs);
+    if (prefs.last_project[0]) open_project_path(prefs.last_project);
+    if (!g_project) {
+        char names[64][DAI_PROJECT_NAME_MAX];
+        uint32_t pn = dai_project_list(g_projects_root, names[0], 64, DAI_PROJECT_NAME_MAX);
+        if (pn > 0) project_open(names[0], nullptr);
+    }
+    if (!g_project) project_create("Untitled", nullptr);
+    if (g_project) std::printf("project: %s\n", dai_project_path(g_project));
+
+    dai_project_settings psettings = dai_project_settings_default();
+    if (g_project) dai_project_settings_load(g_project, &psettings);
+
     dai_config cfg{};
-    cfg.tick_hz = 60; cfg.max_bodies = 4096; cfg.snapshot_ring = 120; cfg.seed = 1;
+    cfg.tick_hz = psettings.tick_hz > 0 ? (uint32_t)psettings.tick_hz : 60;
+    cfg.max_bodies = psettings.max_bodies > 0 ? (uint32_t)psettings.max_bodies : 4096;
+    cfg.snapshot_ring = 120; cfg.seed = 1;
     dai_world *w = nullptr;
     if (dai_create(&cfg, &w) != DAI_OK) { std::printf("world failed\n"); return 1; }
     dai_scene *sc = dai_scene_create(w);
@@ -209,6 +234,7 @@ int main(int argc, char **argv) {
     dai_doc_sync *sync = dai_doc_sync_create(doc, sc);
 
     char err[256] = { 0 };
+    if (!scene_path && g_scene_path[0]) scene_path = g_scene_path;
     if (scene_path && dai_doc_load(doc, scene_path, err, sizeof(err)) != DAI_OK) {
         std::printf("could not load %s: %s\n", scene_path, err);
         scene_path = nullptr;
@@ -286,6 +312,9 @@ int main(int argc, char **argv) {
     dai_editor_ui_mesh_host(panels, mesh_name_of, 4, nullptr);   // the builtins
     dai_editor_ui_script_host(panels, script_create, nullptr);
     dai_editor_ui_folder_host(panels, folder_create, nullptr);
+    g_psettings = &psettings;
+    g_ui_for_settings = ui;
+    dai_editor_ui_project_settings_host(panels, draw_project_settings, nullptr);
 
     // The layout is the user's; it belongs on disk next to the projects, not
     // in the binary. Loading it before the first frame means the editor opens
@@ -310,7 +339,12 @@ int main(int argc, char **argv) {
 
     // Settings: the UI size is a font reload, and the font is ours.
     g_renderer = r; g_ui = ui; g_font = font;
-    dai_editor_ui_settings_host(panels, apply_font, 13.0f, nullptr);
+    dai_editor_ui_settings_host(panels, apply_font, 13.0f * prefs.ui_scale, nullptr);
+    if (prefs.ui_scale > 1.02f || prefs.ui_scale < 0.98f) apply_font(13.0f * prefs.ui_scale, nullptr);
+    dai_editor_cam_speed(ed, prefs.cam_speed > 0.1f ? prefs.cam_speed : 6.0f);
+    if (prefs.gizmo_px > 10.0f) dai_editor_gizmo_size(ed, prefs.gizmo_px);
+    if (prefs.snap_translate > 0.0f || prefs.snap_rotate_deg > 0.0f)
+        dai_editor_snap(ed, prefs.snap_translate, prefs.snap_rotate_deg, 0.1f);
 
     auto last = std::chrono::high_resolution_clock::now();
     int prev_keys[8] = { 0 };
@@ -617,6 +651,11 @@ int main(int argc, char **argv) {
         FILE *lf = std::fopen(lpath, "wb");
         if (lf) { std::fwrite(txt.c_str(), 1, need, lf); std::fclose(lf); }
     }
+    {   // what this human set on this machine, kept for the next start
+        prefs.cam_speed = dai_editor_cam_speed_get(ed);
+        dai_prefs_save(&prefs);
+    }
+    if (g_project) dai_project_close(g_project);
     dai_editor_ui_destroy(panels);
     dai_editor_destroy(ed);
     dai_ui_destroy(ui);

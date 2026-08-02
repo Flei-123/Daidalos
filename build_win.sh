@@ -65,7 +65,7 @@ mkdir -p "$VKINC/vk_video" && cp -r /usr/include/vk_video/* "$VKINC/vk_video/" 2
 echo "-- engine"
 CORE="dai_engine dai_scene dai_input dai_doc dai_doc_text dai_doc_sync dai_editor \
       dai_editor_ui dai_meshgen dai_image dai_inflate dai_json dai_gltf dai_gltf_geom \
-      dai_gltf_write dai_fracture dai_particles dai_font dai_svg dai_icons dai_ui dai_dock dai_update \
+      dai_gltf_write dai_fracture dai_particles dai_font dai_svg dai_icons dai_ui dai_dock dai_project dai_update \
       dai_audio physics_jolt physics_null"
 # The Talos backend needs its own include path and its own mingw built library
 # (tools/build_talos_win.sh). Without one, the engine is compiled with
