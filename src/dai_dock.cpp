@@ -158,9 +158,21 @@ void remove_tab(dai_dock *d, const std::string &title) {
         return;   // the main root always exists, even empty
     }
     Node *sib = (parent->a == leaf) ? parent->b : parent->a;
-    // The sibling is promoted into the parent's slot. Copying the sibling's
-    // contents into the parent (rather than re-pointing the grandparent) keeps
-    // every other pointer in the tree valid.
+    // The sibling is promoted into the parent's slot, which makes its
+    // rectangle grow to the parent's. If it is a split along the SAME axis,
+    // its ratio was relative to its old, smaller rectangle - rescale it, or
+    // promoting it visibly moves every panel inside it.
+    if (!sib->leaf() && sib->axis == parent->axis) {
+        float pe = parent->axis == 1 ? parent->rect.w : parent->rect.h;
+        float se = parent->axis == 1 ? sib->rect.w : sib->rect.h;
+        if (pe > 1.0f && se > 1.0f) {
+            sib->ratio = sib->ratio * se / pe;
+            if (sib->ratio < 0.05f) sib->ratio = 0.05f;
+            if (sib->ratio > 0.95f) sib->ratio = 0.95f;
+        }
+    }
+    // Copying the sibling's contents into the parent (rather than re-pointing
+    // the grandparent) keeps every other pointer in the tree valid.
     Node *gp = parent->parent;
     sib->parent = gp;
     if (gp) {
@@ -562,9 +574,12 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
         float dx = mx - d->press_x, dy = my - d->press_y;
         if (dx * dx + dy * dy > 100.0f) d->dragging = true;
     }
-    d->drag_kind = -1;
-    d->drop_node = nullptr;
     if (d->dragging && down) {
+        // The target is recomputed while the button is held and must SURVIVE
+        // into the release frame - clearing it here every frame meant the
+        // drop handler always saw "nowhere" and the tab never docked.
+        d->drag_kind = -1;
+        d->drop_node = nullptr;
         dai_ui_claim_mouse(ui);
         // Find the drop target: tab bars first, then the edges of a body.
         Node *target = nullptr;
@@ -633,10 +648,12 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
         d->dragging = false;
         d->drag_armed = false;
         d->drag_title.clear();
+        d->drag_kind = -1;
+        d->drop_node = nullptr;
         layout(d->root, d->area);
         for (auto &f : d->floats) layout(f.root, f.rect);
     }
-    if (!down) { d->dragging = false; d->drag_armed = false; }
+    if (!down) { d->dragging = false; d->drag_armed = false; d->drag_kind = -1; d->drop_node = nullptr; }
 }
 
 int dai_dock_panel(dai_dock *d, const char *title, float *x, float *y, float *w, float *h) {

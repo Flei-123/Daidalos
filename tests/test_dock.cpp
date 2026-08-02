@@ -190,6 +190,65 @@ int main() {
           before, hw);
     no_overlaps("after dragging a splitter");
 
+    // ---- 8. dropping on an edge really docks ------------------------------
+    // A drag that ends with the button up must still know where it was
+    // pointing: the target is chosen while the button is HELD and used on the
+    // RELEASE frame. (This is the regression test for "dragging never docks".)
+    std::printf("edge dock\n");
+    dai_dock_reset(dock);
+    frame(-1, -1, 0);
+    frame(-1, -1, 0);
+    float cx, cy, cw, ch;
+    dai_dock_panel(dock, "Scene", &cx, &cy, &cw, &ch);
+    dai_dock_panel_end(dock);
+    dai_dock_panel(dock, "Inspector", &ix, &iy, &iw, &ih);
+    dai_dock_panel_end(dock);
+    tab_x = ix + 20.0f; tab_y = iy - 10.0f;
+    float drop_x = cx + 4.0f, drop_y = cy + ch * 0.5f;   // left edge of the scene
+    frame(tab_x, tab_y, 1);                              // grab the Inspector tab
+    frame(tab_x + 30.0f, tab_y + 60.0f, 1);              // past the drag threshold
+    frame(drop_x, drop_y, 1);                            // hover the left zone
+    frame(drop_x, drop_y, 1);
+    frame(drop_x, drop_y, 0);                            // drop
+    frame(-1, -1, 0);
+    float ix2, iy2, iw2, ih2, cx2, cy2, cw2, ch2;
+    CHECK(dai_dock_panel(dock, "Inspector", &ix2, &iy2, &iw2, &ih2) != 0,
+          "the inspector vanished after the edge drop");
+    dai_dock_panel_end(dock);
+    dai_dock_panel(dock, "Scene", &cx2, &cy2, &cw2, &ch2);
+    dai_dock_panel_end(dock);
+    std::printf("  inspector x %.0f -> %.0f, scene x %.0f -> %.0f\n", ix, ix2, cx, cx2);
+    CHECK(ix2 < ix - 100.0f,
+          "the inspector did not move to the scene's left edge (x %.0f -> %.0f)", ix, ix2);
+    CHECK(cx2 > ix2 + iw2 - 1.0f, "the scene did not make room for the docked inspector");
+    no_overlaps("after edge docking");
+
+    // ---- 9. dropping on a tab bar stacks tabs ------------------------------
+    std::printf("tab dock\n");
+    dai_dock_reset(dock);
+    frame(-1, -1, 0);
+    frame(-1, -1, 0);
+    dai_dock_panel(dock, "Hierarchy", &hx, &hy, &hw, &hh);
+    dai_dock_panel_end(dock);
+    dai_dock_panel(dock, "Inspector", &ix, &iy, &iw, &ih);
+    dai_dock_panel_end(dock);
+    tab_x = ix + 20.0f; tab_y = iy - 10.0f;
+    float bar_x = hx + hw * 0.5f, bar_y = hy - 10.0f;    // the hierarchy's tab bar
+    frame(tab_x, tab_y, 1);
+    frame(tab_x - 30.0f, tab_y + 60.0f, 1);
+    frame(bar_x, bar_y, 1);
+    frame(bar_x, bar_y, 0);
+    frame(-1, -1, 0);
+    CHECK(dai_dock_visible(dock, "Inspector") == 1, "the dropped tab was not selected");
+    CHECK(dai_dock_visible(dock, "Hierarchy") == 0, "the hierarchy should sit behind the dropped tab");
+    float ix3, iy3, iw3, ih3;
+    dai_dock_panel(dock, "Inspector", &ix3, &iy3, &iw3, &ih3);
+    dai_dock_panel_end(dock);
+    CHECK(std::fabs(ix3 - hx) < 2.0f && std::fabs(iw3 - hw) < 2.0f,
+          "the docked tab does not fill the hierarchy's old body (%.0f,%.0f vs %.0f,%.0f)",
+          ix3, iw3, hx, hw);
+    no_overlaps("after tab docking");
+
     dai_dock_destroy(dock);
     dai_ui_destroy(ui);
     dai_font_free(font);
