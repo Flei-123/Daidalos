@@ -23,6 +23,9 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -103,6 +106,17 @@ static int project_open(const char *name, void *) {
 // template beats an empty file: the first script you ever write should not
 // start with figuring out what the entry point is called.
 static char g_assets_dir[512] = { 0 };
+static int folder_create(const char *name, void *) {
+    if (!name || !*name || !g_assets_dir[0]) return 0;
+    char path[512];
+    std::snprintf(path, sizeof(path), "%s/%s", g_assets_dir, name);
+#ifdef _WIN32
+    return CreateDirectoryA(path, nullptr) ? 1 : 0;
+#else
+    return mkdir(path, 0755) == 0 ? 1 : 0;
+#endif
+}
+
 static int script_create(const char *name, void *) {
     if (!name || !*name || !g_assets_dir[0]) return 0;
     for (const char *c = name; *c; ++c) {
@@ -271,6 +285,24 @@ int main(int argc, char **argv) {
     dai_editor_ui_project_host(panels, project_list, project_create, project_open, nullptr);
     dai_editor_ui_mesh_host(panels, mesh_name_of, 4, nullptr);   // the builtins
     dai_editor_ui_script_host(panels, script_create, nullptr);
+    dai_editor_ui_folder_host(panels, folder_create, nullptr);
+
+    // The layout is the user's; it belongs on disk next to the projects, not
+    // in the binary. Loading it before the first frame means the editor opens
+    // the way it was left.
+    {
+        char lpath[512];
+        std::snprintf(lpath, sizeof(lpath), "%s/layout.txt", g_projects_root);
+        FILE *lf = std::fopen(lpath, "rb");
+        if (lf) {
+            std::string txt;
+            char chunk[1024];
+            size_t got;
+            while ((got = std::fread(chunk, 1, sizeof(chunk), lf)) > 0) txt.append(chunk, got);
+            std::fclose(lf);
+            dai_editor_ui_layout_load(panels, txt.c_str());
+        }
+    }
 
     // The asset layer: a mounted folder of glTF/JS, hot reloaded, bound to the
     // document sync so "asset crate.glb" on a node actually resolves.
@@ -285,6 +317,7 @@ int main(int argc, char **argv) {
     std::vector<dai_render_instance> inst(4096);
     int prev_f2 = 0, prev_backspace = 0, prev_enter = 0, prev_tab = 0;
     int prev_edit_keys[6] = { 0 };
+    int prev_nav_keys[2] = { 0 };
     int prev_ctrl_a = 0;
 
     while (dai_window_poll(win)) {
@@ -390,6 +423,11 @@ int main(int argc, char **argv) {
             std::printf("project: %s\n", current_scene);
         }
 
+        if (dai_editor_ui_take_save(panels) && scene_path) {
+            if (dai_doc_save(doc, scene_path) == DAI_OK) std::printf("saved %s\n", scene_path);
+        }
+        if (dai_editor_ui_take_refresh(panels) && assets) dai_assets_poll(assets);
+
         // ---- assets: hot reload, list, and what the Project window clicked
         if (assets) {
             if (dai_assets_poll(assets)) dai_assets_bind(assets, sync);
@@ -478,6 +516,15 @@ int main(int argc, char **argv) {
                 prev_edit_keys[i] = now;
             }
         }
+        {
+            static const uint32_t NAV[2] = { DAI_KEY_UP, DAI_KEY_DOWN };
+            int *nav_out[2] = { &in.key_up_arrow, &in.key_down_arrow };
+            for (int i = 0; i < 2; ++i) {
+                int now = dai_window_key_down(win, NAV[i]);
+                *nav_out[i] = now && !prev_nav_keys[i];
+                prev_nav_keys[i] = now;
+            }
+        }
         in.key_shift = ci.key_shift;
         in.key_ctrl = ctrl;
         {
@@ -561,6 +608,15 @@ int main(int argc, char **argv) {
         dai_window_present(win);
     }
 
+    {
+        char lpath[512];
+        std::snprintf(lpath, sizeof(lpath), "%s/layout.txt", g_projects_root);
+        size_t need = dai_editor_ui_layout_save(panels, nullptr, 0);
+        std::string txt(need + 1, '\0');
+        dai_editor_ui_layout_save(panels, &txt[0], txt.size());
+        FILE *lf = std::fopen(lpath, "wb");
+        if (lf) { std::fwrite(txt.c_str(), 1, need, lf); std::fclose(lf); }
+    }
     dai_editor_ui_destroy(panels);
     dai_editor_destroy(ed);
     dai_ui_destroy(ui);

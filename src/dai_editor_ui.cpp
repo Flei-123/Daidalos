@@ -5,6 +5,7 @@
 // is the model, and a second copy would be the thing that goes stale.
 
 #include "dai_editor_ui.h"
+#include "dai_dock.h"
 
 #include <cmath>
 #include <cstdio>
@@ -149,8 +150,11 @@ struct dai_editor_ui {
 
     // ---- scripts -----------------------------------------------------------
     int (*script_create)(const char *name, void *user) = nullptr;
+    int (*folder_create)(const char *name, void *user) = nullptr;
     void *script_user = nullptr;
     char   script_name_buf[64] = { 0 };
+    int    script_focus = 0;
+    int    want_save = 0, want_refresh = 0;
 
     // ---- mesh inventory --------------------------------------------------
     dai_editor_ui_mesh_name_fn mesh_name = nullptr;
@@ -160,16 +164,11 @@ struct dai_editor_ui {
     // The layout. Windows the user can move, so their rectangles have to
     // survive the frame - and be resettable, because a window dragged off the
     // screen on a monitor you no longer have is otherwise gone for good.
-    dai_ui_window win_hierarchy{};
-    dai_ui_window win_inspector{};
-    dai_ui_window win_project{};
-    dai_ui_window win_scene{};          // the viewport IS a window
-    dai_ui_window win_settings{};
+    // The layout is a dock TREE now (see dai_dock.h): panels tile, they never
+    // overlap, and Scene/Game are two tabs of one leaf like every other pair.
+    dai_dock *dock = nullptr;
     int   settings_open = 0;
-    // Where fill mode last put the scene window, so a user drag can be told
-    // apart from the layout: same rect = filling, different = floated.
-    float scene_fx = -1, scene_fy = -1, scene_fw = -1, scene_fh = -1;
-    int   prev_frame_down = 0;
+    dai_ui_popup menu_project{};      // right click in the project window
 
     // ---- settings ----------------------------------------------------------
     float settings_font_px = 13.0f;
@@ -313,13 +312,16 @@ dai_editor_ui *dai_editor_ui_create(dai_editor *editor, dai_ui *ui) {
     dai_editor_ui *p = new dai_editor_ui();
     p->ed = editor;
     p->ui = ui;
+    p->dock = dai_dock_create();
     return p;
 }
 
-void dai_editor_ui_destroy(dai_editor_ui *p) { delete p; }
+void dai_editor_ui_destroy(dai_editor_ui *p) { if (p) dai_dock_destroy(p->dock);
+    delete p; }
 
 int dai_editor_ui_menu_open(const dai_editor_ui *p) {
-    return p ? (p->menu_node.open || p->menu_canvas.open) : 0;
+    return p ? (p->menu_node.open || p->menu_canvas.open || p->menu_project.open ||
+                dai_ui_popup_active(p->ui)) : 0;
 }
 
 void dai_editor_ui_rename(dai_editor_ui *p, dai_node n) {
@@ -377,6 +379,42 @@ void dai_editor_ui_script_host(dai_editor_ui *p,
 
 const char *dai_editor_ui_project(const dai_editor_ui *p) {
     return p ? p->proj_current.c_str() : "";
+}
+
+void dai_editor_ui_folder_host(dai_editor_ui *p,
+                               int (*create)(const char *name, void *user), void *user) {
+    if (!p) return;
+    p->folder_create = create;
+    if (user) p->script_user = user;
+}
+
+int dai_editor_ui_take_save(dai_editor_ui *p) {
+    if (!p || !p->want_save) return 0;
+    p->want_save = 0;
+    return 1;
+}
+
+int dai_editor_ui_take_refresh(dai_editor_ui *p) {
+    if (!p || !p->want_refresh) return 0;
+    p->want_refresh = 0;
+    return 1;
+}
+
+size_t dai_editor_ui_layout_save(const dai_editor_ui *p, char *buf, size_t n) {
+    if (!p) return 0;
+    return dai_dock_to_text(p->dock, buf, n);
+}
+
+dai_result dai_editor_ui_layout_load(dai_editor_ui *p, const char *text) {
+    if (!p || !text) return DAI_ERR_INVALID_ARG;
+    dai_result r = dai_dock_from_text(p->dock, text);
+    if (r == DAI_OK) p->layout_ready = true;
+    return r;
+}
+
+void dai_editor_ui_panel_open(dai_editor_ui *p, const char *title) {
+    if (!p || !title) return;
+    dai_dock_focus(p->dock, title);
 }
 
 void dai_editor_ui_mesh_host(dai_editor_ui *p,
@@ -636,7 +674,10 @@ static void inspector_body(dai_editor_ui *p) {
     }
     if (p->fold_body) {
         if (!has_body) {
+            // Inverted before this: the fields were INSIDE the "off" branch,
+            // so switching the rigidbody off is what made them appear.
             dai_ui_label(p->ui, "no rigidbody - nothing drives this");
+        } else {
             dai_ui_option(p->ui, "Motion", &r.motion, MOTIONS, 3);
             dai_ui_num_field(p->ui, "Friction", &r.friction, 0.005f, 0.0f, 10.0f, "friction");
             dai_ui_num_field(p->ui, "Bounce", &r.restitution, 0.005f, 0.0f, 1.0f, "bounce");
@@ -1504,39 +1545,22 @@ static int assets_body(dai_editor_ui *p, float h, const char **out_path, int *ou
 
 void dai_editor_ui_layout_dump(const dai_editor_ui *p, char *out, size_t n) {
     if (!p || !out || !n) return;
-    const dai_ui_window *ws[5] = { &p->win_hierarchy, &p->win_project, &p->win_inspector,
-                                   &p->win_scene, &p->win_settings };
-    const char *names[5] = { "Hierarchy", "Project", "Inspector", "Scene", "Settings" };
-    size_t used = 0;
-    for (int i = 0; i < 5 && used + 80 < n; ++i) {
-        const dai_ui_window *w = ws[i];
-        int wro = std::snprintf(out + used, n - used,
-                                "%s dock=%d slot=%d vp=%d fl=%d open=%d %.0f,%.0f %.0fx%.0f | ",
-                                names[i], w->dock, w->dock_slot, w->viewport, w->floated,
-                                w->open, w->x, w->y, w->w, w->h);
-        used += wro > 0 ? (size_t)wro : 0;
-    }
+    // The dock tree in one line: "{ h 0.18 { leaf 0 "Hierarchy" } ... }". A
+    // screenshot of a maximised editor across the room is not data; this is.
+    dai_dock_dump(p->dock, out, n);
 }
 
 void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
     if (!p) return;
-    const float SIDE = 230.0f;
-    // Docked, like the layout every 3D editor opens with: hierarchy over
-    // project on the left, inspector down the right. Dragging a title bar
-    // pulls a window out of its dock, dropping it near an edge puts it back.
-    p->win_hierarchy = dai_ui_window_docked(DAI_DOCK_LEFT, 1, SIDE);
-    p->win_project   = dai_ui_window_docked(DAI_DOCK_LEFT, 2, SIDE);
-    p->win_inspector = dai_ui_window_docked(DAI_DOCK_RIGHT, 0, SIDE);
-    // The scene view is a window like the others. It starts in fill mode:
-    // not docked to an edge, not floated - covering whatever is left.
-    p->win_scene = dai_ui_window_make(0, 0, 400, 300);
-    p->win_scene.viewport = 1;
-    p->win_scene.floated = 0;
-    p->win_scene.min_w = 200.0f;
-    p->win_scene.min_h = 120.0f;
-    p->win_settings = dai_ui_window_make(120, 80, 340, 320);
-    p->win_settings.open = 0;
-    p->scene_fx = -1;
+    // The layout every 3D editor opens with: hierarchy on the left, project
+    // under it, inspector on the right, scene and game as two tabs of the
+    // middle. Registering is idempotent, so this also runs on the first frame.
+    dai_dock_reset(p->dock);
+    dai_dock_add(p->dock, "Scene", DAI_DOCK_NONE, 0.0f);
+    dai_dock_add_tab(p->dock, "Game", "Scene");
+    dai_dock_add(p->dock, "Hierarchy", DAI_DOCK_LEFT, 0.18f);
+    dai_dock_add(p->dock, "Inspector", DAI_DOCK_RIGHT, 0.20f);
+    dai_dock_add(p->dock, "Project", DAI_DOCK_BOTTOM, 0.26f);
     p->layout_ready = true;
     p->layout_w = vw; p->layout_h = vh;
 }
@@ -1554,6 +1578,20 @@ void dai_editor_ui_viewport_rect(const dai_editor_ui *p, float *x, float *y, flo
 // the document like every other edit.
 static void run_context_menus(dai_editor_ui *p) {
     dai_doc *d = dai_editor_doc(p->ed);
+
+    // The project window's own Create menu. The editor owns the click, the
+    // host owns the disk - the same split the asset browser already uses.
+    static const dai_ui_menu_item PROJ_ITEMS[] = {
+        { DAI_ICON_FILE, "Create: Script", nullptr },
+        { DAI_ICON_FOLDER, "Create: Folder", nullptr },
+        { DAI_ICON_SAVE, "Save scene", "Ctrl+S" },
+        { DAI_ICON_SEARCH, "Refresh", nullptr },
+    };
+    int ppick = dai_ui_popup_menu(p->ui, &p->menu_project, PROJ_ITEMS, 4);
+    if (ppick == 0) { p->proj_tab = 0; p->script_focus = 1; }
+    else if (ppick == 1 && p->folder_create) p->folder_create("New Folder", p->script_user);
+    else if (ppick == 2) p->want_save = 1;
+    else if (ppick == 3) p->want_refresh = 1;
 
     static const dai_ui_menu_item NODE_ITEMS[] = {
         { DAI_ICON_PLUS, "Rename", "F2" },
@@ -1576,15 +1614,33 @@ static void run_context_menus(dai_editor_ui *p) {
 
     // Everything "Create" can mean, in one place. An empty node is a group:
     // no body, nothing drawn - it exists to carry children and a transform.
+    // Unity's GameObject menu, flattened: no submenus in this popup yet, so
+    // the six things people actually make are listed instead of hidden one
+    // level down.
     static const dai_ui_menu_item CANVAS_ITEMS[] = {
-        { DAI_ICON_PLUS, "Create Empty", nullptr },
-        { DAI_ICON_BOX, "New Box", nullptr },
-        { DAI_ICON_SPHERE, "New Sphere", nullptr },
-        { DAI_ICON_CAPSULE, "New Capsule", nullptr },
-        { DAI_ICON_CAMERA, "New Camera", nullptr },
+        { DAI_ICON_PLUS, "Create Empty", "Ctrl+Shift+N" },
+        { DAI_ICON_BOX, "3D Object: Cube", nullptr },
+        { DAI_ICON_SPHERE, "3D Object: Sphere", nullptr },
+        { DAI_ICON_CAPSULE, "3D Object: Capsule", nullptr },
+        { DAI_ICON_GRID, "3D Object: Plane", nullptr },
+        { DAI_ICON_CAMERA, "Camera", nullptr },
     };
-    int cpick = dai_ui_popup_menu(p->ui, &p->menu_canvas, CANVAS_ITEMS, 5);
-    if (cpick == 4) { dai_editor_ui_add_camera(p); return; }
+    int cpick = dai_ui_popup_menu(p->ui, &p->menu_canvas, CANVAS_ITEMS, 6);
+    if (cpick == 5) { dai_editor_ui_add_camera(p); return; }
+    if (cpick == 4) {
+        dai_node_desc r = dai_node_desc_default();
+        std::snprintf(r.name, sizeof(r.name), "Plane");
+        r.shape = DAI_SHAPE_BOX;
+        r.motion = DAI_STATIC;
+        r.half_extent = { 5.0f, 0.05f, 5.0f };
+        r.position = { 0, 0, 0 };
+        dai_doc_begin(d, "New plane");
+        dai_node n = dai_doc_add(d, &r);
+        dai_doc_commit(d);
+        dai_editor_resync(p->ed);
+        dai_editor_select(p->ed, n, 0);
+        return;
+    }
     if (cpick >= 0) {
         dai_node_desc r = dai_node_desc_default();
         const char *undo = "New box";
@@ -1611,6 +1667,69 @@ static void run_context_menus(dai_editor_ui *p) {
     }
 }
 
+// The project window's body, so it can live in a dock panel of any size.
+static void project_body(dai_editor_ui *p, float h) {
+    dai_ui *ui = p->ui;
+    dai_ui_row(ui, 22.0f);
+    if (dai_ui_button(ui, p->proj_tab == 0 ? "[Files]" : "Files")) p->proj_tab = 0;
+    if (dai_ui_button(ui, p->proj_tab == 1 ? "[Projects]" : "Projects")) {
+        p->proj_tab = 1;
+        dai_editor_ui_projects_refresh(p);
+    }
+    dai_ui_row_end(ui);
+    dai_ui_separator(ui);
+
+    if (p->proj_tab == 1) {
+        if (p->proj_current.empty()) dai_ui_label(ui, "no project open");
+        else dai_ui_label_fmt(ui, "open: %s", p->proj_current.c_str());
+        dai_ui_separator(ui);
+        if (p->projects.empty())
+            dai_ui_label(ui, p->proj_list ? "no projects yet" : "no project host");
+        for (const std::string &name : p->projects) {
+            if (dai_ui_button(ui, name.c_str()) && p->proj_open) {
+                if (p->proj_open(name.c_str(), p->proj_user)) {
+                    p->proj_current = name;
+                    p->proj_tab = 0;
+                }
+            }
+        }
+        dai_ui_separator(ui);
+        dai_ui_label(ui, "New project");
+        dai_ui_input_text(ui, "Name", p->proj_name_buf, sizeof(p->proj_name_buf));
+        if (dai_ui_button(ui, "Create + open") && p->proj_create) {
+            if (p->proj_name_buf[0] && p->proj_create(p->proj_name_buf, p->proj_user)) {
+                p->proj_current = p->proj_name_buf;
+                p->proj_name_buf[0] = 0;
+                dai_editor_ui_projects_refresh(p);
+                p->proj_tab = 0;
+            }
+        }
+    } else {
+        const char *pick = nullptr;
+        int as_tree = 0;
+        if (assets_body(p, h, &pick, &as_tree)) {
+            p->pending_asset = pick;
+            p->pending_as_tree = as_tree;
+        }
+        if (p->script_create) {
+            dai_ui_separator(ui);
+            dai_ui_label(ui, "New script");
+            dai_ui_input_text(ui, "Name", p->script_name_buf, sizeof(p->script_name_buf));
+            if (dai_ui_button(ui, "Create script") && p->script_name_buf[0]) {
+                if (p->script_create(p->script_name_buf, p->script_user))
+                    p->script_name_buf[0] = 0;
+            }
+        }
+    }
+    // Right click anywhere in the empty part of the panel: the Create menu,
+    // the way Unity's project window does it.
+    float mx = 0, my = 0;
+    dai_ui_mouse(ui, &mx, &my, nullptr, nullptr);
+    if (dai_ui_right_pressed(ui) && dai_ui_root_hovered(ui, "Project") &&
+        !p->menu_project.open && !p->menu_node.open && !p->menu_canvas.open)
+        dai_ui_popup_open(&p->menu_project, mx, my);
+}
+
 void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     if (!p) return;
     dai_ui *ui = p->ui;
@@ -1618,184 +1737,96 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     const float TOP = 34.0f, BOTTOM = 24.0f;
 
     if (!p->layout_ready) dai_editor_ui_layout_reset(p, vw, vh);
-    // Docked windows divide up everything between the two bars.
-    dai_ui_dock_area(ui, 0.0f, TOP, vw, vh - TOP - BOTTOM);
-    if (p->layout_w != vw || p->layout_h != vh) {
-        // Keep the right hand column glued to the right edge on a resize.
-        // Anything else leaves the inspector floating in the middle of a wider
-        // window, which is exactly what a 21:9 monitor did to it.
-        float dx = vw - p->layout_w;
-        if (p->win_inspector.x + p->win_inspector.w > p->layout_w - 40.0f)
-            p->win_inspector.x += dx;
-        float dh = vh - p->layout_h;
-        if (p->win_inspector.y + p->win_inspector.h > p->layout_h - 60.0f)
-            p->win_inspector.h += dh;
-        if (p->win_project.y + p->win_project.h > p->layout_h - 60.0f)
-            p->win_project.h += dh;
-        p->layout_w = vw; p->layout_h = vh;
-    }
+    p->layout_w = vw; p->layout_h = vh;
 
-    // The chrome: solid bars top and bottom. Everything between them that no
-    // window covers is the scene view - the editor is a frame around a hole.
+    // The chrome: solid bars top and bottom, the dock tree in between. There
+    // is no "free area" any more - every pixel between the bars belongs to
+    // exactly one panel, which is what makes overlapping impossible.
     dai_ui_rect(ui, 0, 0, vw, TOP, st->chrome);
     dai_ui_rect(ui, 0, vh - BOTTOM, vw, BOTTOM, st->chrome);
     dai_ui_rect(ui, 0, vh - BOTTOM, vw, 1.0f, st->panel_border);
 
     dai_editor_ui_toolbar(p, 0.0f, 0.0f, vw);
 
-    if (dai_ui_window_begin(ui, "Hierarchy", &p->win_hierarchy))
-        hierarchy_body(p, p->win_hierarchy.h - 40.0f);
-    dai_ui_window_end(ui);
-
-    if (dai_ui_window_begin(ui, "Project", &p->win_project)) {
-        // Two tabs: the current project's files, and the projects themselves.
-        // A project in this engine is a folder of scenes and assets - it has
-        // to exist before "nothing mounted" can become anything, which is why
-        // the tab is here and not in a launcher.
-        dai_ui_row(ui, 22.0f);
-        if (dai_ui_button(ui, p->proj_tab == 0 ? "[Files]" : "Files")) p->proj_tab = 0;
-        if (dai_ui_button(ui, p->proj_tab == 1 ? "[Projects]" : "Projects")) {
-            p->proj_tab = 1;
-            dai_editor_ui_projects_refresh(p);
-        }
-        dai_ui_row_end(ui);
-        dai_ui_separator(ui);
-
-        if (p->proj_tab == 1) {
-            if (p->proj_current.empty())
-                dai_ui_label(ui, "no project open");
-            else
-                dai_ui_label_fmt(ui, "open: %s", p->proj_current.c_str());
-            dai_ui_separator(ui);
-            if (p->projects.empty())
-                dai_ui_label(ui, p->proj_list ? "no projects yet" : "no project host");
-            for (const std::string &name : p->projects) {
-                if (dai_ui_button(ui, name.c_str()) && p->proj_open) {
-                    if (p->proj_open(name.c_str(), p->proj_user)) {
-                        p->proj_current = name;
-                        p->proj_tab = 0;
-                    }
-                }
-            }
-            dai_ui_separator(ui);
-            dai_ui_label(ui, "New project");
-            dai_ui_input_text(ui, "Name", p->proj_name_buf, sizeof(p->proj_name_buf));
-            if (dai_ui_button(ui, "Create + open") && p->proj_create) {
-                if (p->proj_name_buf[0] &&
-                    p->proj_create(p->proj_name_buf, p->proj_user)) {
-                    p->proj_current = p->proj_name_buf;
-                    p->proj_name_buf[0] = 0;
-                    dai_editor_ui_projects_refresh(p);
-                    p->proj_tab = 0;
-                }
-            }
-        } else {
-            const char *pick = nullptr; int as_tree = 0;
-            if (assets_body(p, p->win_project.h, &pick, &as_tree)) {
-                p->pending_asset = pick;
-                p->pending_as_tree = as_tree;
-            }
-            // Creating a script is a file, and the file is the host's - the
-            // editor owns the click, the host owns the folder.
-            if (p->script_create) {
-                dai_ui_separator(ui);
-                dai_ui_label(ui, "New script");
-                dai_ui_input_text(ui, "Name", p->script_name_buf, sizeof(p->script_name_buf));
-                if (dai_ui_button(ui, "Create script") && p->script_name_buf[0]) {
-                    if (p->script_create(p->script_name_buf, p->script_user))
-                        p->script_name_buf[0] = 0;
-                }
-            }
-        }
+    // Play switches to the Game tab and Stop switches back, once each - the
+    // tabs are real tabs of one dock leaf now, so this is just a selection.
+    int playing = dai_editor_state_get(p->ed) != DAI_EDITOR_EDIT;
+    if (playing && !p->view_was_playing) dai_dock_focus(p->dock, "Game");
+    if (!playing && p->view_was_playing) dai_dock_focus(p->dock, "Scene");
+    p->view_was_playing = playing;
+    if (p->settings_open && !dai_dock_is_open(p->dock, "Settings")) {
+        // Settings is a panel like any other - it docks, it tabs, it closes.
+        dai_dock_add(p->dock, "Settings", DAI_DOCK_RIGHT, 0.24f);
+        dai_dock_focus(p->dock, "Settings");
     }
-    dai_ui_window_end(ui);
 
-    if (dai_ui_window_begin(ui, "Inspector", &p->win_inspector))
-        inspector_body(p);
-    dai_ui_window_end(ui);
+    dai_dock_begin(p->dock, ui, 0.0f, TOP, vw, vh - TOP - BOTTOM);
 
-    // ---- the scene window -------------------------------------------------
-    // The viewport is a WINDOW: it docks like every other window, resizes like
-    // every other window, and tearing it off the layout floats it - which is
-    // the answer to "Scene und Game sind eigentlich auch Fenster".
-    float fx = 0, fy = 0, fw = vw, fh = vh;
-    dai_ui_free_area(ui, &fx, &fy, &fw, &fh);
-    if (fy < TOP) { fh -= (TOP - fy); fy = TOP; }
-    if (fy + fh > vh - BOTTOM) fh = vh - BOTTOM - fy;
-
-    // Fill mode versus floated: if the window is not where the layout last
-    // put it, the user moved it - and it floats from then on. Docking it
-    // clears the flag, because a docked window is placed by the dock.
-    if (p->win_scene.dock != DAI_DOCK_NONE) p->win_scene.floated = 0;
-    bool filling = p->win_scene.dock == DAI_DOCK_NONE && !p->win_scene.floated;
-    if (filling && p->scene_fx >= 0.0f &&
-        (std::fabs(p->win_scene.x - p->scene_fx) > 2.0f ||
-         std::fabs(p->win_scene.y - p->scene_fy) > 2.0f))
-        p->win_scene.floated = 1;
-    // Dropped back over the middle of the layout: fill again.
-    {
+    float px, py, pw, ph;
+    if (dai_dock_panel(p->dock, "Hierarchy", &px, &py, &pw, &ph)) {
+        dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
+        hierarchy_body(p, ph - 8.0f);
+        // Right click on empty space in the hierarchy: the GameObject menu.
         float mx = 0, my = 0;
-        int down = 0;
-        dai_ui_mouse(ui, &mx, &my, &down, nullptr);
-        if (!down && p->prev_frame_down && p->win_scene.floated &&
-            p->win_scene.dock == DAI_DOCK_NONE &&
-            mx > fx + fw * 0.25f && mx < fx + fw * 0.75f &&
-            my > fy + fh * 0.25f && my < fy + fh * 0.75f)
-            p->win_scene.floated = 0;
-        p->prev_frame_down = down;
+        dai_ui_mouse(ui, &mx, &my, nullptr, nullptr);
+        if (dai_ui_right_pressed(ui) && dai_ui_root_hovered(ui, "Hierarchy") &&
+            !p->menu_node.open && !p->menu_canvas.open)
+            dai_ui_popup_open(&p->menu_canvas, mx, my);
+        dai_ui_panel_end(ui);
+        dai_dock_panel_end(p->dock);
     }
-    filling = p->win_scene.dock == DAI_DOCK_NONE && !p->win_scene.floated;
-    if (filling) {
-        p->win_scene.x = fx; p->win_scene.y = fy;
-        p->win_scene.w = fw; p->win_scene.h = fh;
+    if (dai_dock_panel(p->dock, "Project", &px, &py, &pw, &ph)) {
+        dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
+        project_body(p, ph);
+        dai_ui_panel_end(ui);
+        dai_dock_panel_end(p->dock);
     }
-
-    if (dai_ui_window_begin(ui, "Scene", &p->win_scene)) {
-        // No widgets: the body IS the scene. The tabs sit on the title bar,
-        // drawn after window_end at the window's own layer.
+    if (dai_dock_panel(p->dock, "Inspector", &px, &py, &pw, &ph)) {
+        dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
+        inspector_body(p);
+        dai_ui_panel_end(ui);
+        dai_dock_panel_end(p->dock);
     }
-    dai_ui_window_end(ui);
-    {
-        int layer = dai_ui_window_layer(ui, "Scene");
-        dai_ui_layer_set(ui, layer);
-        float bar = 19.0f;
-        float tx = p->win_scene.x + 22.0f;
-        // Play switches to Game and Stop switches back, exactly once each.
-        int playing = dai_editor_state_get(p->ed) != DAI_EDITOR_EDIT;
-        if (playing && !p->view_was_playing) p->view = DAI_VIEW_GAME;
-        if (!playing && p->view_was_playing) p->view = DAI_VIEW_SCENE;
-        p->view_was_playing = playing;
-        if (view_tab(p, tx, p->win_scene.y, 58.0f, bar, "Scene", p->view == DAI_VIEW_SCENE))
-            p->view = DAI_VIEW_SCENE;
-        if (view_tab(p, tx + 59.0f, p->win_scene.y, 58.0f, bar, "Game", p->view == DAI_VIEW_GAME))
-            p->view = DAI_VIEW_GAME;
-        dai_ui_layer_set(ui, 0);
-    }
-    {
-        float bar = 19.0f;
-        p->view_x = p->win_scene.x + 1.0f;
-        p->view_y = p->win_scene.y + bar;
-        p->view_w = p->win_scene.w - 2.0f;
-        p->view_h = p->win_scene.h - bar;
-        if (p->view_w < 8.0f) p->view_w = 8.0f;
-        if (p->view_h < 8.0f) p->view_h = 8.0f;
+    if (dai_dock_panel(p->dock, "Settings", &px, &py, &pw, &ph)) {
+        dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
+        settings_body(p);
+        dai_ui_panel_end(ui);
+        dai_dock_panel_end(p->dock);
+    } else if (p->settings_open && !dai_dock_visible(p->dock, "Settings") &&
+               !dai_dock_is_open(p->dock, "Settings")) {
+        p->settings_open = 0;
     }
 
-    if (p->view == DAI_VIEW_GAME && !dai_editor_ui_game_camera(p, nullptr, nullptr, nullptr)) {
-        // Unity's message, and it means the same thing here.
-        const char *msg = "No camera in the scene - right click the viewport, New Camera";
+    // The scene and the game are two tabs of one leaf, and their body is the
+    // 3D view: no panel background is drawn, the host renders the world into
+    // exactly this rectangle.
+    p->view = dai_dock_visible(p->dock, "Game") ? DAI_VIEW_GAME : DAI_VIEW_SCENE;
+    int have_view = 0;
+    if (dai_dock_panel(p->dock, "Scene", &px, &py, &pw, &ph)) {
+        p->view_x = px; p->view_y = py; p->view_w = pw; p->view_h = ph;
+        have_view = 1;
+        dai_dock_panel_end(p->dock);
+    } else if (dai_dock_panel(p->dock, "Game", &px, &py, &pw, &ph)) {
+        p->view_x = px; p->view_y = py; p->view_w = pw; p->view_h = ph;
+        have_view = 1;
+        dai_dock_panel_end(p->dock);
+    }
+    if (!have_view) { p->view_w = 0; p->view_h = 0; }
+
+    if (p->view == DAI_VIEW_GAME && have_view &&
+        !dai_editor_ui_game_camera(p, nullptr, nullptr, nullptr)) {
+        const char *msg = "No camera in the scene - right click the hierarchy, New Camera";
         float tw = dai_ui_text_width(ui, msg);
         dai_ui_text(ui, p->view_x + (p->view_w - tw) * 0.5f,
                     p->view_y + p->view_h * 0.5f, msg, st->text_dim);
     }
 
-    p->scene_fx = p->win_scene.x; p->scene_fy = p->win_scene.y;
-    p->scene_fw = p->win_scene.w; p->scene_fh = p->win_scene.h;
+    dai_dock_end(p->dock);
 
     dai_editor_ui_timeline(p, p->view_x + 8.0f, vh - BOTTOM - 50.0f, p->view_w - 16.0f);
     dai_editor_ui_status(p, 0.0f, vh - BOTTOM, vw, BOTTOM);
-    if (p->view == DAI_VIEW_SCENE) {
-        // The wireframes are UI lines over the 3D - clipped to the window the
+    if (p->view == DAI_VIEW_SCENE && have_view) {
+        // The wireframes are UI lines over the 3D - clipped to the panel the
         // 3D lives in, or an object behind the inspector draws its gizmo on
         // the inspector.
         dai_ui_clip_begin(ui, p->view_x, p->view_y, p->view_w, p->view_h);
@@ -1803,16 +1834,6 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         draw_cameras(p);
         dai_editor_ui_gizmo(p);
         dai_ui_clip_end(ui);
-    }
-
-    // Settings, on top of the rest.
-    if (p->settings_open) {
-        p->win_settings.open = 1;
-        if (dai_ui_window_begin(ui, "Settings", &p->win_settings))
-            settings_body(p);
-        dai_ui_window_end(ui);
-    } else {
-        p->win_settings.open = 0;
     }
 
     run_context_menus(p);

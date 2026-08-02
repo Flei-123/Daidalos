@@ -139,6 +139,20 @@ DAI_API void dai_editor_ui_projects_refresh(dai_editor_ui *p);
 DAI_API void dai_editor_ui_script_host(dai_editor_ui *p,
                                        int (*create)(const char *name, void *user),
                                        void *user);
+/* Same split for folders, and for the two commands the project window's menu
+ * can only ask for: the host owns the disk. Read and clear each frame. */
+DAI_API void dai_editor_ui_folder_host(dai_editor_ui *p,
+                                       int (*create)(const char *name, void *user),
+                                       void *user);
+DAI_API int  dai_editor_ui_take_save(dai_editor_ui *p);
+DAI_API int  dai_editor_ui_take_refresh(dai_editor_ui *p);
+
+/* ---- the dock layout ----------------------------------------------------
+ * Panels tile in a tree (see dai_dock.h). The host needs these two to keep a
+ * layout across restarts, and the Window menu to reopen a closed panel. */
+DAI_API size_t     dai_editor_ui_layout_save(const dai_editor_ui *p, char *buf, size_t n);
+DAI_API dai_result dai_editor_ui_layout_load(dai_editor_ui *p, const char *text);
+DAI_API void       dai_editor_ui_panel_open(dai_editor_ui *p, const char *title);
 /* Which project is open ("" when none) - the host shows it in the title bar
  * and knows which folder "save" means. */
 DAI_API const char *dai_editor_ui_project(const dai_editor_ui *p);

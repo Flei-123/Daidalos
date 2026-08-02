@@ -62,6 +62,7 @@ typedef struct dai_ui_input {
      * are "held" - a text field that only knows backspace is a toy: you cannot
      * fix a typo in the middle of a number without retyping it. */
     int      key_left, key_right, key_home, key_end, key_delete, key_escape;
+    int      key_up_arrow, key_down_arrow;   /* dropdown / list navigation */
     int      key_shift, key_ctrl;    /* held */
     int      key_select_all;         /* Ctrl+A, edge triggered */
     int      double_click;           /* the press this frame was a double click */
@@ -90,6 +91,43 @@ DAI_API int dai_ui_cursor(const dai_ui *ui);
  * ask for a cursor too. Last writer of the frame wins, which is right: the
  * frontmost thing under the pointer is drawn last. */
 DAI_API void dai_ui_cursor_set(dai_ui *ui, int cursor);
+
+/* ---- draw layers --------------------------------------------------------
+ *
+ * Everything is drawn into one list and sorted by layer at the end of the
+ * frame. That is what lets a dropdown opened inside a panel be drawn OVER the
+ * window next to it: in an immediate mode UI the order things are submitted
+ * in is the order they are laid out in, and that is almost never the order
+ * they should be painted in.
+ *
+ * Windows occupy DAI_LAYER_WINDOW + their position in the z order, so there
+ * is room for a few hundred of them before they reach the next layer. */
+enum {
+    DAI_LAYER_BACKGROUND = 0,
+    DAI_LAYER_WINDOW     = 1,
+    DAI_LAYER_DOCK_PREVIEW = 1 << 12,
+    DAI_LAYER_POPUP      = 1 << 13,
+    DAI_LAYER_DRAG       = 1 << 14,
+    DAI_LAYER_TOOLTIP    = 1 << 15
+};
+DAI_API void dai_ui_layer_push(dai_ui *ui, int layer);
+DAI_API void dai_ui_layer_pop(dai_ui *ui);
+
+/* ---- hit testing --------------------------------------------------------
+ *
+ * "Is the pointer over THIS thing, and is this thing the frontmost thing under
+ * the pointer?" Every widget asks that; a host drawing its own chrome (a dock
+ * tab bar, a viewport) has to ask it too, or two overlapping things both react
+ * to the same click.
+ *
+ * The frontmost root is decided at the END of a frame and used by the NEXT
+ * one - one frame of lag, which is invisible and is what every immediate mode
+ * UI does, because who is on top is not known until everyone has been laid
+ * out. */
+DAI_API void dai_ui_root_begin(dai_ui *ui, const char *id, float x, float y, float w, float h);
+DAI_API void dai_ui_root_end(dai_ui *ui);
+/* 1 when this root is the frontmost one under the pointer. */
+DAI_API int  dai_ui_root_hovered(const dai_ui *ui, const char *id);
 
 typedef struct dai_ui_style {
     uint32_t panel, panel_border, text, text_dim;
@@ -185,6 +223,10 @@ typedef struct dai_ui_window {
      * scene view a real window - dockable, resizable, tear-off - instead of
      * "the hole the panels leave". */
     int   viewport;
+    /* Set by the window system when the ⋮ button was pressed; the host opens
+     * its own menu and clears it. A window menu belongs to the host - only it
+     * knows what "close" or "dock left" mean for this particular panel. */
+    int   menu_wanted;
     /* Set by the host, not by the window system: a viewport window that has
      * been dragged off its fill position floats; one that has not covers the
      * free area. */
@@ -331,8 +373,22 @@ DAI_API int  dai_ui_image_button(dai_ui *ui, dai_texture tex, float w, float h,
 /* Cycles through `items` on click - a real dropdown needs an overlay layer and
  * this is an editor field with four options, not a font picker. Returns 1 when
  * the value changed. */
+/* A REAL dropdown: clicking opens a list over everything else, the list stays
+ * open until an entry is clicked, Escape or a click outside cancels, and the
+ * arrow keys move a highlight that only commits on Enter.
+ *
+ * The old one was a button that added one to the index per click. That is not
+ * a dropdown, it is a counter: picking the third of five values took three
+ * clicks, and there was no way to see what the other values even were. */
 DAI_API int  dai_ui_option(dai_ui *ui, const char *label, int *value,
                            const char *const *items, int count);
+/* Same, laid out by the caller. */
+DAI_API int  dai_ui_option_at(dai_ui *ui, const char *id, float x, float y, float w, float h,
+                              int *value, const char *const *items, int count);
+/* Is any popup (dropdown, context menu, window menu) open? The host needs it
+ * for the same reason it needs dai_ui_text_active: while a menu is up, the
+ * keyboard and the right mouse button belong to the menu. */
+DAI_API int  dai_ui_popup_active(const dai_ui *ui);
 
 /* Drag to change, the way every 3D editor does it: no keyboard, no modal state,
  * and it works on a laptop trackpad. `step` is world units per pixel. */

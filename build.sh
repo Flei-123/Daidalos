@@ -73,6 +73,7 @@ echo "-- scene layer"
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_scene.cpp -o build/dai_scene.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_input.cpp -o build/dai_input.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor.cpp -o build/dai_editor.o
+g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_dock.cpp -o build/dai_dock.o
 
 echo "-- scene document (editor truth: stable ids, generic undo)"
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc.cpp -o build/dai_doc.o
@@ -164,7 +165,7 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_update.cpp       -o build/dai_update.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor_ui.cpp     -o build/dai_editor_ui.o
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
-           $WINDOW_OBJ build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
+           $WINDOW_OBJ build/dai_dock.o build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
            build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_svg.o build/dai_icons.o build/dai_ui.o build/dai_update.o \
            build/dai_editor_ui.o
     VK_OK=1
@@ -291,6 +292,10 @@ if [ "$VK_OK" = "1" ]; then
     # No renderer: input in, vertices out.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_field.cpp src/dai_ui.cpp src/dai_font.cpp \
         src/dai_svg.cpp src/dai_icons.cpp -o build/test_ui_field && ./build/test_ui_field
+    # Docked panels tile and never overlap - the property the whole layout
+    # rewrite exists for.
+    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_dock.cpp src/dai_dock.cpp src/dai_ui.cpp \
+        src/dai_font.cpp src/dai_svg.cpp src/dai_icons.cpp -o build/test_dock && ./build/test_dock
     g++ $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
     if [ -n "$ASSETS_LIB" ]; then
