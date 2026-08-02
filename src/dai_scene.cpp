@@ -78,6 +78,11 @@ void shape_to_mesh(int shape, dai_vec3 he, uint32_t *mesh, dai_vec3 *scale, floa
     case DAI_SHAPE_CAPSULE:
         // half_extent.x = radius, .y = half height of the shaft
         *mesh = DAI_MESH_CAPSULE; *scale = { he.x, he.x, he.x }; *param = he.y; break;
+    case DAI_SHAPE_CYLINDER:
+        // DAI_MESH_CYLINDER is radius 1 and y +-1, so the half height goes into
+        // the scale rather than into param the way the capsule needs - the
+        // capsule's caps have to stay round, a cylinder's ends do not exist.
+        *mesh = DAI_MESH_CYLINDER; *scale = { he.x, he.y, he.x }; *param = 0.0f; break;
     case DAI_SHAPE_BOX:
     default:
         *mesh = DAI_MESH_BOX; *scale = he; *param = 0.0f; break;

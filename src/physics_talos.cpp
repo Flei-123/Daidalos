@@ -208,6 +208,16 @@ public:
         bs.allow_sleeping   = d.no_sleeping ? 0 : 1;
         bs.is_sensor        = d.sensor != 0;   // reports overlaps, blocks nothing
         bs.user_data        = slot;
+        // Same reasoning as the Jolt backend: a discrete step lets a falling
+        // body arrive several centimetres inside whatever it landed on, and an
+        // editor that draws collider outlines makes that immediately visible.
+        // Talos exposes the motion quality per body but has no equivalent of
+        // Jolt's mPenetrationSlop / mSpeculativeContactDistance in
+        // tal_world_settings, so this backend gets the sweep and not the other
+        // two thirds of the fix - a resting overlap here is whatever the Talos
+        // solver leaves, and that is a Talos setting to add, not something to
+        // fake from this side.
+        if (mt == TAL_MOTION_DYNAMIC) bs.motion_quality = TAL_QUALITY_LINEAR_CAST;
         if (d.density > 0.0f && mt == TAL_MOTION_DYNAMIC) {
             float m = tal_shape_get_mass(shape, d.density);
             if (m > 0.0f) bs.override_mass = m;
@@ -553,6 +563,15 @@ private:
             return tal_shape_sphere(he.x > 0 ? he.x : 0.5f);
         case DAI_SHAPE_CAPSULE:
             return tal_shape_capsule(he.y > 0 ? he.y : 0.5f, he.x > 0 ? he.x : 0.5f);
+        case DAI_SHAPE_CYLINDER: {
+            // Talos has a real cylinder too (tal_shape_cylinder, TalC/talos.h),
+            // so the shape is not approximated on either backend and a scene
+            // saved under Jolt behaves the same way when it is opened under
+            // Talos. Same convex radius clamp as the box next to it.
+            float r = he.x > 0 ? he.x : 0.5f, hh = he.y > 0 ? he.y : 0.5f;
+            float cr = std::min(std::min(r * 0.05f, hh * 0.05f), 0.05f);
+            return tal_shape_cylinder(hh, r, cr);
+        }
         default: {
             float ex = he.x > 0 ? he.x : 0.5f, ey = he.y > 0 ? he.y : 0.5f, ez = he.z > 0 ? he.z : 0.5f;
             float cr = std::min(std::min(ex, ey), std::min(ez, 0.05f));

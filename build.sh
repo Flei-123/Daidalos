@@ -249,6 +249,12 @@ g++ $FLAGS $ARCH -Iinclude tests/test_merge.cpp $LIBS -o build/test_merge
 g++ $FLAGS $ARCH -Iinclude tests/test_save.cpp $LIBS -o build/test_save
 g++ $FLAGS $ARCH -Iinclude tests/test_input.cpp $LIBS -o build/test_input
 g++ $FLAGS $ARCH -Iinclude tests/test_editor.cpp $LIBS -o build/test_editor
+# Four bugs that were all the same question asked badly - "where is this object,
+# really". Run here rather than merely built: three of the four are measurements
+# (penetration depth, drag distance, roll distance) that a change to the physics
+# settings or the sync layer can move without breaking anything that compiles.
+g++ $FLAGS $ARCH -Iinclude tests/test_editor_live.cpp $LIBS -o build/test_editor_live && \
+    ./build/test_editor_live
 g++ $FLAGS $ARCH -Iinclude tests/test_doc.cpp $LIBS -o build/test_doc
 g++ $FLAGS $ARCH -Iinclude tests/test_play.cpp $LIBS -o build/test_play
 g++ $FLAGS $ARCH -Iinclude tests/test_cam.cpp $LIBS -o build/test_cam

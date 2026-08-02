@@ -101,7 +101,22 @@ typedef enum dai_shape {
     DAI_SHAPE_BOX = 0,
     DAI_SHAPE_SPHERE,
     DAI_SHAPE_CAPSULE,
-    DAI_SHAPE_COMPOUND   /* built from dai_compound_part, see dai_body_desc */
+    DAI_SHAPE_COMPOUND,  /* built from dai_compound_part, see dai_body_desc */
+    /* Flat ended cylinder about the local Y axis: half_extent.x is the radius,
+     * .y the half height, .z ignored - the same convention the capsule uses, so
+     * the two are interchangeable in the inspector.
+     *
+     * Added AFTER compound rather than next to the capsule where it belongs,
+     * because the scene file writes this enum as a plain integer: renumbering
+     * would silently turn every saved capsule into a compound. A new value at
+     * the end costs one comment and keeps every scene ever written valid.
+     *
+     * The renderer has had DAI_MESH_CYLINDER from the start, so until now a
+     * cylinder was drawn as a cylinder and collided as a box: it stood on its
+     * corners, which is the "it stops too early" the user was looking at.
+     * Both backends have a real cylinder (Jolt CylinderShape, Talos
+     * tal_shape_cylinder), so neither has to fake it. */
+    DAI_SHAPE_CYLINDER
 } dai_shape;
 
 typedef enum dai_motion {
@@ -114,7 +129,8 @@ typedef enum dai_motion {
 
 typedef struct dai_compound_part {
     int      shape;          /* dai_shape, no compound nesting                 */
-    dai_vec3 half_extent;    /* box: half size; sphere: x = r; capsule: x = r, y = half height */
+    dai_vec3 half_extent;    /* box: half size; sphere: x = r; capsule and
+                                cylinder: x = r, y = half height              */
     dai_vec3 offset;
     dai_quat rotation;
 } dai_compound_part;
