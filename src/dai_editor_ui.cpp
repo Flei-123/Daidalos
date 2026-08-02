@@ -1834,9 +1834,12 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         dai_ui_panel_end(ui);
         dai_dock_panel_end(p->dock);
     }
+    (void)0;
     if (dai_dock_panel(p->dock, "Inspector", &px, &py, &pw, &ph)) {
         dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
+        dai_ui_scroll_begin(ui, "inspector", ph - 6.0f);
         inspector_body(p);
+        dai_ui_scroll_end(ui);
         dai_ui_panel_end(ui);
         dai_dock_panel_end(p->dock);
     }
