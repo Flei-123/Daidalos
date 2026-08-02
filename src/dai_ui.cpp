@@ -157,6 +157,7 @@ struct dai_ui {
     std::vector<Win> wins;          // z order: back() is in front
     int      cur_layer = 0;
     bool     blocked = false;       // the current window is behind another one
+    int   panel_clip_depth = 0;   // the clip a panel pushed, to pop exactly it
     float dock_x = 0, dock_y = 0, dock_w = 0, dock_h = 0;   // area docked windows divide
     bool  dock_area_set = false;
     int   preview_slot = 0;             // set for the drop preview only
@@ -1017,10 +1018,17 @@ void dai_ui_panel_begin(dai_ui *ui, float x, float y, float w, float h, const ch
                     w - ui->style.padding * 2, 1.0f, ui->style.panel_border);
     }
     if (inside_chk(ui, x, y, w, h)) ui->mouse_over_ui = true;
+    // Contents belong to this panel and nowhere else: an inspector longer
+    // than the space it has must scroll, not paint over the panel below.
+    ui->clips.push_back(dai_ui::Clip{ x, y, x + w, y + h });
+    ui->panel_clip_depth = (int)ui->clips.size();
 }
 
 void dai_ui_panel_end(dai_ui *ui) {
     if (!ui) return;
+    if ((int)ui->clips.size() >= ui->panel_clip_depth && ui->panel_clip_depth > 0)
+        ui->clips.resize((size_t)ui->panel_clip_depth - 1);
+    ui->panel_clip_depth = 0;
     ui->in_panel = false;
     if (ui->in_row) {                 // close an open row with the panel
         ui->in_row = false;
