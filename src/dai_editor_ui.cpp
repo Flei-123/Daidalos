@@ -66,7 +66,11 @@ static bool quat_eq(dai_quat a, dai_quat b) {
 // The collider's shape picker: "From Mesh" leaves the body's shape to the
 // asset resolver, the way a MeshCollider in Unity is not a capsule with a
 // different name.
-const char *const COLLIDER_SHAPES[] = { "Box", "Sphere", "Capsule", "From Mesh" };
+const char *const COLLIDER_SHAPES[] = { "Box", "Sphere", "Capsule", "Compound", "Cylinder",
+                                        "From Mesh" };
+// The index in that list is the dai_shape value, except for the last entry -
+// "From Mesh" is not a shape, it is the mesh answering instead.
+const int COLLIDER_FROM_MESH = 5;
 
 } // namespace
 
@@ -490,17 +494,19 @@ void fit_label_column(dai_ui *ui) {
 // the collider to a sphere" from also turning the model into a sphere.
 uint32_t mesh_of_shape(int shape) {
     switch (shape) {
-    case DAI_SHAPE_SPHERE:  return DAI_MESH_SPHERE;
-    case DAI_SHAPE_CAPSULE: return DAI_MESH_CAPSULE;
-    default:                return DAI_MESH_BOX;
+    case DAI_SHAPE_SPHERE:   return DAI_MESH_SPHERE;
+    case DAI_SHAPE_CAPSULE:  return DAI_MESH_CAPSULE;
+    case DAI_SHAPE_CYLINDER: return DAI_MESH_CYLINDER;
+    default:                 return DAI_MESH_BOX;
     }
 }
 
 const char *collider_title(int shape) {
     switch (shape) {
-    case DAI_SHAPE_SPHERE:  return "Sphere Collider";
-    case DAI_SHAPE_CAPSULE: return "Capsule Collider";
-    default:                return "Box Collider";
+    case DAI_SHAPE_SPHERE:   return "Sphere Collider";
+    case DAI_SHAPE_CAPSULE:  return "Capsule Collider";
+    case DAI_SHAPE_CYLINDER: return "Cylinder Collider";
+    default:                 return "Box Collider";
     }
 }
 
@@ -651,18 +657,18 @@ static void inspector_body(dai_editor_ui *p) {
                 p->collider_edit = !p->collider_edit;
 
             int shape_idx = r.shape;
-            if (r.mesh == 0xFFFFFFFEu) shape_idx = 3;
-            if (dai_ui_option(p->ui, "Shape", &shape_idx, COLLIDER_SHAPES, 4)) {
+            if (r.mesh == 0xFFFFFFFEu) shape_idx = COLLIDER_FROM_MESH;
+            if (dai_ui_option(p->ui, "Shape", &shape_idx, COLLIDER_SHAPES, 6)) {
                 // Changing the collider's shape must not reshape the model:
                 // pin the mesh to what it is right now first.
                 if (r.mesh == 0xFFFFFFFFu) r.mesh = mesh_of_shape(r.shape);
-                if (shape_idx == 3) r.mesh = 0xFFFFFFFEu;
-                else                r.shape = shape_idx;
+                if (shape_idx == COLLIDER_FROM_MESH) r.mesh = 0xFFFFFFFEu;
+                else                                 r.shape = shape_idx;
             }
             int trig = r.trigger;
             if (dai_ui_checkbox(p->ui, "Is Trigger", &trig)) r.trigger = trig;
             dai_ui_num_vec3(p->ui, "Center", &r.collider_center.x, 0.01f);
-            if (shape_idx != 3) {
+            if (shape_idx != COLLIDER_FROM_MESH) {
                 // Unity shows the FULL size of the box, not the half extent.
                 // The document stores halves, so the field converts.
                 dai_vec3 size{ r.half_extent.x * 2.0f, r.half_extent.y * 2.0f,
@@ -905,11 +911,11 @@ bool collider_of(dai_editor_ui *p, dai_node n, ColliderBox *out) {
     if (r.no_body) return false;
     dai_vec3 wp{}, ws{ 1, 1, 1 };
     dai_quat wr{ 0, 0, 0, 1 };
-    dai_doc_world_transform(d, n, &wp, &wr, &ws);
-    // While playing, the object is where the SIMULATION put it - a wireframe
-    // left at the pre-play pose would be a lie drawn in green.
-    if (dai_editor_state_get(p->ed) != DAI_EDITOR_EDIT)
-        dai_editor_live_position(p->ed, n, &wp);
+    // Where the object REALLY is, orientation included. Asking for the live
+    // position and then keeping the document's rotation is what left the green
+    // outline behind a spinning body - measured at 114 degrees of lie.
+    if (!dai_editor_live_transform(p->ed, n, &wp, &wr, &ws))
+        dai_doc_world_transform(d, n, &wp, &wr, &ws);
     dai_vec3 off{ r.collider_center.x * ws.x, r.collider_center.y * ws.y,
                   r.collider_center.z * ws.z };
     out->center = v_add(wp, qrot_v(wr, off));
@@ -920,6 +926,8 @@ bool collider_of(dai_editor_ui *p, dai_node n, ColliderBox *out) {
     if (r.shape == DAI_SHAPE_SPHERE) {
         float rad = r.half_extent.x * ax;
         out->half = { rad, rad, rad };
+    } else if (r.shape == DAI_SHAPE_CYLINDER) {
+        out->half = { r.half_extent.x * ax, r.half_extent.y * ay, r.half_extent.x * ax };
     } else if (r.shape == DAI_SHAPE_CAPSULE) {
         float rad = r.half_extent.x * ax;
         out->half = { rad, r.half_extent.y * ay + rad, rad };
@@ -975,6 +983,18 @@ void draw_collider(dai_editor_ui *p, const ColliderBox &c, uint32_t col, float t
         float rad = c.half.x, shaft = c.half.y - rad;
         dai_vec3 top = v_add(c.center, qrot_v(c.rot, dai_vec3{ 0, shaft, 0 }));
         dai_vec3 bot = v_add(c.center, qrot_v(c.rot, dai_vec3{ 0, -shaft, 0 }));
+        wire_circle(p, top, c.rot, dai_vec3{1,0,0}, dai_vec3{0,0,1}, rad, col, thick);
+        wire_circle(p, bot, c.rot, dai_vec3{1,0,0}, dai_vec3{0,0,1}, rad, col, thick);
+        for (int i = 0; i < 4; ++i) {
+            float sx = (i == 0) ? rad : (i == 1) ? -rad : 0.0f;
+            float sz = (i == 2) ? rad : (i == 3) ? -rad : 0.0f;
+            wire_line(p, v_add(top, qrot_v(c.rot, dai_vec3{ sx, 0, sz })),
+                         v_add(bot, qrot_v(c.rot, dai_vec3{ sx, 0, sz })), col, thick);
+        }
+    } else if (c.shape == DAI_SHAPE_CYLINDER) {
+        float rad = c.half.x, half_h = c.half.y;
+        dai_vec3 top = v_add(c.center, qrot_v(c.rot, dai_vec3{ 0, half_h, 0 }));
+        dai_vec3 bot = v_add(c.center, qrot_v(c.rot, dai_vec3{ 0, -half_h, 0 }));
         wire_circle(p, top, c.rot, dai_vec3{1,0,0}, dai_vec3{0,0,1}, rad, col, thick);
         wire_circle(p, bot, c.rot, dai_vec3{1,0,0}, dai_vec3{0,0,1}, rad, col, thick);
         for (int i = 0; i < 4; ++i) {
@@ -1189,9 +1209,8 @@ int dai_editor_ui_game_camera(const dai_editor_ui *p, dai_vec3 *eye, dai_vec3 *l
     dai_doc *d = dai_editor_doc(p->ed);
     dai_vec3 wp{}, ws{ 1, 1, 1 };
     dai_quat wr{ 0, 0, 0, 1 };
-    if (dai_doc_world_transform(d, cam, &wp, &wr, &ws) != DAI_OK) return 0;
-    if (dai_editor_state_get(p->ed) != DAI_EDITOR_EDIT)
-        dai_editor_live_position(p->ed, cam, &wp);
+    if (!dai_editor_live_transform(p->ed, cam, &wp, &wr, &ws) &&
+        dai_doc_world_transform(d, cam, &wp, &wr, &ws) != DAI_OK) return 0;
     dai_vec3 dir = qrot_v(wr, dai_vec3{ 0, 0, -1 });
     if (eye) *eye = wp;
     if (look) *look = v_add(wp, dir);
@@ -1237,7 +1256,8 @@ static void draw_cameras(dai_editor_ui *p) {
         if (std::strcmp(r.tag, CAMERA_TAG) != 0) continue;
         dai_vec3 wp{}, ws{ 1, 1, 1 };
         dai_quat wr{ 0, 0, 0, 1 };
-        dai_doc_world_transform(d, id, &wp, &wr, &ws);
+        if (!dai_editor_live_transform(p->ed, id, &wp, &wr, &ws))
+            dai_doc_world_transform(d, id, &wp, &wr, &ws);
         bool sel = dai_editor_is_selected(p->ed, id) != 0;
         uint32_t col = sel ? 0xFFFFFFFFu : 0xFFB0B0B0u;
         const float NEAR_D = 0.35f, FAR_D = 1.6f, HALF = 0.55f;
@@ -1652,12 +1672,13 @@ static void run_context_menus(dai_editor_ui *p) {
         { DAI_ICON_BOX, "3D Object: Cube", nullptr },
         { DAI_ICON_SPHERE, "3D Object: Sphere", nullptr },
         { DAI_ICON_CAPSULE, "3D Object: Capsule", nullptr },
+        { DAI_ICON_CAPSULE, "3D Object: Cylinder", nullptr },
         { DAI_ICON_GRID, "3D Object: Plane", nullptr },
         { DAI_ICON_CAMERA, "Camera", nullptr },
     };
-    int cpick = dai_ui_popup_menu(p->ui, &p->menu_canvas, CANVAS_ITEMS, 6);
-    if (cpick == 5) { dai_editor_ui_add_camera(p); return; }
-    if (cpick == 4) {
+    int cpick = dai_ui_popup_menu(p->ui, &p->menu_canvas, CANVAS_ITEMS, 7);
+    if (cpick == 6) { dai_editor_ui_add_camera(p); return; }
+    if (cpick == 5) {
         dai_node_desc r = dai_node_desc_default();
         std::snprintf(r.name, sizeof(r.name), "Plane");
         r.shape = DAI_SHAPE_BOX;
@@ -1680,14 +1701,16 @@ static void run_context_menus(dai_editor_ui *p) {
             r.hidden = 1;           // an empty has no mesh to draw
             undo = "Create empty";
         } else {
-            const char *names[4] = { "", "Box", "Sphere", "Capsule" };
-            int shapes[4] = { 0, DAI_SHAPE_BOX, DAI_SHAPE_SPHERE, DAI_SHAPE_CAPSULE };
+            const char *names[5] = { "", "Box", "Sphere", "Capsule", "Cylinder" };
+            int shapes[5] = { 0, DAI_SHAPE_BOX, DAI_SHAPE_SPHERE, DAI_SHAPE_CAPSULE,
+                              DAI_SHAPE_CYLINDER };
             std::snprintf(r.name, sizeof(r.name), "%s", names[cpick]);
             r.shape = shapes[cpick];
             r.motion = DAI_DYNAMIC;
             r.half_extent = { 0.5f, 0.5f, 0.5f };
             r.position = { 0, 0.5f, 0 };
-            undo = names[cpick] == names[2] ? "New sphere" : (cpick == 3 ? "New capsule" : "New box");
+            undo = cpick == 2 ? "New sphere" : cpick == 3 ? "New capsule"
+                 : cpick == 4 ? "New cylinder" : "New box";
         }
         dai_doc_begin(d, undo);
         dai_node n = dai_doc_add(d, &r);
