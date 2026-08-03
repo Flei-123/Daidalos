@@ -144,6 +144,10 @@ DAI_API void dai_editor_ui_projects_refresh(dai_editor_ui *p);
  * Project window). old_path/new_path are asset-relative. 1 = done. */
 typedef int (*dai_editor_ui_rename_fn)(const char *old_path, const char *new_path, void *user);
 DAI_API void dai_editor_ui_rename_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn, void *user);
+/* "Create Prefab" in the hierarchy menu. Gets the node id as a decimal string
+ * and the asset-relative target path; the host does the actual save. Shares
+ * the rename host's user pointer. */
+DAI_API void dai_editor_ui_prefab_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn);
 
 /* The scene shown as the hierarchy's root row - which scene is open, the way
  * Unity puts the .unity file above everything. Dropping a node on it makes
@@ -151,6 +155,11 @@ DAI_API void dai_editor_ui_rename_host(dai_editor_ui *p, dai_editor_ui_rename_fn
 DAI_API void dai_editor_ui_scene_label(dai_editor_ui *p, const char *name);
 /* A short message in the status bar - "saved main.daidalos". Fades by itself. */
 DAI_API void dai_editor_ui_toast(dai_editor_ui *p, const char *text, float seconds);
+/* The Console panel. level: 0 info, 1 warning, 2 error. Repeats collapse. */
+DAI_API void dai_editor_ui_log(dai_editor_ui *p, int level, const char *text);
+DAI_API void dai_editor_ui_log_clear(dai_editor_ui *p);
+/* The Audio panel's mixer. bus: 0 master, 1 music, 2 sfx, 3 ui. Muted = 0. */
+DAI_API float dai_editor_ui_bus_gain(const dai_editor_ui *p, int bus);
 /* The hierarchy's root row reports itself as this node when a drag hovers it. */
 #define DAI_SCENE_ROOT_NODE ((dai_node)0xFFFFFFFEu)
 /* Scenes are files of their own (<project>/scenes/<name>.daidalos), like

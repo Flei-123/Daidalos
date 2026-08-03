@@ -54,6 +54,13 @@ typedef struct dai_icons dai_icons;
 #define DAI_ICON_GRID       "grid"
 #define DAI_ICON_SETTINGS   "settings"
 #define DAI_ICON_LAYERS     "layers"
+/* asset kinds - the project browser picks one per file extension */
+#define DAI_ICON_SCRIPT     "script"
+#define DAI_ICON_MODEL      "model"
+#define DAI_ICON_AUDIO      "audio"
+#define DAI_ICON_IMAGE      "image"
+#define DAI_ICON_SCENE      "scene"
+#define DAI_ICON_CONSOLE    "console"
 
 /* Rasterises the built-in set at `pixel_size` and packs it. */
 DAI_API dai_icons *dai_icons_create(float pixel_size);

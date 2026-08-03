@@ -102,6 +102,26 @@ const Builtin BUILTIN[] = {
   "<path d='M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.2 3.2'/>"
   "<path d='M14.1 14.1a3 3 0 1 1-4.2-4.2'/>"
   "<line x1='1' y1='1' x2='23' y2='23'/>" TAIL },
+// ---- asset kinds: what a file IS, at a glance ---------------------------
+// Unity marks a script with a hash, a model with a cube, audio with a note.
+// The browser used one grey page for everything, so a folder of assets read
+// as a folder of nothing.
+{ "script", STROKE_HEAD
+  "<line x1='10' y1='3' x2='8' y2='21'/><line x1='16' y1='3' x2='14' y2='21'/>"
+  "<line x1='3.5' y1='9' x2='21' y2='9'/><line x1='3' y1='15' x2='20.5' y2='15'/>" TAIL },
+{ "model", STROKE_HEAD
+  "<path d='M12 2 21 7v10l-9 5-9-5V7z'/>"
+  "<polyline points='3 7 12 12 21 7'/><line x1='12' y1='12' x2='12' y2='22'/>" TAIL },
+{ "audio", STROKE_HEAD
+  "<path d='M9 18V5l12-2v13'/><circle cx='6' cy='18' r='3'/><circle cx='18' cy='16' r='3'/>" TAIL },
+{ "image", STROKE_HEAD
+  "<rect x='3' y='3' width='18' height='18' rx='2'/>"
+  "<circle cx='8.5' cy='8.5' r='1.5'/><polyline points='21 15 16 10 5 21'/>" TAIL },
+{ "scene", STROKE_HEAD
+  "<path d='M3 7l9-4 9 4-9 4z'/><path d='M3 12l9 4 9-4'/><path d='M3 17l9 4 9-4'/>" TAIL },
+{ "console", STROKE_HEAD
+  "<rect x='2' y='4' width='20' height='16' rx='2'/>"
+  "<polyline points='6 9 9 12 6 15'/><line x1='12' y1='15' x2='17' y2='15'/>" TAIL },
 { "layers", STROKE_HEAD
   "<polygon points='12 2 2 7 12 12 22 7 12 2'/>"
   "<polyline points='2 17 12 22 22 17'/><polyline points='2 12 12 17 22 12'/>" TAIL },

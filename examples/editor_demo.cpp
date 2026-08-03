@@ -209,6 +209,10 @@ static int scene_save_as(const char *name, void *) {
     return 1;
 }
 
+// The console panel, reachable from the script runner below: a script error
+// belongs where the user is looking, not only on stdout.
+static dai_editor_ui *g_panels_for_log = nullptr;
+
 #ifdef DAI_WITH_SCRIPT
 // ---- the behaviour runner --------------------------------------------------
 // Play presses start: every node's scripts load, get the scene bindings and
@@ -337,10 +341,19 @@ static void scripts_start() {
             char full[640];
             std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, path.c_str());
             dai_script *s = dai_script_create(err, sizeof(err));
-            if (!s) { std::printf("script: %s\n", err); continue; }
+            if (!s) {
+                std::printf("script: %s\n", err);
+                if (g_panels_for_log) dai_editor_ui_log(g_panels_for_log, 2, err);
+                continue;
+            }
             dai_script_bind_nodes(s, &g_node_host);
             if (dai_script_load(s, full, err, sizeof(err)) != DAI_OK) {
                 std::printf("script %s: %s\n", path.c_str(), err);
+                if (g_panels_for_log) {
+                    char line[400];
+                    std::snprintf(line, sizeof(line), "%s: %s", path.c_str(), err);
+                    dai_editor_ui_log(g_panels_for_log, 2, line);
+                }
                 dai_script_destroy(s);
                 continue;
             }
@@ -349,9 +362,36 @@ static void scripts_start() {
             g_running.push_back({ s, path });
         }
     }
-    if (!g_running.empty()) std::printf("scripts: %u running\n", (unsigned)g_running.size());
+    if (!g_running.empty()) {
+        std::printf("scripts: %u running\n", (unsigned)g_running.size());
+        if (g_panels_for_log) {
+            char line[96];
+            std::snprintf(line, sizeof(line), "play: %u script(s) running", (unsigned)g_running.size());
+            dai_editor_ui_log(g_panels_for_log, 0, line);
+        }
+    }
 }
 #endif // DAI_WITH_SCRIPT
+
+// "Create Prefab": the node becomes a file under <assets>/prefabs/, which the
+// browser then lists like any other asset and the document layer can
+// instantiate again.
+static dai_doc *g_prefab_doc = nullptr;
+
+static int prefab_save_cb(const char *node_id, const char *rel_path, void *) {
+    if (!g_prefab_doc || !node_id || !rel_path || !g_assets_dir[0]) return 0;
+    dai_node n = (dai_node)strtoul(node_id, nullptr, 10);
+    char dir[640];
+    std::snprintf(dir, sizeof(dir), "%s/prefabs", g_assets_dir);
+#ifdef _WIN32
+    CreateDirectoryA(dir, nullptr);
+#else
+    mkdir(dir, 0755);
+#endif
+    char path[700];
+    std::snprintf(path, sizeof(path), "%s/%s", g_assets_dir, rel_path);
+    return dai_doc_prefab_save(g_prefab_doc, n, path) == DAI_OK ? 1 : 0;
+}
 
 // The inline rename of the Project window: asset-relative paths, same rules
 // as script creation (never escape the assets folder).
@@ -597,6 +637,10 @@ int main(int argc, char **argv) {
     dai_editor_ui_mesh_host(panels, mesh_name_of, DAI_MESH_BUILTIN_COUNT, nullptr);
     dai_editor_ui_script_host(panels, script_create, nullptr);
     dai_editor_ui_rename_host(panels, asset_rename, nullptr);
+    dai_editor_ui_prefab_host(panels, prefab_save_cb);
+    g_prefab_doc = doc;
+    g_panels_for_log = panels;
+    dai_editor_ui_log(panels, 0, dai_version());
     dai_editor_ui_scene_host(panels, scene_list, scene_open, scene_save_as, nullptr);
 #ifdef DAI_WITH_SCRIPT
     dai_editor_ui_params_host(panels, script_params_of, nullptr);
@@ -935,7 +979,11 @@ int main(int argc, char **argv) {
             if (g_scripts_live)
                 for (RunningScript &rs : g_running) {
                     char serr[192] = { 0 };
-                    dai_script_call(rs.s, "frame", serr, sizeof(serr));
+                    if (dai_script_call(rs.s, "frame", serr, sizeof(serr)) != DAI_OK && serr[0]) {
+                        char line[400];
+                        std::snprintf(line, sizeof(line), "%s: %s", rs.path.c_str(), serr);
+                        dai_editor_ui_log(panels, 2, line);   // collapses on repeat
+                    }
                 }
         }
 #endif

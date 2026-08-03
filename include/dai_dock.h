@@ -75,6 +75,9 @@ DAI_API void dai_dock_focus(dai_dock *d, const char *title);
 /* Closes / reopens a panel. A closed panel keeps its place for when it comes
  * back, the way Unity's "Close Tab" and the Window menu behave. */
 DAI_API void dai_dock_close(dai_dock *d, const char *title);
+/* Brings a closed panel back - the Window menu's job. Registering it again
+ * with dai_dock_add does the same thing for a panel that is already known. */
+DAI_API void dai_dock_open(dai_dock *d, const char *title);
 DAI_API int  dai_dock_is_open(const dai_dock *d, const char *title);
 /* Every registered panel, for a Window menu. */
 DAI_API uint32_t dai_dock_panels(const dai_dock *d, const char **out, uint32_t max);

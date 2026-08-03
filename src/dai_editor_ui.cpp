@@ -183,6 +183,9 @@ struct dai_editor_ui {
     std::string rename_asset;
     char        rename_asset_buf[160] = { 0 };
     int         rename_seen_active = 0;
+    // Prefabs: the document layer can already save and instantiate them
+    // (dai_doc_prefab_save / _instantiate). The editor just never offered it.
+    dai_editor_ui_rename_fn prefab_save = nullptr;   // (node_name, rel_path) -> 1
     dai_editor_ui_rename_fn asset_rename = nullptr;
     void       *rename_user = nullptr;
     // Scenes as files (Unity: several per project, opened by click).
@@ -216,6 +219,16 @@ struct dai_editor_ui {
     int   settings_open = 0;
     dai_ui_popup menu_project{};      // right click in the project window
     dai_ui_popup menu_addcomp{};      // the Add Component button's list
+    dai_ui_popup menu_window{};       // the Window menu: bring a panel back
+    // Console: one ring buffer for engine messages and script print().
+    struct LogLine { int level; std::string text; uint32_t count; };
+    std::vector<LogLine> log;
+    int  log_show[3] = { 1, 1, 1 };   // info / warning / error
+    int  log_collapse = 1;
+    float log_scroll = 0.0f;
+    // Audio mixer: four busses, the set every game ends up with.
+    float bus_gain[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    int   bus_mute[4] = { 0, 0, 0, 0 };
     char scene_label[128] = { 0 };    // the active scene, shown as the hierarchy root
     char toast[160] = { 0 };          // "saved main.daidalos" and friends
     float toast_left = 0.0f;          // seconds it stays up
@@ -279,6 +292,20 @@ static void script_join(char *out, size_t n, const std::vector<std::string> &lis
         std::strncat(out, s.c_str(), n - std::strlen(out) - 1);
     }
 }
+// What a file IS, by extension - so the browser reads at a glance.
+static const char *icon_for_asset(const std::string &path) {
+    size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return DAI_ICON_FILE;
+    std::string e = path.substr(dot + 1);
+    for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if (e == "js" || e == "ts")                       return DAI_ICON_SCRIPT;
+    if (e == "glb" || e == "gltf" || e == "obj")      return DAI_ICON_MODEL;
+    if (e == "wav" || e == "ogg" || e == "mp3" || e == "flac") return DAI_ICON_AUDIO;
+    if (e == "png" || e == "jpg" || e == "jpeg" || e == "tga" || e == "svg") return DAI_ICON_IMAGE;
+    if (e == "daidalos" || e == "prefab")             return DAI_ICON_SCENE;
+    return DAI_ICON_FILE;
+}
+
 static bool script_name_ok(const std::string &s) {
     if (s.empty()) return false;
     for (char c : s) {
@@ -563,6 +590,27 @@ int dai_editor_ui_menu_open(const dai_editor_ui *p) {
                 dai_ui_popup_active(p->ui)) : 0;
 }
 
+void dai_editor_ui_log(dai_editor_ui *p, int level, const char *text) {
+    if (!p || !text) return;
+    if (level < 0) level = 0;
+    if (level > 2) level = 2;
+    // Collapse repeats the way every console does: a script erroring once per
+    // frame must not push everything else out of the buffer.
+    if (!p->log.empty() && p->log.back().level == level && p->log.back().text == text) {
+        p->log.back().count++;
+        return;
+    }
+    p->log.push_back({ level, text, 1 });
+    if (p->log.size() > 2000) p->log.erase(p->log.begin(), p->log.begin() + 500);
+}
+
+void dai_editor_ui_log_clear(dai_editor_ui *p) { if (p) p->log.clear(); }
+
+float dai_editor_ui_bus_gain(const dai_editor_ui *p, int bus) {
+    if (!p || bus < 0 || bus > 3) return 1.0f;
+    return p->bus_mute[bus] ? 0.0f : p->bus_gain[bus];
+}
+
 void dai_editor_ui_toast(dai_editor_ui *p, const char *text, float seconds) {
     if (!p) return;
     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
@@ -603,6 +651,10 @@ void dai_editor_ui_project_host(dai_editor_ui *p,
 void dai_editor_ui_rename_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn, void *user) {
     if (!p) return;
     p->asset_rename = fn; p->rename_user = user;
+}
+
+void dai_editor_ui_prefab_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn) {
+    if (p) p->prefab_save = fn;
 }
 
 void dai_editor_ui_params_host(dai_editor_ui *p, dai_editor_ui_params_fn fn, void *user) {
@@ -1173,6 +1225,13 @@ void dai_editor_ui_toolbar(dai_editor_ui *p, float x, float y, float w) {
         dai_editor_ui_layout_reset(p, p->layout_w, p->layout_h);
     if (dai_ui_icon_button(p->ui, DAI_ICON_SETTINGS, "Settings", p->settings_open))
         p->settings_open = !p->settings_open;
+    // Window menu: every panel the editor knows, one click to bring it back.
+    // Closing a panel used to be one-way - it was gone until restart.
+    if (dai_ui_icon_button(p->ui, DAI_ICON_LAYERS, "Window", p->menu_window.open)) {
+        float wx = 0, wy = 0;
+        dai_ui_mouse(p->ui, &wx, &wy, nullptr, nullptr);
+        dai_ui_popup_open(&p->menu_window, wx, wy);
+    }
     (void)d;
     dai_ui_panel_end(p->ui);
 }
@@ -1978,6 +2037,12 @@ void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
     dai_dock_add(p->dock, "Hierarchy", DAI_DOCK_LEFT, 0.18f);
     dai_dock_add(p->dock, "Inspector", DAI_DOCK_RIGHT, 0.20f);
     dai_dock_add(p->dock, "Project", DAI_DOCK_BOTTOM, 0.26f);
+    // Registered so the Window menu can list them; they start as tabs of the
+    // Project panel rather than stealing space from the scene view.
+    dai_dock_add(p->dock, "Console", DAI_DOCK_BOTTOM, 0.26f);
+    dai_dock_add_tab(p->dock, "Console", "Project");
+    dai_dock_add(p->dock, "Audio", DAI_DOCK_BOTTOM, 0.26f);
+    dai_dock_add_tab(p->dock, "Audio", "Project");
     p->layout_ready = true;
     p->layout_w = vw; p->layout_h = vh;
 }
@@ -2020,6 +2085,26 @@ static void project_expand_to(dai_editor_ui *p, const std::string &dir) {
 // the document like every other edit.
 static void run_context_menus(dai_editor_ui *p) {
     dai_doc *d = dai_editor_doc(p->ed);
+
+    // The Window menu, built from what the dock actually knows - so a panel
+    // added later shows up here without anyone remembering to list it.
+    if (p->menu_window.open) {
+        const char *names[16];
+        uint32_t n = dai_dock_panels(p->dock, names, 16);
+        if (n > 16) n = 16;
+        dai_ui_menu_item items[16];
+        char labels[16][64];
+        for (uint32_t i = 0; i < n; ++i) {
+            int open = dai_dock_is_open(p->dock, names[i]);
+            std::snprintf(labels[i], sizeof(labels[i]), "%s%s", open ? "" : "+ ", names[i]);
+            items[i] = { open ? DAI_ICON_CHECK : DAI_ICON_PLUS, labels[i], nullptr };
+        }
+        int pick = dai_ui_popup_menu(p->ui, &p->menu_window, items, (int)n);
+        if (pick >= 0 && pick < (int)n) {
+            dai_dock_open(p->dock, names[pick]);
+            if (std::strcmp(names[pick], "Settings") == 0) p->settings_open = 1;
+        }
+    }
 
     // The Add Component list. Entries flip between add and remove so one menu
     // covers both directions - a component that is already there offers to go.
@@ -2127,8 +2212,9 @@ static void run_context_menus(dai_editor_ui *p) {
         { DAI_ICON_PLUS, "Rename", "F2" },
         { DAI_ICON_COPY, "Duplicate", "Ctrl+D" },
         { DAI_ICON_TRASH, "Delete", "Del" },
+        { DAI_ICON_SCENE, "Create Prefab", nullptr },
     };
-    int pick = dai_ui_popup_menu(p->ui, &p->menu_node, NODE_ITEMS, 3);
+    int pick = dai_ui_popup_menu(p->ui, &p->menu_node, NODE_ITEMS, 4);
     if (pick >= 0 && p->menu_target != DAI_INVALID_NODE) {
         if (pick == 0) {
             dai_editor_ui_rename(p, p->menu_target);
@@ -2138,6 +2224,22 @@ static void run_context_menus(dai_editor_ui *p) {
         } else if (pick == 2) {
             dai_editor_select(p->ed, p->menu_target, 0);
             dai_editor_delete_selection(p->ed);
+        } else if (pick == 3 && p->prefab_save) {
+            // The object becomes a reusable file under prefabs/. The host owns
+            // the disk, the editor owns the click - the same split the asset
+            // browser already uses.
+            dai_node_desc pr{};
+            if (dai_doc_get(d, p->menu_target, &pr) == DAI_OK) {
+                char rel[192];
+                std::snprintf(rel, sizeof(rel), "prefabs/%s.daidalos",
+                              pr.name[0] ? pr.name : "Prefab");
+                char nm[64];
+                std::snprintf(nm, sizeof(nm), "%u", (unsigned)p->menu_target);
+                if (p->prefab_save(nm, rel, p->rename_user)) {
+                    dai_editor_ui_toast(p, "prefab saved", 2.0f);
+                    p->want_refresh = 1;
+                }
+            }
         }
         p->menu_target = DAI_INVALID_NODE;
     }
@@ -2298,6 +2400,94 @@ static void project_tree_rows(dai_editor_ui *p, const std::set<std::string> &fol
 }
 
 // The project window's body, so it can live in a dock panel of any size.
+// The console: engine messages and script print(), filterable by level.
+static void console_body(dai_editor_ui *p, float px, float py, float pw, float ph) {
+    dai_ui *ui = p->ui;
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    const float BAR = 24.0f;
+    static const char *LEVEL_NAME[3] = { "Info", "Warnings", "Errors" };
+    const uint32_t LEVEL_COL[3] = { st->text_dim, rgba(230, 190, 90, 255), rgba(235, 105, 95, 255) };
+
+    uint32_t counts[3] = { 0, 0, 0 };
+    for (const auto &l : p->log) counts[l.level] += l.count;
+
+    float bx = px + 4.0f;
+    if (browser_button(p, bx, py + 2.0f, 54.0f, BAR - 4.0f, "Clear")) dai_editor_ui_log_clear(p);
+    bx += 58.0f;
+    for (int i = 0; i < 3; ++i) {
+        char lbl[48];
+        std::snprintf(lbl, sizeof(lbl), "%s %u", LEVEL_NAME[i], counts[i]);
+        float w = dai_ui_text_width(ui, lbl) + 18.0f;
+        if (browser_row(p, bx, py + 2.0f, w, BAR - 4.0f, nullptr, lbl, p->log_show[i]))
+            p->log_show[i] = !p->log_show[i];
+        bx += w + 4.0f;
+    }
+    dai_ui_rect(ui, px, py + BAR, pw, 1.0f, st->panel_border);
+
+    const float ROW = 17.0f;
+    float ly = py + BAR + 3.0f;
+    float mx = 0, my = 0;
+    dai_ui_mouse(ui, &mx, &my, nullptr, nullptr);
+    if (mx >= px && mx < px + pw && my >= py && my < py + ph)
+        p->log_scroll -= dai_ui_wheel(ui) * 32.0f;
+    float total = 0.0f;
+    for (const auto &l : p->log) if (p->log_show[l.level]) total += ROW;
+    float maxs = total - (ph - BAR - 6.0f);
+    if (maxs < 0.0f) maxs = 0.0f;
+    if (p->log_scroll > maxs) p->log_scroll = maxs;
+    if (p->log_scroll < 0.0f) p->log_scroll = 0.0f;
+
+    dai_ui_clip_begin(ui, px, py + BAR + 1.0f, pw, ph - BAR - 1.0f);
+    float ry = ly - p->log_scroll;
+    if (p->log.empty())
+        dai_ui_text(ui, px + 8.0f, ry, "no messages - script print() and engine warnings land here", st->text_dim);
+    for (const auto &l : p->log) {
+        if (!p->log_show[l.level]) continue;
+        if (ry + ROW > py + BAR && ry < py + ph) {
+            char line[400];
+            if (l.count > 1) std::snprintf(line, sizeof(line), "(%u) %s", l.count, l.text.c_str());
+            else             std::snprintf(line, sizeof(line), "%s", l.text.c_str());
+            dai_ui_text(ui, px + 8.0f, ry, line, LEVEL_COL[l.level]);
+        }
+        ry += ROW;
+    }
+    dai_ui_clip_end(ui);
+}
+
+// The audio mixer: the four busses every game grows anyway.
+static void audio_body(dai_editor_ui *p, float px, float py, float pw, float ph) {
+    dai_ui *ui = p->ui;
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    static const char *BUS[4] = { "Master", "Music", "SFX", "UI" };
+    dai_ui_text(ui, px + 8.0f, py + 6.0f, "Mixer", st->text_dim);
+    float y = py + 26.0f;
+    for (int i = 0; i < 4; ++i) {
+        dai_ui_text(ui, px + 8.0f, y + 4.0f, BUS[i], st->text);
+        if (browser_row(p, px + 70.0f, y, 44.0f, 20.0f, nullptr,
+                        p->bus_mute[i] ? "muted" : "on", p->bus_mute[i]))
+            p->bus_mute[i] = !p->bus_mute[i];
+        // The slider is a bar you drag - the same widget the inspector uses
+        // for a number, without pretending to be a knob.
+        float tx = px + 124.0f, tw = pw - 200.0f;
+        if (tw > 40.0f) {
+            dai_ui_rect(ui, tx, y + 7.0f, tw, 6.0f, st->track);
+            dai_ui_rect(ui, tx, y + 7.0f, tw * p->bus_gain[i], 6.0f, st->accent);
+            float mx = 0, my = 0; int down = 0;
+            dai_ui_mouse(ui, &mx, &my, &down, nullptr);
+            if (down && mx >= tx && mx <= tx + tw && my >= y && my <= y + 20.0f) {
+                p->bus_gain[i] = (mx - tx) / tw;
+                if (p->bus_gain[i] < 0.0f) p->bus_gain[i] = 0.0f;
+                if (p->bus_gain[i] > 1.0f) p->bus_gain[i] = 1.0f;
+            }
+            char v[24];
+            std::snprintf(v, sizeof(v), "%3.0f%%", p->bus_gain[i] * 100.0f);
+            dai_ui_text(ui, tx + tw + 10.0f, y + 4.0f, v, st->text_dim);
+        }
+        y += 26.0f;
+    }
+    (void)ph;
+}
+
 static void project_body(dai_editor_ui *p, float px, float py, float pw, float ph) {
     dai_ui *ui = p->ui;
     const dai_ui_style *st = dai_ui_style_of(ui);
@@ -2626,7 +2816,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                     }
                 } else {
                     if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
-                                    DAI_ICON_FILE, label.c_str(), selected) && clicks_ok)
+                                    icon_for_asset(full), label.c_str(), selected) && clicks_ok)
                         p->asset_sel = fi;
                     // A right click selects what it landed on, then the menu opens.
                     if (over && right_pressed && clicks_ok) { p->asset_sel = fi; p->rename_click = full; }
@@ -2762,6 +2952,18 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         dai_dock_panel_end(p->dock);
     }
     (void)0;
+    if (dai_dock_panel(p->dock, "Console", &px, &py, &pw, &ph)) {
+        dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
+        console_body(p, px, py, pw, ph);
+        dai_ui_panel_end(ui);
+        dai_dock_panel_end(p->dock);
+    }
+    if (dai_dock_panel(p->dock, "Audio", &px, &py, &pw, &ph)) {
+        dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
+        audio_body(p, px, py, pw, ph);
+        dai_ui_panel_end(ui);
+        dai_dock_panel_end(p->dock);
+    }
     if (dai_dock_panel(p->dock, "Inspector", &px, &py, &pw, &ph)) {
         dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
         dai_ui_scroll_begin(ui, "inspector", ph - 6.0f);
