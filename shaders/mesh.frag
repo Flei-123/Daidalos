@@ -65,17 +65,26 @@ vec3 tonemap_aces(vec3 x) {
 // it stays stable under a moving camera and costs one compare.
 // The shadow term.
 //
-// Two biases, because there are two different errors to hide. The DEPTH bias
-// fights the quantisation of the shadow map's own depth values. The NORMAL
+// Two biases, because there are two different errors to hide. The NORMAL
 // OFFSET moves the lookup off the surface, along its normal, by about one
-// shadow texel measured in WORLD units - which is what actually kills acne on
-// a face lit at a glancing angle: there, one texel of the map covers a long
-// stretch of surface, and no constant depth bias is both large enough to clear
-// it and small enough to keep the contact shadow.
+// shadow texel measured in WORLD units - that is what kills acne on a face lit
+// at a glancing angle, where one texel of the map covers a long stretch of
+// surface. It carries the whole load: with the offset alone and no depth bias
+// at all, a floor lit at 9 degrees comes out clean, and without it 100% of
+// that floor shadows itself (tests/test_shadow_contact.cpp [4]).
 //
-// The world size of a texel is read out of the light matrix rather than passed
-// in: for an orthographic projection the length of its first row is 2/width,
-// so one texel is 2*texel_uv/length(row0) metres.
+// The DEPTH bias only mops up what is left, and it is quoted as a LENGTH -
+// a fraction of a texel, scaled by the slope - rather than as a constant in
+// depth units. The difference is not cosmetic: the cascades have wildly
+// different orthographic depth ranges, so the old constant 0.0012 was 7 cm of
+// world in the near cascade and 1.7 METRES in the far one. A bias deeper than
+// the caster is thick lifts the shadow off the ground entirely, which is how a
+// plank 50 m away lost the first 1.3 m of its own shadow.
+//
+// Both the world size of a texel and the depth-per-metre are read out of the
+// light matrix rather than passed in: for an orthographic projection the
+// length of its first row is 2/width, so one texel is 2*texel_uv/length(row0)
+// metres, and the length of its third row is 1/(far-near).
 float shadow_factor(vec3 world, vec3 N, float ndl) {
     if (F.cam_pos.w < 0.5) return 1.0;
     float view_depth = length(F.cam_pos.xyz - world);
@@ -90,13 +99,18 @@ float shadow_factor(vec3 world, vec3 N, float ndl) {
 
     vec3 p = vec3(0.0);
     bool inside = false;
+    float world_per_texel = 0.0;    // metres covered by one shadow texel
+    float depth_per_metre = 0.0;    // and what a metre along the light is worth in z
     for (int attempt = 0; attempt < 2 && !inside; ++attempt) {
         // Second attempt: the widest cascade, which is the only fallback that
         // can still contain the point.
         if (attempt == 1) c = 2;
         mat4 M = F.lightviewproj[c];
         vec3 row0 = vec3(M[0][0], M[1][0], M[2][0]);
-        float world_per_texel = 2.0 * texel / max(length(row0), 1e-6);
+        world_per_texel = 2.0 * texel / max(length(row0), 1e-6);
+        // The third row is the depth row: its length is 1/(far-near) of this
+        // cascade's orthographic box, which turns metres into depth units.
+        depth_per_metre = length(vec3(M[0][2], M[1][2], M[2][2]));
         vec3 offset_world = world + N * world_per_texel * (1.0 + 2.0 * slope);
 
         vec4 lp = M * vec4(offset_world, 1.0);
@@ -106,10 +120,15 @@ float shadow_factor(vec3 world, vec3 N, float ndl) {
     }
     if (!inside) return 1.0;
 
-    // With the normal offset doing the heavy lifting, the depth bias only has
-    // to cover depth quantisation, so it can stay small - which is what keeps
-    // a crate's shadow attached to the crate instead of floating away from it.
-    float bias = mix(0.0012, 0.0004, ndl) * (1.0 + float(c) * 1.2);
+    // The depth bias is a LENGTH, converted into depth units here - not a
+    // constant in depth units. Those are not the same thing: 0.0012 of depth
+    // is 7 cm in the near cascade and 1.7 METRES in the far one, and a bias
+    // deeper than the caster is thick lifts the shadow clean off the ground.
+    // What has to be covered is the depth a surface gains across ONE shadow
+    // texel, so the bias is quoted in texels and scaled by the slope, which is
+    // exactly what a slope scaled bias is - just done where the cascade's own
+    // scale is known.
+    float bias = world_per_texel * (0.25 + 1.0 * slope) * depth_per_metre;
 
     // 5x5 PCF. The hardware does the compare and the bilinear filtering, so
     // this is 25 texture fetches and no arithmetic - the difference between a

@@ -744,12 +744,28 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     gs.pDepthStencilState = &ds_sky; gs.pRasterizationState = &rs_sky;
     VkResult sr = vkCreateGraphicsPipelines(r->dev, VK_NULL_HANDLE, 1, &gs, nullptr, &r->pipe_sky);
 
-    // shadow: depth only, front faces culled to push peter-panning off the
-    // visible surfaces, depth clamp so casters behind the light plane survive
+    // shadow: depth only, NOTHING culled, depth clamp so casters behind the
+    // light plane survive.
+    //
+    // Culling the FRONT faces here is the classic acne dodge: the map then
+    // holds the caster's far side, so a surface can never shadow itself. It
+    // also detaches every shadow from its object. The occluder nearest the
+    // contact point becomes the caster's BACK face, which meets the receiver at
+    // zero depth difference, so ANY bias opens a bright gap between a crate and
+    // its own shadow - measured at 66 mm for a crate 7 m away and 1.14 m for
+    // one 50 m away (tests/test_shadow_contact.cpp). Keeping the light facing
+    // surface instead puts the entire thickness of the caster between occluder
+    // and receiver, and the acne that would let back in is what the normal
+    // offset in mesh.frag is for - measured: it holds, with a factor of four
+    // to spare.
+    //
+    // NONE rather than BACK so that single sided geometry - a plane, an
+    // imported wall, a leaf card - still casts. It costs ~4% of a frame in the
+    // visual tests on llvmpipe, and less than that on a GPU.
     VkPipelineRenderingCreateInfo prc_sh{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
     prc_sh.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
     VkPipelineRasterizationStateCreateInfo rs_sh = rs;
-    rs_sh.cullMode = VK_CULL_MODE_FRONT_BIT;
+    rs_sh.cullMode = VK_CULL_MODE_NONE;
     rs_sh.depthClampEnable = VK_TRUE;
     VkPipelineColorBlendStateCreateInfo cb_sh{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
     VkPipelineShaderStageCreateInfo st_sh[1] = { stage(VK_SHADER_STAGE_VERTEX_BIT, vs_shadow) };

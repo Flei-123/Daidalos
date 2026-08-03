@@ -149,6 +149,8 @@ DAI_API void dai_editor_ui_rename_host(dai_editor_ui *p, dai_editor_ui_rename_fn
  * Unity puts the .unity file above everything. Dropping a node on it makes
  * that node a root again. */
 DAI_API void dai_editor_ui_scene_label(dai_editor_ui *p, const char *name);
+/* A short message in the status bar - "saved main.daidalos". Fades by itself. */
+DAI_API void dai_editor_ui_toast(dai_editor_ui *p, const char *text, float seconds);
 /* The hierarchy's root row reports itself as this node when a drag hovers it. */
 #define DAI_SCENE_ROOT_NODE ((dai_node)0xFFFFFFFEu)
 /* Scenes are files of their own (<project>/scenes/<name>.daidalos), like
