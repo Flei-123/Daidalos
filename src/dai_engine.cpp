@@ -229,7 +229,7 @@ void save_snapshot(dai_world *w) {
 
 extern "C" {
 
-const char *dai_version(void) { return "daidalos 0.2.0 (backends: jolt, talos, null)"; }
+const char *dai_version(void) { return "daidalos 0.2.1 (backends: talos, jolt, null)"; }
 
 dai_result dai_create(const dai_config *cfg_in, dai_world **out) {
     if (!out) return DAI_ERR_INVALID_ARG;
@@ -255,11 +255,15 @@ dai_result dai_create(const dai_config *cfg_in, dai_world **out) {
         w->phys = create_null_backend();
     } else if (w->cfg.backend == DAI_PHYSICS_TALOS) {
 #ifdef DAI_NO_TALOS
-        // Asking for a backend that was not linked in is a configuration
-        // mistake, not something to paper over with a silent fallback: the
-        // caller would get a different simulation than the one they asked for.
-        delete w;
-        return DAI_ERR_STATE;
+        // Talos is the zero-config default now, so a build without it cannot
+        // refuse the default - every zero-initialised config would fail.
+        // Fall back to Jolt (or null): the caller can always check
+        // dai_backend_name() to see what it actually got.
+#ifdef DAI_NO_JOLT
+        w->phys = create_null_backend();
+#else
+        w->phys = create_jolt_backend();
+#endif
 #else
         w->phys = create_talos_backend();
 #endif

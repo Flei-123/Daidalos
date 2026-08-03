@@ -71,17 +71,21 @@ typedef struct dai_quat { float x, y, z, w; } dai_quat;
  * engine ever stops building or running against it, Jolt has leaked out of
  * physics_jolt.cpp. */
 typedef enum dai_physics_backend {
-    DAI_PHYSICS_JOLT = 0,
-    DAI_PHYSICS_NULL = 1,
     /* Talos (github.com/Flei-123/talos) through its C API. Same contract as
      * Jolt: bodies, joints, contacts, raycasts, save/restore. A saved backend
      * state is NOT portable between backends - that has always been true and
-     * is why dai_save writes body descriptions, not a physics blob. */
-    DAI_PHYSICS_TALOS = 2
+     * is why dai_save writes body descriptions, not a physics blob.
+     *
+     * Talos is value 0 on purpose: a zero-initialised dai_config runs Talos.
+     * It is our own engine and the default since 0.2.1 - Jolt stays linked as
+     * the reference backend the test suite cross-checks Talos against. */
+    DAI_PHYSICS_TALOS = 0,
+    DAI_PHYSICS_NULL = 1,
+    DAI_PHYSICS_JOLT = 2
 } dai_physics_backend;
 
 typedef struct dai_config {
-    int      backend;           /* dai_physics_backend, default JOLT */
+    int      backend;           /* dai_physics_backend, default TALOS */
     uint32_t tick_hz;           /* 0 -> 60. The sim only ever advances by 1/tick_hz.  */
     uint32_t max_bodies;        /* 0 -> 8192                                          */
     uint32_t physics_threads;   /* 0 -> hardware_concurrency-1, 1 -> single threaded  */
