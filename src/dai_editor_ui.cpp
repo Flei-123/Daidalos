@@ -190,6 +190,16 @@ struct dai_editor_ui {
     dai_editor_ui_project_action_fn scene_save_as = nullptr;
     void       *scene_user = nullptr;
     char        scene_name_buf[128] = { 0 };
+    // Node references for scripts: "// @param target" declares a field, a
+    // hierarchy node dragged onto the assign block fills it.
+    dai_editor_ui_params_fn params_fn = nullptr;
+    void       *params_user = nullptr;
+    dai_node    drag_node = DAI_INVALID_NODE;
+    dai_node    drag_node_pending = DAI_INVALID_NODE;
+    dai_node    drag_ref_target = DAI_INVALID_NODE;  // selection when the drag began
+    float       drag_nx = 0, drag_ny = 0;
+    int         param_hover_entry = -1;
+    char        param_hover_key[64] = { 0 };
 
     // ---- mesh inventory --------------------------------------------------
     dai_editor_ui_mesh_name_fn mesh_name = nullptr;
@@ -285,6 +295,52 @@ static void script_attach(dai_editor_ui *p, dai_node n, const std::string &path)
     dai_doc_commit(d);
 }
 
+// An entry is "path.js" or "path.js{key=value,key=value}" - the brace block
+// carries the references the inspector assigned.
+static std::string entry_path(const std::string &e) {
+    size_t b = e.find('{');
+    return b == std::string::npos ? e : e.substr(0, b);
+}
+static std::string entry_param(const std::string &e, const std::string &key) {
+    size_t b = e.find('{');
+    if (b == std::string::npos) return std::string();
+    size_t en = e.find('}', b);
+    std::string inner = e.substr(b + 1, en == std::string::npos ? en : en - b - 1);
+    size_t pos = 0;
+    while (pos < inner.size()) {
+        size_t comma = inner.find(',', pos);
+        std::string kv = inner.substr(pos, comma == std::string::npos ? comma : comma - pos);
+        size_t eq = kv.find('=');
+        if (eq != std::string::npos && kv.substr(0, eq) == key) return kv.substr(eq + 1);
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    return std::string();
+}
+static void entry_set_param(std::string &e, const std::string &key, const std::string &val) {
+    std::string path = entry_path(e);
+    std::string inner;
+    size_t b = e.find('{');
+    if (b != std::string::npos) {
+        size_t en = e.find('}', b);
+        inner = e.substr(b + 1, en == std::string::npos ? en : en - b - 1);
+    }
+    std::string out;
+    size_t pos = 0;
+    bool done = false;
+    while (pos < inner.size()) {
+        size_t comma = inner.find(',', pos);
+        std::string kv = inner.substr(pos, comma == std::string::npos ? comma : comma - pos);
+        size_t eq = kv.find('=');
+        if (eq != std::string::npos && kv.substr(0, eq) == key) { kv = key + "=" + val; done = true; }
+        if (!kv.empty()) { if (!out.empty()) out += ","; out += kv; }
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    if (!done) { if (!out.empty()) out += ","; out += key + "=" + val; }
+    e = path + "{" + out + "}";
+}
+
 namespace {
 
 void begin_field_tx(dai_editor_ui *p, const char *name) {
@@ -369,7 +425,17 @@ void draw_subtree(dai_editor_ui *p, dai_doc *d, dai_node n, int depth) {
         const char *label = node_label(r, n, tmp, sizeof(tmp));
         int rc = dai_ui_tree_item_ex(p->ui, label, depth, kids, kids ? &open : nullptr,
                                      dai_editor_is_selected(p->ed, n));
-        if (rc & 4) p->hover_node = n;   // a dragged script aims at this row
+        if (rc & 4) {
+            p->hover_node = n;   // a dragged script aims at this row
+            int lpe = 0;
+            dai_ui_mouse(p->ui, nullptr, nullptr, nullptr, &lpe);
+            if (lpe && p->drag_pending.empty()) {
+                p->drag_node_pending = n;
+                p->drag_ref_target = dai_editor_selection_count(p->ed) > 0
+                                   ? dai_editor_selected(p->ed, 0) : DAI_INVALID_NODE;
+                dai_ui_mouse(p->ui, &p->drag_nx, &p->drag_ny, nullptr, nullptr);
+            }
+        }
         if (rc & 1) {
             // Ctrl-less toggle is not discoverable; additive selection is left
             // to the viewport, where the modifier keys live.
@@ -412,7 +478,10 @@ dai_editor_ui *dai_editor_ui_create(dai_editor *editor, dai_ui *ui) {
     // Scene and Game are two views of ONE rendered world, and the host draws
     // that world once per frame into a single rectangle - the two tabs stay
     // in one leaf no matter where the user drags them.
-    dai_dock_lock_pair(p->dock, "Scene", "Game");
+    // Scene and Game were once one viewport wearing two hats - the lock kept
+    // them tabbed together because they could never show different things.
+    // With two real views the lock is the bug: dragging one dragged both.
+    // (dai_dock_lock_pair deliberately NOT called anymore.)
     return p;
 }
 
@@ -453,6 +522,11 @@ void dai_editor_ui_project_host(dai_editor_ui *p,
 void dai_editor_ui_rename_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn, void *user) {
     if (!p) return;
     p->asset_rename = fn; p->rename_user = user;
+}
+
+void dai_editor_ui_params_host(dai_editor_ui *p, dai_editor_ui_params_fn fn, void *user) {
+    if (!p) return;
+    p->params_fn = fn; p->params_user = user;
 }
 
 void dai_editor_ui_scene_host(dai_editor_ui *p,
@@ -554,6 +628,7 @@ static void hierarchy_body(dai_editor_ui *p, float h) {
     dai_doc *d = dai_editor_doc(p->ed);
     p->visible_rows = 0;
     p->hover_node = DAI_INVALID_NODE;   // rebuilt per frame, for script drops
+    p->param_hover_entry = -1;          // same, for reference assign fields
     dai_ui_scroll_begin(p->ui, "hierarchy", h);
 
     uint32_t n = dai_doc_count(d);
@@ -841,14 +916,70 @@ static void inspector_body(dai_editor_ui *p) {
         int remove_at = -1;
         for (size_t si = 0; si < slist.size(); ++si) {
             dai_ui_row(p->ui, 20.0f);
-            dai_ui_label(p->ui, base_of(slist[si]).c_str());
+            dai_ui_label(p->ui, base_of(entry_path(slist[si])).c_str());
             if (dai_ui_button(p->ui, "x")) remove_at = (int)si;
+            // "// @param name" lines in the file show what they were given.
+            if (p->params_fn) {
+                char keys[512] = { 0 };
+                p->params_fn(entry_path(slist[si]).c_str(), keys, sizeof(keys), p->params_user);
+                std::string k;
+                for (const char *c = keys; ; ++c) {
+                    if (*c == ',' || !*c) {
+                        if (!k.empty()) {
+                            std::string val = entry_param(slist[si], k);
+                            dai_ui_label_fmt(p->ui, "   %s: %s", k.c_str(),
+                                             val.empty() ? "none" : val.c_str());
+                            k.clear();
+                        }
+                        if (!*c) break;
+                    } else k += *c;
+                }
+            }
         }
         if (slist.empty())
             dai_ui_label(p->ui, "none - drag a .js from the Project window onto this object");
         if (remove_at >= 0) {
             slist.erase(slist.begin() + remove_at);
             script_join(r.script, sizeof(r.script), slist);
+        }
+    }
+
+    // While a hierarchy node is being dragged it BECAME the selection on
+    // press - but the reference belongs to the object the user was looking
+    // at. Its drop fields stay open here until the button comes up.
+    if (p->drag_node != DAI_INVALID_NODE && p->drag_ref_target != DAI_INVALID_NODE &&
+        p->params_fn) {
+        dai_doc *doc2 = dai_editor_doc(p->ed);
+        dai_node_desc tr{}, dr{};
+        if (dai_doc_get(doc2, p->drag_ref_target, &tr) == DAI_OK && tr.script[0]) {
+            std::string dn = "node";
+            if (dai_doc_get(doc2, p->drag_node, &dr) == DAI_OK && dr.name[0]) dn = dr.name;
+            dai_ui_separator(p->ui);
+            dai_ui_label_fmt(p->ui, "Assign %s to:", dn.c_str());
+            std::vector<std::string> tlist = script_list(tr.script);
+            const char *hot = dai_ui_hot_label(p->ui);
+            for (size_t si = 0; si < tlist.size(); ++si) {
+                char keys[512] = { 0 };
+                p->params_fn(entry_path(tlist[si]).c_str(), keys, sizeof(keys), p->params_user);
+                std::string k;
+                for (const char *c = keys; ; ++c) {
+                    if (*c == ',' || !*c) {
+                        if (!k.empty()) {
+                            std::string val = entry_param(tlist[si], k);
+                            char pl[384];
+                            std::snprintf(pl, sizeof(pl), "%s: %s", k.c_str(),
+                                          val.empty() ? "none" : val.c_str());
+                            dai_ui_button(p->ui, pl);
+                            if (hot && std::strcmp(hot, pl) == 0) {
+                                p->param_hover_entry = (int)si;
+                                std::snprintf(p->param_hover_key, sizeof(p->param_hover_key), "%s", k.c_str());
+                            }
+                            k.clear();
+                        }
+                        if (!*c) break;
+                    } else k += *c;
+                }
+            }
         }
     }
 
@@ -2495,6 +2626,42 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             float tw = dai_ui_text_width(ui, lbl.c_str()) + 12.0f;
             dai_ui_rect(ui, dmx + 10.0f, dmy + 8.0f, tw, 18.0f, st->accent);
             dai_ui_text(ui, dmx + 16.0f, dmy + 11.0f, lbl.c_str(), st->text);
+        }
+
+        // A hierarchy node in flight: arm, drag, drop on an assign field.
+        if (p->drag_node_pending != DAI_INVALID_NODE && p->drag_node == DAI_INVALID_NODE && ddown) {
+            float ddx = dmx - p->drag_nx, ddy = dmy - p->drag_ny;
+            if (ddx * ddx + ddy * ddy > 36.0f) p->drag_node = p->drag_node_pending;
+        }
+        if (!ddown && p->drag_node_pending != DAI_INVALID_NODE) {
+            if (p->drag_node != DAI_INVALID_NODE && p->param_hover_entry >= 0 &&
+                p->drag_ref_target != DAI_INVALID_NODE) {
+                dai_doc *d = dai_editor_doc(p->ed);
+                dai_node_desc r{}, src{};
+                if (dai_doc_get(d, p->drag_ref_target, &r) == DAI_OK &&
+                    dai_doc_get(d, p->drag_node, &src) == DAI_OK && src.name[0]) {
+                    std::vector<std::string> list = script_list(r.script);
+                    if (p->param_hover_entry < (int)list.size()) {
+                        entry_set_param(list[(size_t)p->param_hover_entry],
+                                        p->param_hover_key, src.name);
+                        dai_doc_begin(d, "Assign reference");
+                        script_join(r.script, sizeof(r.script), list);
+                        dai_doc_set(d, p->drag_ref_target, &r);
+                        dai_doc_commit(d);
+                    }
+                }
+            }
+            p->drag_node_pending = DAI_INVALID_NODE;
+            p->drag_node = DAI_INVALID_NODE;
+        }
+        if (p->drag_node != DAI_INVALID_NODE) {
+            dai_node_desc dr{};
+            const char *nm = "node";
+            if (dai_doc_get(dai_editor_doc(p->ed), p->drag_node, &dr) == DAI_OK && dr.name[0])
+                nm = dr.name;
+            float tw = dai_ui_text_width(ui, nm) + 12.0f;
+            dai_ui_rect(ui, dmx + 10.0f, dmy + 8.0f, tw, 18.0f, st->accent);
+            dai_ui_text(ui, dmx + 16.0f, dmy + 11.0f, nm, st->text);
         }
     }
 

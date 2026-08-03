@@ -419,6 +419,9 @@ DAI_API int  dai_ui_text_field(dai_ui *ui, const char *id, float x, float y, flo
 /* Arms the NEXT text field drawn to take focus immediately, text selected -
  * the "create file, rename it right there" flow. One shot. */
 DAI_API void dai_ui_text_focus_next(dai_ui *ui);
+/* The label of the widget under the pointer this frame, nullptr = none.
+ * Lets host code turn any button into a drop target. */
+DAI_API const char *dai_ui_hot_label(const dai_ui *ui);
 DAI_API int  dai_ui_text_active(const dai_ui *ui);
 
 /* One row of a hierarchy. `depth` indents, `open` is the caller's fold state

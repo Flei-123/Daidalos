@@ -6,3 +6,6 @@ build/
 *.wav
 extern/quickjs/
 build-win/
+
+# editor backups
+*.bak*

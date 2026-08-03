@@ -19,6 +19,8 @@ struct dai_script {
     JSRuntime *rt = nullptr;
     JSContext *ctx = nullptr;
     dai_ui *ui = nullptr;
+    dai_script_node_host nodes{};
+    int has_nodes = 0;
     std::string last_path;
     uint32_t errors = 0;
 };
@@ -261,3 +263,81 @@ dai_result dai_script_call(dai_script *s, const char *fn, char *err, size_t err_
 uint32_t dai_script_error_count(const dai_script *s) { return s ? s->errors : 0; }
 
 } // extern "C"
+
+
+// ---------------------------------------------------------------- node access
+// The `scene`/`node` globals, bound by the host through dai_script_bind_nodes.
+// Self-contained on purpose: this block only talks to the host callbacks, so
+// it sits at the end of the file and touches nothing else.
+namespace {
+
+double arg_num(JSContext *ctx, JSValueConst v) {
+    double d = 0.0;
+    JS_ToFloat64(ctx, &d, v);
+    return d;
+}
+
+JSValue js_scene_find(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_nodes || argc < 1) return JS_NewFloat64(ctx, -1.0);
+    const char *c = JS_ToCString(ctx, argv[0]);
+    double r = c ? s->nodes.find(c, s->nodes.user) : -1.0;
+    if (c) JS_FreeCString(ctx, c);
+    return JS_NewFloat64(ctx, r);
+}
+
+JSValue js_node_get_pos(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    double xyz[3] = { 0, 0, 0 };
+    if (s->has_nodes && argc >= 1) s->nodes.get_pos(arg_num(ctx, argv[0]), xyz, s->nodes.user);
+    JSValue arr = JS_NewArray(ctx);
+    for (int i = 0; i < 3; ++i) JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewFloat64(ctx, xyz[i]));
+    return arr;
+}
+
+JSValue js_node_set_pos(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_nodes && argc >= 4) {
+        double xyz[3] = { arg_num(ctx, argv[1]), arg_num(ctx, argv[2]), arg_num(ctx, argv[3]) };
+        s->nodes.set_pos(arg_num(ctx, argv[0]), xyz, s->nodes.user);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue js_node_get_rot(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    double q[4] = { 0, 0, 0, 1 };
+    if (s->has_nodes && argc >= 1) s->nodes.get_rot(arg_num(ctx, argv[0]), q, s->nodes.user);
+    JSValue arr = JS_NewArray(ctx);
+    for (int i = 0; i < 4; ++i) JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewFloat64(ctx, q[i]));
+    return arr;
+}
+
+JSValue js_node_set_rot(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_nodes && argc >= 5) {
+        double q[4] = { arg_num(ctx, argv[1]), arg_num(ctx, argv[2]),
+                        arg_num(ctx, argv[3]), arg_num(ctx, argv[4]) };
+        s->nodes.set_rot(arg_num(ctx, argv[0]), q, s->nodes.user);
+    }
+    return JS_UNDEFINED;
+}
+
+} // namespace
+
+void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host) {
+    if (!s || !host) return;
+    s->nodes = *host;
+    s->has_nodes = 1;
+    JSValue global = JS_GetGlobalObject(s->ctx);
+    JSValue scene = JS_NewObject(s->ctx);
+    JS_SetPropertyStr(s->ctx, scene, "find", JS_NewCFunction(s->ctx, js_scene_find, "find", 1));
+    JS_SetPropertyStr(s->ctx, global, "scene", scene);
+    JSValue node = JS_NewObject(s->ctx);
+    JS_SetPropertyStr(s->ctx, node, "getPos", JS_NewCFunction(s->ctx, js_node_get_pos, "getPos", 1));
+    JS_SetPropertyStr(s->ctx, node, "setPos", JS_NewCFunction(s->ctx, js_node_set_pos, "setPos", 4));
+    JS_SetPropertyStr(s->ctx, node, "getRot", JS_NewCFunction(s->ctx, js_node_get_rot, "getRot", 1));
+    JS_SetPropertyStr(s->ctx, node, "setRot", JS_NewCFunction(s->ctx, js_node_set_rot, "setRot", 5));
+    JS_SetPropertyStr(s->ctx, global, "node", node);
+    JS_FreeValue(s->ctx, global);
+}
