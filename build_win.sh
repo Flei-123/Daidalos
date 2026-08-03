@@ -99,6 +99,10 @@ VKOBJS=""
         -Iinclude -Isrc -I"$VKINC" -c "src/$f.cpp" -o "$OUT/$f.o"
     VKOBJS="$VKOBJS $OUT/$f.o"
 done
+# The shaders are embedded too: the shipped .exe needs NOTHING beside it.
+python3 tools/embed_shaders.py shaders "$OUT/dai_shaders_embed.cpp"
+$CXX $FLAGS $ARCH -Iinclude -Isrc -c "$OUT/dai_shaders_embed.cpp" -o "$OUT/dai_shaders_embed.o"
+VKOBJS="$VKOBJS $OUT/dai_shaders_embed.o"
 x86_64-w64-mingw32-ar rcs "$OUT/libdaidalos_vk.a" $VKOBJS
 echo "   ok: $OUT/libdaidalos_vk.a"
 

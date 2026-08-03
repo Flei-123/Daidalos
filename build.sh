@@ -165,7 +165,12 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_ui.cpp            -o build/dai_ui.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_update.cpp       -o build/dai_update.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor_ui.cpp     -o build/dai_editor_ui.o
+    # The shaders are also linked IN - the editor runs as one file anywhere,
+    # and a shaders/ dir (or DAI_SHADER_DIR) still overrides when present.
+    python3 tools/embed_shaders.py shaders build/dai_shaders_embed.cpp
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c build/dai_shaders_embed.cpp -o build/dai_shaders_embed.o
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
+           build/dai_shaders_embed.o \
            $WINDOW_OBJ build/dai_dock.o build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
            build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_svg.o build/dai_icons.o build/dai_ui.o build/dai_update.o \
            build/dai_editor_ui.o

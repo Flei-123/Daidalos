@@ -518,12 +518,15 @@ int main(int argc, char **argv) {
         if (dai_editor_ui_take_save(panels) && scene_path) {
             if (dai_doc_save(doc, scene_path) == DAI_OK) std::printf("saved %s\n", scene_path);
         }
-        if (dai_editor_ui_take_refresh(panels) && assets) dai_assets_poll(assets);
+        // A refresh means the Project window WROTE files (new script/folder).
+        // The list below only re-feeds on a revision change and a new file
+        // does not move the revision - so force the re-feed here.
+        static uint32_t fed_rev = 0xFFFFFFFFu;
+        if (dai_editor_ui_take_refresh(panels) && assets) { dai_assets_poll(assets); fed_rev = 0xFFFFFFFFu; }
 
         // ---- assets: hot reload, list, and what the Project window clicked
         if (assets) {
             if (dai_assets_poll(assets)) dai_assets_bind(assets, sync);
-            static uint32_t fed_rev = 0xFFFFFFFFu;
             uint32_t rev = dai_assets_revision(assets);
             if (rev != fed_rev) {
                 fed_rev = rev;
@@ -625,11 +628,17 @@ int main(int argc, char **argv) {
             prev_ctrl_a = a_now;
         }
         in.double_click = dai_window_double_click(win);
+        // The camera step runs BEFORE the UI frame on purpose: the gizmo and
+        // the collider lines are generated inside dai_editor_ui_frame, and
+        // with the old order they were projected with last frame's camera -
+        // visibly trailing the scene by one frame while moving. The "is the
+        // pointer over a panel" answer this consumes is then one layout old,
+        // the same staleness the menu check above already relies on.
+        dai_editor_ui_viewport(panels, &ci);
+
         dai_ui_begin(ui, (float)ww, (float)wh, &in);
         dai_editor_ui_frame(panels, (float)ww, (float)wh);
         dai_ui_end(ui);
-
-        dai_editor_ui_viewport(panels, &ci);
 
         // The layout, once, a second in: enough frames for the dock to settle,
         // early enough to catch it going wrong.

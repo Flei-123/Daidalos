@@ -364,7 +364,9 @@ uint32_t dai_assets_list(dai_assets *a, char *out, uint32_t max, uint32_t stride
             if (dot == std::string::npos) return false;
             std::string e = p.substr(dot + 1);
             for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-            return e == "glb" || e == "gltf";
+            // .js is not placeable but ATTACHABLE ("Assign to selection") -
+            // a script the browser cannot show could never be assigned.
+            return e == "glb" || e == "gltf" || e == "js";
         }
         static void go(const std::string &root, const std::string &rel,
                        std::vector<std::string> &out, int depth) {

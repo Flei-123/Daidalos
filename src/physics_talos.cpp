@@ -145,9 +145,10 @@ public:
             ws.num_threads = cfg.physics_threads - 1;
         }
         ws.num_position_steps = cfg.position_steps;
-        // cfg.velocity_steps has no counterpart: Talos fixes the velocity
-        // iterations in its solver settings. Saying so beats silently
-        // accepting a number that does nothing.
+        // dai_engine already mapped 0 -> 10 (the Jolt default). It matters:
+        // with the solver default a dropped box sank visibly into the ground
+        // for a few ticks; 10 velocity iterations make contacts Jolt-hard.
+        ws.num_velocity_steps = cfg.velocity_steps;
         ws.gravity = tal_vec3{ 0.0f, -9.81f, 0.0f };
         // Both kinds: "it just hit" AND "something is resting on me". The
         // engine's contact API promises the second one - Jolt reports added
