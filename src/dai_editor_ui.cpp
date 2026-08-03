@@ -710,6 +710,9 @@ static void inspector_body(dai_editor_ui *p) {
             dai_ui_label(p->ui, "no rigidbody - nothing drives this");
         } else {
             dai_ui_option(p->ui, "Motion", &r.motion, MOTIONS, 3);
+            // No mass field on purpose: mass = density x shape volume.
+            // 0 falls back to water (1000) in dai_engine.
+            dai_ui_num_field(p->ui, "Density", &r.density, 10.0f, 0.0f, 100000.0f, "density");
             dai_ui_num_field(p->ui, "Friction", &r.friction, 0.005f, 0.0f, 10.0f, "friction");
             dai_ui_num_field(p->ui, "Bounce", &r.restitution, 0.005f, 0.0f, 1.0f, "bounce");
         }
@@ -1918,16 +1921,16 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                 bx += 10.0f;
             }
         }
-        // The mode switch and the search field, right aligned.
+        // The mode switch sits next to the breadcrumb (Assets | Projects) -
+        // both views of the same window belong together. Search keeps right.
         float pw_btn = dai_ui_text_width(ui, "Projects") + 16.0f;
-        float right = px + pw - 4.0f;
-        if (browser_row(p, right - pw_btn, by, pw_btn, BAR - 4.0f, nullptr,
+        if (browser_row(p, bx + 6.0f, by, pw_btn, BAR - 4.0f, nullptr,
                         "Projects", 0) && clicks_ok) {
             p->proj_tab = 1;
             dai_editor_ui_projects_refresh(p);
         }
-        right -= pw_btn + 6.0f;
-        float sw = right - 20.0f - bx;
+        float right = px + pw - 4.0f;
+        float sw = right - 20.0f - (bx + 6.0f + pw_btn);
         if (sw > 170.0f) sw = 170.0f;
         if (sw >= 70.0f)
             dai_ui_text_field(ui, "projsearch", right - sw, by + 1.0f, sw, BAR - 6.0f,

@@ -46,7 +46,9 @@ void set_vp(VkCommandBuffer cb, uint32_t w, uint32_t h) {
 extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instance *inst, uint32_t count) {
     if (!r) return DAI_ERR_INVALID_ARG;
     if (count && !inst) return DAI_ERR_INVALID_ARG;
-    if (!ensure_instances(r, count ? count : 1)) return DAI_ERR_OUT_OF_MEMORY;
+    // The stream holds the shadow section (ALL casters) plus the colour
+    // section (visible only) - worst case twice the input count.
+    if (!ensure_instances(r, count ? count * 2 : 1)) return DAI_ERR_OUT_OF_MEMORY;
     auto t0 = std::chrono::high_resolution_clock::now();
 
     // ---- 0. frustum culling
@@ -95,34 +97,51 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     uint32_t total_input = count;
     count = (uint32_t)visible.size();
 
-    // ---- 1. sort: shadow casters first, then by mesh
-    std::vector<uint32_t> order(count);
-    for (uint32_t i = 0; i < count; ++i) order[i] = visible[i];
-    // sort by (casts shadow, material, mesh): shadow casters form a prefix the
-    // depth pass can draw without touching materials, and inside that every
-    // material/mesh pair becomes exactly one draw call
-    (void)total_input;
+    // ---- 1. order: the SHADOW section first, built from ALL instances -
+    // a caster outside the camera frustum still throws a shadow INTO it, and
+    // culling it made shadows pop at the frame edge. The COLOUR section after
+    // it uses the camera-culled list. Both sorted by (material, mesh), so
+    // every pair is exactly one draw call.
     auto key = [&](uint32_t i) {
         uint32_t m = inst[i].mesh < r->meshes.size() ? inst[i].mesh : (uint32_t)DAI_MESH_BOX;
         uint32_t mat = inst[i].material < r->materials.size() ? inst[i].material : 0u;
-        uint64_t caster = (inst[i].flags & DAI_RI_NO_SHADOW) ? 1u : 0u;
-        return (caster << 40) | ((uint64_t)mat << 20) | m;
+        return ((uint64_t)mat << 20) | m;
     };
-    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return key(a) < key(b); });
-
-    dai_render_instance *dst = (dai_render_instance *)r->inst.mapped;
-    uint32_t casters = 0;
-    std::vector<Range> ranges;
-    for (uint32_t i = 0; i < count; ++i) {
-        dai_render_instance v = inst[order[i]];
+    auto normalized = [&](uint32_t i) {
+        dai_render_instance v = inst[i];
         if (v.mesh >= r->meshes.size()) v.mesh = DAI_MESH_BOX;
         if (v.roughness <= 0.0f) v.roughness = 1.0f;
-        dst[i] = v;
         if (v.material >= r->materials.size()) v.material = 0;
-        if (!(v.flags & DAI_RI_NO_SHADOW)) casters = i + 1;
-        if (!ranges.empty() && ranges.back().mesh == v.mesh && ranges.back().material == v.material)
-            ranges.back().count++;
-        else ranges.push_back({ v.mesh, v.material, i, 1 });
+        return v;
+    };
+    auto push_range = [&](std::vector<Range> &rr, const dai_render_instance &v, uint32_t at) {
+        if (!rr.empty() && rr.back().mesh == v.mesh && rr.back().material == v.material)
+            rr.back().count++;
+        else rr.push_back({ v.mesh, v.material, at, 1 });
+    };
+
+    dai_render_instance *dst = (dai_render_instance *)r->inst.mapped;
+    uint32_t written = 0, casters = 0;
+    std::vector<Range> sranges, ranges;
+
+    std::vector<uint32_t> sorder(total_input);
+    for (uint32_t i = 0; i < total_input; ++i) sorder[i] = i;
+    std::stable_sort(sorder.begin(), sorder.end(), [&](uint32_t a, uint32_t b) { return key(a) < key(b); });
+    for (uint32_t i = 0; i < total_input; ++i) {
+        if (inst[sorder[i]].flags & DAI_RI_NO_SHADOW) continue;
+        dai_render_instance v = normalized(sorder[i]);
+        push_range(sranges, v, written);
+        dst[written++] = v;
+    }
+    casters = written;
+
+    std::vector<uint32_t> order(count);
+    for (uint32_t i = 0; i < count; ++i) order[i] = visible[i];
+    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return key(a) < key(b); });
+    for (uint32_t i = 0; i < count; ++i) {
+        dai_render_instance v = normalized(order[i]);
+        push_range(ranges, v, written);
+        dst[written++] = v;
     }
 
     // ---- 2. uniforms
@@ -307,7 +326,7 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
             set_vp(r->cmd, ss, ss);
             vkCmdBindVertexBuffers(r->cmd, 0, 2, bufs, off);
             vkCmdBindIndexBuffer(r->cmd, r->ibo.buf, 0, VK_INDEX_TYPE_UINT32);
-            for (const Range &g : ranges) {
+            for (const Range &g : sranges) {
                 if (g.first >= casters) break;
                 uint32_t n = std::min(g.count, casters - g.first);
                 const MeshEntry &me = r->meshes[g.mesh];

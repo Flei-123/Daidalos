@@ -7,6 +7,7 @@
 
 #include "rhi_vulkan.hpp"
 #include "dai_meshgen.hpp"
+#include "dai_shaders_embed.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -195,6 +196,19 @@ VkShaderModule load_module(dai_renderer *r, const char *name, bool *ok) {
     std::snprintf(p, sizeof(p), "%s/%s", spv_dir(), name);
     bool got = false;
     std::vector<uint32_t> code = load_spv(p, &got);
+    if (!got) {
+        // One-file fallback: the shaders are linked into the binary, so the
+        // editor runs anywhere with nothing beside it. A file on disk (or
+        // DAI_SHADER_DIR) still wins - overrides and hot edits keep working.
+        for (int i = 0; i < dai_embedded_shaders_count; ++i) {
+            const dai_embedded_shader &e = dai_embedded_shaders[i];
+            if (std::strcmp(e.name, name) != 0) continue;
+            code.resize(((size_t)e.size + 3) / 4);
+            std::memcpy(code.data(), e.data, e.size);
+            got = true;
+            break;
+        }
+    }
     if (!got) { *ok = false; return VK_NULL_HANDLE; }
     VkShaderModuleCreateInfo si{ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
     si.codeSize = code.size() * 4; si.pCode = code.data();
