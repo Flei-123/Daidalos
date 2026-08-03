@@ -179,6 +179,7 @@ struct dai_editor_ui {
     float       drag_px = 0, drag_py = 0;
     dai_node    hover_node = DAI_INVALID_NODE;  // hierarchy row under the pointer
     // Inline rename of a just-created asset (Unity's create flow).
+    std::string rename_click;           // row the Project right click landed on
     std::string rename_asset;
     char        rename_asset_buf[160] = { 0 };
     int         rename_seen_active = 0;
@@ -214,6 +215,9 @@ struct dai_editor_ui {
     dai_dock *dock = nullptr;
     int   settings_open = 0;
     dai_ui_popup menu_project{};      // right click in the project window
+    dai_ui_popup menu_addcomp{};      // the Add Component button's list
+    char scene_label[128] = { 0 };    // the active scene, shown as the hierarchy root
+    int  scene_root_folded = 0;
 
     // ---- settings ----------------------------------------------------------
     float settings_font_px = 13.0f;
@@ -281,6 +285,69 @@ static bool script_name_ok(const std::string &s) {
     }
     return true;
 }
+// Reparenting keeps the object exactly where it is on screen: the document
+// stores LOCAL transforms, so the new local one is the old world transform
+// expressed in the new parent's frame. Without this every drag in the
+// hierarchy teleported the object by the parent's offset.
+static dai_quat q_conj(dai_quat q) { return { -q.x, -q.y, -q.z, q.w }; }
+static dai_quat q_mul(dai_quat a, dai_quat b) {
+    return { a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
+             a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+             a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
+             a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z };
+}
+static dai_vec3 q_rot(dai_quat q, dai_vec3 v) {
+    dai_vec3 u{ q.x, q.y, q.z };
+    dai_vec3 uv{ u.y*v.z - u.z*v.y, u.z*v.x - u.x*v.z, u.x*v.y - u.y*v.x };
+    dai_vec3 uuv{ u.y*uv.z - u.z*uv.y, u.z*uv.x - u.x*uv.z, u.x*uv.y - u.y*uv.x };
+    return { v.x + 2.0f*(q.w*uv.x + uuv.x), v.y + 2.0f*(q.w*uv.y + uuv.y),
+             v.z + 2.0f*(q.w*uv.z + uuv.z) };
+}
+// A node may not become a child of its own descendant - that builds a cycle
+// the tree walk never returns from.
+static bool is_descendant(dai_doc *d, dai_node maybe_child, dai_node of) {
+    for (int guard = 0; guard < 256; ++guard) {
+        dai_node_desc r{};
+        if (dai_doc_get(d, maybe_child, &r) != DAI_OK) return false;
+        if (r.parent == DAI_INVALID_NODE) return false;
+        if (r.parent == of) return true;
+        maybe_child = r.parent;
+    }
+    return true;   // pathological depth: refuse rather than loop
+}
+static void reparent_node(dai_editor_ui *p, dai_node child, dai_node parent) {
+    dai_doc *d = dai_editor_doc(p->ed);
+    if (child == parent) return;
+    dai_node_desc r{};
+    if (dai_doc_get(d, child, &r) != DAI_OK) return;
+    if (parent != DAI_INVALID_NODE && is_descendant(d, parent, child)) return;
+    if (r.parent == parent) return;
+
+    dai_vec3 cw{}, cs{ 1, 1, 1 }; dai_quat cr{ 0, 0, 0, 1 };
+    dai_doc_world_transform(d, child, &cw, &cr, &cs);
+    dai_doc_begin(d, "Reparent");
+    r.parent = parent;
+    if (parent == DAI_INVALID_NODE) {
+        r.position = cw; r.rotation = cr; r.scale = cs;
+    } else {
+        dai_vec3 pw{}, ps{ 1, 1, 1 }; dai_quat pr{ 0, 0, 0, 1 };
+        dai_doc_world_transform(d, parent, &pw, &pr, &ps);
+        dai_quat inv = q_conj(pr);
+        dai_vec3 delta{ cw.x - pw.x, cw.y - pw.y, cw.z - pw.z };
+        dai_vec3 loc = q_rot(inv, delta);
+        r.position = { ps.x != 0 ? loc.x / ps.x : loc.x,
+                       ps.y != 0 ? loc.y / ps.y : loc.y,
+                       ps.z != 0 ? loc.z / ps.z : loc.z };
+        r.rotation = q_mul(inv, cr);
+        r.scale = { ps.x != 0 ? cs.x / ps.x : cs.x,
+                    ps.y != 0 ? cs.y / ps.y : cs.y,
+                    ps.z != 0 ? cs.z / ps.z : cs.z };
+    }
+    dai_doc_set(d, child, &r);
+    dai_doc_commit(d);
+    dai_editor_resync(p->ed);
+}
+
 // The drop: a dragged .js lands on a node and becomes another component.
 static void script_attach(dai_editor_ui *p, dai_node n, const std::string &path) {
     dai_doc *d = dai_editor_doc(p->ed);
@@ -493,6 +560,11 @@ int dai_editor_ui_menu_open(const dai_editor_ui *p) {
                 dai_ui_popup_active(p->ui)) : 0;
 }
 
+void dai_editor_ui_scene_label(dai_editor_ui *p, const char *name) {
+    if (!p) return;
+    std::snprintf(p->scene_label, sizeof(p->scene_label), "%s", name ? name : "");
+}
+
 void dai_editor_ui_rename(dai_editor_ui *p, dai_node n) {
     if (!p) return;
     dai_node_desc r{};
@@ -631,14 +703,29 @@ static void hierarchy_body(dai_editor_ui *p, float h) {
     p->param_hover_entry = -1;          // same, for reference assign fields
     dai_ui_scroll_begin(p->ui, "hierarchy", h);
 
-    uint32_t n = dai_doc_count(d);
-    std::vector<dai_node> all(n);
-    if (n) dai_doc_nodes(d, all.data(), n);
-    for (dai_node id : all) {
-        dai_node_desc r{};
-        if (dai_doc_get(d, id, &r) != DAI_OK) continue;
-        if (r.parent != DAI_INVALID_NODE) continue;      // roots drive the recursion
-        draw_subtree(p, d, id, 0);
+    // The scene itself is the root row, the way Unity puts the .unity file
+    // above everything: it says WHICH scene is open, and dropping a node on
+    // it is how a child becomes a root again.
+    int have_root = p->scene_label[0] != 0;
+    int root_open = !p->scene_root_folded;
+    if (have_root) {
+        char label[160];
+        std::snprintf(label, sizeof(label), "%s", p->scene_label);
+        int rc = dai_ui_tree_item_ex(p->ui, label, 0, 1, &root_open, 0);
+        p->scene_root_folded = !root_open;
+        if (rc & 4) p->hover_node = DAI_SCENE_ROOT_NODE;   // drop here = unparent
+        ++p->visible_rows;
+    }
+    if (!have_root || root_open) {
+        uint32_t n = dai_doc_count(d);
+        std::vector<dai_node> all(n);
+        if (n) dai_doc_nodes(d, all.data(), n);
+        for (dai_node id : all) {
+            dai_node_desc r{};
+            if (dai_doc_get(d, id, &r) != DAI_OK) continue;
+            if (r.parent != DAI_INVALID_NODE) continue;      // roots drive the recursion
+            draw_subtree(p, d, id, have_root ? 1 : 0);
+        }
     }
     dai_ui_scroll_end(p->ui);
 }
@@ -942,6 +1029,18 @@ static void inspector_body(dai_editor_ui *p) {
             slist.erase(slist.begin() + remove_at);
             script_join(r.script, sizeof(r.script), slist);
         }
+    }
+
+    // ---- Add Component ------------------------------------------------------
+    // Unity's button, and the honest version of it: a Daidalos node HAS its
+    // slots (a body, a collider, scripts) - adding one switches it on and
+    // gives it sane values, removing one switches it off. The mesh is never
+    // touched by either, which is the bug this replaced.
+    dai_ui_separator(p->ui);
+    if (dai_ui_button(p->ui, "Add Component")) {
+        float mx2 = 0, my2 = 0;
+        dai_ui_mouse(p->ui, &mx2, &my2, nullptr, nullptr);
+        dai_ui_popup_open(&p->menu_addcomp, mx2, my2);
     }
 
     // While a hierarchy node is being dragged it BECAME the selection on
@@ -1913,15 +2012,67 @@ static void project_expand_to(dai_editor_ui *p, const std::string &dir) {
 static void run_context_menus(dai_editor_ui *p) {
     dai_doc *d = dai_editor_doc(p->ed);
 
+    // The Add Component list. Entries flip between add and remove so one menu
+    // covers both directions - a component that is already there offers to go.
+    if (p->menu_addcomp.open && dai_editor_selection_count(p->ed) > 0) {
+        dai_node an = dai_editor_selected(p->ed, 0);
+        dai_node_desc ar{};
+        if (dai_doc_get(d, an, &ar) == DAI_OK) {
+            int has_rb = !ar.no_rigidbody && !ar.no_body;
+            int has_col = !ar.no_collider && !ar.no_body;
+            dai_ui_menu_item items[3];
+            items[0] = { DAI_ICON_SETTINGS, has_rb ? "Remove Rigidbody" : "Rigidbody", nullptr };
+            items[1] = { DAI_ICON_BOX, has_col ? "Remove Collider" : "Collider", nullptr };
+            items[2] = { DAI_ICON_FILE, "Script (drag a .js here)", nullptr };
+            int pick = dai_ui_popup_menu(p->ui, &p->menu_addcomp, items, 3);
+            if (pick == 0 || pick == 1) {
+                dai_doc_begin(d, "Component");
+                if (pick == 0) ar.no_rigidbody = has_rb ? 1 : 0;
+                else           ar.no_collider = has_col ? 1 : 0;
+                // no_body is the "neither" state: the node stops being physical
+                // at all only once BOTH are gone, and comes back the moment
+                // either returns. Getting this wrong made the mesh disappear.
+                ar.no_body = (ar.no_rigidbody && ar.no_collider) ? 1 : 0;
+                dai_doc_set(d, an, &ar);
+                dai_doc_commit(d);
+                dai_editor_resync(p->ed);
+            }
+        }
+    } else if (p->menu_addcomp.open) {
+        dai_ui_menu_item none[1] = { { DAI_ICON_FILE, "select an object first", nullptr } };
+        dai_ui_popup_menu(p->ui, &p->menu_addcomp, none, 1);
+    }
+
     // The project window's own Create menu. The editor owns the click, the
     // host owns the disk - the same split the asset browser already uses.
     static const dai_ui_menu_item PROJ_ITEMS[] = {
         { DAI_ICON_FILE, "Create: Script", nullptr },
         { DAI_ICON_FOLDER, "Create: Folder", nullptr },
+        { DAI_ICON_PLUS, "Rename", "F2" },
         { DAI_ICON_SAVE, "Save scene", "Ctrl+S" },
         { DAI_ICON_SEARCH, "Refresh", nullptr },
     };
-    int ppick = dai_ui_popup_menu(p->ui, &p->menu_project, PROJ_ITEMS, 4);
+    int ppick = dai_ui_popup_menu(p->ui, &p->menu_project, PROJ_ITEMS, 5);
+    if (ppick == 2) {
+        // Rename works on whatever the browser has selected - a file OR a
+        // folder. std::rename does both, so there was never a reason for
+        // folders to be the one thing you could create but not correct.
+        std::string pick = p->rename_click.empty()
+                         ? (p->asset_sel >= 0 && p->asset_sel < (int)p->assets.size()
+                            ? std::string(p->assets[(size_t)p->asset_sel] ? p->assets[(size_t)p->asset_sel] : "")
+                            : std::string())
+                         : p->rename_click;
+        if (!pick.empty()) {
+            p->rename_asset = pick;
+            std::string base = base_of(pick);
+            if (base.size() > 3 && base.compare(base.size() - 3, 3, ".js") == 0)
+                base.resize(base.size() - 3);
+            std::snprintf(p->rename_asset_buf, sizeof(p->rename_asset_buf), "%s", base.c_str());
+            p->rename_seen_active = 0;
+        }
+        p->rename_click.clear();
+    }
+    else if (ppick > 2) ppick += 0;   // Save/Refresh keep their meaning below
     if (ppick == 0 && p->script_create) {
         // Unity's create flow: the file exists the moment the menu closes -
         // NewScript, NewScript2, ... - and its row in the list is in rename
@@ -1960,8 +2111,8 @@ static void run_context_menus(dai_editor_ui *p) {
             }
         }
     }
-    else if (ppick == 2) p->want_save = 1;
-    else if (ppick == 3) p->want_refresh = 1;
+    else if (ppick == 3) p->want_save = 1;
+    else if (ppick == 4) p->want_refresh = 1;
 
     static const dai_ui_menu_item NODE_ITEMS[] = {
         { DAI_ICON_PLUS, "Rename", "F2" },
@@ -2208,24 +2359,77 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
 
     // ---- the Projects list keeps the flow layout it always had --------------
     if (p->proj_tab == 1) {
-        dai_ui_spacing(ui, BAR + 4.0f);
-        if (p->proj_current.empty()) dai_ui_label(ui, "no project open");
-        else dai_ui_label_fmt(ui, "open: %s", p->proj_current.c_str());
-        dai_ui_separator(ui);
+        // Same two-column shape as the file browser: the list of projects on
+        // the left, what the selected one contains on the right. Full width
+        // buttons stacked down the window read as a settings page, not as a
+        // list of things you pick from.
+        const float pcols_y = py + BAR + 1.0f;
+        const float pcols_h = ph - BAR - 1.0f;
+        float ptree_w = p->proj_tree_w;
+        if (ptree_w > pw * 0.5f) ptree_w = pw * 0.5f;
+        if (ptree_w < 100.0f) ptree_w = pw > 200.0f ? 100.0f : pw * 0.5f;
+        float pright_x = px + ptree_w + 5.0f;
+        dai_ui_rect(ui, px + ptree_w, pcols_y, 1.0f, pcols_h, st->panel_border);
+
+        const float PROW = 20.0f;
+        float pry = pcols_y + 2.0f;
+        dai_ui_clip_begin(ui, px, pcols_y, ptree_w, pcols_h);
         if (p->projects.empty())
-            dai_ui_label(ui, p->proj_list ? "no projects yet" : "no project host");
+            dai_ui_text(ui, px + 8.0f, pry + 4.0f,
+                        p->proj_list ? "no projects yet" : "no project host", st->text_dim);
         for (const std::string &name : p->projects) {
-            if (dai_ui_button(ui, name.c_str()) && p->proj_open) {
+            int is_open = name == p->proj_current;
+            if (browser_row(p, px + 2.0f, pry, ptree_w - 4.0f, PROW,
+                            DAI_ICON_FOLDER, name.c_str(), is_open) && clicks_ok &&
+                p->proj_open) {
                 if (p->proj_open(name.c_str(), p->proj_user)) {
                     p->proj_current = name;
                     p->proj_tab = 0;
                 }
             }
+            pry += PROW;
         }
-        dai_ui_separator(ui);
-        dai_ui_label(ui, "New project");
-        dai_ui_input_text(ui, "Name", p->proj_name_buf, sizeof(p->proj_name_buf));
-        if (dai_ui_button(ui, "Create + open") && p->proj_create) {
+        dai_ui_clip_end(ui);
+
+        // Right column: what this project holds, and how to make a new one.
+        dai_ui_clip_begin(ui, pright_x, pcols_y, px + pw - pright_x, pcols_h);
+        float ry2 = pcols_y + 4.0f;
+        if (p->proj_current.empty())
+            dai_ui_text(ui, pright_x + 6.0f, ry2, "no project open - pick one on the left", st->text_dim);
+        else
+            dai_ui_text(ui, pright_x + 6.0f, ry2, p->proj_current.c_str(), st->text);
+        ry2 += 22.0f;
+        // Scenes are FILES of the open project, like Unity's .unity assets.
+        if (p->scene_list) {
+            dai_ui_text(ui, pright_x + 6.0f, ry2, "Scenes", st->text_dim);
+            ry2 += 18.0f;
+            for (uint32_t i = 0; ; ++i) {
+                const char *nm = p->scene_list(i, p->scene_user);
+                if (!nm) break;
+                if (browser_row(p, pright_x + 6.0f, ry2, 220.0f, PROW, DAI_ICON_FILE, nm, 0) &&
+                    clicks_ok && p->scene_open)
+                    p->scene_open(nm, p->scene_user);
+                ry2 += PROW;
+            }
+            ry2 += 6.0f;
+            dai_ui_text_field(ui, "scenename", pright_x + 6.0f, ry2, 150.0f, 22.0f,
+                              p->scene_name_buf, sizeof(p->scene_name_buf), nullptr);
+            if (browser_button(p, pright_x + 162.0f, ry2, 110.0f, 22.0f, "Save scene as") &&
+                p->scene_save_as && p->scene_name_buf[0]) {
+                std::string nm = p->scene_name_buf;
+                const std::string ext = ".daidalos";
+                if (nm.size() <= ext.size() || nm.compare(nm.size() - ext.size(), ext.size(), ext) != 0)
+                    nm += ext;
+                if (p->scene_save_as(nm.c_str(), p->scene_user)) p->scene_name_buf[0] = 0;
+            }
+            ry2 += 30.0f;
+        }
+        dai_ui_text(ui, pright_x + 6.0f, ry2, "New project", st->text_dim);
+        ry2 += 18.0f;
+        dai_ui_text_field(ui, "projname", pright_x + 6.0f, ry2, 150.0f, 22.0f,
+                          p->proj_name_buf, sizeof(p->proj_name_buf), nullptr);
+        if (browser_button(p, pright_x + 162.0f, ry2, 110.0f, 22.0f, "Create + open") &&
+            p->proj_create) {
             if (p->proj_name_buf[0] && p->proj_create(p->proj_name_buf, p->proj_user)) {
                 p->proj_current = p->proj_name_buf;
                 p->proj_name_buf[0] = 0;
@@ -2233,26 +2437,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                 p->proj_tab = 0;
             }
         }
-        // Scenes are FILES of the open project, like Unity's .unity assets:
-        // click opens, "Save scene as" forks the current one under a new name.
-        if (p->scene_list) {
-            dai_ui_separator(ui);
-            dai_ui_label(ui, "Scenes");
-            for (uint32_t i = 0; ; ++i) {
-                const char *nm = p->scene_list(i, p->scene_user);
-                if (!nm) break;
-                if (dai_ui_button(ui, nm) && p->scene_open)
-                    p->scene_open(nm, p->scene_user);
-            }
-            dai_ui_input_text(ui, "Scene name", p->scene_name_buf, sizeof(p->scene_name_buf));
-            if (dai_ui_button(ui, "Save scene as") && p->scene_save_as && p->scene_name_buf[0]) {
-                std::string nm = p->scene_name_buf;
-                const std::string ext = ".daidalos";
-                if (nm.size() <= ext.size() || nm.compare(nm.size() - ext.size(), ext.size(), ext) != 0)
-                    nm += ext;
-                if (p->scene_save_as(nm.c_str(), p->scene_user)) p->scene_name_buf[0] = 0;
-            }
-        }
+        dai_ui_clip_end(ui);
         return;
     }
 
@@ -2354,11 +2539,37 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
         for (const std::string &name : subfolders) {
             ++rows;
             if (ry + ROW > cols_y && ry < cols_y + list_h) {
-                if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
-                                DAI_ICON_FOLDER, name.c_str(), 0) && clicks_ok) {
-                    p->proj_dir = p->proj_dir.empty() ? name : p->proj_dir + "/" + name;
-                    project_expand_to(p, p->proj_dir);
-                    p->proj_list_scroll = 0.0f;
+                std::string ffull = p->proj_dir.empty() ? name : p->proj_dir + "/" + name;
+                if (ffull == p->rename_asset) {
+                    int commit = 0;
+                    dai_ui_text_focus_next(ui);
+                    dai_ui_text_field(ui, "assetrename", list_x + 2.0f, ry, list_w - 4.0f,
+                                      ROW, p->rename_asset_buf, sizeof(p->rename_asset_buf),
+                                      &commit);
+                    if (dai_ui_text_active(ui)) p->rename_seen_active = 1;
+                    if (commit || (p->rename_seen_active && !dai_ui_text_active(ui))) {
+                        std::string nn = p->rename_asset_buf;
+                        if (script_name_ok(nn) && p->asset_rename) {
+                            std::string dir = parent_of(p->rename_asset);
+                            std::string np = dir.empty() ? nn : dir + "/" + nn;
+                            if (np != p->rename_asset)
+                                p->asset_rename(p->rename_asset.c_str(), np.c_str(), p->rename_user);
+                        }
+                        p->rename_asset.clear();
+                        p->rename_seen_active = 0;
+                        p->want_refresh = 1;
+                    }
+                } else {
+                    int over_f = mx >= list_x + 2.0f && mx < list_x + list_w - 4.0f &&
+                                 my >= ry && my < ry + ROW;
+                    if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
+                                    DAI_ICON_FOLDER, name.c_str(), 0) && clicks_ok) {
+                        p->proj_dir = p->proj_dir.empty() ? name : p->proj_dir + "/" + name;
+                        project_expand_to(p, p->proj_dir);
+                        p->proj_list_scroll = 0.0f;
+                    }
+                    // Right click aims Rename at THIS folder.
+                    if (over_f && right_pressed && clicks_ok) p->rename_click = ffull;
                 }
             }
             ry += ROW;
@@ -2383,11 +2594,18 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                     if (dai_ui_text_active(ui)) p->rename_seen_active = 1;
                     if (commit || (p->rename_seen_active && !dai_ui_text_active(ui))) {
                         std::string nn = p->rename_asset_buf;
-                        if (nn.size() > 3 && nn.compare(nn.size() - 3, 3, ".js") == 0)
-                            nn.resize(nn.size() - 3);
+                        // Keep whatever extension the OLD path had - a folder
+                        // has none, and forcing ".js" onto one turned "models"
+                        // into "models.js" the moment it was renamed.
+                        std::string ob = base_of(p->rename_asset), ext;
+                        size_t dot = ob.find_last_of('.');
+                        if (dot != std::string::npos) ext = ob.substr(dot);
+                        if (!ext.empty() && nn.size() > ext.size() &&
+                            nn.compare(nn.size() - ext.size(), ext.size(), ext) == 0)
+                            nn.resize(nn.size() - ext.size());
                         if (script_name_ok(nn)) {
                             std::string dir = parent_of(p->rename_asset);
-                            std::string np = dir.empty() ? nn + ".js" : dir + "/" + nn + ".js";
+                            std::string np = dir.empty() ? nn + ext : dir + "/" + nn + ext;
                             if (np != p->rename_asset && p->asset_rename)
                                 p->asset_rename(p->rename_asset.c_str(), np.c_str(), p->rename_user);
                         }
@@ -2400,7 +2618,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                                     DAI_ICON_FILE, label.c_str(), selected) && clicks_ok)
                         p->asset_sel = fi;
                     // A right click selects what it landed on, then the menu opens.
-                    if (over && right_pressed && clicks_ok) p->asset_sel = fi;
+                    if (over && right_pressed && clicks_ok) { p->asset_sel = fi; p->rename_click = full; }
                     // A .js arms a drag: press, move 6 px, and it travels
                     // with the cursor until it lands on a node (or nowhere).
                     size_t fl2 = full.size();
@@ -2634,7 +2852,15 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             if (ddx * ddx + ddy * ddy > 36.0f) p->drag_node = p->drag_node_pending;
         }
         if (!ddown && p->drag_node_pending != DAI_INVALID_NODE) {
-            if (p->drag_node != DAI_INVALID_NODE && p->param_hover_entry >= 0 &&
+            // A node dropped on a hierarchy ROW re-parents; dropped on a
+            // script's reference field it becomes that reference. The row wins
+            // when both could apply - that is where the pointer actually is.
+            if (p->drag_node != DAI_INVALID_NODE && p->hover_node != DAI_INVALID_NODE &&
+                p->hover_node != p->drag_node) {
+                reparent_node(p, p->drag_node,
+                              p->hover_node == DAI_SCENE_ROOT_NODE ? DAI_INVALID_NODE
+                                                                   : p->hover_node);
+            } else if (p->drag_node != DAI_INVALID_NODE && p->param_hover_entry >= 0 &&
                 p->drag_ref_target != DAI_INVALID_NODE) {
                 dai_doc *d = dai_editor_doc(p->ed);
                 dai_node_desc r{}, src{};
