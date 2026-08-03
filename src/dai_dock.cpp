@@ -784,6 +784,9 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
         // Dropping a tab onto its own leaf, when that leaf has only this one
         // tab, must do nothing: it would remove the tab, delete the leaf and
         // then look for the leaf it was going to drop into.
+        // Dropping a tab into the leaf it already owns ALONE is a no-op in
+        // every direction: splitting a leaf against itself would remove the
+        // tab, delete the now empty leaf, and then look for it.
         bool degenerate = target && target->leaf() && target->tabs.size() == 1 &&
                           target->tabs[0] == title;
         if (!degenerate) {
@@ -798,8 +801,16 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
             } else if (target) {
                 // Remember where the target is by identity, since removing the
                 // dragged tab can delete nodes - including the target itself.
-                std::string anchor = target->tabs.empty() ? std::string()
-                                   : target->tabs[(size_t)std::max(0, target->selected)];
+                // The anchor must be a tab that SURVIVES the removal below.
+                // It used to be the target's SELECTED tab - but pressing a tab
+                // selects it, so dragging Game out of a Scene+Game leaf made
+                // the anchor "Game" itself. After remove_tab it was gone, the
+                // lookup failed, and the fallback first_leaf() docked it onto
+                // whatever leaf happens to come first in the tree - the panel
+                // appeared on the opposite side of the editor.
+                std::string anchor;
+                for (const std::string &t : target->tabs)
+                    if (t != title) { anchor = t; break; }
                 remove_tab(d, title);
                 Node *t2 = anchor.empty() ? first_leaf(d->root) : d->find(anchor, nullptr);
                 if (!t2) t2 = first_leaf(d->root);

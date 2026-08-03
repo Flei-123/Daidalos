@@ -751,6 +751,12 @@ int main(int argc, char **argv) {
                     }
                 }
             }
+            {   // the hierarchy's root row says which scene is open
+                const char *base = std::strrchr(current_scene, '/');
+                const char *bs = std::strrchr(current_scene, '\\');
+                if (bs && (!base || bs > base)) base = bs;
+                dai_editor_ui_scene_label(panels, base ? base + 1 : current_scene);
+            }
             std::printf("project: %s\n", current_scene);
         }
 
@@ -938,13 +944,21 @@ int main(int argc, char **argv) {
         // What gets RENDERED is the game camera while the Game tab is up.
         dai_vec3 reye = eye, rlook = look;
         float rfov = 55.0f;
+        // The Game tab shows what the GAME camera sees - and with no camera in
+        // the scene it must show NOTHING. It used to fall through to the
+        // editor camera, so selecting the Game tab still drew the scene view
+        // and the "no camera" message sat on top of a picture it was denying.
+        int no_world = 0;
         if (dai_editor_ui_view(panels) == DAI_VIEW_GAME) {
             dai_vec3 ge{}, gl{};
             float gf = 60.0f;
             if (dai_editor_ui_game_camera(panels, &ge, &gl, &gf)) {
                 reye = ge; rlook = gl; rfov = gf;
+            } else {
+                no_world = 1;
             }
         }
+        dai_render_sky(r, no_world ? 0 : 1);
         dai_render_camera(r, reye, rlook, dai_vec3{ 0, 1, 0 }, rfov, 0.1f, 300.0f);
 
         // Both panels docked open: the Scene panel keeps the editor camera
@@ -962,6 +976,7 @@ int main(int argc, char **argv) {
         }
 
         uint32_t n = dai_scene_instances(sc, inst.data(), (uint32_t)inst.size(), alpha);
+        if (no_world) n = 0;   // Game tab, no camera: an empty frame, not a lie
 
         const dai_ui_draw *draws = nullptr;
         uint32_t nb = dai_ui_draws(ui, &draws);

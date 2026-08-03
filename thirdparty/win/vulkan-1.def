@@ -27,6 +27,7 @@ vkCmdPipelineBarrier2
 vkCmdPushConstants
 vkCmdSetScissor
 vkCmdSetViewport
+vkCmdSetDepthBias
 vkCreateBuffer
 vkCreateCommandPool
 vkCreateDescriptorPool

@@ -144,6 +144,13 @@ DAI_API void dai_editor_ui_projects_refresh(dai_editor_ui *p);
  * Project window). old_path/new_path are asset-relative. 1 = done. */
 typedef int (*dai_editor_ui_rename_fn)(const char *old_path, const char *new_path, void *user);
 DAI_API void dai_editor_ui_rename_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn, void *user);
+
+/* The scene shown as the hierarchy's root row - which scene is open, the way
+ * Unity puts the .unity file above everything. Dropping a node on it makes
+ * that node a root again. */
+DAI_API void dai_editor_ui_scene_label(dai_editor_ui *p, const char *name);
+/* The hierarchy's root row reports itself as this node when a drag hovers it. */
+#define DAI_SCENE_ROOT_NODE ((dai_node)0xFFFFFFFEu)
 /* Scenes are files of their own (<project>/scenes/<name>.daidalos), like
  * Unity's .unity assets: the Projects tab lists them, clicking opens, and
  * "Save scene as" writes the current scene under a new name. The host owns
