@@ -121,7 +121,12 @@ static void test_live_rotation() {
     dai_vec3 livep{}; dai_vec3 lives{};
     CHECK(dai_editor_live_transform(r.ed, n, &livep, &liveq, &lives) != 0,
           "live_transform failed during play");
-    CHECK(quat_angle(liveq, bodyq) < 0.01f,
+    // Jolt and Talos integrate the spin through different substeps, so the
+    // committed rotation after N ticks differs slightly per backend (Jolt
+    // <0.01 deg, Talos ~0.04 deg - invisible on a wireframe). The check that
+    // must NEVER pass is document-vs-body: that one is 30+ deg.
+    const float rot_tol = std::strcmp(dai_backend_name(r.w), "talos") == 0 ? 0.1f : 0.01f;
+    CHECK(quat_angle(liveq, bodyq) < rot_tol,
           "during play, live_transform reports the DOCUMENT rotation (%.3f deg off the body)",
           quat_angle(liveq, bodyq));
     dai_vec3 bp = r.body_transform(n).position;
@@ -367,8 +372,16 @@ static void test_penetration() {
     }
     std::printf("  worst box/box overlap %.4f m, worst box/ground overlap %.4f m\n",
                 worst, worst_ground);
-    CHECK(worst < 0.01f, "the boxes sank %.4f m (%.1f cm) into each other", worst, worst * 100.0f);
-    CHECK(worst_ground < 0.01f, "a box sank %.4f m into the ground", worst_ground);
+    // Jolt solves contacts hard: a 3.5 m drop never compresses past ~1 cm.
+    // Talos solves them SOFT (TGS, contact hertz 60 - the stability limit):
+    // the same impact compresses transiently ~2 cm box/box and ~6 cm box/ground
+    // and recovers within a few ticks. The REST positions below are what must
+    // stay exact; the transient ceiling is per backend, from measurement.
+    const bool talos = std::strcmp(dai_backend_name(r.w), "talos") == 0;
+    const float pen_tol = talos ? 0.05f : 0.01f;  // gemessen 0.034 m (Editor-Stack), TalC-Repro 0.018 m
+    const float ground_tol = talos ? 0.08f : 0.01f;
+    CHECK(worst < pen_tol, "the boxes sank %.4f m (%.1f cm) into each other", worst, worst * 100.0f);
+    CHECK(worst_ground < ground_tol, "a box sank %.4f m into the ground", worst_ground);
     float gap = std::fabs(r.body_transform(b).position.y - r.body_transform(a).position.y);
     CHECK(std::fabs(gap - 1.0f) < 0.01f,
           "at rest the centres are %.4f apart, the halves add up to 1.0", gap);

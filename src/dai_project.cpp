@@ -703,7 +703,7 @@ dai_project_settings dai_project_settings_default(void) {
     s.gravity[2] = 0.0f;
     s.tick_hz             = 60;
     s.max_bodies          = 8192;
-    s.physics_backend     = DAI_PHYSICS_JOLT;
+    s.physics_backend     = DAI_PHYSICS_TALOS;
     s.default_friction    = 0.6f;
     s.default_restitution = 0.0f;
     copy_str(s.app_name, sizeof(s.app_name), "Untitled");
