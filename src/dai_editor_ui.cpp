@@ -172,6 +172,24 @@ struct dai_editor_ui {
     char   script_name_buf[64] = { 0 };
     int    script_focus = 0;
     int    want_save = 0, want_refresh = 0;
+    // Drag & drop of a .js from the Project list onto a node (Unity: dropping
+    // a script on an object ADDS a script component to it).
+    std::string drag_pending;           // row the press started on
+    std::string drag_script;            // moved far enough: actively dragged
+    float       drag_px = 0, drag_py = 0;
+    dai_node    hover_node = DAI_INVALID_NODE;  // hierarchy row under the pointer
+    // Inline rename of a just-created asset (Unity's create flow).
+    std::string rename_asset;
+    char        rename_asset_buf[160] = { 0 };
+    int         rename_seen_active = 0;
+    dai_editor_ui_rename_fn asset_rename = nullptr;
+    void       *rename_user = nullptr;
+    // Scenes as files (Unity: several per project, opened by click).
+    dai_editor_ui_project_list_fn   scene_list = nullptr;
+    dai_editor_ui_project_action_fn scene_open = nullptr;
+    dai_editor_ui_project_action_fn scene_save_as = nullptr;
+    void       *scene_user = nullptr;
+    char        scene_name_buf[128] = { 0 };
 
     // ---- mesh inventory --------------------------------------------------
     dai_editor_ui_mesh_name_fn mesh_name = nullptr;
@@ -201,6 +219,10 @@ struct dai_editor_ui {
     bool  layout_ready = false;
     float layout_w = 0, layout_h = 0;
     float view_x = 0, view_y = 0, view_w = 0, view_h = 0;
+    // The Game panel next to the Scene panel: two independent views, not one
+    // viewport with a split personality.
+    int   has_game = 0;
+    float game_x = 0, game_y = 0, game_w = 0, game_h = 0;
 
     // viewport interaction
     bool viewport_dragging = false;
@@ -208,6 +230,60 @@ struct dai_editor_ui {
     bool prev_right_down = false;
     bool scrubbing = false;
 };
+
+// ---- asset paths: the list is flat, the browser is a tree -------------------
+static std::string parent_of(const std::string &s) {
+    size_t slash = s.find_last_of('/');
+    return slash == std::string::npos ? std::string() : s.substr(0, slash);
+}
+static std::string base_of(const std::string &s) {
+    size_t slash = s.find_last_of('/');
+    return slash == std::string::npos ? s : s.substr(slash + 1);
+}
+
+// Scripts stack on a node like Unity components. The document field is one
+// string, so the list travels ';'-separated - every old single-script file
+// stays valid.
+static std::vector<std::string> script_list(const char *s) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (const char *c = s; c && *c; ++c) {
+        if (*c == ';') { if (!cur.empty()) out.push_back(cur); cur.clear(); }
+        else cur += *c;
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+static void script_join(char *out, size_t n, const std::vector<std::string> &list) {
+    if (!n) return;
+    out[0] = 0;
+    for (const std::string &s : list) {
+        if (out[0]) std::strncat(out, ";", n - std::strlen(out) - 1);
+        std::strncat(out, s.c_str(), n - std::strlen(out) - 1);
+    }
+}
+static bool script_name_ok(const std::string &s) {
+    if (s.empty()) return false;
+    for (char c : s) {
+        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == '-' || c == '_';
+        if (!ok) return false;
+    }
+    return true;
+}
+// The drop: a dragged .js lands on a node and becomes another component.
+static void script_attach(dai_editor_ui *p, dai_node n, const std::string &path) {
+    dai_doc *d = dai_editor_doc(p->ed);
+    dai_node_desc r{};
+    if (dai_doc_get(d, n, &r) != DAI_OK) return;
+    std::vector<std::string> list = script_list(r.script);
+    for (const std::string &s : list) if (s == path) return;   // already attached
+    list.push_back(path);
+    dai_doc_begin(d, "Add script");
+    script_join(r.script, sizeof(r.script), list);
+    dai_doc_set(d, n, &r);
+    dai_doc_commit(d);
+}
 
 namespace {
 
@@ -293,6 +369,7 @@ void draw_subtree(dai_editor_ui *p, dai_doc *d, dai_node n, int depth) {
         const char *label = node_label(r, n, tmp, sizeof(tmp));
         int rc = dai_ui_tree_item_ex(p->ui, label, depth, kids, kids ? &open : nullptr,
                                      dai_editor_is_selected(p->ed, n));
+        if (rc & 4) p->hover_node = n;   // a dragged script aims at this row
         if (rc & 1) {
             // Ctrl-less toggle is not discoverable; additive selection is left
             // to the viewport, where the modifier keys live.
@@ -371,6 +448,21 @@ void dai_editor_ui_project_host(dai_editor_ui *p,
     p->proj_list = list; p->proj_create = create; p->proj_open = open;
     p->proj_user = user;
     dai_editor_ui_projects_refresh(p);
+}
+
+void dai_editor_ui_rename_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn, void *user) {
+    if (!p) return;
+    p->asset_rename = fn; p->rename_user = user;
+}
+
+void dai_editor_ui_scene_host(dai_editor_ui *p,
+                              dai_editor_ui_project_list_fn list,
+                              dai_editor_ui_project_action_fn open,
+                              dai_editor_ui_project_action_fn save_as,
+                              void *user) {
+    if (!p) return;
+    p->scene_list = list; p->scene_open = open; p->scene_save_as = save_as;
+    p->scene_user = user;
 }
 
 void dai_editor_ui_projects_refresh(dai_editor_ui *p) {
@@ -461,6 +553,7 @@ void dai_editor_ui_mesh_host(dai_editor_ui *p,
 static void hierarchy_body(dai_editor_ui *p, float h) {
     dai_doc *d = dai_editor_doc(p->ed);
     p->visible_rows = 0;
+    p->hover_node = DAI_INVALID_NODE;   // rebuilt per frame, for script drops
     dai_ui_scroll_begin(p->ui, "hierarchy", h);
 
     uint32_t n = dai_doc_count(d);
@@ -585,17 +678,24 @@ static void inspector_body(dai_editor_ui *p) {
         // asked the document would show a frozen ghost. Ask the BODY where the
         // object is, and write typed values back to the document.
         dai_vec3 pos = r.position;
-        if (playing) dai_editor_live_position(p->ed, n, &pos);
+        dai_quat rot = r.rotation;
+        if (playing) {
+            // Live means BOTH: position came from the body, but rotation kept
+            // showing the document's pre-play ghost - "rotation never updates".
+            dai_quat lr; dai_vec3 ls;
+            if (dai_editor_live_transform(p->ed, n, &pos, &lr, &ls)) rot = lr;
+            else dai_editor_live_position(p->ed, n, &pos);
+        }
         if (dai_ui_num_vec3(p->ui, "Position", &pos.x, 0.02f)) r.position = pos;
 
         // Rotation is shown in degrees. The cache is refreshed whenever the
         // quaternion moved from anywhere that is not this field - the gizmo,
         // an undo, the simulation - so typing is never fought by a conversion
         // that rounds differently than the last keystroke.
-        if (p->euler_node != n || !quat_eq(p->euler_cached_q, r.rotation)) {
+        if (p->euler_node != n || !quat_eq(p->euler_cached_q, rot)) {
             p->euler_node = n;
-            p->euler_cached_q = r.rotation;
-            quat_to_euler(r.rotation, p->euler_deg);
+            p->euler_cached_q = rot;
+            quat_to_euler(rot, p->euler_deg);
         }
         if (dai_ui_num_vec3(p->ui, "Rotation", p->euler_deg, 0.5f)) {
             r.rotation = euler_to_quat(p->euler_deg);
@@ -729,19 +829,27 @@ static void inspector_body(dai_editor_ui *p) {
         if (r.mesh == 0xFFFFFFFFu) r.mesh = mesh_of_shape(before.shape);
     }
 
-    // ---- Script -------------------------------------------------------------
-    // The path is the behaviour. Creating the file lives in the Project
-    // window ("New Script"); assigning it is typing the name or picking the
-    // file - the same rule as the Asset field.
-    dai_ui_header_icon(p->ui, DAI_ICON_FILE, "Script", &p->fold_script, nullptr);
+    // ---- Scripts ------------------------------------------------------------
+    // Scripts are COMPONENTS, the Unity rule: each .js on the node is its own
+    // block and several stack. The document stores them ';'-separated in the
+    // one script field, so every old single-script file stays valid. There is
+    // deliberately no assign button: a script attaches by DRAG, onto the node
+    // in the hierarchy or anywhere in this panel.
+    dai_ui_header_icon(p->ui, DAI_ICON_FILE, "Scripts", &p->fold_script, nullptr);
     if (p->fold_script) {
-        if (p->script_buf_node != n) {
-            std::snprintf(p->script_buf, sizeof(p->script_buf), "%s", r.script);
-            p->script_buf_node = n;
+        std::vector<std::string> slist = script_list(r.script);
+        int remove_at = -1;
+        for (size_t si = 0; si < slist.size(); ++si) {
+            dai_ui_row(p->ui, 20.0f);
+            dai_ui_label(p->ui, base_of(slist[si]).c_str());
+            if (dai_ui_button(p->ui, "x")) remove_at = (int)si;
         }
-        if (dai_ui_input_text(p->ui, "File", p->script_buf, sizeof(p->script_buf)))
-            std::snprintf(r.script, sizeof(r.script), "%s", p->script_buf);
-        if (!r.script[0]) dai_ui_label(p->ui, "none - New Script is in the Project window");
+        if (slist.empty())
+            dai_ui_label(p->ui, "none - drag a .js from the Project window onto this object");
+        if (remove_at >= 0) {
+            slist.erase(slist.begin() + remove_at);
+            script_join(r.script, sizeof(r.script), slist);
+        }
     }
 
     // Clamp here rather than in the widgets: these are physical quantities and
@@ -1635,6 +1743,15 @@ void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
     p->layout_w = vw; p->layout_h = vh;
 }
 
+int dai_editor_ui_game_view_rect(const dai_editor_ui *p, float *x, float *y, float *w, float *h) {
+    if (!p || !p->has_game) return 0;
+    if (x) *x = p->game_x;
+    if (y) *y = p->game_y;
+    if (w) *w = p->game_w;
+    if (h) *h = p->game_h;
+    return 1;
+}
+
 void dai_editor_ui_viewport_rect(const dai_editor_ui *p, float *x, float *y, float *w, float *h) {
     if (!p) return;
     if (x) *x = p->view_x;
@@ -1643,15 +1760,9 @@ void dai_editor_ui_viewport_rect(const dai_editor_ui *p, float *x, float *y, flo
     if (h) *h = p->view_h;
 }
 
-// ---- asset paths: the list is flat, the browser is a tree -------------------
-static std::string parent_of(const std::string &s) {
-    size_t slash = s.find_last_of('/');
-    return slash == std::string::npos ? std::string() : s.substr(0, slash);
-}
-static std::string base_of(const std::string &s) {
-    size_t slash = s.find_last_of('/');
-    return slash == std::string::npos ? s : s.substr(slash + 1);
-}
+// (the asset-path and script-list helpers live right after the struct now -
+// the inspector needs them long before this point)
+
 
 // The path to a folder opens in the tree: every ancestor expanded.
 static void project_expand_to(dai_editor_ui *p, const std::string &dir) {
@@ -1680,7 +1791,27 @@ static void run_context_menus(dai_editor_ui *p) {
         { DAI_ICON_SEARCH, "Refresh", nullptr },
     };
     int ppick = dai_ui_popup_menu(p->ui, &p->menu_project, PROJ_ITEMS, 4);
-    if (ppick == 0) { p->proj_tab = 0; p->script_focus = 1; }
+    if (ppick == 0 && p->script_create) {
+        // Unity's create flow: the file exists the moment the menu closes -
+        // NewScript, NewScript2, ... - and its row in the list is in rename
+        // right away. Enter commits the name, Escape keeps the default.
+        p->proj_tab = 0;
+        std::string base = p->proj_dir.empty() ? std::string() : p->proj_dir + "/";
+        for (int i = 0; i < 20; ++i) {
+            char nm[64], rel[224];
+            if (i == 0) std::snprintf(nm, sizeof(nm), "NewScript");
+            else        std::snprintf(nm, sizeof(nm), "NewScript%d", i + 1);
+            std::snprintf(rel, sizeof(rel), "%s%s", base.c_str(), nm);
+            if (p->script_create(rel, p->script_user)) {
+                p->rename_asset = std::string(rel) + ".js";
+                std::snprintf(p->rename_asset_buf, sizeof(p->rename_asset_buf), "%s", nm);
+                p->rename_seen_active = 0;
+                project_expand_to(p, p->proj_dir);
+                p->want_refresh = 1;
+                break;
+            }
+        }
+    }
     else if (ppick == 1 && p->folder_create) {
         // Like every file manager: New Folder, New Folder 2, ... - in the
         // folder the browser is showing, not blindly at the root.
@@ -1971,6 +2102,26 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                 p->proj_tab = 0;
             }
         }
+        // Scenes are FILES of the open project, like Unity's .unity assets:
+        // click opens, "Save scene as" forks the current one under a new name.
+        if (p->scene_list) {
+            dai_ui_separator(ui);
+            dai_ui_label(ui, "Scenes");
+            for (uint32_t i = 0; ; ++i) {
+                const char *nm = p->scene_list(i, p->scene_user);
+                if (!nm) break;
+                if (dai_ui_button(ui, nm) && p->scene_open)
+                    p->scene_open(nm, p->scene_user);
+            }
+            dai_ui_input_text(ui, "Scene name", p->scene_name_buf, sizeof(p->scene_name_buf));
+            if (dai_ui_button(ui, "Save scene as") && p->scene_save_as && p->scene_name_buf[0]) {
+                std::string nm = p->scene_name_buf;
+                const std::string ext = ".daidalos";
+                if (nm.size() <= ext.size() || nm.compare(nm.size() - ext.size(), ext.size(), ext) != 0)
+                    nm += ext;
+                if (p->scene_save_as(nm.c_str(), p->scene_user)) p->scene_name_buf[0] = 0;
+            }
+        }
         return;
     }
 
@@ -2089,11 +2240,47 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                 int selected = fi == p->asset_sel;
                 bool over = mx >= list_x + 2.0f && mx < list_x + list_w - 4.0f &&
                             my >= ry && my < ry + ROW;
-                if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
-                                DAI_ICON_FILE, label.c_str(), selected) && clicks_ok)
-                    p->asset_sel = fi;
-                // A right click selects what it landed on, then the menu opens.
-                if (over && right_pressed && clicks_ok) p->asset_sel = fi;
+                if (full == p->rename_asset) {
+                    // Fresh out of "Create: Script": the row IS the rename
+                    // field - type the name, Enter commits, Escape keeps the
+                    // default. Focus loss commits too, or it waits forever.
+                    int commit = 0;
+                    dai_ui_text_focus_next(ui);
+                    dai_ui_text_field(ui, "assetrename", list_x + 2.0f, ry, list_w - 4.0f,
+                                      ROW, p->rename_asset_buf, sizeof(p->rename_asset_buf),
+                                      &commit);
+                    if (dai_ui_text_active(ui)) p->rename_seen_active = 1;
+                    if (commit || (p->rename_seen_active && !dai_ui_text_active(ui))) {
+                        std::string nn = p->rename_asset_buf;
+                        if (nn.size() > 3 && nn.compare(nn.size() - 3, 3, ".js") == 0)
+                            nn.resize(nn.size() - 3);
+                        if (script_name_ok(nn)) {
+                            std::string dir = parent_of(p->rename_asset);
+                            std::string np = dir.empty() ? nn + ".js" : dir + "/" + nn + ".js";
+                            if (np != p->rename_asset && p->asset_rename)
+                                p->asset_rename(p->rename_asset.c_str(), np.c_str(), p->rename_user);
+                        }
+                        p->rename_asset.clear();
+                        p->rename_seen_active = 0;
+                        p->want_refresh = 1;
+                    }
+                } else {
+                    if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
+                                    DAI_ICON_FILE, label.c_str(), selected) && clicks_ok)
+                        p->asset_sel = fi;
+                    // A right click selects what it landed on, then the menu opens.
+                    if (over && right_pressed && clicks_ok) p->asset_sel = fi;
+                    // A .js arms a drag: press, move 6 px, and it travels
+                    // with the cursor until it lands on a node (or nowhere).
+                    size_t fl2 = full.size();
+                    int lpress = 0;
+                    dai_ui_mouse(ui, nullptr, nullptr, nullptr, &lpress);
+                    if (fl2 > 3 && full.compare(fl2 - 3, 3, ".js") == 0 && over &&
+                        lpress && clicks_ok) {
+                        p->drag_pending = full;
+                        p->drag_px = mx; p->drag_py = my;
+                    }
+                }
             }
             ry += ROW;
         }
@@ -2135,21 +2322,10 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
             dai_ui_text(ui, list_x + 4.0f, sy + 7.0f, base.c_str(), st->text_dim);
             size_t plen = pick ? std::strlen(pick) : 0;
             if (plen > 3 && std::strcmp(pick + plen - 3, ".js") == 0) {
-                // A script is not placed, it is ATTACHED - the same click as
-                // typing its name into the Script block.
-                if (browser_button(p, list_x + list_w - 148.0f, sy + 3.0f, 144.0f, 22.0f,
-                                   "Assign to selection") &&
-                    dai_editor_selection_count(p->ed) > 0) {
-                    dai_node n = dai_editor_selected(p->ed, 0);
-                    dai_node_desc r{};
-                    if (dai_doc_get(dai_editor_doc(p->ed), n, &r) == DAI_OK) {
-                        dai_doc_begin(dai_editor_doc(p->ed), "Assign script");
-                        std::snprintf(r.script, sizeof(r.script), "%s", pick);
-                        dai_doc_set(dai_editor_doc(p->ed), n, &r);
-                        dai_doc_commit(dai_editor_doc(p->ed));
-                        p->script_buf_node = DAI_INVALID_NODE;
-                    }
-                }
+                // No assign button on purpose: a script attaches by DRAG -
+                // onto the object in the hierarchy or into the inspector.
+                dai_ui_text(ui, list_x + list_w - 220.0f, sy + 7.0f,
+                            "drag onto an object to attach", st->text_dim);
             } else {
                 // Two buttons because the difference is physical, not cosmetic:
                 // one body for the whole model, or one body per piece.
@@ -2247,25 +2423,34 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     // The scene and the game are two tabs of one leaf, and their body is the
     // 3D view: no panel background is drawn, the host renders the world into
     // exactly this rectangle.
-    p->view = dai_dock_visible(p->dock, "Game") ? DAI_VIEW_GAME : DAI_VIEW_SCENE;
+    // Scene and Game are independent views now: each panel keeps its own
+    // rectangle, the host renders the editor camera into Scene and the game
+    // camera into Game - side by side when both are docked open.
     int have_view = 0;
+    p->has_game = 0;
     if (dai_dock_panel(p->dock, "Scene", &px, &py, &pw, &ph)) {
         p->view_x = px; p->view_y = py; p->view_w = pw; p->view_h = ph;
         have_view = 1;
         dai_dock_panel_end(p->dock);
-    } else if (dai_dock_panel(p->dock, "Game", &px, &py, &pw, &ph)) {
-        p->view_x = px; p->view_y = py; p->view_w = pw; p->view_h = ph;
-        have_view = 1;
+    }
+    if (dai_dock_panel(p->dock, "Game", &px, &py, &pw, &ph)) {
+        p->game_x = px; p->game_y = py; p->game_w = pw; p->game_h = ph;
+        p->has_game = 1;
+        if (!have_view) {   // Game alone: it is THE view, exactly as before
+            p->view_x = px; p->view_y = py; p->view_w = pw; p->view_h = ph;
+            have_view = 1;
+        }
         dai_dock_panel_end(p->dock);
     }
+    // Tabs in one leaf still switch: the selected tab is the visible one.
+    p->view = dai_dock_visible(p->dock, "Scene") ? DAI_VIEW_SCENE : DAI_VIEW_GAME;
     if (!have_view) { p->view_w = 0; p->view_h = 0; }
 
-    if (p->view == DAI_VIEW_GAME && have_view &&
-        !dai_editor_ui_game_camera(p, nullptr, nullptr, nullptr)) {
+    if (p->has_game && !dai_editor_ui_game_camera(p, nullptr, nullptr, nullptr)) {
         const char *msg = "No camera in the scene - right click the hierarchy, New Camera";
         float tw = dai_ui_text_width(ui, msg);
-        dai_ui_text(ui, p->view_x + (p->view_w - tw) * 0.5f,
-                    p->view_y + p->view_h * 0.5f, msg, st->text_dim);
+        dai_ui_text(ui, p->game_x + (p->game_w - tw) * 0.5f,
+                    p->game_y + p->game_h * 0.5f, msg, st->text_dim);
     }
 
     dai_dock_end(p->dock);
@@ -2281,6 +2466,36 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         draw_cameras(p);
         dai_editor_ui_gizmo(p);
         dai_ui_clip_end(ui);
+    }
+
+    // Script drag & drop, frame level: the pill follows the cursor over every
+    // panel, and the drop lands on the hierarchy row under it (that node) or
+    // anywhere on the inspector (the selection) - the Unity gesture.
+    {
+        float dmx = 0, dmy = 0; int ddown = 0;
+        dai_ui_mouse(ui, &dmx, &dmy, &ddown, nullptr);
+        if (!p->drag_pending.empty() && p->drag_script.empty() && ddown) {
+            float ddx = dmx - p->drag_px, ddy = dmy - p->drag_py;
+            if (ddx * ddx + ddy * ddy > 36.0f) p->drag_script = p->drag_pending;
+        }
+        if (!ddown && !p->drag_pending.empty()) {
+            if (!p->drag_script.empty()) {
+                dai_node target = DAI_INVALID_NODE;
+                if (p->hover_node != DAI_INVALID_NODE) target = p->hover_node;
+                else if (dai_ui_root_hovered(ui, "Inspector") &&
+                         dai_editor_selection_count(p->ed) > 0)
+                    target = dai_editor_selected(p->ed, 0);
+                if (target != DAI_INVALID_NODE) script_attach(p, target, p->drag_script);
+            }
+            p->drag_pending.clear();
+            p->drag_script.clear();
+        }
+        if (!p->drag_script.empty()) {
+            std::string lbl = base_of(p->drag_script);
+            float tw = dai_ui_text_width(ui, lbl.c_str()) + 12.0f;
+            dai_ui_rect(ui, dmx + 10.0f, dmy + 8.0f, tw, 18.0f, st->accent);
+            dai_ui_text(ui, dmx + 16.0f, dmy + 11.0f, lbl.c_str(), st->text);
+        }
     }
 
     run_context_menus(p);

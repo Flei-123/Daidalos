@@ -432,6 +432,14 @@ DAI_API int dai_window_double_click(dai_window *w);
  * to match. */
 DAI_API void dai_render_world_clip(dai_renderer *r, float x, float y, float w, float h);
 
+/* A SECOND world view in the same frame - Scene and Game side by side, each
+ * with its own rectangle and camera. Arm it per frame before
+ * dai_render_frame; the frame consumes and clears it. With no camera2 set the
+ * slot keeps last frame's camera, so set both together. */
+DAI_API void dai_render_world_clip2(dai_renderer *r, float x, float y, float w, float h);
+DAI_API void dai_render_camera2(dai_renderer *r, dai_vec3 eye, dai_vec3 target, dai_vec3 up,
+                                float fov_deg);
+
 DAI_API dai_result dai_render_frame(dai_renderer *r, const dai_render_instance *inst, uint32_t count);
 
 /* Re-creates the render targets at a new size.

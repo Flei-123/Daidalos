@@ -542,7 +542,15 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
 
     // ---- buffers
     VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    if (!vk_make_buffer(r, sizeof(FrameUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, host, &r->ubo, true))
+    // Two view slots in one buffer: Scene and Game can share a frame. The
+    // descriptor is DYNAMIC, so each view's draws bind their slot by offset -
+    // the shader never changes.
+    VkPhysicalDeviceProperties pd{};
+    vkGetPhysicalDeviceProperties(r->phys, &pd);
+    VkDeviceSize ualign = pd.limits.minUniformBufferOffsetAlignment;
+    if (ualign < 16) ualign = 16;
+    r->ubo_stride = (uint32_t)((sizeof(FrameUBO) + ualign - 1) / ualign * ualign);
+    if (!vk_make_buffer(r, (VkDeviceSize)r->ubo_stride * 2, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, host, &r->ubo, true))
         { dai_render_destroy(r); return fail("uniform buffer failed"); }
     if (!vk_make_buffer(r, (VkDeviceSize)r->width * r->height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                         host, &r->readback, false))
@@ -554,7 +562,7 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
 
     // ---- descriptors
     VkDescriptorSetLayoutBinding lb[4]{};
-    lb[0].binding = 0; lb[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; lb[0].descriptorCount = 1;
+    lb[0].binding = 0; lb[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC; lb[0].descriptorCount = 1;
     lb[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     lb[1].binding = 1; lb[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; lb[1].descriptorCount = 1;
     lb[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -566,7 +574,7 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     dlc.bindingCount = 4; dlc.pBindings = lb;
     if (vkCreateDescriptorSetLayout(r->dev, &dlc, nullptr, &r->dsl) != VK_SUCCESS)
         { dai_render_destroy(r); return fail("descriptor layout failed"); }
-    VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
+    VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1 },
                                    { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 },
                                    { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 } };
     VkDescriptorPoolCreateInfo dpc{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
@@ -605,7 +613,7 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     VkWriteDescriptorSet wr[4]{};
     wr[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     wr[0].dstSet = r->dset; wr[0].dstBinding = 0; wr[0].descriptorCount = 1;
-    wr[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; wr[0].pBufferInfo = &dbi;
+    wr[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC; wr[0].pBufferInfo = &dbi;
     wr[1] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     wr[1].dstSet = r->dset; wr[1].dstBinding = 1; wr[1].descriptorCount = 1;
     wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[1].pImageInfo = &dii;
@@ -1110,6 +1118,27 @@ dai_result dai_render_resize(dai_renderer *r, uint32_t width, uint32_t height) {
     // back or presented until the next one is drawn.
     r->have_frame = false;
     return DAI_OK;
+}
+
+void dai_render_camera2(dai_renderer *r, dai_vec3 eye, dai_vec3 target, dai_vec3 up,
+                        float fov_deg) {
+    if (!r) return;
+    r->view2_eye[0]=eye.x; r->view2_eye[1]=eye.y; r->view2_eye[2]=eye.z;
+    r->view2_target[0]=target.x; r->view2_target[1]=target.y; r->view2_target[2]=target.z;
+    r->view2_up[0]=up.x; r->view2_up[1]=up.y; r->view2_up[2]=up.z;
+    r->view2_fov = fov_deg;
+}
+
+void dai_render_world_clip2(dai_renderer *r, float x, float y, float w, float h) {
+    if (!r) return;
+    if (w <= 0.0f || h <= 0.0f) { r->view2_active = 0; return; }
+    if (x < 0.0f) { w += x; x = 0.0f; }
+    if (y < 0.0f) { h += y; y = 0.0f; }
+    if (x + w > (float)r->width)  w = (float)r->width - x;
+    if (y + h > (float)r->height) h = (float)r->height - y;
+    r->view2_clip[0] = x; r->view2_clip[1] = y;
+    r->view2_clip[2] = w; r->view2_clip[3] = h;
+    r->view2_active = 1;
 }
 
 void dai_render_world_clip(dai_renderer *r, float x, float y, float w, float h) {

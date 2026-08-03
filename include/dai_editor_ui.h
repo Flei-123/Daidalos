@@ -48,6 +48,10 @@ DAI_API void dai_editor_ui_layout_reset(dai_editor_ui *p, float viewport_w, floa
 
 /* The part of the surface the scene is visible in, after the bars and the
  * docked windows. */
+/* The Game panel docked next to the Scene panel is its own view, with its
+ * own rectangle and the game camera. 0 when the Game panel is not visible. */
+DAI_API int  dai_editor_ui_game_view_rect(const dai_editor_ui *p, float *x, float *y,
+                                          float *w, float *h);
 DAI_API void dai_editor_ui_viewport_rect(const dai_editor_ui *p, float *x, float *y,
                                          float *w, float *h);
 
@@ -136,6 +140,19 @@ DAI_API void dai_editor_ui_projects_refresh(dai_editor_ui *p);
 /* "New Script" in the Project window: the host writes the file (it owns the
  * disk - the editor cannot know where projects live) and the list refresh
  * makes it show up. The name comes without an extension. */
+/* Renames a file inside the project's assets dir (the inline rename of the
+ * Project window). old_path/new_path are asset-relative. 1 = done. */
+typedef int (*dai_editor_ui_rename_fn)(const char *old_path, const char *new_path, void *user);
+DAI_API void dai_editor_ui_rename_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn, void *user);
+/* Scenes are files of their own (<project>/scenes/<name>.daidalos), like
+ * Unity's .unity assets: the Projects tab lists them, clicking opens, and
+ * "Save scene as" writes the current scene under a new name. The host owns
+ * the disk; scene_open hands over a file name and the loop loads it. */
+DAI_API void dai_editor_ui_scene_host(dai_editor_ui *p,
+                                      dai_editor_ui_project_list_fn list,
+                                      dai_editor_ui_project_action_fn open,
+                                      dai_editor_ui_project_action_fn save_as,
+                                      void *user);
 DAI_API void dai_editor_ui_script_host(dai_editor_ui *p,
                                        int (*create)(const char *name, void *user),
                                        void *user);
