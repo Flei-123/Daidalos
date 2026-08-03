@@ -99,6 +99,7 @@ struct dai_ui {
         float    scroll = 0;      // horizontal scroll when the text is too long
     } edit;
     int focus_next_field = 0;   // the next text field takes focus on its own (create flows)
+    const char *hot_label = nullptr;   // label of the hovered widget, for drop targets
 
     // An open menu swallows every hit test outside its own rectangle - see
     // dai_ui_popup_menu. popup_was_open is written at the end of a frame and
@@ -355,6 +356,7 @@ void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in)
     ui->cursor_x = ui->cursor_y = 0;
     ui->in_panel = ui->in_row = false;
     ui->hot = 0;
+    ui->hot_label = nullptr;
     ui->mouse_over_ui = false;
     ui->clips.clear();
     ui->scroll_stack.clear();
@@ -1119,7 +1121,7 @@ int dai_ui_button(dai_ui *ui, const char *utf8) {
 
     uint64_t id = hash_id(utf8, x, y);
     bool over = inside_chk(ui, x, y, w, h);
-    if (over) { ui->hot = id; ui->mouse_over_ui = true; }
+    if (over) { ui->hot = id; ui->hot_label = utf8; ui->mouse_over_ui = true; }
     bool pressed = false;
     if (over && ui->input.mouse_down && !ui->prev.mouse_down) ui->active = id;
     if (ui->active == id && !ui->input.mouse_down) { pressed = over; ui->active = 0; }
@@ -1918,6 +1920,8 @@ int dai_ui_input_text(dai_ui *ui, const char *label, char *buf, size_t buf_size)
 }
 
 void dai_ui_text_focus_next(dai_ui *ui) { if (ui) ui->focus_next_field = 1; }
+
+const char *dai_ui_hot_label(const dai_ui *ui) { return ui ? ui->hot_label : nullptr; }
 
 int dai_ui_text_field(dai_ui *ui, const char *id_str, float x, float y, float w, float h,
                       char *buf, size_t buf_size, int *commit) {

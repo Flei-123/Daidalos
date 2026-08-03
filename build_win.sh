@@ -47,6 +47,21 @@ fi
 
 mkdir -p "$OUT"
 
+# QuickJS for the editor's behaviours: the same vendored sources as the Linux
+# lib, cross-compiled ONCE - rebuilding someone else's library every run is
+# how builds get slow.
+QJS_WIN=${QJS_WIN:-extern/quickjs/libquickjs-win.a}
+if [ ! -f "$QJS_WIN" ]; then
+    echo "-- quickjs (windows, one-time)"
+    for c in dtoa libregexp libunicode quickjs; do
+        x86_64-w64-mingw32-gcc -O2 -std=c11 -D_GNU_SOURCE -DWIN32_LEAN_AND_MEAN \
+            -Iextern/quickjs -c "extern/quickjs/$c.c" -o "$OUT/qjs_$c.o"
+    done
+    x86_64-w64-mingw32-ar rcs "$QJS_WIN" "$OUT/qjs_dtoa.o" "$OUT/qjs_libregexp.o" \
+        "$OUT/qjs_libunicode.o" "$OUT/qjs_quickjs.o"
+    echo "   ok: $QJS_WIN"
+fi
+
 # The Vulkan import library, regenerated every time so it cannot drift from the
 # calls the engine makes.
 echo "-- vulkan import library"
@@ -67,6 +82,10 @@ CORE="dai_engine dai_scene dai_input dai_doc dai_doc_text dai_doc_sync dai_edito
       dai_editor_ui dai_meshgen dai_image dai_inflate dai_json dai_gltf dai_gltf_geom \
       dai_gltf_write dai_fracture dai_particles dai_font dai_svg dai_icons dai_ui dai_dock dai_project dai_update \
       dai_audio physics_jolt physics_null"
+# dai_script needs the vendored QuickJS headers; the define lets the editor
+# compile its runner only when scripting is actually linked.
+CORE="$CORE dai_script"
+FLAGS="$FLAGS -Iextern/quickjs"
 # The Talos backend needs its own include path and its own mingw built library
 # (tools/build_talos_win.sh). Without one, the engine is compiled with
 # -DDAI_NO_TALOS and refuses DAI_PHYSICS_TALOS instead of quietly giving out
@@ -126,13 +145,13 @@ fi
 # whole point is handing over one file.
 LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a $ASSETS \
       ${TALOS_LINK:-} -L$JOLT_LIB -lJolt -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 \
-      -static -static-libgcc -static-libstdc++ -lpthread"
+      "$QJS_WIN" -static -static-libgcc -static-libstdc++ -lpthread"
 
 echo "-- programs"
 for src in examples/win_smoke.cpp examples/win_keytest.cpp examples/editor_demo.cpp examples/window_demo.cpp; do
     [ -f "$src" ] || continue
     name=$(basename "$src" .cpp)
-    $CXX $FLAGS $ARCH -Iinclude -Isrc -I"$VKINC" ${ASSETS:+-I$MNEMOSYNE/include} \
+    $CXX $FLAGS $ARCH -DDAI_WITH_SCRIPT -Iinclude -Isrc -I"$VKINC" ${ASSETS:+-I$MNEMOSYNE/include} \
         "$src" $LIBS -o "$OUT/$name.exe"
     echo "   ok: $OUT/$name.exe"
 done

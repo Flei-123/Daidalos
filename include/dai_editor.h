@@ -218,6 +218,12 @@ DAI_API int dai_editor_live_position(const dai_editor *e, dai_node n, dai_vec3 *
 DAI_API int dai_editor_live_transform(const dai_editor *e, dai_node n,
                                       dai_vec3 *pos, dai_quat *rot, dai_vec3 *scale);
 
+/* The write half of live_transform: while playing, the LIVE body moves (the
+ * document keeps the pre-play pose, so Stop still restores exactly); while
+ * editing it writes the document like any other edit. Scripts drive this. */
+DAI_API void dai_editor_live_set_transform(dai_editor *e, dai_node n,
+                                           const dai_vec3 *pos, const dai_quat *rot);
+
 /* The name used for picking paths and for status lines: "Player" is better
  * than "node 7", and a Unity user looks for the tag too. Writes "tag name",
  * "name", or the id, into buf. */

@@ -1176,6 +1176,47 @@ int dai_editor_live_position(const dai_editor *e, dai_node n, dai_vec3 *out) {
     return dai_editor_live_transform(e, n, out, nullptr, nullptr);
 }
 
+void dai_editor_live_set_transform(dai_editor *e, dai_node n,
+                                   const dai_vec3 *pos, const dai_quat *rot) {
+    if (!e || (!pos && !rot)) return;
+    if (e->state == DAI_EDITOR_EDIT) {
+        dai_node_desc rec{};
+        if (dai_doc_get(e->doc, n, &rec) != DAI_OK) return;
+        dai_doc_begin(e->doc, "Move");
+        if (pos) rec.position = *pos;
+        if (rot) rec.rotation = *rot;
+        dai_doc_set(e->doc, n, &rec);
+        dai_doc_commit(e->doc);
+        return;
+    }
+    if (!e->sync) return;
+    dai_entity ent = dai_doc_sync_entity(e->sync, n);
+    dai_scene *sc = dai_doc_sync_scene(e->sync);
+    if (!ent || !sc) return;
+    dai_body b = dai_scene_body(sc, ent);
+    if (!b) return;
+    dai_transform t{};
+    if (dai_body_get(editor_world(e), b, &t) != DAI_OK) return;
+    if (rot) t.rotation = *rot;
+    if (pos) {
+        // live_transform takes the collider-centre offset OUT of the body
+        // pose; writing one back in has to put it back, with the same scale.
+        dai_node_desc rec{};
+        dai_vec3 wp{}, ws{ 1, 1, 1 };
+        dai_quat wrq{ 0, 0, 0, 1 };
+        dai_doc_world_transform(e->doc, n, &wp, &wrq, &ws);
+        t.position = *pos;
+        if (dai_doc_get(e->doc, n, &rec) == DAI_OK &&
+            (rec.collider_center.x || rec.collider_center.y || rec.collider_center.z)) {
+            dai_vec3 off = qrot(t.rotation, dai_vec3{ rec.collider_center.x * ws.x,
+                                                      rec.collider_center.y * ws.y,
+                                                      rec.collider_center.z * ws.z });
+            t.position.x += off.x; t.position.y += off.y; t.position.z += off.z;
+        }
+    }
+    dai_body_set_transform(editor_world(e), b, t.position, t.rotation);
+}
+
 void dai_editor_node_label(const dai_editor *e, dai_node n, char *buf, size_t len) {
     if (!buf || !len) return;
     buf[0] = 0;

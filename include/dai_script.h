@@ -29,6 +29,21 @@ DAI_API void        dai_script_destroy(dai_script *s);
 
 /* Makes a UI available to scripts as the global `ui` object. */
 DAI_API void dai_script_bind_ui(dai_script *s, dai_ui *ui);
+
+/* The scene a script may touch, as the globals `scene` and `node`:
+ *   scene.find("Crate")          -> node id as a number (or -1)
+ *   node.getPos(id)              -> [x, y, z]
+ *   node.setPos(id, x, y, z)     / node.getRot(id) -> [x,y,z,w] / node.setRot(id, x,y,z,w)
+ * Ids travel as doubles - JS has one number type and a dai_node fits easily. */
+typedef struct dai_script_node_host {
+    double   (*find)(const char *name, void *user);
+    int      (*get_pos)(double id, double *xyz, void *user);
+    void     (*set_pos)(double id, const double *xyz, void *user);
+    int      (*get_rot)(double id, double *xyzw, void *user);
+    void     (*set_rot)(double id, const double *xyzw, void *user);
+    void    *user;
+} dai_script_node_host;
+DAI_API void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host);
 /* Any host value scripts can read through `state.<name>`. */
 DAI_API void dai_script_set_number(dai_script *s, const char *name, double value);
 DAI_API void dai_script_set_string(dai_script *s, const char *name, const char *value);

@@ -19,6 +19,9 @@
 #include "dai_assets.h"
 #include "dai_project.h"
 #include "dai_update.h"
+#ifdef DAI_WITH_SCRIPT
+#include "dai_script.h"
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -206,6 +209,150 @@ static int scene_save_as(const char *name, void *) {
     return 1;
 }
 
+#ifdef DAI_WITH_SCRIPT
+// ---- the behaviour runner --------------------------------------------------
+// Play presses start: every node's scripts load, get the scene bindings and
+// their assigned references as `params`, and hear init(). frame() runs every
+// rendered frame until Stop tears the whole set down with the world.
+static dai_editor *g_script_ed = nullptr;
+
+static double sh_find(const char *name, void *) {
+    if (!name || !*name || !g_scene_doc) return -1.0;
+    uint32_t n = dai_doc_count(g_scene_doc);
+    std::vector<dai_node> all(n);
+    if (n) dai_doc_nodes(g_scene_doc, all.data(), n);
+    for (dai_node id : all) {
+        dai_node_desc r{};
+        if (dai_doc_get(g_scene_doc, id, &r) == DAI_OK && std::strcmp(r.name, name) == 0)
+            return (double)(uint32_t)id;
+    }
+    return -1.0;
+}
+static int sh_get_pos(double id, double *xyz, void *) {
+    dai_vec3 p{};
+    if (!g_script_ed || !dai_editor_live_transform(g_script_ed, (dai_node)(uint32_t)id, &p, nullptr, nullptr)) return 0;
+    xyz[0] = p.x; xyz[1] = p.y; xyz[2] = p.z;
+    return 1;
+}
+static void sh_set_pos(double id, const double *xyz, void *) {
+    if (!g_script_ed) return;
+    dai_vec3 p{ (float)xyz[0], (float)xyz[1], (float)xyz[2] };
+    dai_editor_live_set_transform(g_script_ed, (dai_node)(uint32_t)id, &p, nullptr);
+}
+static int sh_get_rot(double id, double *xyzw, void *) {
+    dai_quat q{};
+    if (!g_script_ed || !dai_editor_live_transform(g_script_ed, (dai_node)(uint32_t)id, nullptr, &q, nullptr)) return 0;
+    xyzw[0] = q.x; xyzw[1] = q.y; xyzw[2] = q.z; xyzw[3] = q.w;
+    return 1;
+}
+static void sh_set_rot(double id, const double *xyzw, void *) {
+    if (!g_script_ed) return;
+    dai_quat q{ (float)xyzw[0], (float)xyzw[1], (float)xyzw[2], (float)xyzw[3] };
+    dai_editor_live_set_transform(g_script_ed, (dai_node)(uint32_t)id, nullptr, &q);
+}
+static dai_script_node_host g_node_host = { sh_find, sh_get_pos, sh_set_pos, sh_get_rot, sh_set_rot, nullptr };
+
+// "// @param name" lines declare the drop fields the inspector draws.
+static void script_params_of(const char *path, char *buf, size_t n, void *) {
+    if (!buf || !n) return;
+    buf[0] = 0;
+    if (!path || !g_assets_dir[0]) return;
+    char full[640];
+    std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, path);
+    FILE *f = std::fopen(full, "rb");
+    if (!f) return;
+    char line[256];
+    size_t used = 0;
+    while (std::fgets(line, sizeof(line), f)) {
+        const char *p = std::strstr(line, "// @param");
+        if (!p) continue;
+        p += 9;
+        while (*p == ' ') ++p;
+        char key[64];
+        int ki = 0;
+        while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+               (*p >= '0' && *p <= '9') || *p == '_' || *p == '-') {
+            if (ki < 63) key[ki++] = *p;
+            ++p;
+        }
+        key[ki] = 0;
+        if (!ki) continue;
+        size_t kl = std::strlen(key);
+        if (used + kl + 2 >= n) break;
+        if (used) buf[used++] = ',';
+        std::memcpy(buf + used, key, kl); used += kl; buf[used] = 0;
+    }
+    std::fclose(f);
+}
+
+struct RunningScript { dai_script *s = nullptr; std::string path; };
+static std::vector<RunningScript> g_running;
+static int g_scripts_live = 0;
+
+static void scripts_stop() {
+    for (RunningScript &r : g_running) dai_script_destroy(r.s);
+    g_running.clear();
+}
+
+static void scripts_start() {
+    scripts_stop();
+    if (!g_scene_doc) return;
+    uint32_t n = dai_doc_count(g_scene_doc);
+    std::vector<dai_node> all(n);
+    if (n) dai_doc_nodes(g_scene_doc, all.data(), n);
+    char err[256];
+    for (dai_node id : all) {
+        dai_node_desc r{};
+        if (dai_doc_get(g_scene_doc, id, &r) != DAI_OK || !r.script[0]) continue;
+        // entries: "a.js{target=Box};b.js" - path plus its assigned references
+        std::string cur;
+        std::vector<std::string> entries;
+        for (const char *c = r.script; ; ++c) {
+            if (*c == ';' || !*c) {
+                if (!cur.empty()) entries.push_back(cur);
+                cur.clear();
+                if (!*c) break;
+            } else cur += *c;
+        }
+        for (const std::string &entry : entries) {
+            std::string path = entry, params_js;
+            size_t b = entry.find('{');
+            if (b != std::string::npos) {
+                path = entry.substr(0, b);
+                size_t en = entry.find('}', b);
+                std::string inner = entry.substr(b + 1, en == std::string::npos ? en : en - b - 1);
+                params_js = "var params = {";
+                size_t pos = 0;
+                while (pos < inner.size()) {
+                    size_t comma = inner.find(',', pos);
+                    std::string kv = inner.substr(pos, comma == std::string::npos ? comma : comma - pos);
+                    size_t eq = kv.find('=');
+                    if (eq != std::string::npos && eq > 0)
+                        params_js += """ + kv.substr(0, eq) + "":"" + kv.substr(eq + 1) + "",";
+                    if (comma == std::string::npos) break;
+                    pos = comma + 1;
+                }
+                params_js += "};";
+            }
+            char full[640];
+            std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, path.c_str());
+            dai_script *s = dai_script_create(err, sizeof(err));
+            if (!s) { std::printf("script: %s\n", err); continue; }
+            dai_script_bind_nodes(s, &g_node_host);
+            if (dai_script_load(s, full, err, sizeof(err)) != DAI_OK) {
+                std::printf("script %s: %s\n", path.c_str(), err);
+                dai_script_destroy(s);
+                continue;
+            }
+            if (!params_js.empty()) dai_script_eval(s, params_js.c_str(), "params", err, sizeof(err));
+            dai_script_call(s, "init", err, sizeof(err));
+            g_running.push_back({ s, path });
+        }
+    }
+    if (!g_running.empty()) std::printf("scripts: %u running\n", (unsigned)g_running.size());
+}
+#endif // DAI_WITH_SCRIPT
+
 // The inline rename of the Project window: asset-relative paths, same rules
 // as script creation (never escape the assets folder).
 static int asset_rename(const char *old_rel, const char *new_rel, void *) {
@@ -240,6 +387,14 @@ static int script_create(const char *name, void *) {
     std::fputs("// A Daidalos behaviour. The engine calls the globals it finds:\n"
                "//   init()   once when play starts\n"
                "//   frame()  every rendered frame\n"
+               "// The scene, from a script:\n"
+               "//   scene.find(\"Crate\")       -> node id (or -1)\n"
+               "//   node.getPos(id)             -> [x, y, z]\n"
+               "//   node.setPos(id, x, y, z)    node.getRot(id) -> [x,y,z,w]\n"
+               "// References: a line like\n"
+               "//   // @param target\n"
+               "// adds a drop field in the inspector; drag a node onto it and\n"
+               "// read it here as params.target (the node's name).\n"
                "\n"
                "function init() {\n}\n"
                "\n"
@@ -443,6 +598,10 @@ int main(int argc, char **argv) {
     dai_editor_ui_script_host(panels, script_create, nullptr);
     dai_editor_ui_rename_host(panels, asset_rename, nullptr);
     dai_editor_ui_scene_host(panels, scene_list, scene_open, scene_save_as, nullptr);
+#ifdef DAI_WITH_SCRIPT
+    dai_editor_ui_params_host(panels, script_params_of, nullptr);
+    g_script_ed = ed;
+#endif
     dai_editor_ui_folder_host(panels, folder_create, nullptr);
     g_psettings = &psettings;
     g_ui_for_settings = ui;
@@ -736,6 +895,22 @@ int main(int argc, char **argv) {
 
         float alpha = 1.0f;
         dai_editor_advance(ed, dt, &alpha);
+
+#ifdef DAI_WITH_SCRIPT
+        // Behaviours: init() on the edge into play, frame() every rendered
+        // frame, and Stop tears them down together with the world.
+        {
+            int st_now = dai_editor_state_get(ed);
+            if (st_now == DAI_EDITOR_PLAY && !g_scripts_live) scripts_start();
+            if (st_now != DAI_EDITOR_PLAY && g_scripts_live) scripts_stop();
+            g_scripts_live = st_now == DAI_EDITOR_PLAY;
+            if (g_scripts_live)
+                for (RunningScript &rs : g_running) {
+                    char serr[192] = { 0 };
+                    dai_script_call(rs.s, "frame", serr, sizeof(serr));
+                }
+        }
+#endif
 
         dai_vec3 eye, look;
         {   // read the camera back out of the editor so both agree exactly

@@ -343,6 +343,11 @@ if [ "$VK_OK" = "1" ]; then
             EXTRA="$ASSETS_LIB"
             EXTRA_I="-I$MNEMOSYNE/include"
         fi
+        # The editor runs the behaviours at play: link the script runtime in.
+        if [ "$ex" = "editor_demo" ] && [ -n "$SCRIPT_LIB" ]; then
+            EXTRA="$EXTRA $SCRIPT_LIB"
+            EXTRA_I="$EXTRA_I -DDAI_WITH_SCRIPT"
+        fi
         g++ $FLAGS $ARCH -Iinclude $EXTRA_I "examples/$ex.cpp" $EXTRA $VKLIBS -o "build/$ex"
     done
 fi

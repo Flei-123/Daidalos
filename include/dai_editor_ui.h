@@ -148,6 +148,11 @@ DAI_API void dai_editor_ui_rename_host(dai_editor_ui *p, dai_editor_ui_rename_fn
  * Unity's .unity assets: the Projects tab lists them, clicking opens, and
  * "Save scene as" writes the current scene under a new name. The host owns
  * the disk; scene_open hands over a file name and the loop loads it. */
+/* Fills buf with the comma separated parameter names a script declares with
+ * "// @param name" lines. The inspector shows the assigned references, and a
+ * hierarchy node dragged onto the field becomes the value. */
+typedef void (*dai_editor_ui_params_fn)(const char *script_path, char *buf, size_t buf_size, void *user);
+DAI_API void dai_editor_ui_params_host(dai_editor_ui *p, dai_editor_ui_params_fn fn, void *user);
 DAI_API void dai_editor_ui_scene_host(dai_editor_ui *p,
                                       dai_editor_ui_project_list_fn list,
                                       dai_editor_ui_project_action_fn open,
