@@ -403,9 +403,37 @@ void dai_dock_destroy(dai_dock *d) {
     delete d;
 }
 
+void dai_dock_open(dai_dock *d, const char *title) {
+    if (!d || !title || !*title) return;
+    // Take it off the closed list FIRST - otherwise the panel is "known" and
+    // "closed" at the same time, dai_dock_add returns early, and the window
+    // can never come back. That was the Settings panel: openable exactly once
+    // per session, dead after the first close.
+    for (size_t i = 0; i < d->closed.size(); ++i)
+        if (d->closed[i] == title) { d->closed.erase(d->closed.begin() + (long)i); break; }
+    if (d->find(title, nullptr)) { dai_dock_focus(d, title); return; }
+    // Known but not in the tree: put it back where it was registered.
+    for (const auto &r : d->regs)
+        if (r.title == title) {
+            Node *centre = first_leaf(d->root);
+            if (!centre) { centre = d->root = new Node(); }
+            if (r.edge == DAI_DOCK_NONE || centre->tabs.empty()) add_tab_to(centre, title, true);
+            else {
+                int e = r.edge == DAI_DOCK_LEFT ? 1 : r.edge == DAI_DOCK_RIGHT ? 2
+                      : r.edge == DAI_DOCK_TOP ? 3 : 4;
+                split_into(d, d->root, title, e, r.frac);
+            }
+            layout(d->root, d->area);
+            dai_dock_focus(d, title);
+            return;
+        }
+    dai_dock_add(d, title, DAI_DOCK_RIGHT, 0.24f);
+}
+
 void dai_dock_add(dai_dock *d, const char *title, int edge, float fraction) {
     if (!d || !title || !*title) return;
-    for (const auto &r : d->regs) if (r.title == title) return;    // already known
+    for (const auto &r : d->regs)
+        if (r.title == title) { dai_dock_open(d, title); return; }   // known: reopen it
     d->regs.push_back(dai_dock::Reg{ title, edge, fraction > 0.02f ? fraction : 0.22f, "" });
 
     if (d->find(title, nullptr)) return;
