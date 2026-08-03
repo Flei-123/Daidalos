@@ -319,6 +319,98 @@ int main() {
         std::printf("  malformed manifests: rejected with a reason\n");
     }
 
+    // --- the flat single-exe manifest the editor consumes -------------------
+    // The shipped editor asks about ONE file - itself - and remembers what it
+    // is in a sidecar, so the binary never carries a version number.
+    {
+        const std::string exe_new2 = "MZ...build 2026.08.03-2...";
+        const std::string exe_path = dir + "/DaidalosEditor.exe";
+        write_file(exe_path, exe_new2);
+
+        std::string flat =
+            "{\"version\":\"2026.08.03-2\",\"sha256\":\"" + hash_of(exe_new2) + "\","
+            "\"size\":" + std::to_string(exe_new2.size()) + ","
+            "\"updated\":\"2026-08-03T07:00:00Z\",\"url\":\"/download/DaidalosEditor.exe\"}";
+        srv.put("https://dai.example/api/version.json", flat);
+        srv.put("https://dai.example/download/DaidalosEditor.exe", exe_new2);
+
+        // No sidecar at all, but the running exe IS that build: the exe's own
+        // hash answers, and nothing is downloaded again.
+        dai_self_update su;
+        char err[256] = { 0 };
+        CHECK(dai_self_update_check("https://dai.example/api/version.json", exe_path.c_str(),
+                                    &su, err, sizeof(err)) == DAI_OK, "flat check failed: %s", err);
+        CHECK(su.needed == 0, "the running build should be recognised as current");
+        CHECK(su.sidecar == 0, "there was no sidecar to agree");
+        CHECK(!std::strcmp(su.version, "2026.08.03-2"), "version read as %s", su.version);
+        CHECK(!std::strcmp(su.url, "https://dai.example/download/DaidalosEditor.exe"),
+              "relative url resolved wrong: %s", su.url);
+
+        // Now the manifest moves on: a different hash means an update.
+        const std::string exe_next = "MZ...build 2026.08.03-3, with a fix...";
+        std::string flat2 =
+            "{\"version\":\"2026.08.03-3\",\"sha256\":\"" + hash_of(exe_next) + "\","
+            "\"size\":" + std::to_string(exe_next.size()) + ","
+            "\"url\":\"/download/DaidalosEditor.exe\"}";
+        srv.put("https://dai.example/api/version.json", flat2);
+        srv.put("https://dai.example/download/DaidalosEditor.exe", exe_next);
+
+        dai_self_update su2;
+        char e2[256] = { 0 };
+        CHECK(dai_self_update_check("https://dai.example/api/version.json", exe_path.c_str(),
+                                    &su2, e2, sizeof(e2)) == DAI_OK, "second flat check failed: %s", e2);
+        CHECK(su2.needed == 1, "a different remote hash must be an update");
+        CHECK(dai_self_update_stage(&su2, exe_path.c_str(), e2, sizeof(e2)) == DAI_OK,
+              "staging failed: %s", e2);
+        CHECK(file_is(exe_path + ".new", exe_next), "the staged build is not what was promised");
+        CHECK(file_is(exe_path, exe_new2), "staging touched the live exe");
+
+        // The sidecar is what the updater writes after the swap; once it says
+        // the new hash, the same check finds nothing to do.
+        CHECK(dai_self_update_mark_current(exe_path.c_str(), hash_of(exe_next).c_str()) == DAI_OK,
+              "writing the sidecar failed");
+        dai_self_update su3;
+        char e3[256] = { 0 };
+        CHECK(dai_self_update_check("https://dai.example/api/version.json", exe_path.c_str(),
+                                    &su3, e3, sizeof(e3)) == DAI_OK, "third flat check failed: %s", e3);
+        CHECK(su3.needed == 0 && su3.sidecar == 1, "the sidecar should settle the question");
+        std::remove((exe_path + ".new").c_str());
+        std::printf("  flat manifest: current recognised, update staged, sidecar settles it\n");
+    }
+
+    // --- a flat-manifest download that lies is refused -----------------------
+    {
+        const std::string exe_path = dir + "/DaidalosEditor.exe";
+        std::string flat =
+            "{\"version\":\"9.9.9\",\"sha256\":\"" + hash_of("the promise") + "\","
+            "\"url\":\"/download/DaidalosEditor.exe\"}";
+        srv.put("https://dai.example/api/version.json", flat);
+        srv.put("https://dai.example/download/DaidalosEditor.exe", "the reality");
+
+        dai_self_update su;
+        char err[256] = { 0 };
+        CHECK(dai_self_update_check("https://dai.example/api/version.json", exe_path.c_str(),
+                                    &su, err, sizeof(err)) == DAI_OK, "check failed: %s", err);
+        CHECK(su.needed == 1, "the lying manifest should still look like an update");
+        char e2[256] = { 0 };
+        CHECK(dai_self_update_stage(&su, exe_path.c_str(), e2, sizeof(e2)) != DAI_OK,
+              "a hash mismatch must not be staged");
+        CHECK(!exists(exe_path + ".new"), "a refused download left a staged file behind");
+        std::printf("  flat manifest, corrupt download: refused\n");
+    }
+
+    // --- an unreachable update server costs a log line, not the editor -------
+    {
+        const std::string exe_path = dir + "/DaidalosEditor.exe";
+        dai_self_update su;
+        char err[256] = { 0 };
+        CHECK(dai_self_update_check("https://dai.example/gone.json", exe_path.c_str(),
+                                    &su, err, sizeof(err)) != DAI_OK,
+              "a missing manifest should not succeed");
+        CHECK(su.needed == 0, "a failed check must not look like an update");
+        std::printf("  flat manifest, unreachable server: reported, nothing staged\n");
+    }
+
     dai_update_set_fetch(nullptr, nullptr);
     std::string rm = "rm -rf " + dir;
     if (std::system(rm.c_str()) != 0) std::printf("  (could not clean %s)\n", dir.c_str());

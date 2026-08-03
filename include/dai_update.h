@@ -5,8 +5,9 @@
  * means the program checks a manifest at startup, downloads what changed,
  * verifies it and replaces itself.
  *
- * The manifest is the same shape the JARVIS helper already uses, so one
- * publishing habit covers both:
+ * Two manifest shapes live here:
+ *
+ * The multi-file one, the same shape the JARVIS helper uses:
  *
  *   {
  *     "version": "0.2.0",
@@ -15,6 +16,15 @@
  *       "daidalos_editor.exe": { "sha256": "ab12...", "size": 4711 },
  *       "shaders.pack":        "cd34..."
  *     }
+ *   }
+ *
+ * and the flat single-exe one the editor's own download page publishes:
+ *
+ *   {
+ *     "version": "2026.08.03-1",
+ *     "sha256":  "ab12...",
+ *     "size":    6921434,
+ *     "url":     "/download/DaidalosEditor.exe"
  *   }
  *
  * A file's value may be the hash on its own or an object with the size too.
@@ -115,6 +125,58 @@ DAI_API void dai_update_sweep(const char *install_dir);
 /* Compares two dotted version strings numerically: <0, 0 or >0.
  * "0.10.0" is newer than "0.9.9", which strcmp gets wrong. */
 DAI_API int dai_version_compare(const char *a, const char *b);
+
+/* ---- the flat single-exe manifest (what the editor itself consumes) ------ */
+
+/* The download page publishes one JSON object describing ONE executable:
+ * {"version":"2026.08.03-1","sha256":"...","size":6921434,"url":"/download/..."}.
+ * The installed build remembers what it is in a sidecar file next to the exe,
+ * "<name>.version" holding the sha256 of the build in place. No version number
+ * is baked into the binary, so a build never has to be told what it is - the
+ * hash answers that. */
+typedef struct dai_self_update {
+    char     version[32];    /* the remote build's version string  */
+    char     sha256[65];     /* sha256 the remote build must have  */
+    char     url[512];       /* download URL, made absolute        */
+    uint64_t size;           /* 0 when the manifest did not say    */
+    int      needed;         /* 1 = the running install differs    */
+    int      sidecar;        /* 1 = the sidecar existed and agreed */
+} dai_self_update;
+
+/* Fetches and parses the flat manifest, resolves a relative "url" against the
+ * manifest's own address, and decides whether THIS exe is that build. The
+ * sidecar says what was installed; when it is missing the exe itself is
+ * hashed, so a fresh download of the current build is not downloaded again.
+ *
+ * Returns DAI_OK even when nothing needs doing - read out->needed. An
+ * unreachable server is an error return, never a hang: the built in transport
+ * gives the manifest a short timeout (see DAI_SELF_UPDATE_MANIFEST_TIMEOUT_MS). */
+#define DAI_SELF_UPDATE_MANIFEST_TIMEOUT_MS 3000
+#define DAI_SELF_UPDATE_DOWNLOAD_TIMEOUT_MS 60000
+DAI_API dai_result dai_self_update_check(const char *manifest_url, const char *exe_path,
+                                         dai_self_update *out, char *err, size_t err_len);
+
+/* Downloads info->url, refuses anything whose sha256 or size disagrees with
+ * the manifest, and stages the verified bytes as "<exe_path>.new". The live
+ * exe is not touched - a running editor cannot be overwritten on Windows, and
+ * should not be surprised either. */
+DAI_API dai_result dai_self_update_stage(const dai_self_update *info, const char *exe_path,
+                                         char *err, size_t err_len);
+
+/* Hands the staged build to a tiny batch file that waits for this process to
+ * exit, moves "<exe>.new" over the exe, writes the sidecar and starts the exe
+ * again. The batch file deletes itself when done. Call this as the LAST thing
+ * before the process exits - everything after the launch happens without us.
+ *
+ * Windows only: the shipped path is a Windows exe, and a POSIX build is a
+ * developer build that updates with git, not a downloader. */
+DAI_API dai_result dai_self_update_restart(const dai_self_update *info, const char *exe_path,
+                                           char *err, size_t err_len);
+
+/* Writes the sidecar ("<exe>.version" containing the sha256). Used when a
+ * check found the running build already current but the sidecar was missing,
+ * so the next check is cheap. */
+DAI_API dai_result dai_self_update_mark_current(const char *exe_path, const char *sha256);
 
 #ifdef __cplusplus
 }
