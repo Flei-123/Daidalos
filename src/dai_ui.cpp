@@ -98,6 +98,7 @@ struct dai_ui {
         float    text_x = 0;      // where buf is drawn, for caret hit testing
         float    scroll = 0;      // horizontal scroll when the text is too long
     } edit;
+    int focus_next_field = 0;   // the next text field takes focus on its own (create flows)
 
     // An open menu swallows every hit test outside its own rectangle - see
     // dai_ui_popup_menu. popup_was_open is written at the end of a frame and
@@ -1916,11 +1917,19 @@ int dai_ui_input_text(dai_ui *ui, const char *label, char *buf, size_t buf_size)
     return changed;
 }
 
+void dai_ui_text_focus_next(dai_ui *ui) { if (ui) ui->focus_next_field = 1; }
+
 int dai_ui_text_field(dai_ui *ui, const char *id_str, float x, float y, float w, float h,
                       char *buf, size_t buf_size, int *commit) {
     if (commit) *commit = 0;
     if (!ui || !buf || buf_size < 2) return 0;
     uint64_t id = hash_id(id_str ? id_str : "field", x, y);
+    // A create flow armed this field: take focus without waiting for a click,
+    // text selected - "new file, type the name right there", like Unity.
+    if (ui->focus_next_field) {
+        ui->focus_next_field = 0;
+        if (!ui->edit.editing) { edit_open(ui, id, buf, false, true); ui->edit.opened_now = false; }
+    }
     bool editing = ui->edit.editing && ui->edit.id == id;
     dai_ui_rect(ui, x, y, w, h, ui->style.track);
     dai_ui_rect_outline(ui, x, y, w, h, 1.0f,
@@ -2002,6 +2011,7 @@ int dai_ui_tree_item_ex(dai_ui *ui, const char *label, int depth,
     // The right button folds nothing and selects nothing - it is the menu's
     // button, and the caller decides what the menu says.
     if (over && ui->input.right_down && !ui->prev.right_down) clicked |= 2;
+    if (over) clicked |= 4;   // hover report: drag & drop aims at rows, not panels
 
     if (selected)   dai_ui_rect(ui, x, y, w, h, ui->style.accent);
     else if (over)  dai_ui_rect(ui, x, y, w, h, ui->style.button_hover);

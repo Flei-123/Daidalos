@@ -28,6 +28,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <algorithm>
+#include <dirent.h>   // mingw has it too - one directory API for both
 #ifndef _WIN32
 #include <sys/stat.h>
 #include <unistd.h>
@@ -95,7 +97,17 @@ static const char *project_list(uint32_t index, void *) {
         char buf[64][DAI_PROJECT_NAME_MAX];
         uint32_t n = dai_project_list(g_projects_root, buf[0], 64, DAI_PROJECT_NAME_MAX);
         if (n > 64) n = 64;
-        for (uint32_t i = 0; i < n; ++i) names.push_back(buf[i]);
+        // dai_project_list returns FULL paths (its tested contract). The
+        // picker shows and hands over bare names - a full path here built
+        // 'root/root/Name' and clicking a project silently did nothing.
+        std::string root = g_projects_root;
+        for (char &c : root) if (c == '\\') c = '/';
+        if (!root.empty() && root.back() != '/') root += '/';
+        for (uint32_t i = 0; i < n; ++i) {
+            std::string f = buf[i];
+            for (char &c : f) if (c == '\\') c = '/';
+            names.push_back(f.compare(0, root.size(), root) == 0 ? f.substr(root.size()) : f);
+        }
     }
     if (index >= names.size()) return nullptr;
     return names[index].c_str();
@@ -130,6 +142,10 @@ static int project_create(const char *name, void *) {
 }
 
 static int project_open(const char *name, void *) {
+    // Bare name from the picker, or a full path (startup fallback, older
+    // callers) - both open.
+    if (name && (std::strchr(name, '/') || std::strchr(name, '\\') || std::strchr(name, ':')))
+        return open_project_path(name);
     char path[640];
     std::snprintf(path, sizeof(path), "%s/%s", g_projects_root, name);
     return open_project_path(path);
@@ -144,6 +160,67 @@ static int folder_create(const char *name, void *) {
 #else
     return mkdir(path, 0755) == 0 ? 1 : 0;
 #endif
+}
+
+// ---- scenes as files -----------------------------------------------------
+// Several scenes per project, like Unity: they live in <project>/scenes and
+// opening one is just pointing g_scene_path at it - the main loop notices
+// the change and does the load, the same path a project switch takes.
+static dai_doc *g_scene_doc = nullptr;
+
+static const char *scene_list(uint32_t index, void *) {
+    static std::vector<std::string> names;
+    if (index == 0) {
+        names.clear();
+        if (g_project) {
+            std::string dir = std::string(dai_project_path(g_project)) + "/scenes";
+            DIR *d = opendir(dir.c_str());
+            if (d) {
+                while (struct dirent *e = readdir(d)) {
+                    std::string n = e->d_name;
+                    if (n.size() > 9 && n.compare(n.size() - 9, 9, ".daidalos") == 0)
+                        names.push_back(n);
+                }
+                closedir(d);
+            }
+            std::sort(names.begin(), names.end());
+        }
+    }
+    if (index >= names.size()) return nullptr;
+    return names[index].c_str();
+}
+
+static int scene_open(const char *name, void *) {
+    if (!g_project || !name || !*name) return 0;
+    std::snprintf(g_scene_path, sizeof(g_scene_path), "%s/scenes/%s",
+                  dai_project_path(g_project), name);
+    return 1;
+}
+
+static int scene_save_as(const char *name, void *) {
+    if (!g_project || !g_scene_doc || !name || !*name) return 0;
+    char path[640];
+    std::snprintf(path, sizeof(path), "%s/scenes/%s", dai_project_path(g_project), name);
+    if (dai_doc_save(g_scene_doc, path) != DAI_OK) return 0;
+    std::snprintf(g_scene_path, sizeof(g_scene_path), "%s", path);
+    return 1;
+}
+
+// The inline rename of the Project window: asset-relative paths, same rules
+// as script creation (never escape the assets folder).
+static int asset_rename(const char *old_rel, const char *new_rel, void *) {
+    if (!old_rel || !new_rel || !*old_rel || !*new_rel || !g_assets_dir[0]) return 0;
+    for (const char *c = new_rel; *c; ++c) {
+        bool ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+                  (*c >= '0' && *c <= '9') || *c == '-' || *c == '_' ||
+                  *c == '/' || *c == '.';
+        if (!ok) return 0;
+    }
+    if (std::strstr(new_rel, "..")) return 0;
+    char a[640], b[640];
+    std::snprintf(a, sizeof(a), "%s/%s", g_assets_dir, old_rel);
+    std::snprintf(b, sizeof(b), "%s/%s", g_assets_dir, new_rel);
+    return std::rename(a, b) == 0 ? 1 : 0;
 }
 
 // "New Script" writes a template, because the first script anyone writes
@@ -283,6 +360,7 @@ int main(int argc, char **argv) {
     if (dai_create(&cfg, &w) != DAI_OK) { std::printf("world failed\n"); return 1; }
     dai_scene *sc = dai_scene_create(w);
     dai_doc *doc = dai_doc_create();
+    g_scene_doc = doc;   // the scene host callbacks save through it
     dai_doc_sync *sync = dai_doc_sync_create(doc, sc);
 
     char err[256] = { 0 };
@@ -363,6 +441,8 @@ int main(int argc, char **argv) {
     dai_editor_ui_project_host(panels, project_list, project_create, project_open, nullptr);
     dai_editor_ui_mesh_host(panels, mesh_name_of, DAI_MESH_BUILTIN_COUNT, nullptr);
     dai_editor_ui_script_host(panels, script_create, nullptr);
+    dai_editor_ui_rename_host(panels, asset_rename, nullptr);
+    dai_editor_ui_scene_host(panels, scene_list, scene_open, scene_save_as, nullptr);
     dai_editor_ui_folder_host(panels, folder_create, nullptr);
     g_psettings = &psettings;
     g_ui_for_settings = ui;
@@ -691,6 +771,20 @@ int main(int argc, char **argv) {
             }
         }
         dai_render_camera(r, reye, rlook, dai_vec3{ 0, 1, 0 }, rfov, 0.1f, 300.0f);
+
+        // Both panels docked open: the Scene panel keeps the editor camera
+        // (above) and the Game panel shows the game camera as the SECOND view.
+        if (dai_editor_ui_view(panels) == DAI_VIEW_SCENE) {
+            float gx, gy, gw, gh;
+            if (dai_editor_ui_game_view_rect(panels, &gx, &gy, &gw, &gh)) {
+                dai_vec3 ge{}, gl{};
+                float gf = 60.0f;
+                if (dai_editor_ui_game_camera(panels, &ge, &gl, &gf)) {
+                    dai_render_camera2(r, ge, gl, dai_vec3{ 0, 1, 0 }, gf);
+                    dai_render_world_clip2(r, gx, gy, gw, gh);
+                }
+            }
+        }
 
         uint32_t n = dai_scene_instances(sc, inst.data(), (uint32_t)inst.size(), alpha);
 

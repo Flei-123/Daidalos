@@ -416,6 +416,9 @@ DAI_API int  dai_ui_text_field(dai_ui *ui, const char *id, float x, float y, flo
 /* Is any field being typed into? A host that also reads the keyboard for
  * shortcuts needs it, or Delete both removes the selected object and a
  * character from the name being typed. */
+/* Arms the NEXT text field drawn to take focus immediately, text selected -
+ * the "create file, rename it right there" flow. One shot. */
+DAI_API void dai_ui_text_focus_next(dai_ui *ui);
 DAI_API int  dai_ui_text_active(const dai_ui *ui);
 
 /* One row of a hierarchy. `depth` indents, `open` is the caller's fold state

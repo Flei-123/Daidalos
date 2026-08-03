@@ -254,6 +254,22 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     if (u.cam_pos[3] > 0.0f && getenv("DAI_DEBUG_SHADOW")) u.cam_pos[3] = 2.0f;
     std::memcpy(r->ubo.mapped, &u, sizeof(u));
 
+    // Second view (a Game panel docked next to the Scene panel): same sun,
+    // same fog, same shadow cascades - own camera.
+    if (r->view2_active) {
+        float v2w = r->view2_clip[2] > 0.0f ? r->view2_clip[2] : (float)r->width;
+        float v2h = r->view2_clip[3] > 0.0f ? r->view2_clip[3] : (float)r->height;
+        Mat4 view2 = mat_look_at(r->view2_eye, r->view2_target, r->view2_up);
+        Mat4 viewproj2 = mat_mul(mat_perspective(r->view2_fov, v2w / v2h, r->znear, r->zfar), view2);
+        FrameUBO u2 = u;
+        u2.viewproj = viewproj2;
+        if (!mat_invert(viewproj2, &u2.invviewproj)) u2.invviewproj = mat_identity();
+        u2.cam_pos[0] = r->view2_eye[0]; u2.cam_pos[1] = r->view2_eye[1]; u2.cam_pos[2] = r->view2_eye[2];
+        u2.cam_right[0] = view2.m[0]; u2.cam_right[1] = view2.m[4]; u2.cam_right[2] = view2.m[8];
+        u2.cam_up[0] = view2.m[1];    u2.cam_up[1] = view2.m[5];    u2.cam_up[2] = view2.m[9];
+        std::memcpy((char *)r->ubo.mapped + r->ubo_stride, &u2, sizeof(u2));
+    }
+
     // ---- 3. record
     vkResetFences(r->dev, 1, &r->fence);
     vkResetCommandBuffer(r->cmd, 0);
@@ -314,7 +330,8 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         vkCmdBeginRendering(r->cmd, &ri);
         if (r->shadows && casters) {
             vkCmdBindPipeline(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipe_shadow);
-            vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->dset, 0, nullptr);
+            uint32_t dyn0 = 0;
+            vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->dset, 1, &dyn0);
             vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 1, 1,
                                     &r->materials[0].set, 0, nullptr);
             // which cascade this pass writes travels in the push constant slot
@@ -381,17 +398,25 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     // World into its rectangle, UI over the whole frame. A scene window that
     // is smaller than the editor shows the world in exactly its body - the
     // rest of the frame keeps the clear colour and whatever the UI draws.
-    if (r->world_clip[2] > 0.0f && r->world_clip[3] > 0.0f) {
-        VkViewport vp{ r->world_clip[0], r->world_clip[1], r->world_clip[2], r->world_clip[3],
+    // One world pass per view: view 0 is the Scene (editor camera), view 1
+    // the Game panel next to it (game camera). Each gets its rectangle and
+    // its UBO slot; the scene itself - meshes, sky, particles - is identical.
+    int nviews = r->view2_active ? 2 : 1;
+    for (int view_idx = 0; view_idx < nviews; ++view_idx) {
+    const float *clip = view_idx == 0 ? r->world_clip : r->view2_clip;
+    if (clip[2] > 0.0f && clip[3] > 0.0f) {
+        VkViewport vp{ clip[0], clip[1], clip[2], clip[3],
                        0.0f, 1.0f };
-        VkRect2D sc{ { (int32_t)r->world_clip[0], (int32_t)r->world_clip[1] },
-                     { (uint32_t)r->world_clip[2], (uint32_t)r->world_clip[3] } };
+        VkRect2D sc{ { (int32_t)clip[0], (int32_t)clip[1] },
+                     { (uint32_t)clip[2], (uint32_t)clip[3] } };
         vkCmdSetViewport(r->cmd, 0, 1, &vp);
         vkCmdSetScissor(r->cmd, 0, 1, &sc);
     } else {
+        if (view_idx > 0) continue;   // a view without a rectangle draws nothing
         set_vp(r->cmd, r->width, r->height);
     }
-    vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->dset, 0, nullptr);
+    uint32_t dyn = (uint32_t)view_idx * r->ubo_stride;
+    vkCmdBindDescriptorSets(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->layout, 0, 1, &r->dset, 1, &dyn);
 
     if (r->sky_enabled) {
         vkCmdBindPipeline(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipe_sky);
@@ -430,6 +455,7 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->particles.buf, &poff);
         vkCmdDraw(r->cmd, 6, r->particle_count, 0, 0);
     }
+    }   // per view
     // UI last of all: screen space, no depth, one batch per texture. Full
     // frame again - a panel may cover the scene, the scene may not cover a
     // panel.
@@ -481,5 +507,6 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         std::chrono::high_resolution_clock::now() - t0).count();
     r->last_draws = (uint32_t)ranges.size() + cascades_drawn;
     r->have_frame = true;
+    r->view2_active = 0;   // the host re-arms the second view every frame
     return DAI_OK;
 }

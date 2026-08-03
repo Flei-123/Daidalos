@@ -194,6 +194,14 @@ struct dai_renderer {
     // frame. The UI pass always gets the whole frame - panels must be able to
     // overlap the scene, the scene must not spill over the panels.
     float world_clip[4] = { 0, 0, 0, 0 };
+    // Second world view (the Game panel docked next to the Scene panel): the
+    // main pass then draws the world twice, once per rectangle, each with its
+    // own camera. Re-armed by the host every frame, cleared at frame end.
+    int   view2_active = 0;
+    float view2_clip[4] = { 0, 0, 0, 0 };
+    float view2_eye[3] = { 8, 6, 12 }, view2_target[3] = { 0, 1, 0 }, view2_up[3] = { 0, 1, 0 };
+    float view2_fov = 60.0f;
+    uint32_t ubo_stride = 0;   // FrameUBO aligned to minUniformBufferOffsetAlignment
     float shadow_radius = 30.0f;
     int   sky_enabled = 1;
 
