@@ -18,18 +18,64 @@
 #include "dai_render.h"
 #include "dai_assets.h"
 #include "dai_project.h"
+#include "dai_update.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 #ifndef _WIN32
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+// ---- self update: a newer build replaces this one, politely ---------------
+// The check runs on its own thread so a slow or absent server never delays
+// the window opening. When a staged build is verified the editor exits and a
+// tiny batch file (written by dai_self_update_restart) swaps the exe once
+// this process is gone and starts it again.
+static struct UpdateCheck {
+    std::atomic<int> state{0};   // 0 running, 1 current, 2 unreachable, 3 staged, 4 refused
+    dai_self_update info{};
+    char exe_path[512]{};
+    char note[256]{};
+} g_update;
+
+static void update_worker() {
+    char err[256] = { 0 };
+    if (dai_self_update_check("https://daidalos.fleitec.com/api/version.json",
+                              g_update.exe_path, &g_update.info, err, sizeof(err)) != DAI_OK) {
+        std::snprintf(g_update.note, sizeof(g_update.note), "update: no check (%s)", err);
+        g_update.state = 2;
+        return;
+    }
+    if (!g_update.info.needed) {
+        std::snprintf(g_update.note, sizeof(g_update.note), "update: current (%s)",
+                      g_update.info.version);
+        g_update.state = 1;
+        if (!g_update.info.sidecar)
+            dai_self_update_mark_current(g_update.exe_path, g_update.info.sha256);
+        return;
+    }
+    std::printf("update: %s available, downloading\n", g_update.info.version);
+    char err2[256] = { 0 };
+    if (dai_self_update_stage(&g_update.info, g_update.exe_path, err2, sizeof(err2)) != DAI_OK) {
+        // A refused download is a log line, not a crash - the old build runs on.
+        std::snprintf(g_update.note, sizeof(g_update.note), "update: not applied (%s)", err2);
+        g_update.state = 4;
+        return;
+    }
+    std::snprintf(g_update.note, sizeof(g_update.note), "update: %s verified, restarting",
+                  g_update.info.version);
+    g_update.state = 3;
+}
 
 // ---- the project host: the editor's "New Project" needs a disk ------------
 // A project is a folder: scenes and assets under one root. That is the entire
@@ -204,9 +250,13 @@ int main(int argc, char **argv) {
     const char *scene_path = argc > 1 ? argv[1] : nullptr;
 #ifdef _WIN32
     std::snprintf(g_projects_root, sizeof(g_projects_root), "C:\\daidalos\\projects");
+    GetModuleFileNameA(nullptr, g_update.exe_path, (DWORD)sizeof(g_update.exe_path));
 #else
     std::snprintf(g_projects_root, sizeof(g_projects_root), "projects");
+    if (argc > 0 && argv[0] && realpath(argv[0], g_update.exe_path) == nullptr)
+        g_update.exe_path[0] = 0;
 #endif
+    if (g_update.exe_path[0]) std::thread(update_worker).detach();
 
     // Unity cannot run without a project, and neither can this: the scene, the
     // assets and half the settings only mean something relative to one. Last
@@ -356,7 +406,13 @@ int main(int argc, char **argv) {
     int prev_nav_keys[2] = { 0 };
     int prev_ctrl_a = 0;
 
+    int update_reported = 0;
     while (dai_window_poll(win)) {
+        if (!update_reported && g_update.state != 0) {
+            update_reported = 1;
+            std::printf("%s\n", g_update.note);
+        }
+        if (g_update.state == 3) break;   // staged and verified: hand over
         auto now = std::chrono::high_resolution_clock::now();
         float dt = std::chrono::duration<float>(now - last).count();
         last = now;
@@ -670,5 +726,13 @@ int main(int argc, char **argv) {
     dai_doc_destroy(doc);
     dai_scene_destroy(sc);
     dai_destroy(w);
+    if (g_update.state == 3) {
+        // Last thing: the batch file waits for this process to end, swaps the
+        // exe, writes the sidecar and starts the new build.
+        char uerr[256] = { 0 };
+        if (dai_self_update_restart(&g_update.info, g_update.exe_path,
+                                    uerr, sizeof(uerr)) != DAI_OK)
+            std::printf("update: restart failed (%s)\n", uerr);
+    }
     return 0;
 }

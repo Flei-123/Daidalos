@@ -148,7 +148,9 @@ void *g_fetch_user = nullptr;
 
 #ifdef _WIN32
 // WinHTTP ships with Windows, so a shipped editor needs no extra DLL.
-int http_get(const char *url, void **out_bytes, size_t *out_size, void *) {
+// timeout_ms of 0 keeps WinHTTP's defaults; the update check passes a short
+// one so an absent server costs the editor a beat, not its startup.
+int http_get_to(const char *url, void **out_bytes, size_t *out_size, unsigned timeout_ms) {
     wchar_t wurl[1024];
     if (!MultiByteToWideChar(CP_UTF8, 0, url, -1, wurl, 1024)) return 0;
 
@@ -162,6 +164,8 @@ int http_get(const char *url, void **out_bytes, size_t *out_size, void *) {
     HINTERNET s = WinHttpOpen(L"daidalos", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!s) return 0;
+    if (timeout_ms)
+        WinHttpSetTimeouts(s, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
     int ok = 0;
     HINTERNET c = WinHttpConnect(s, host, uc.nPort, 0);
     if (c) {
@@ -206,10 +210,12 @@ int http_get(const char *url, void **out_bytes, size_t *out_size, void *) {
 // engine to update a Linux build nobody ships would be the wrong trade. curl is
 // on every machine that would be running this, and being honest about the
 // dependency beats implementing TLS badly.
-int http_get(const char *url, void **out_bytes, size_t *out_size, void *) {
+int http_get_to(const char *url, void **out_bytes, size_t *out_size, unsigned timeout_ms) {
     for (const char *p = url; *p; ++p)
         if (*p == '\'' || *p == '\n' || *p == '`') return 0;      // no shell games
-    std::string cmd = "curl -fsSL --max-time 60 '";
+    std::string cmd = "curl -fsSL --max-time ";
+    cmd += std::to_string(timeout_ms ? (timeout_ms + 999) / 1000 : 60);
+    cmd += " '";
     cmd += url;
     cmd += "'";
     FILE *f = popen(cmd.c_str(), "r");
@@ -228,9 +234,11 @@ int http_get(const char *url, void **out_bytes, size_t *out_size, void *) {
 }
 #endif
 
-int fetch(const char *url, void **b, size_t *n, char *err, size_t err_len) {
+int fetch(const char *url, void **b, size_t *n, char *err, size_t err_len,
+          unsigned timeout_ms = 0) {
     *b = nullptr; *n = 0;
-    int ok = g_fetch ? g_fetch(url, b, n, g_fetch_user) : http_get(url, b, n, nullptr);
+    int ok = g_fetch ? g_fetch(url, b, n, g_fetch_user)
+                     : http_get_to(url, b, n, timeout_ms);
     if (!ok && err && err_len) std::snprintf(err, err_len, "cannot fetch %s", url);
     return ok;
 }
@@ -470,4 +478,216 @@ void dai_update_sweep(const char *install_dir) {
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// The flat single-exe manifest - what a shipped editor consumes about itself.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// "<dir>/DaidalosEditor.exe" -> "<dir>/DaidalosEditor.version". The sidecar
+// is how an installed build knows what it is, without a version resource.
+std::string sidecar_path(const char *exe_path) {
+    std::string s = exe_path ? exe_path : "";
+    if (s.size() >= 4) {
+        std::string ext = s.substr(s.size() - 4);
+        for (char &c : ext) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (ext == ".exe") s.resize(s.size() - 4);
+    }
+    return s + ".version";
+}
+
+// A manifest "url" may be relative ("/download/x.exe") so the same file works
+// on every mirror. Resolve it against the manifest's own address; an absolute
+// URL passes through untouched.
+void resolve_url(const char *base, const char *rel, char *out, size_t out_len) {
+    if (!rel) rel = "";
+    if (std::strstr(rel, "://")) { std::snprintf(out, out_len, "%s", rel); return; }
+    const char *scheme = std::strstr(base, "://");
+    if (!scheme) { std::snprintf(out, out_len, "%s", rel); return; }
+    const char *host = scheme + 3;
+    const char *slash = std::strchr(host, '/');
+    if (rel[0] == '/' || !slash) {
+        // Replace the whole path, keeping scheme://host[:port].
+        size_t origin = slash ? (size_t)(slash - base) : std::strlen(base);
+        std::snprintf(out, out_len, "%.*s%s%s", (int)origin, base,
+                      rel[0] == '/' ? "" : "/", rel);
+        return;
+    }
+    // Relative to the manifest's directory.
+    const char *last = std::strrchr(slash, '/');
+    std::snprintf(out, out_len, "%.*s/%s", (int)(last - base), base, rel);
+}
+
+// Reads the first token of the sidecar into out (65 bytes). Returns 1 when a
+// full 64 char hash was there.
+int sidecar_read(const char *exe_path, char *out) {
+    std::string p = sidecar_path(exe_path);
+    FILE *f = std::fopen(p.c_str(), "rb");
+    if (!f) return 0;
+    char buf[80] = { 0 };
+    size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    if (n < 64) return 0;
+    for (int i = 0; i < 64; ++i)
+        if (!((buf[i] >= '0' && buf[i] <= '9') || (buf[i] >= 'a' && buf[i] <= 'f'))) return 0;
+    std::memcpy(out, buf, 64);
+    out[64] = 0;
+    return 1;
+}
+
+} // namespace
+
+dai_result dai_self_update_check(const char *manifest_url, const char *exe_path,
+                                 dai_self_update *out, char *err, size_t err_len) {
+    if (!manifest_url || !exe_path || !out) return DAI_ERR_INVALID_ARG;
+    *out = dai_self_update{};
+
+    void *bytes = nullptr;
+    size_t size = 0;
+    if (!fetch(manifest_url, &bytes, &size, err, err_len,
+               DAI_SELF_UPDATE_MANIFEST_TIMEOUT_MS))
+        return DAI_ERR_NOT_FOUND;
+
+    daijson::Document doc;
+    std::string jerr;
+    bool parsed = doc.parse((const char *)bytes, size, &jerr);
+    std::free(bytes);
+    if (!parsed) {
+        if (err && err_len) std::snprintf(err, err_len, "manifest is not JSON: %s", jerr.c_str());
+        return DAI_ERR_INVALID_ARG;
+    }
+    const daijson::Value *root = doc.root();
+    if (!root || root->type != daijson::Value::OBJECT) {
+        if (err && err_len) std::snprintf(err, err_len, "manifest root is not an object");
+        return DAI_ERR_INVALID_ARG;
+    }
+
+    std::snprintf(out->version, sizeof(out->version), "%s", root->str_at("version", ""));
+    std::snprintf(out->sha256, sizeof(out->sha256), "%s", root->str_at("sha256", ""));
+    out->size = (uint64_t)root->num_at("size", 0);
+    resolve_url(manifest_url, root->str_at("url", ""), out->url, sizeof(out->url));
+    if (std::strlen(out->sha256) != 64 || !out->url[0]) {
+        if (err && err_len) std::snprintf(err, err_len, "manifest lacks sha256 or url");
+        return DAI_ERR_INVALID_ARG;
+    }
+
+    // The sidecar says what was installed. When it is missing (a fresh manual
+    // download) the exe itself answers - hashing 7 MB costs less than
+    // downloading it again because the bookkeeping file was absent.
+    char local[65];
+    out->sidecar = sidecar_read(exe_path, local);
+    if (!out->sidecar) {
+        if (dai_sha256_file(exe_path, local) != DAI_OK) local[0] = 0;
+    }
+    out->needed = !local[0] || std::strcmp(local, out->sha256) != 0;
+    return DAI_OK;
+}
+
+dai_result dai_self_update_stage(const dai_self_update *info, const char *exe_path,
+                                 char *err, size_t err_len) {
+    if (!info || !exe_path || !info->url[0]) return DAI_ERR_INVALID_ARG;
+
+    void *bytes = nullptr;
+    size_t size = 0;
+    if (!fetch(info->url, &bytes, &size, err, err_len,
+               DAI_SELF_UPDATE_DOWNLOAD_TIMEOUT_MS))
+        return DAI_ERR_NOT_FOUND;
+
+    // Verified before it is allowed to exist as a file. The hash is the
+    // manifest's promise; a download that does not keep it is discarded here,
+    // not discovered after it replaced the editor.
+    char got[65];
+    dai_sha256_hex(bytes, size, got);
+    if (std::strcmp(got, info->sha256) != 0) {
+        std::free(bytes);
+        if (err && err_len) std::snprintf(err, err_len, "hash mismatch, refusing the download");
+        return DAI_ERR_INVALID_ARG;
+    }
+    if (info->size && info->size != size) {
+        std::free(bytes);
+        if (err && err_len) std::snprintf(err, err_len, "size mismatch, refusing the download");
+        return DAI_ERR_INVALID_ARG;
+    }
+
+    std::string dst = std::string(exe_path) + ".new";
+    FILE *o = std::fopen(dst.c_str(), "wb");
+    if (!o) {
+        std::free(bytes);
+        if (err && err_len) std::snprintf(err, err_len, "cannot write %s", dst.c_str());
+        return DAI_ERR_FILE;
+    }
+    bool ok = std::fwrite(bytes, 1, size, o) == size;
+    ok = (std::fflush(o) == 0) && ok;
+    std::fclose(o);
+    std::free(bytes);
+    if (!ok) {
+        std::remove(dst.c_str());
+        if (err && err_len) std::snprintf(err, err_len, "writing %s failed", dst.c_str());
+        return DAI_ERR_FILE;
+    }
+    return DAI_OK;
+}
+
+dai_result dai_self_update_mark_current(const char *exe_path, const char *sha256) {
+    if (!exe_path || !sha256 || std::strlen(sha256) != 64) return DAI_ERR_INVALID_ARG;
+    std::string p = sidecar_path(exe_path);
+    FILE *f = std::fopen(p.c_str(), "wb");
+    if (!f) return DAI_ERR_FILE;
+    std::fprintf(f, "%s\n", sha256);
+    std::fclose(f);
+    return DAI_OK;
+}
+
+dai_result dai_self_update_restart(const dai_self_update *info, const char *exe_path,
+                                   char *err, size_t err_len) {
+    if (!info || !exe_path) return DAI_ERR_INVALID_ARG;
+#ifdef _WIN32
+    std::string exe = exe_path;
+    std::string bat = exe + ".update.bat";
+    std::string side = sidecar_path(exe_path);
+
+    // The swap cannot happen while this process holds the exe open, so the
+    // work is handed to a batch file that outlives us: wait until the move
+    // succeeds (that is the process being gone), write the sidecar, start the
+    // new build, sweep the stage file, delete itself.
+    std::string script;
+    script += "@echo off\r\n";
+    script += "set \"EXE=" + exe + "\"\r\n";
+    script += "set \"NEW=" + exe + ".new\"\r\n";
+    script += "set \"VER=" + side + "\"\r\n";
+    script += ":swap\r\n";
+    script += "move /Y \"%NEW%\" \"%EXE%\" >nul 2>&1\r\n";
+    script += "if exist \"%NEW%\" (timeout /t 1 /nobreak >nul & goto swap)\r\n";
+    script += ">" + std::string("\"%VER%\"") + " echo " + info->sha256 + "\r\n";
+    script += "start \"\" \"%EXE%\"\r\n";
+    script += "del \"%~f0\"\r\n";
+
+    FILE *f = std::fopen(bat.c_str(), "wb");
+    if (!f) {
+        if (err && err_len) std::snprintf(err, err_len, "cannot write %s", bat.c_str());
+        return DAI_ERR_FILE;
+    }
+    std::fwrite(script.data(), 1, script.size(), f);
+    std::fclose(f);
+
+    std::string cmd = "cmd.exe /c \"" + bat + "\"";
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessA(nullptr, &cmd[0], nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr, &si, &pi)) {
+        if (err && err_len) std::snprintf(err, err_len, "cannot launch the updater");
+        return DAI_ERR_FILE;
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return DAI_OK;
+#else
+    (void)info; (void)exe_path;
+    if (err && err_len) std::snprintf(err, err_len, "self restart exists on Windows only");
+    return DAI_ERR_FILE;
+#endif
+}
+
 } // extern "C"
+
