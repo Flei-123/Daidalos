@@ -217,6 +217,9 @@ struct dai_editor_ui {
     dai_ui_popup menu_project{};      // right click in the project window
     dai_ui_popup menu_addcomp{};      // the Add Component button's list
     char scene_label[128] = { 0 };    // the active scene, shown as the hierarchy root
+    char toast[160] = { 0 };          // "saved main.daidalos" and friends
+    float toast_left = 0.0f;          // seconds it stays up
+    int  rename_drawn = 0;            // the rename row existed THIS frame
     int  scene_root_folded = 0;
 
     // ---- settings ----------------------------------------------------------
@@ -558,6 +561,12 @@ void dai_editor_ui_destroy(dai_editor_ui *p) { if (p) dai_dock_destroy(p->dock);
 int dai_editor_ui_menu_open(const dai_editor_ui *p) {
     return p ? (p->menu_node.open || p->menu_canvas.open || p->menu_project.open ||
                 dai_ui_popup_active(p->ui)) : 0;
+}
+
+void dai_editor_ui_toast(dai_editor_ui *p, const char *text, float seconds) {
+    if (!p) return;
+    std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+    p->toast_left = seconds > 0.0f ? seconds : 2.0f;
 }
 
 void dai_editor_ui_scene_label(dai_editor_ui *p, const char *name) {
@@ -2541,6 +2550,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
             if (ry + ROW > cols_y && ry < cols_y + list_h) {
                 std::string ffull = p->proj_dir.empty() ? name : p->proj_dir + "/" + name;
                 if (ffull == p->rename_asset) {
+                    p->rename_drawn = 1;
                     int commit = 0;
                     dai_ui_text_focus_next(ui);
                     dai_ui_text_field(ui, "assetrename", list_x + 2.0f, ry, list_w - 4.0f,
@@ -2583,6 +2593,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                 bool over = mx >= list_x + 2.0f && mx < list_x + list_w - 4.0f &&
                             my >= ry && my < ry + ROW;
                 if (full == p->rename_asset) {
+                    p->rename_drawn = 1;
                     // Fresh out of "Create: Script": the row IS the rename
                     // field - type the name, Enter commits, Escape keeps the
                     // default. Focus loss commits too, or it waits forever.
@@ -2804,6 +2815,17 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
 
     dai_dock_end(p->dock);
 
+    // A rename row whose file vanished (deleted, refreshed away, folder left)
+    // would keep an invisible text field focused forever - and a focused field
+    // eats Delete, W/E/R and Space, so the whole editor goes deaf. If the row
+    // was not drawn this frame, the rename is over.
+    if (!p->rename_asset.empty() && !p->rename_drawn) {
+        p->rename_asset.clear();
+        p->rename_seen_active = 0;
+    }
+    p->rename_drawn = 0;
+    if (p->toast_left > 0.0f) p->toast_left -= 1.0f / 60.0f;
+
     dai_editor_ui_timeline(p, p->view_x + 8.0f, vh - BOTTOM - 50.0f, p->view_w - 16.0f);
     dai_editor_ui_status(p, 0.0f, vh - BOTTOM, vw, BOTTOM);
     if (p->view == DAI_VIEW_SCENE && have_view) {
@@ -2908,6 +2930,12 @@ void dai_editor_ui_status(dai_editor_ui *p, float x, float y, float w, float h) 
                   dai_editor_undo_name(p->ed) && *dai_editor_undo_name(p->ed)
                       ? dai_editor_undo_name(p->ed) : "-");
     dai_ui_text(ui, x + 8.0f, y + 3.0f, buf, st->text_dim);
+    // A save that says nothing might as well not have happened - Ctrl+S in an
+    // editor has to leave a mark somewhere.
+    if (p->toast_left > 0.0f && p->toast[0]) {
+        float tw2 = dai_ui_text_width(ui, p->toast);
+        dai_ui_text(ui, x + (w - tw2) * 0.5f, y + 3.0f, p->toast, st->accent);
+    }
     char right[96];
     std::snprintf(right, sizeof(right), "viewport %.0fx%.0f", p->view_w, p->view_h);
     float rw = dai_ui_text_width(ui, right);

@@ -684,11 +684,13 @@ int main(int argc, char **argv) {
         // W/E/R switch gizmo mode, but only when the camera is not flying -
         // otherwise pressing W to walk forward would also change the tool.
         int ctrl = dai_window_key_down(win, DAI_KEY_CTRL_L) || dai_window_key_down(win, DAI_KEY_CTRL_R);
-        int keys[8] = {
+        int keys[10] = {
             ci.key_w, ci.key_e, dai_window_key_down(win, DAI_KEY_R),
             dai_window_key_down(win, DAI_KEY_Z), dai_window_key_down(win, DAI_KEY_Y),
             dai_window_key_down(win, DAI_KEY_DELETE), dai_window_key_down(win, DAI_KEY_D),
             dai_window_key_down(win, DAI_KEY_SPACE),
+            dai_window_key_down(win, DAI_KEY_S),
+            dai_window_key_down(win, DAI_KEY_BACKSPACE),
         };
         auto pressed = [&](int i) { return keys[i] && !prev_keys[i]; };
         // While a field is being typed into, the keyboard belongs to the field.
@@ -705,13 +707,29 @@ int main(int argc, char **argv) {
         if (ctrl && pressed(6) && !typing) dai_editor_duplicate_selection(ed);
         // Not while a field is being typed into: Delete belongs to the caret
         // then, not to the scene.
-        if (pressed(5) && !dai_ui_text_active(ui)) dai_editor_delete_selection(ed);
+        // Delete, and Backspace for the keyboards that have no Delete key.
+        // Never while typing: there the two belong to the caret.
+        if ((pressed(5) || pressed(9)) && !typing) dai_editor_delete_selection(ed);
         if (pressed(7) && !typing) {
             if (dai_editor_state_get(ed) == DAI_EDITOR_PLAY) dai_editor_pause(ed);
             else dai_editor_play(ed);
         }
-        if (ctrl && dai_window_key_down(win, DAI_KEY_S) && scene_path) {
-            if (dai_doc_save(doc, scene_path) == DAI_OK) std::printf("saved %s\n", scene_path);
+        // Ctrl+S: once per press, never while a field has the keyboard, and
+        // it says so. Held down it used to write the file sixty times a second
+        // and tell nobody - a save you cannot see is a save you do not trust.
+        if (ctrl && pressed(8) && !typing) {
+            const char *sp = scene_path ? scene_path : (g_scene_path[0] ? g_scene_path : nullptr);
+            char msg[192];
+            if (sp && dai_doc_save(doc, sp) == DAI_OK) {
+                const char *base = std::strrchr(sp, '/');
+                const char *bs2 = std::strrchr(sp, '\\');
+                if (bs2 && (!base || bs2 > base)) base = bs2;
+                std::snprintf(msg, sizeof(msg), "saved %s", base ? base + 1 : sp);
+                std::printf("%s\n", msg);
+            } else {
+                std::snprintf(msg, sizeof(msg), "could not save - open a project first");
+            }
+            dai_editor_ui_toast(panels, msg, 2.0f);
         }
         std::memcpy(prev_keys, keys, sizeof(keys));
 
@@ -760,8 +778,12 @@ int main(int argc, char **argv) {
             std::printf("project: %s\n", current_scene);
         }
 
-        if (dai_editor_ui_take_save(panels) && scene_path) {
-            if (dai_doc_save(doc, scene_path) == DAI_OK) std::printf("saved %s\n", scene_path);
+        if (dai_editor_ui_take_save(panels)) {
+            const char *sp = scene_path ? scene_path : (g_scene_path[0] ? g_scene_path : nullptr);
+            if (sp && dai_doc_save(doc, sp) == DAI_OK) {
+                std::printf("saved %s\n", sp);
+                dai_editor_ui_toast(panels, "scene saved", 2.0f);
+            }
         }
         // A refresh means the Project window WROTE files (new script/folder).
         // The list below only re-feeds on a revision change and a new file
