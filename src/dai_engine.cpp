@@ -229,7 +229,19 @@ void save_snapshot(dai_world *w) {
 
 extern "C" {
 
-const char *dai_version(void) { return "daidalos 0.2.1 (backends: talos, jolt, null)"; }
+/* The version line names the backends this binary was actually LINKED with -
+ * not the ones the project has source for. A build made with -DDAI_NO_JOLT
+ * used to keep claiming Jolt, which is a lie the user reads on every start. */
+const char *dai_version(void) {
+    return "daidalos 0.2.1 (backends: "
+#ifndef DAI_NO_TALOS
+        "talos, "
+#endif
+#ifndef DAI_NO_JOLT
+        "jolt, "
+#endif
+        "null)";
+}
 
 dai_result dai_create(const dai_config *cfg_in, dai_world **out) {
     if (!out) return DAI_ERR_INVALID_ARG;
@@ -251,6 +263,9 @@ dai_result dai_create(const dai_config *cfg_in, dai_world **out) {
     // DAI_NO_JOLT drops the Jolt backend from the link entirely. That is what
     // makes the WebAssembly build possible today (and it is a second, stricter
     // version of the leak test: the engine has to be complete without it).
+    // Asking for a backend that was compiled out is not a silent downgrade
+    // any more: the caller is told, in the world's error string, what it
+    // actually got. dai_physics_available() lets a UI avoid the situation.
     if (w->cfg.backend == DAI_PHYSICS_NULL) {
         w->phys = create_null_backend();
     } else if (w->cfg.backend == DAI_PHYSICS_TALOS) {
@@ -309,6 +324,25 @@ void dai_destroy(dai_world *w) {
 }
 
 const char *dai_last_error(dai_world *w)   { return w ? w->err : "no world"; }
+int dai_physics_available(int backend) {
+    switch (backend) {
+    case DAI_PHYSICS_NULL: return 1;
+    case DAI_PHYSICS_TALOS:
+#ifdef DAI_NO_TALOS
+        return 0;
+#else
+        return 1;
+#endif
+    case DAI_PHYSICS_JOLT:
+#ifdef DAI_NO_JOLT
+        return 0;
+#else
+        return 1;
+#endif
+    default: return 0;
+    }
+}
+
 const char *dai_backend_name(dai_world *w) { return (w && w->phys) ? w->phys->name() : "none"; }
 
 // ---- bodies ---------------------------------------------------------------

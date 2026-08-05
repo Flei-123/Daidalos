@@ -61,12 +61,26 @@ DAI_API void dai_editor_camera_viewport_rect(dai_editor *e, float x, float y,
 
 /* Builds the world space ray under a pixel. Also used by gameplay code that
  * wants to click on things. */
+/* Re-anchor the camera drag to this pointer position without moving it. Call
+ * it when the mouse coordinate SYSTEM changed rather than the mouse - a window
+ * resize rescales it, and a resize is done with the button held, so without
+ * this the scene camera spins as the window is dragged. */
+DAI_API void dai_editor_cam_anchor(dai_editor *e, float mouse_x, float mouse_y);
+
 DAI_API void dai_editor_ray(const dai_editor *e, float mouse_x, float mouse_y,
                             dai_vec3 *origin, dai_vec3 *direction);
 /* Projects a world point to pixels. Returns 0 when it is behind the camera,
  * in which case *out is not written. */
 DAI_API int  dai_editor_project(const dai_editor *e, dai_vec3 world,
                                 float *out_x, float *out_y);
+/* Projects a world-space SEGMENT to a screen-space segment, clipping it
+ * against the near plane first. dai_editor_project() alone can only answer
+ * all-or-nothing per point, so a floor-grid line whose near end crosses the
+ * near plane vanished whole whenever the camera flew close to the ground -
+ * this is the fix: the visible part survives. Returns 0 when the whole
+ * segment is at or behind the near plane. */
+DAI_API int  dai_editor_project_seg(const dai_editor *e, dai_vec3 a, dai_vec3 b,
+                                    float *x1, float *y1, float *x2, float *y2);
 
 /* ---- viewport camera (Unity bindings) ---------------------------------- */
 
@@ -93,6 +107,7 @@ typedef struct dai_editor_cam_input {
     float wheel;                 /* notches, positive = away from the user */
     int   key_w, key_a, key_s, key_d, key_q, key_e;
     int   key_shift, key_alt;
+    int   key_ctrl;
     int   key_focus;             /* F - edge triggered, held does not repeat */
     float dt;                    /* seconds since the last call */
 } dai_editor_cam_input;
@@ -221,6 +236,14 @@ DAI_API int dai_editor_live_transform(const dai_editor *e, dai_node n,
 /* The write half of live_transform: while playing, the LIVE body moves (the
  * document keeps the pre-play pose, so Stop still restores exactly); while
  * editing it writes the document like any other edit. Scripts drive this. */
+/* The body's velocity while playing. 0 when the node has no body (or the
+ * editor is not playing), and the out parameters are left alone - a script
+ * that reads the velocity of a static wall gets zero, not garbage. */
+DAI_API int  dai_editor_live_velocity(const dai_editor *e, dai_node n,
+                                      dai_vec3 *linear, dai_vec3 *angular);
+DAI_API void dai_editor_live_set_velocity(dai_editor *e, dai_node n, dai_vec3 linear);
+DAI_API void dai_editor_live_impulse(dai_editor *e, dai_node n, dai_vec3 impulse);
+
 DAI_API void dai_editor_live_set_transform(dai_editor *e, dai_node n,
                                            const dai_vec3 *pos, const dai_quat *rot);
 

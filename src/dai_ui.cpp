@@ -3,6 +3,7 @@
 // No Vulkan here: this file turns widgets into triangles and nothing else.
 
 #include "dai_ui.h"
+#include "dai_tr.h"
 
 #include <algorithm>
 #include <cmath>
@@ -36,6 +37,7 @@ struct dai_ui {
     dai_texture font_tex = 0;
     float white_u = 0.0f, white_v = 0.0f;
     dai_ui_style style{};
+    int   tr_on = 0;              // translate widget text through dai_tr
 
     std::vector<Batch> batches;
     std::vector<dai_ui_draw> draws;
@@ -44,8 +46,15 @@ struct dai_ui {
     dai_ui_input input{};
     dai_ui_input prev{};
 
+    // The code editor has the keyboard. Kept next to edit.editing because the
+    // host asks one question - "is the user typing" - and must get one answer.
+    int code_focus = 0;
+
     // layout cursor
     float cursor_x = 0, cursor_y = 0;
+    // The rectangle the last row widget claimed, for callers that have to
+    // draw ON it (a drop target marker) rather than after it.
+    float last_x = 0, last_y = 0, last_w = 0, last_h = 0;
     float panel_x = 0, panel_y = 0, panel_w = 0;
     bool in_panel = false;
     float row_height = 0;
@@ -72,6 +81,19 @@ struct dai_ui {
     }
     struct ScrollFrame { uint64_t id; float x, y, w, h, start_y; };
     std::vector<ScrollFrame> scroll_stack;
+    std::vector<float> scroll_saved_panel_w;   // width the region borrowed from
+    uint64_t scroll_drag_id = 0;   // the bar the pointer is holding
+    float    scroll_grab = 0.0f;
+    float out_scale = 1.0f;   // logical -> real pixels, applied at the very end
+    // How far the content of each region reached LAST frame. The wheel needs
+    // it before the content is laid out; without it a region can only find
+    // out it should not have scrolled after it already has.
+    std::vector<std::pair<uint64_t, float>> scroll_max;
+    float &scroll_max_of(uint64_t id) {
+        for (auto &e : scroll_max) if (e.first == id) return e.second;
+        scroll_max.push_back({ id, 0.0f });
+        return scroll_max.back().second;
+    }
 
     float    drag_accum = 0.0f;     // sub-step remainder of a drag_float
     int      cursor_want = DAI_CURSOR_ARROW;   // what the pointer should look like
@@ -126,6 +148,10 @@ struct dai_ui {
     struct Popup { uint64_t id; float x, y, w, h; };
     std::vector<Popup> popups;
     uint64_t popup_open_id = 0;       // the one dropdown that is open
+    // popup panel (widget-hosting popup) save state
+    int pp_save_layer = 0;
+    std::vector<dai_ui::Clip> pp_save_clips;
+    dai_ui_popup *pp_menu = nullptr;
     int      popup_nav = -1;          // highlighted row, keyboard only
     uint64_t popup_opened_frame_id = 0;
 
@@ -201,6 +227,26 @@ struct dai_ui {
         return false;
     }
 
+    // A frame is a picture, not a memory sink. When the host loops (a panel
+    // iterator that never ended is exactly what shipped once), the buffer used
+    // to grow until the process died of std::bad_alloc with nothing on screen
+    // and nothing in the log. Past a ceiling no honest frame reaches, drop the
+    // rest of the frame and say so - a glitchy frame is a bug report, a dead
+    // process is not.
+    size_t frame_verts = 0;
+    bool   over_budget = false;
+    bool take(size_t n) {
+        if (over_budget) return false;
+        frame_verts += n;
+        if (frame_verts > 2000000u) {
+            over_budget = true;
+            std::fprintf(stderr, "dai_ui: %zu vertices in one frame - the interface is in a "
+                                 "loop; dropping the rest of it\n", frame_verts);
+            return false;
+        }
+        return true;
+    }
+
     Batch &batch(dai_texture tex) {
         if (batches.empty() || batches.back().texture != tex || batches.back().layer != cur_layer) {
             batches.push_back(Batch{});
@@ -224,6 +270,7 @@ struct dai_ui {
             if (y0 < c.y0) { v0 += (c.y0 - y0) * dv; y0 = c.y0; }
             if (y1 > c.y1) { v1 -= (y1 - c.y1) * dv; y1 = c.y1; }
         }
+        if (!take(6)) return;
         Batch &b = batch(tex);
         dai_ui_vertex v[6] = {
             { x0, y0, u0, v0, col }, { x1, y0, u1, v0, col }, { x1, y1, u1, v1, col },
@@ -236,6 +283,7 @@ struct dai_ui {
     // axis aligned - gizmo arms, graph lines, debug overlays.
     void quad4(dai_texture tex, float ax, float ay, float bx, float by,
                float cx, float cy, float dx, float dy, uint32_t col) {
+        if (!take(6)) return;
         Batch &b = batch(tex);
         const float u = white_u, v_ = white_v;
         dai_ui_vertex v[6] = {
@@ -305,10 +353,10 @@ dai_ui_style dai_ui_style_default(void) {
     s.panel_border = rgba(0x14, 0x14, 0x14, 255);
     s.text         = rgba(0xD2, 0xD2, 0xD2, 255);
     s.text_dim     = rgba(0x9E, 0x9E, 0x9E, 255);
-    s.button       = rgba(0x50, 0x50, 0x50, 255);
-    s.button_hover = rgba(0x5D, 0x5D, 0x5D, 255);
-    s.button_active= rgba(0x2C, 0x5D, 0x87, 255);   // Unity's selection blue
-    s.accent       = rgba(0x2C, 0x5D, 0x87, 255);
+    s.button       = rgba(0x48, 0x48, 0x4A, 255);
+    s.button_hover = rgba(0x58, 0x58, 0x5B, 255);
+    s.button_active= rgba(0x2F, 0x6C, 0xB5, 255);   // selection: readable, not neon
+    s.accent       = rgba(0x3D, 0x84, 0xD8, 255);
     s.track        = rgba(0x2A, 0x2A, 0x2A, 255);   // text fields
     // Editor chrome: the surface the viewport is a hole in.
     s.titlebar         = rgba(0x21, 0x21, 0x21, 255);
@@ -320,7 +368,7 @@ dai_ui_style dai_ui_style_default(void) {
     // off the bottom of the panel with a dozen fields in it.
     s.padding = 5.0f;
     s.spacing = 3.0f;
-    s.rounding = 0.0f;
+    s.rounding = 4.0f;   // soft corners: modern without going full cartoon
     s.border = 1.0f;
     s.label_w = 62.0f;
     s.row_pad = 4.0f;
@@ -353,6 +401,8 @@ void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in)
     ui->width = width; ui->height = height;
     ui->batches.clear();
     ui->draws.clear();
+    ui->frame_verts = 0;      // the ceiling is per frame, not per lifetime
+    ui->over_budget = false;
     ui->cursor_x = ui->cursor_y = 0;
     ui->in_panel = ui->in_row = false;
     ui->hot = 0;
@@ -360,6 +410,7 @@ void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in)
     ui->mouse_over_ui = false;
     ui->clips.clear();
     ui->scroll_stack.clear();
+    ui->scroll_saved_panel_w.clear();
     ui->cur_layer = 0;
     ui->blocked = false;
     ui->win_depth = 0;
@@ -420,6 +471,16 @@ void dai_ui_end(dai_ui *ui) {
     // Stable, so within one layer the host's call order still decides.
     std::stable_sort(ui->batches.begin(), ui->batches.end(),
                      [](const Batch &a, const Batch &b) { return a.layer < b.layer; });
+    // Logical pixels became real pixels here, once, for everything: scaling
+    // at the source would need every hardcoded 20.0f in the editor multiplied
+    // by hand, and one of them would always be missed.
+    if (ui->out_scale != 1.0f) {
+        const float s = ui->out_scale;
+        for (Batch &b : ui->batches) {
+            for (dai_ui_vertex &v : b.verts) { v.x *= s; v.y *= s; }
+            b.clip[0] *= s; b.clip[1] *= s; b.clip[2] *= s; b.clip[3] *= s;
+        }
+    }
     for (Batch &b : ui->batches) {
         if (b.verts.empty()) continue;
         dai_ui_draw d{};
@@ -430,6 +491,13 @@ void dai_ui_end(dai_ui *ui) {
         ui->draws.push_back(d);
     }
 }
+
+void dai_ui_scale_set(dai_ui *ui, float scale) {
+    if (!ui) return;
+    if (!(scale > 0.05f) || scale > 8.0f) scale = 1.0f;
+    ui->out_scale = scale;
+}
+float dai_ui_scale_get(const dai_ui *ui) { return ui ? ui->out_scale : 1.0f; }
 
 uint32_t dai_ui_draws(dai_ui *ui, const dai_ui_draw **out) {
     if (!ui || !out) return 0;
@@ -446,6 +514,7 @@ void dai_ui_mouse(const dai_ui *ui, float *x, float *y, int *down, int *pressed)
 }
 
 float dai_ui_wheel(const dai_ui *ui) { return ui ? ui->input.wheel : 0.0f; }
+int dai_ui_double_click(const dai_ui *ui) { return ui ? ui->input.double_click : 0; }
 
 int dai_ui_wants_mouse(const dai_ui *ui) { return ui && ui->mouse_over_ui ? 1 : 0; }
 
@@ -492,7 +561,17 @@ int dai_ui_popup_active(const dai_ui *ui) {
 }
 int  dai_ui_cursor(const dai_ui *ui) { return ui ? ui->cursor_want : DAI_CURSOR_ARROW; }
 void dai_ui_cursor_set(dai_ui *ui, int cursor) { if (ui) ui->cursor_want = cursor; }
-int  dai_ui_text_active(const dai_ui *ui) { return ui && ui->edit.editing ? 1 : 0; }
+int  dai_ui_text_active(const dai_ui *ui) {
+    return ui && (ui->edit.editing || ui->code_focus) ? 1 : 0;
+}
+// Give the keyboard back. A field keeps focus until something takes it, and
+// "something" has to include the scene view: W A S D typed into an invisible
+// text box is the bug where the camera turns but never moves.
+void dai_ui_text_defocus(dai_ui *ui) {
+    if (!ui) return;
+    ui->edit.editing = false;
+    ui->edit.id = 0;
+}
 
 // ---------------------------------------------------------------- drawing
 
@@ -505,6 +584,56 @@ void dai_ui_rect(dai_ui *ui, float x, float y, float w, float h, uint32_t color)
     // scene, with nothing behind it.
     ui->quad(ui->font_tex, x, y, x + w, y + h,
              ui->white_u, ui->white_v, ui->white_u, ui->white_v, color);
+}
+
+void dai_ui_rrect(dai_ui *ui, float x, float y, float w, float h, float radius, uint32_t color) {
+    dai_ui_rrect_mask(ui, x, y, w, h, radius, color, 0xF);
+}
+
+void dai_ui_rrect_mask(dai_ui *ui, float x, float y, float w, float h,
+                       float radius, uint32_t color, int corners) {
+    if (!ui || w <= 0 || h <= 0) return;
+    float r = radius;
+    if (r > w * 0.5f) r = w * 0.5f;
+    if (r > h * 0.5f) r = h * 0.5f;
+    if (r < 1.0f || !corners) { dai_ui_rect(ui, x, y, w, h, color); return; }
+    // Centre cross: two clipped rects, then the corner fans the mask allows.
+    // A corner the mask excludes is covered by extending the cross there, so
+    // a "top corners only" tab stays square along the bottom edge.
+    bool tl = corners & 1, tr = corners & 2, bl = corners & 4, br = corners & 8;
+    float top_l = tl ? r : 0.0f, top_r = tr ? r : 0.0f;
+    float bot_l = bl ? r : 0.0f, bot_r = br ? r : 0.0f;
+    dai_ui_rect(ui, x + top_l, y, w - top_l - top_r, tl || tr ? r : 0.0f, color);              // top strip
+    dai_ui_rect(ui, x, y + (tl || tr ? r : 0.0f), w,
+                h - (tl || tr ? r : 0.0f) - (bl || br ? r : 0.0f), color);                      // middle
+    dai_ui_rect(ui, x + bot_l, y + h - (bl || br ? r : 0.0f), w - bot_l - bot_r,
+                bl || br ? r : 0.0f, color);                                                    // bottom strip
+    const int SEG = 5;   // 5 segments per quarter: smooth at 4-8 px, cheap
+    for (int c = 0; c < 4; ++c) {
+        if (!(corners & (1 << c))) continue;
+        float cx = (c & 1) ? x + w - r : x + r;
+        float cy = (c & 2) ? y + h - r : y + r;
+        float a0 = 0.0f;
+        switch (c) {
+            case 0: a0 = 3.14159265f;        break;   // top left
+            case 1: a0 = 3.14159265f * 1.5f; break;   // top right
+            case 2: a0 = 3.14159265f * 0.5f; break;   // bottom left
+            case 3: a0 = 0.0f;               break;   // bottom right
+        }
+        // Skip a corner the clip rect cuts away entirely.
+        if (!ui->clips.empty()) {
+            const dai_ui::Clip &cl = ui->clips.back();
+            float x0 = cx - r, x1 = cx + r, y0 = cy - r, y1 = cy + r;
+            if (x1 <= cl.x0 || x0 >= cl.x1 || y1 <= cl.y0 || y0 >= cl.y1) continue;
+        }
+        for (int i = 0; i < SEG; ++i) {
+            float a1 = a0 + (3.14159265f * 0.5f) * (float)i / (float)SEG;
+            float a2 = a0 + (3.14159265f * 0.5f) * (float)(i + 1) / (float)SEG;
+            float px1 = cx + r * cosf(a1), py1 = cy + r * sinf(a1);
+            float px2 = cx + r * cosf(a2), py2 = cy + r * sinf(a2);
+            ui->quad4(ui->font_tex, cx, cy, px1, py1, px2, py2, px2, py2, color);
+        }
+    }
 }
 
 void dai_ui_rect_outline(dai_ui *ui, float x, float y, float w, float h, float t, uint32_t color) {
@@ -550,6 +679,9 @@ void dai_ui_line(dai_ui *ui, float x0, float y0, float x1, float y1,
 }
 
 void dai_ui_text(dai_ui *ui, float x, float y, const char *utf8, uint32_t color) {
+    // The editor's localisation hook: labels go through the table, everything
+    // else is a game string we have no business touching. Off by default.
+    if (ui && ui->tr_on && utf8) utf8 = dai_tr(utf8);
     if (!ui || !ui->font || !utf8) return;
     float pen_x = x, pen_y = y + dai_font_ascent(ui->font);
     uint32_t off = 0;
@@ -570,6 +702,35 @@ void dai_ui_text(dai_ui *ui, float x, float y, const char *utf8, uint32_t color)
                      g->u0, g->v0, g->u1, g->v1, color);
         pen_x += g->advance;
     }
+}
+
+namespace dai {
+float ui_detail_row_x();
+float ui_detail_row_y();
+float ui_detail_row_w();
+float ui_detail_row_h();
+}
+
+void dai_ui_help(dai_ui *ui, const char *text) {
+    if (!ui || !text || !*text) return;
+    // Uses the rect of the field drawn immediately before, which is why this
+    // is a separate call and not a parameter: half the widgets in this file
+    // would need one, and a host that does not want tooltips pays nothing.
+    if (ui->in_popup || ui->blocked) return;
+    float x = dai::ui_detail_row_x(), y = dai::ui_detail_row_y();
+    float w = dai::ui_detail_row_w(), h = dai::ui_detail_row_h();
+    if (w <= 0.0f || h <= 0.0f) return;
+    if (ui->input.mouse_x < x || ui->input.mouse_x >= x + w) return;
+    if (ui->input.mouse_y < y || ui->input.mouse_y >= y + h) return;
+    if (ui->input.mouse_down) return;
+    std::snprintf(ui->tooltip, sizeof(ui->tooltip), "%s", text);
+    ui->tooltip_x = x;
+    ui->tooltip_y = y + h + 4.0f;
+    ui->tooltip_on = true;
+}
+
+float dai_ui_text_height(dai_ui *ui) {
+    return ui ? dai_font_line_height(ui->font) : 0.0f;
 }
 
 float dai_ui_text_width(dai_ui *ui, const char *utf8) {
@@ -1057,7 +1218,35 @@ void dai_ui_row_end(dai_ui *ui) {
     ui->cursor_y = ui->row_start_y + ui->row_height + ui->style.spacing;
 }
 
-void dai_ui_spacing(dai_ui *ui, float px) { if (ui) ui->cursor_y += px; }
+void dai_ui_spacing(dai_ui *ui, float px) {
+    if (!ui) return;
+    // A row runs sideways: leaving space in one has to leave it sideways too.
+    // Always adding to cursor_y pushed everything after the gap onto the next
+    // line instead of along the current one - which is what made the
+    // Materials header and its +/- buttons land on top of their neighbours.
+    if (ui->in_row) ui->cursor_x += px;
+    else            ui->cursor_y += px;
+}
+
+void dai_ui_cursor_pos(const dai_ui *ui, float *x, float *y) {
+    if (!ui) return;
+    if (x) *x = ui->cursor_x;
+    if (y) *y = ui->cursor_y;
+}
+
+void dai_ui_last_rect(const dai_ui *ui, float *x, float *y, float *w, float *h) {
+    if (!ui) return;
+    if (x) *x = ui->last_x;
+    if (y) *y = ui->last_y;
+    if (w) *w = ui->last_w;
+    if (h) *h = ui->last_h;
+}
+
+void dai_ui_advance(dai_ui *ui, float w, float h) {
+    if (!ui) return;
+    if (ui->in_row) ui->cursor_x += w + ui->style.spacing;
+    else ui->cursor_y += h + ui->style.spacing;
+}
 
 void dai_ui_clip_begin(dai_ui *ui, float x, float y, float w, float h) {
     if (!ui) return;
@@ -1095,6 +1284,8 @@ float widget_height(dai_ui *ui) { return dai_font_line_height(ui->font) + ui->st
 
 // ---------------------------------------------------------------- widgets
 
+void dai_ui_translate(dai_ui *ui, int on) { if (ui) ui->tr_on = on ? 1 : 0; }
+
 void dai_ui_label(dai_ui *ui, const char *utf8) {
     if (!ui) return;
     float x, y;
@@ -1129,7 +1320,7 @@ int dai_ui_button(dai_ui *ui, const char *utf8) {
     uint32_t col = ui->style.button;
     if (ui->active == id) col = ui->style.button_active;
     else if (over) col = ui->style.button_hover;
-    dai_ui_rect(ui, x, y, w, h, col);
+    dai_ui_rrect(ui, x, y, w, h, ui->style.rounding, col);
     float tw = dai_ui_text_width(ui, utf8);
     dai_ui_text(ui, x + (w - tw) * 0.5f, y + ui->style.row_pad * 0.5f, utf8, ui->style.text);
     return pressed ? 1 : 0;
@@ -1146,9 +1337,9 @@ int dai_ui_toggle_button(dai_ui *ui, const char *utf8, int active) {
     int pressed = 0;
     if (over && ui->input.mouse_down && !ui->prev.mouse_down) ui->active = id;
     if (ui->active == id && !ui->input.mouse_down) { pressed = over ? 1 : 0; ui->active = 0; }
-    dai_ui_rect(ui, x, y + 1.0f, w, h - 2.0f,
-                active ? ui->style.button_active
-                       : (over ? ui->style.button_hover : ui->style.button));
+    dai_ui_rrect(ui, x, y + 1.0f, w, h - 2.0f, ui->style.rounding,
+                 active ? ui->style.button_active
+                        : (over ? ui->style.button_hover : ui->style.button));
     dai_ui_rect_outline(ui, x, y + 1.0f, w, h - 2.0f, 1.0f, ui->style.panel_border);
     float tw = dai_ui_text_width(ui, utf8);
     dai_ui_text(ui, x + (w - tw) * 0.5f, y + ui->style.row_pad * 0.5f, utf8, ui->style.text);
@@ -1167,7 +1358,8 @@ int dai_ui_checkbox(dai_ui *ui, const char *utf8, int *value) {
     int changed = 0;
     if (over && ui->input.mouse_down && !ui->prev.mouse_down) { *value = !*value; changed = 1; }
 
-    dai_ui_rect(ui, x, y + 4.0f, box, box, over ? ui->style.button_hover : ui->style.track);
+    dai_ui_rrect(ui, x, y + 4.0f, box, box, ui->style.rounding * 0.75f,
+                 over ? ui->style.button_hover : ui->style.track);
     dai_ui_rect_outline(ui, x, y + 4.0f, box, box, 1.0f, ui->style.panel_border);
     if (*value) {
         // A checkmark, drawn as two strokes. Not a filled tile: the box says
@@ -1244,6 +1436,15 @@ int dai_ui_has_icon(const dai_ui *ui, const char *name) {
 void dai_ui_icon_at(dai_ui *ui, const char *name, float x, float y,
                     float size, uint32_t color) {
     if (!ui || !ui->icons || !name) return;
+    if (!color) color = ui->style.text;
+    // A colored icon is its own picture; tinting it with the text color is
+    // what turned the yellow warning triangle gray. Its OPACITY is still the
+    // caller's, though: "half strength" is a statement about state, not about
+    // hue, and forcing opaque white threw that away along with the tint. The
+    // atlas keeps colored cells in straight alpha, so scaling the vertex
+    // alpha is exactly a fade - no fringe, no darkening.
+    if (dai_icons_colored(ui->icons, name))
+        color = 0x00FFFFFFu | (color & 0xFF000000u);
     float u0, v0, u1, v1;
     if (!dai_icons_uv(ui->icons, name, &u0, &v0, &u1, &v1)) return;
     if (size <= 0.0f) size = dai_icons_size(ui->icons);
@@ -1251,8 +1452,7 @@ void dai_ui_icon_at(dai_ui *ui, const char *name, float x, float y,
     // 1.3 px strokes is the difference between a crisp line and a grey smear.
     x = std::floor(x + 0.5f);
     y = std::floor(y + 0.5f);
-    ui->quad(ui->icon_tex, x, y, x + size, y + size, u0, v0, u1, v1,
-             color ? color : ui->style.text);
+    ui->quad(ui->icon_tex, x, y, x + size, y + size, u0, v0, u1, v1, color);
 }
 
 void dai_ui_icon(dai_ui *ui, const char *name, float size, uint32_t color) {
@@ -1280,7 +1480,7 @@ int dai_ui_icon_button(dai_ui *ui, const char *name, const char *tooltip, int ac
     uint32_t bg = active ? ui->style.accent : ui->style.button;
     if (ui->active == id) bg = ui->style.button_active;
     else if (over && !active) bg = ui->style.button_hover;
-    dai_ui_rect(ui, x, y, w, h, bg);
+    dai_ui_rrect(ui, x, y, w, h, ui->style.rounding, bg);
 
     float isz = dai_icons_size(ui->icons);
     if (isz <= 0.0f || isz > h - 4.0f) isz = h - 6.0f;
@@ -1312,8 +1512,16 @@ int dai_ui_header(dai_ui *ui, const char *title, int *open, int *enabled) {
     return dai_ui_header_icon(ui, nullptr, title, open, enabled);
 }
 
+int dai_ui_header_icon_col(dai_ui *ui, const char *icon, uint32_t tint,
+                           const char *title, int *open, int *enabled);
+
 int dai_ui_header_icon(dai_ui *ui, const char *icon, const char *title,
                        int *open, int *enabled) {
+    return dai_ui_header_icon_col(ui, icon, 0, title, open, enabled);
+}
+
+int dai_ui_header_icon_col(dai_ui *ui, const char *icon, uint32_t tint,
+                           const char *title, int *open, int *enabled) {
     if (!ui || !title) return 0;
     float h = dai_font_line_height(ui->font) + 6.0f;
     float x, y;
@@ -1330,6 +1538,9 @@ int dai_ui_header_icon(dai_ui *ui, const char *icon, const char *title,
         if (on_box) { *enabled = !*enabled; result = 2; }
         else if (open) { *open = !*open; result = 1; }
     }
+    // Right click on the header (not its enable box) reports 3: the caller's
+    // context menu - Unity opens Copy/Paste/Remove there, and so do we.
+    if (over && !on_box && ui->input.right_down && !ui->prev.right_down) result = 3;
 
     // #3E3E3E - a component header is quieter than a button. The button grey
     // made every header read as something to press, which is how "Is Trigger"
@@ -1360,7 +1571,8 @@ int dai_ui_header_icon(dai_ui *ui, const char *icon, const char *title,
         tx += 14.0f;
     }
     if (icon && dai_ui_has_icon(ui, icon)) {
-        dai_ui_icon_at(ui, icon, tx, y + (h - isz) * 0.5f, isz, ui->style.accent);
+        dai_ui_icon_at(ui, icon, tx, y + (h - isz) * 0.5f, isz,
+                       tint ? tint : ui->style.accent);
         tx += isz + 5.0f;
     }
     dai_ui_text(ui, tx, y + 2.0f, title, ui->style.text);
@@ -1396,20 +1608,83 @@ namespace {
 // The label column. In the style, because a 13 px font wants a narrower one
 // than a 20 px font and the editor is free to change it.
 
+// Where the label of the last field_rect went. Reported separately instead of
+// through more out parameters because every caller wants the field rect and
+// only the numeric ones want the label: the label is a DRAG HANDLE (Unity
+// scrubs a value by dragging its name), and a widget that cannot report where
+// its name is cannot offer that.
+float g_label_x = 0.0f, g_label_y = 0.0f, g_label_w = 0.0f;
+// The whole row of the last field, label column included - what a help
+// tooltip has to hover over. A field whose units are only in the manual is a
+// field whose units nobody knows: "Friction 10" means nothing until you learn
+// it is a coefficient and not a percentage.
+float g_row_x = 0.0f, g_row_y = 0.0f, g_row_w = 0.0f, g_row_h = 0.0f;
+
 void field_rect(dai_ui *ui, const char *label, float *x, float *y, float *w, float h) {
     float rx, ry;
     next_rect(ui, 0, h, &rx, &ry);
     float full = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    // Inside a row, "full width" means "what is LEFT of the row", not the
+    // whole panel: the second field of a row was drawn at full width from
+    // where the first one ended, i.e. mostly off the right edge.
+    if (ui->in_row) {
+        float left_edge = (ui->in_panel ? ui->panel_x + ui->style.padding : 0.0f);
+        float used = rx - left_edge;
+        full -= used;
+        if (full < 24.0f) full = 24.0f;
+    }
+    g_label_x = rx; g_label_y = ry; g_label_w = 0.0f;
+    g_row_x = rx; g_row_y = ry; g_row_w = full; g_row_h = h;
     if (label && *label) {
         float lw = ui->style.label_w > 0 ? ui->style.label_w : 62.0f;
         dai_ui_text(ui, rx, ry + 2.0f, label, ui->style.text_dim);
         *x = rx + lw;
         *w = full - lw;
+        g_label_w = lw - 2.0f;
     } else {
         *x = rx;
         *w = full;
     }
     *y = ry;
+}
+
+// Drag the label sideways to change the value. `step` is units per pixel, and
+// Shift/Ctrl are the two speeds every DCC tool has: fine and coarse.
+//
+// This lives next to field_rect and not inside num_field_at because the label
+// is drawn by field_rect and is OUTSIDE the field's own rectangle - the drag
+// zone and the widget are two different rects, and pretending otherwise is why
+// only the X/Y/Z fields used to be draggable.
+int label_scrub(dai_ui *ui, uint64_t id, float lx, float ly, float lw, float lh,
+                float *value, float step, float min, float max) {
+    if (lw <= 0.0f || !value) return 0;
+    if (step <= 0.0f) step = 0.01f;
+    bool over = !ui->in_popup && !ui->blocked &&
+                ui->input.mouse_x >= lx && ui->input.mouse_x < lx + lw &&
+                ui->input.mouse_y >= ly && ui->input.mouse_y < ly + lh;
+    if (over) { ui->hot = id; ui->mouse_over_ui = true; ui->cursor_want = DAI_CURSOR_SIZE_WE; }
+    if (over && ui->input.mouse_down && !ui->prev.mouse_down) ui->active = id;
+    int changed = 0;
+    if (ui->active == id) {
+        if (!ui->input.mouse_down) { ui->active = 0; return 0; }
+        ui->cursor_want = DAI_CURSOR_SIZE_WE;
+        float dx = ui->input.mouse_x - ui->prev.mouse_x;
+        if (dx != 0.0f) {
+            float sp = step;
+            if (ui->input.key_shift) sp *= 10.0f;
+            if (ui->input.key_ctrl)  sp *= 0.1f;
+            float v = *value + dx * sp;
+            if (min < max) v = v < min ? min : (v > max ? max : v);
+            if (v != *value) { *value = v; changed = 1; }
+        }
+    }
+    // The name lights up while it is a handle, so the gesture is discoverable
+    // without a manual.
+    if (over || ui->active == id) {
+        // redraw over the dim text field_rect already emitted
+        dai_ui_rect(ui, lx, ly + lh - 1.0f, lw, 1.0f, ui->style.accent);
+    }
+    return changed;
 }
 
 std::string trim_number(float v) {
@@ -1449,13 +1724,24 @@ int drag_float_at(dai_ui *ui, uint64_t id, float x, float y, float w, float h,
 
 } // namespace
 
+namespace dai {
+float ui_detail_row_x() { return g_row_x; }
+float ui_detail_row_y() { return g_row_y; }
+float ui_detail_row_w() { return g_row_w; }
+float ui_detail_row_h() { return g_row_h; }
+}
+
 int dai_ui_drag_float(dai_ui *ui, const char *label, float *value, float step) {
     if (!ui || !value) return 0;
     if (step <= 0.0f) step = 0.01f;
     float h = widget_height(ui), x, y, w;
     field_rect(ui, label, &x, &y, &w, h);
-    return drag_float_at(ui, hash_id(label ? label : "drag", x, y), x, y, w, h,
-                         value, step, nullptr, 0);
+    float lx = g_label_x, ly = g_label_y, lw = g_label_w;
+    int changed = drag_float_at(ui, hash_id(label ? label : "drag", x, y), x, y, w, h,
+                                value, step, nullptr, 0);
+    changed |= label_scrub(ui, hash_id(label ? label : "drag", lx, ly) ^ 0x9E3779B97F4A7C15ull,
+                           lx, ly, lw, h, value, step, 0.0f, 0.0f);
+    return changed;
 }
 
 int dai_ui_drag_vec3(dai_ui *ui, const char *label, float *xyz, float step) {
@@ -1476,6 +1762,613 @@ int dai_ui_drag_vec3(dai_ui *ui, const char *label, float *xyz, float step) {
         uint64_t id = hash_id(label ? label : "vec", fx, y) ^ (uint64_t)(i + 1) * 0x9E3779B97F4A7C15ull;
         changed |= drag_float_at(ui, id, fx, y, each, h, &xyz[i], step, names[i], cols[i]);
     }
+    return changed;
+}
+
+int dai_ui_object_field(dai_ui *ui, const char *label, const char *value, const char *icon) {
+    if (!ui) return 0;
+    float h = widget_height(ui), x, y, w;
+    field_rect(ui, label, &x, &y, &w, h);
+    // The target button on the right is the whole point: it says "there is a
+    // list of these" without a manual, and it is where Unity puts it.
+    float bw = h;
+    float fw = w - bw - 2.0f;
+    if (fw < 20.0f) fw = w;
+    bool over_f = inside_chk(ui, x, y, fw, h);
+    bool over_b = inside_chk(ui, x + fw + 2.0f, y, bw, h);
+    uint64_t oid = hash_id(label ? label : "objfield", x, y);
+    if (over_f || over_b) { ui->mouse_over_ui = true; ui->cursor_want = DAI_CURSOR_HAND; }
+    if ((over_f || over_b) && ui->input.mouse_down && !ui->prev.mouse_down) ui->active = oid;
+    bool pressed = false;
+    if (ui->active == oid && !ui->input.mouse_down) {
+        pressed = over_f || over_b;
+        ui->active = 0;
+    }
+
+    dai_ui_rrect(ui, x, y + 1.0f, fw, h - 2.0f, ui->style.rounding,
+                 over_f ? ui->style.button_hover : ui->style.track);
+    dai_ui_rect_outline(ui, x, y + 1.0f, fw, h - 2.0f, 1.0f, ui->style.panel_border);
+    float tx = x + 5.0f;
+    float isz = dai_icons_size(ui->icons);
+    if (isz <= 0.0f || isz > h - 4.0f) isz = h - 6.0f;
+    if (icon && dai_ui_has_icon(ui, icon)) {
+        dai_ui_icon_at(ui, icon, tx, y + (h - isz) * 0.5f, isz, ui->style.text_dim);
+        tx += isz + 4.0f;
+    }
+    dai_ui_text(ui, tx, y + (h - dai_font_line_height(ui->font)) * 0.5f,
+                value ? value : "None", ui->style.text);
+
+    if (fw < w) {
+        float bx = x + fw + 2.0f;
+        dai_ui_rrect(ui, bx, y + 1.0f, bw, h - 2.0f, ui->style.rounding,
+                     over_b ? ui->style.button_hover : ui->style.button);
+        if (dai_ui_has_icon(ui, "target"))
+            dai_ui_icon_at(ui, "target", bx + (bw - isz) * 0.5f, y + (h - isz) * 0.5f,
+                           isz, ui->style.text);
+        else
+            dai_ui_text(ui, bx + 4.0f, y + 2.0f, "...", ui->style.text);
+    }
+    return pressed ? 1 : 0;
+}
+
+void dai_ui_searchlist_open(dai_ui_searchlist *s, float x, float y) {
+    if (!s) return;
+    s->x = x; s->y = y;
+    s->open = 1;
+    s->highlight = 0;
+    s->scroll = 0.0f;
+    s->query[0] = 0;
+    s->wants_focus = 1;
+}
+
+int dai_ui_searchlist_draw(dai_ui *ui, dai_ui_searchlist *s,
+                           const dai_ui_menu_item *items, uint32_t count) {
+    if (!ui || !s || !s->open) return DAI_SEARCHLIST_CLOSED;
+    const float W = 260.0f;
+    const float ROW_H = 22.0f;
+    const float SEARCH_H = 26.0f;
+    const float MAX_ROWS = 11.0f;
+
+    // Keep it on screen: opening at the mouse near the bottom edge would put
+    // half the list under it.
+    float x = s->x, y = s->y;
+    if (x + W > ui->width - 4.0f) x = ui->width - 4.0f - W;
+    if (x < 4.0f) x = 4.0f;
+    s->x = x;                    // remember it: a list that re-derives its
+                                 // place every frame drifts with the panel
+    float rows_avail = (ui->height - y - 8.0f - SEARCH_H) / ROW_H;
+    float max_rows = rows_avail < MAX_ROWS ? rows_avail : MAX_ROWS;
+    if (max_rows < 2.0f) max_rows = 2.0f;
+
+    // ---- filter, and remember which row maps to which item ----------------
+    int shown[128];
+    uint32_t nshown = 0;
+    for (uint32_t i = 0; i < count && nshown < 128; ++i) {
+        if (s->query[0] && items[i].label) {
+            const char *q = s->query;
+            const char *l = items[i].label;
+            bool hit = false;
+            for (const char *c = l; *c && !hit; ++c) {
+                const char *cc = c, *qq = q;
+                while (*qq && *cc &&
+                       ((*cc >= 'A' && *cc <= 'Z') ? *cc + 32 : *cc) ==
+                       ((*qq >= 'A' && *qq <= 'Z') ? *qq + 32 : *qq)) { ++cc; ++qq; }
+                if (!*qq) hit = true;
+            }
+            if (!hit) continue;
+        }
+        shown[nshown++] = (int)i;
+    }
+    if (s->highlight >= (int)nshown) s->highlight = (int)nshown - 1;
+    if (s->highlight < 0) s->highlight = 0;
+
+    float rows_h = (nshown < (uint32_t)max_rows ? (float)nshown : max_rows) * ROW_H;
+    float H = SEARCH_H + rows_h + 6.0f;
+    if (y + H > ui->height - 4.0f) y = ui->height - 4.0f - H;
+    if (y < 4.0f) y = 4.0f;
+    s->w = W; s->h = H;
+
+    float mx = ui->input.mouse_x, my = ui->input.mouse_y;
+    bool over_panel = mx >= x && mx < x + W && my >= y && my < y + H;
+    bool pressed = ui->input.mouse_down && !ui->prev.mouse_down;
+
+    // A click outside closes without a pick - a menu that cannot be
+    // dismissed trains people to press things they did not want.
+    if (pressed && !over_panel) { s->open = 0; return DAI_SEARCHLIST_CLOSED; }
+    if (ui->input.key_escape)   { s->open = 0; return DAI_SEARCHLIST_CLOSED; }
+
+    ui->popup_was_open = true;      // next frame's widgets underneath are dead
+    ui->mouse_over_ui = true;
+    // Keep the whole list above every panel it was opened from.
+    dai_ui_layer_push(ui, DAI_LAYER_POPUP);
+    dai_ui_rrect(ui, x, y, W, H, 6.0f, ui->style.panel);
+    dai_ui_rect_outline(ui, x, y, W, H, 1.0f, ui->style.panel_border);
+
+    // ---- the search field -------------------------------------------------
+    if (s->wants_focus) { dai_ui_text_focus_next(ui); s->wants_focus = 0; }
+    int commit = 0;
+    dai_ui_text_field(ui, "searchlist", x + 6.0f, y + 4.0f, W - 12.0f, SEARCH_H - 4.0f,
+                      s->query, sizeof(s->query), &commit);
+    if (!s->query[0] && !dai_ui_text_active(ui))
+        dai_ui_text(ui, x + 12.0f, y + 4.0f + (SEARCH_H - 4.0f - dai_font_line_height(ui->font)) * 0.5f,
+                    "Search components...", ui->style.text_dim);
+
+    // ---- keyboard navigation ----------------------------------------------
+    auto is_header = [&](int row) {
+        return row >= 0 && row < (int)nshown && items[shown[row]].header != 0;
+    };
+    int step = 0;
+    if (ui->input.key_down_arrow) { ++s->highlight; step = 1; }
+    if (ui->input.key_up_arrow)   { --s->highlight; step = -1; }
+    if (s->highlight < 0) s->highlight = (int)nshown - 1;
+    if (s->highlight >= (int)nshown) s->highlight = 0;
+    // Walk past captions rather than landing on them. Bounded by the row
+    // count so a list that is nothing but headers cannot spin here.
+    if (step && nshown) {
+        for (uint32_t guard = 0; guard < nshown && is_header(s->highlight); ++guard) {
+            s->highlight += step;
+            if (s->highlight < 0) s->highlight = (int)nshown - 1;
+            if (s->highlight >= (int)nshown) s->highlight = 0;
+        }
+    }
+    if (commit && nshown && !is_header(s->highlight)) {
+        int pick = shown[s->highlight];
+        s->open = 0;
+        dai_ui_layer_pop(ui);
+        return pick;
+    }
+
+    // ---- the rows ----------------------------------------------------------
+    float list_y = y + SEARCH_H + 2.0f;
+    dai_ui_clip_begin(ui, x, list_y, W, rows_h + 2.0f);
+    if (over_panel && mx >= x && mx < x + W && my >= list_y)
+        s->scroll -= ui->input.wheel * ROW_H * 2.0f;
+    float max_scroll = (float)nshown * ROW_H - rows_h;
+    if (max_scroll < 0.0f) max_scroll = 0.0f;
+    if (s->scroll < 0.0f) s->scroll = 0.0f;
+    if (s->scroll > max_scroll) s->scroll = max_scroll;
+
+    float ry = list_y - s->scroll;
+    int result = DAI_SEARCHLIST_OPEN;
+    float lh = dai_font_line_height(ui->font);
+    float isz = dai_icons_size(ui->icons);
+    if (isz <= 0.0f || isz > ROW_H - 4.0f) isz = ROW_H - 6.0f;
+    for (uint32_t r = 0; r < nshown; ++r) {
+        int idx = shown[r];
+        bool head = items[idx].header != 0;
+        bool over = !head && mx >= x && mx < x + W && my >= ry && my < ry + ROW_H;
+        if (over) s->highlight = (int)r;
+        bool hl = !head && (int)r == s->highlight;
+        if (head) {
+            // A caption: a rule and a quiet label, nothing that invites a
+            // click. No icon either - the icon is what made it look like a row.
+            dai_ui_text(ui, x + 8.0f, ry + (ROW_H - lh) * 0.5f, items[idx].label,
+                        ui->style.text_dim);
+            float lw = dai_ui_text_width(ui, items[idx].label);
+            float rule_x = x + 14.0f + lw;
+            if (rule_x < x + W - 10.0f)
+                dai_ui_rect(ui, rule_x, ry + ROW_H * 0.5f, x + W - 10.0f - rule_x, 1.0f,
+                            ui->style.panel_border);
+            ry += ROW_H;
+            continue;
+        }
+        if (hl) dai_ui_rect(ui, x + 2.0f, ry, W - 4.0f, ROW_H, ui->style.button_hover);
+        float tx = x + 10.0f;
+        if (items[idx].icon && dai_ui_has_icon(ui, items[idx].icon)) {
+            dai_ui_icon_at(ui, items[idx].icon, tx, ry + (ROW_H - isz) * 0.5f, isz,
+                           hl ? ui->style.text : ui->style.text_dim);
+            tx += isz + 6.0f;
+        }
+        dai_ui_text(ui, tx, ry + (ROW_H - lh) * 0.5f, items[idx].label,
+                    hl ? ui->style.text : ui->style.text_dim);
+        if (over && pressed) { result = idx; s->open = 0; }
+        ry += ROW_H;
+    }
+    if (!nshown)
+        dai_ui_text(ui, x + 10.0f, list_y + 4.0f, "nothing matches", ui->style.text_dim);
+    dai_ui_clip_end(ui);
+    dai_ui_layer_pop(ui);
+    return result;
+}
+
+// ---- the code editor ------------------------------------------------------
+
+namespace {
+
+// The keywords worth colouring. Deliberately short: a list that tries to be
+// complete is a list that is wrong for the next language, and the value of
+// syntax colour is almost entirely in "string", "comment", "everything else".
+const char *const CODE_KW[] = {
+    "var", "let", "const", "function", "return", "if", "else", "for", "while",
+    "do", "break", "continue", "new", "delete", "typeof", "this", "null",
+    "true", "false", "undefined", "switch", "case", "default", "try", "catch",
+    "throw", "class", "extends", "in", "of",
+    /* the C++ half, for .cpp behaviours */
+    "int", "float", "double", "bool", "void", "char", "struct", "auto",
+    "static", "public", "private", "namespace", "include", "define", "using",
+    "nullptr", "template", "unsigned", "size_t", "const_cast"
+};
+
+bool code_is_word(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_' || c == '#';
+}
+
+bool code_is_keyword(const char *s, int n) {
+    for (const char *k : CODE_KW) {
+        int i = 0;
+        while (i < n && k[i] && k[i] == s[i]) ++i;
+        if (i == n && !k[i]) return true;
+    }
+    return false;
+}
+
+int code_line_start(const char *b, int off) {
+    while (off > 0 && b[off - 1] != '\n') --off;
+    return off;
+}
+int code_line_end(const char *b, int off) {
+    while (b[off] && b[off] != '\n') ++off;
+    return off;
+}
+int code_count_lines(const char *b) {
+    int n = 1;
+    for (const char *c = b; *c; ++c) if (*c == '\n') ++n;
+    return n;
+}
+int code_line_of(const char *b, int off) {
+    int n = 0;
+    for (int i = 0; i < off && b[i]; ++i) if (b[i] == '\n') ++n;
+    return n;
+}
+int code_offset_of_line(const char *b, int line) {
+    int n = 0, i = 0;
+    while (b[i] && n < line) { if (b[i] == '\n') ++n; ++i; }
+    return i;
+}
+
+// The width of a run of bytes in the current font, without building a string.
+float code_run_w(dai_ui *ui, const char *s, int n) {
+    if (n <= 0) return 0.0f;
+    char tmp[512];
+    float total = 0.0f;
+    while (n > 0) {
+        int chunk = n < (int)sizeof(tmp) - 1 ? n : (int)sizeof(tmp) - 1;
+        std::memcpy(tmp, s, (size_t)chunk);
+        tmp[chunk] = 0;
+        total += dai_ui_text_width(ui, tmp);
+        s += chunk; n -= chunk;
+    }
+    return total;
+}
+
+} // namespace
+
+void dai_ui_code_caret_pos(const char *buf, int caret, int *line, int *col) {
+    if (!buf) { if (line) *line = 1; if (col) *col = 1; return; }
+    int ls = code_line_start(buf, caret);
+    if (line) *line = code_line_of(buf, caret) + 1;
+    if (col)  *col = caret - ls + 1;
+}
+
+int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, float h,
+                     char *buf, size_t buf_size, dai_ui_code_state *st, int lang) {
+    if (!ui || !buf || !st || buf_size < 2 || w < 40.0f || h < 20.0f) return 0;
+    (void)lang;
+    const dai_ui_style *sty = &ui->style;
+    int len = (int)std::strlen(buf);
+    if (st->caret > len) st->caret = len;
+    if (st->anchor > len) st->anchor = len;
+    if (st->caret < 0) st->caret = 0;
+    if (st->anchor < 0) st->anchor = 0;
+
+    const float LH = dai_font_line_height(ui->font) + 2.0f;
+    int nlines = code_count_lines(buf);
+    char gut[16];
+    std::snprintf(gut, sizeof(gut), "%d", nlines < 100 ? 100 : nlines);
+    const float GUT = dai_ui_text_width(ui, gut) + 14.0f;
+    const float TEXT_X = x + GUT + 6.0f;
+    const float VIEW_W = w - GUT - 10.0f;
+
+    uint64_t wid = hash_id(id ? id : "code", x, y);
+    float mx = ui->input.mouse_x, my = ui->input.mouse_y;
+    bool over = inside_chk(ui, x, y, w, h);
+    bool pressed = ui->input.mouse_down && !ui->prev.mouse_down;
+    if (over) ui->mouse_over_ui = true;
+
+    // ---- focus ------------------------------------------------------------
+    if (st->want_focus) { st->focused = 1; st->want_focus = 0; }
+    if (pressed) st->focused = over ? 1 : 0;
+    if (st->focused) ui->code_focus = 1;
+
+    // ---- the plate ---------------------------------------------------------
+    dai_ui_rect(ui, x, y, w, h, sty->track);
+    dai_ui_rect(ui, x, y, GUT, h, (sty->chrome & 0x00FFFFFFu) | 0xFF000000u);
+    dai_ui_rect(ui, x + GUT, y, 1.0f, h, sty->panel_border);
+    dai_ui_rect_outline(ui, x, y, w, h, 1.0f,
+                        st->focused ? sty->accent : sty->panel_border);
+
+    // ---- where is the caret, in pixels -------------------------------------
+    auto caret_xy = [&](int off, float *ox, float *oy) {
+        int ls = code_line_start(buf, off);
+        *ox = TEXT_X + code_run_w(ui, buf + ls, off - ls);
+        *oy = y + 4.0f + (float)code_line_of(buf, off) * LH;
+    };
+    // ...and the reverse: which offset is under this point.
+    auto offset_at = [&](float px, float py) {
+        int line = (int)((py - (y + 4.0f) + st->scroll_y) / LH);
+        if (line < 0) line = 0;
+        if (line > nlines - 1) line = nlines - 1;
+        int ls = code_offset_of_line(buf, line);
+        int le = code_line_end(buf, ls);
+        float want = px - TEXT_X + st->scroll_x;
+        if (want <= 0) return ls;
+        int best = ls;
+        float acc = 0.0f;
+        for (int i = ls; i < le; ++i) {
+            char one[2] = { buf[i], 0 };
+            float cw = dai_ui_text_width(ui, one);
+            if (acc + cw * 0.5f > want) return best;
+            acc += cw;
+            best = i + 1;
+        }
+        return le;
+    };
+
+    // ---- mouse: caret and selection ----------------------------------------
+    if (pressed && over && mx > x + GUT) {
+        st->caret = st->anchor = offset_at(mx, my);
+        st->dragging = 1;
+        st->focused = 1;
+        dai_ui_claim_mouse(ui);
+        ui->active = wid;
+        // A double click takes the word under it - the one selection gesture
+        // everybody uses without being taught.
+        if (ui->input.double_click) {
+            int a = st->caret, b = st->caret;
+            while (a > 0 && code_is_word(buf[a - 1])) --a;
+            while (buf[b] && code_is_word(buf[b])) ++b;
+            st->anchor = a; st->caret = b;
+            st->dragging = 0;
+        }
+    }
+    if (st->dragging) {
+        if (ui->input.mouse_down) {
+            st->caret = offset_at(mx, my);
+            dai_ui_claim_mouse(ui);
+        } else st->dragging = 0;
+    }
+    if (over) {
+        ui->cursor_want = DAI_CURSOR_TEXT;
+        st->scroll_y -= ui->input.wheel * LH * 3.0f;
+    }
+
+    // ---- keyboard -----------------------------------------------------------
+    int changed = 0;
+    auto sel_lo = [&]() { return st->caret < st->anchor ? st->caret : st->anchor; };
+    auto sel_hi = [&]() { return st->caret > st->anchor ? st->caret : st->anchor; };
+    auto erase = [&](int a, int b) {
+        if (b <= a) return;
+        std::memmove(buf + a, buf + b, (size_t)(len - b + 1));
+        len -= (b - a);
+        st->caret = st->anchor = a;
+        changed = 1;
+    };
+    auto insert = [&](const char *txt, int n) {
+        if (n <= 0) return;
+        if (sel_hi() > sel_lo()) erase(sel_lo(), sel_hi());
+        if ((size_t)(len + n + 1) > buf_size) return;
+        std::memmove(buf + st->caret + n, buf + st->caret, (size_t)(len - st->caret + 1));
+        std::memcpy(buf + st->caret, txt, (size_t)n);
+        len += n;
+        st->caret += n;
+        st->anchor = st->caret;
+        changed = 1;
+    };
+
+    if (st->focused) {
+        const dai_ui_input &in = ui->input;
+        bool shift = in.key_shift != 0;
+        int before = st->caret;
+
+        for (int i = 0; i < 8 && in.text[i]; ++i) {
+            uint32_t cp = in.text[i];
+            if (cp < 0x20 || cp == 0x7F) continue;
+            char utf[4];
+            int n = 0;
+            if (cp < 0x80) { utf[0] = (char)cp; n = 1; }
+            else if (cp < 0x800) { utf[0] = (char)(0xC0 | (cp >> 6)); utf[1] = (char)(0x80 | (cp & 0x3F)); n = 2; }
+            else { utf[0] = (char)(0xE0 | (cp >> 12)); utf[1] = (char)(0x80 | ((cp >> 6) & 0x3F)); utf[2] = (char)(0x80 | (cp & 0x3F)); n = 3; }
+            insert(utf, n);
+        }
+        if (in.key_enter) {
+            // Auto-indent: a new line starts where the old one's text starts.
+            // Without it every block has to be re-indented by hand, and an
+            // editor that fights the shape of the code is not used twice.
+            int ls = code_line_start(buf, st->caret);
+            char pad[64];
+            int np = 0;
+            while (ls + np < len && np < 60 && (buf[ls + np] == ' ' || buf[ls + np] == '\t'))
+                { pad[np + 1] = buf[ls + np]; ++np; }
+            pad[0] = '\n';
+            insert(pad, np + 1);
+        }
+        if (in.key_tab) insert("    ", 4);
+        if (in.key_backspace) {
+            if (sel_hi() > sel_lo()) erase(sel_lo(), sel_hi());
+            else if (st->caret > 0) {
+                int a = st->caret - 1;
+                while (a > 0 && ((unsigned char)buf[a] & 0xC0) == 0x80) --a;  // whole code point
+                erase(a, st->caret);
+            }
+        }
+        if (in.key_delete) {
+            if (sel_hi() > sel_lo()) erase(sel_lo(), sel_hi());
+            else if (st->caret < len) {
+                int b = st->caret + 1;
+                while (b < len && ((unsigned char)buf[b] & 0xC0) == 0x80) ++b;
+                erase(st->caret, b);
+            }
+        }
+        if (in.key_left && st->caret > 0) {
+            --st->caret;
+            while (st->caret > 0 && ((unsigned char)buf[st->caret] & 0xC0) == 0x80) --st->caret;
+        }
+        if (in.key_right && st->caret < len) {
+            ++st->caret;
+            while (st->caret < len && ((unsigned char)buf[st->caret] & 0xC0) == 0x80) ++st->caret;
+        }
+        if (in.key_home) st->caret = code_line_start(buf, st->caret);
+        if (in.key_end)  st->caret = code_line_end(buf, st->caret);
+        if (in.key_up_arrow || in.key_down_arrow) {
+            int line = code_line_of(buf, st->caret);
+            int ls = code_line_start(buf, st->caret);
+            float want = code_run_w(ui, buf + ls, st->caret - ls);
+            int tgt = line + (in.key_down_arrow ? 1 : -1);
+            if (tgt < 0) tgt = 0;
+            if (tgt > nlines - 1) tgt = nlines - 1;
+            int ts = code_offset_of_line(buf, tgt), te = code_line_end(buf, ts);
+            int best = ts;
+            float acc = 0.0f;
+            for (int i = ts; i < te; ++i) {
+                char one[2] = { buf[i], 0 };
+                float cw = dai_ui_text_width(ui, one);
+                if (acc + cw * 0.5f > want) break;
+                acc += cw;
+                best = i + 1;
+            }
+            st->caret = best;
+        }
+        if (in.key_select_all) { st->anchor = 0; st->caret = len; }
+        else if (st->caret != before && !shift) st->anchor = st->caret;
+        else if (st->caret != before && shift) { /* anchor stays: that IS a selection */ }
+        if (changed) st->anchor = st->caret;
+    }
+
+    // ---- keep the caret in view --------------------------------------------
+    {
+        float cx, cy;
+        caret_xy(st->caret, &cx, &cy);
+        float rel_y = cy - (y + 4.0f);
+        if (rel_y - st->scroll_y < 0.0f) st->scroll_y = rel_y;
+        if (rel_y - st->scroll_y > h - LH - 8.0f) st->scroll_y = rel_y - (h - LH - 8.0f);
+        float rel_x = cx - TEXT_X;
+        if (rel_x - st->scroll_x < 0.0f) st->scroll_x = rel_x;
+        if (rel_x - st->scroll_x > VIEW_W - 20.0f) st->scroll_x = rel_x - (VIEW_W - 20.0f);
+    }
+    float max_y = (float)nlines * LH - (h - 8.0f);
+    if (max_y < 0.0f) max_y = 0.0f;
+    if (st->scroll_y > max_y) st->scroll_y = max_y;
+    if (st->scroll_y < 0.0f) st->scroll_y = 0.0f;
+    if (st->scroll_x < 0.0f) st->scroll_x = 0.0f;
+
+    // ---- draw ---------------------------------------------------------------
+    const uint32_t C_TEXT    = sty->text;
+    const uint32_t C_COMMENT = rgba(0x6A, 0x9B, 0x6A, 255);
+    const uint32_t C_STRING  = rgba(0xCE, 0x9A, 0x63, 255);
+    const uint32_t C_NUMBER  = rgba(0xB5, 0xCE, 0xA8, 255);
+    const uint32_t C_KEYWORD = rgba(0x86, 0xB3, 0xE8, 255);
+    const uint32_t C_LINENO  = sty->text_dim;
+
+    dai_ui_clip_begin(ui, x + 1.0f, y + 1.0f, w - 2.0f, h - 2.0f);
+    int first_line = (int)(st->scroll_y / LH);
+    if (first_line < 0) first_line = 0;
+    int last_line = first_line + (int)(h / LH) + 2;
+    if (last_line > nlines) last_line = nlines;
+    int caret_line = code_line_of(buf, st->caret);
+    int lo = sel_lo(), hi = sel_hi();
+
+    // A block comment can start on a line above the first one drawn, so the
+    // scan begins at the top of the file. Only the state is carried, not the
+    // drawing - this costs one pass over the bytes and nothing else.
+    bool in_block = false;
+    {
+        int upto = code_offset_of_line(buf, first_line);
+        for (int i = 0; i + 1 < upto; ++i) {
+            if (!in_block && buf[i] == '/' && buf[i + 1] == '*') { in_block = true; ++i; }
+            else if (in_block && buf[i] == '*' && buf[i + 1] == '/') { in_block = false; ++i; }
+        }
+    }
+
+    for (int ln = first_line; ln < last_line; ++ln) {
+        float ry = y + 4.0f + (float)ln * LH - st->scroll_y;
+        int ls = code_offset_of_line(buf, ln), le = code_line_end(buf, ls);
+
+        if (ln == caret_line && st->focused)
+            dai_ui_rect(ui, x + GUT + 1.0f, ry - 1.0f, w - GUT - 2.0f, LH,
+                        (sty->accent & 0x00FFFFFFu) | 0x18000000u);
+
+        char nb[16];
+        std::snprintf(nb, sizeof(nb), "%d", ln + 1);
+        float nw = dai_ui_text_width(ui, nb);
+        dai_ui_text(ui, x + GUT - 8.0f - nw, ry, nb,
+                    ln == caret_line ? sty->text : C_LINENO);
+
+        // selection band
+        if (hi > lo && hi > ls && lo <= le) {
+            int a = lo > ls ? lo : ls, b = hi < le ? hi : le;
+            float ax = TEXT_X + code_run_w(ui, buf + ls, a - ls) - st->scroll_x;
+            float bw = code_run_w(ui, buf + a, b - a);
+            if (b == le && hi > le) bw += 6.0f;      // the newline, visibly
+            dai_ui_rect(ui, ax, ry - 1.0f, bw, LH, (sty->accent & 0x00FFFFFFu) | 0x66000000u);
+        }
+
+        // ---- one line, token by token -------------------------------------
+        float tx = TEXT_X - st->scroll_x;
+        int i = ls;
+        while (i < le) {
+            int start = i;
+            uint32_t col = C_TEXT;
+            if (in_block) {
+                while (i < le && !(buf[i] == '*' && i + 1 < le && buf[i + 1] == '/')) ++i;
+                if (i < le) { i += 2; in_block = false; }
+                col = C_COMMENT;
+            } else if (buf[i] == '/' && i + 1 < le && buf[i + 1] == '/') {
+                i = le; col = C_COMMENT;
+            } else if (buf[i] == '/' && i + 1 < le && buf[i + 1] == '*') {
+                in_block = true; i += 2;
+                while (i < le && !(buf[i] == '*' && i + 1 < le && buf[i + 1] == '/')) ++i;
+                if (i < le) { i += 2; in_block = false; }
+                col = C_COMMENT;
+            } else if (buf[i] == '"' || buf[i] == '\'') {
+                char q = buf[i++];
+                while (i < le && buf[i] != q) { if (buf[i] == '\\' && i + 1 < le) ++i; ++i; }
+                if (i < le) ++i;
+                col = C_STRING;
+            } else if (buf[i] >= '0' && buf[i] <= '9') {
+                while (i < le && ((buf[i] >= '0' && buf[i] <= '9') || buf[i] == '.')) ++i;
+                col = C_NUMBER;
+            } else if (code_is_word(buf[i])) {
+                while (i < le && code_is_word(buf[i])) ++i;
+                col = code_is_keyword(buf + start, i - start) ? C_KEYWORD : C_TEXT;
+            } else {
+                ++i;
+                col = C_TEXT;
+            }
+            int n = i - start;
+            if (n > 0 && tx < x + w) {
+                char tmp[512];
+                int cn = n < (int)sizeof(tmp) - 1 ? n : (int)sizeof(tmp) - 1;
+                std::memcpy(tmp, buf + start, (size_t)cn);
+                tmp[cn] = 0;
+                if (tx + code_run_w(ui, tmp, cn) > x + GUT)   // skip what is left of view
+                    dai_ui_text(ui, tx, ry, tmp, col);
+                tx += code_run_w(ui, tmp, cn);
+            }
+        }
+    }
+
+    // the caret itself
+    if (st->focused) {
+        st->blink += 1.0f / 60.0f;
+        if (st->blink > 1.06f) st->blink = 0.0f;
+        if (st->blink < 0.66f) {
+            float cx, cy;
+            caret_xy(st->caret, &cx, &cy);
+            dai_ui_rect(ui, cx - st->scroll_x, cy - st->scroll_y - 1.0f, 1.5f, LH, sty->text);
+        }
+    }
+    dai_ui_clip_end(ui);
     return changed;
 }
 
@@ -1511,8 +2404,8 @@ int dai_ui_option_at(dai_ui *ui, const char *id_str, float x, float y, float w, 
     }
 
     // ---- the closed field
-    dai_ui_rect(ui, x, y + 1.0f, w, h - 2.0f,
-                open ? ui->style.button_hover : (over ? ui->style.button_hover : ui->style.track));
+    dai_ui_rrect(ui, x, y + 1.0f, w, h - 2.0f, ui->style.rounding,
+                 open ? ui->style.button_hover : (over ? ui->style.button_hover : ui->style.track));
     dai_ui_rect_outline(ui, x, y + 1.0f, w, h - 2.0f, 1.0f,
                         open ? ui->style.accent : ui->style.panel_border);
     dai_ui_text(ui, x + 6.0f, y + (h - dai_font_line_height(ui->font)) * 0.5f,
@@ -1935,7 +2828,7 @@ int dai_ui_text_field(dai_ui *ui, const char *id_str, float x, float y, float w,
         if (!ui->edit.editing) { edit_open(ui, id, buf, false, true); ui->edit.opened_now = false; }
     }
     bool editing = ui->edit.editing && ui->edit.id == id;
-    dai_ui_rect(ui, x, y, w, h, ui->style.track);
+    dai_ui_rrect(ui, x, y, w, h, ui->style.rounding, ui->style.track);
     dai_ui_rect_outline(ui, x, y, w, h, 1.0f,
                         editing ? ui->style.accent : ui->style.panel_border);
     int changed = text_field_impl(ui, id, x, y, w, h, buf, buf_size, false, true,
@@ -1992,6 +2885,17 @@ int dai_ui_tree_item(dai_ui *ui, const char *label, int depth, int has_children,
 
 int dai_ui_tree_item_ex(dai_ui *ui, const char *label, int depth,
                         int has_children, int *open, int selected) {
+    return dai_ui_tree_item_icon(ui, nullptr, label, depth, has_children, open, selected);
+}
+
+// The colour of the LAST row's label, consumed by dai_ui_tree_item_icon on the
+// next call. A parameter would have meant touching every call site for one
+// case; this is the same trick the style stack is, scoped to one row.
+static uint32_t g_tree_label_col = 0;
+void dai_ui_tree_label_color(dai_ui *ui, uint32_t rgba) { (void)ui; g_tree_label_col = rgba; }
+
+int dai_ui_tree_item_icon(dai_ui *ui, const char *icon, const char *label, int depth,
+                          int has_children, int *open, int selected) {
     if (!ui || !label) return 0;
     float h = dai_font_line_height(ui->font) + 2.0f;
     float x, y;
@@ -1999,6 +2903,7 @@ int dai_ui_tree_item_ex(dai_ui *ui, const char *label, int depth,
     float w = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
     float indent = 12.0f * (float)(depth < 0 ? 0 : depth);
 
+    ui->last_x = x; ui->last_y = y; ui->last_w = w; ui->last_h = h;
     uint64_t id = hash_id(label, x, y);
     bool over = inside_chk(ui, x, y, w, h);
     if (over) { ui->hot = id; ui->mouse_over_ui = true; }
@@ -2039,7 +2944,19 @@ int dai_ui_tree_item_ex(dai_ui *ui, const char *label, int depth,
             }
         }
     }
-    dai_ui_text(ui, x + indent + arrow_w + 2.0f, y + 1.0f, label, ui->style.text);
+    float tx = x + indent + arrow_w + 2.0f;
+    if (icon && dai_ui_has_icon(ui, icon)) {
+        float isz = dai_icons_size(ui->icons);
+        if (isz <= 0.0f || isz > h) isz = h - 2.0f;
+        // Tinted like the text, dimmer when the row is not selected: an icon
+        // column that shouts is a column you read instead of the names.
+        dai_ui_icon_at(ui, icon, tx, y + (h - isz) * 0.5f, isz,
+                       selected ? ui->style.text : ui->style.text_dim);
+        tx += isz + 4.0f;
+    }
+    dai_ui_text(ui, tx, y + 1.0f, label,
+                g_tree_label_col ? g_tree_label_col : ui->style.text);
+    g_tree_label_col = 0;      // one row only: it is set immediately before
     return clicked;
 }
 
@@ -2082,44 +2999,104 @@ int dai_ui_tree_rename(dai_ui *ui, char *buf, size_t buf_size, int depth,
 void dai_ui_scroll_begin(dai_ui *ui, const char *id_str, float height) {
     if (!ui) return;
     float x, y;
-    next_rect(ui, 0, height, &x, &y);
+    // Place, do not advance: the region clips what is inside it, so reserving
+    // its height in the layout moved whatever follows by the region's height
+    // EVERY frame - which is exactly the snap-back when you scrolled down.
+    x = ui->cursor_x; y = ui->cursor_y;
     float w = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
     uint64_t id = hash_id(id_str ? id_str : "scroll", x, y);
     float &off = ui->scroll_of(id);
 
+    // Only scroll what CAN scroll. The limit is last frame's - one frame of
+    // lag on a value that only changes when the panel's contents change, and
+    // the alternative is a visible jump every time the wheel is touched over
+    // a list that already fits.
+    float limit = ui->scroll_max_of(id);
     if (inside_chk(ui, x, y, w, height)) {
         ui->mouse_over_ui = true;
-        if (ui->input.wheel != 0.0f) off -= ui->input.wheel * 32.0f;
+        if (ui->input.wheel != 0.0f && limit > 0.0f) off -= ui->input.wheel * 32.0f;
     }
     if (off < 0.0f) off = 0.0f;
+    if (off > limit) off = limit;
 
     ui->scroll_stack.push_back(dai_ui::ScrollFrame{ id, x, y, w, height, y });
+    // The bar lives in the last ten pixels; nothing else may be laid out
+    // there or every field's button ends up underneath it.
+    ui->scroll_saved_panel_w.push_back(ui->panel_w);
+    if (ui->in_panel && ui->panel_w > 60.0f) ui->panel_w -= 10.0f;
     ui->clips.push_back(dai_ui::Clip{ x, y, x + w, y + height });
     // The layout continues inside the region, shifted by the scroll offset.
     ui->cursor_x = x;
     ui->cursor_y = y - off;
 }
 
+void dai_ui_scroll_reveal(dai_ui *ui, float y, float h) {
+    if (!ui || ui->scroll_stack.empty()) return;
+    const dai_ui::ScrollFrame &f = ui->scroll_stack.back();
+    float &off = ui->scroll_of(f.id);
+    float top = f.y + 2.0f, bot = f.y + f.h - 2.0f;
+    if (y < top)              off -= (top - y);
+    else if (y + h > bot)     off += (y + h - bot);
+    if (off < 0.0f) off = 0.0f;
+}
+
 void dai_ui_scroll_end(dai_ui *ui) {
     if (!ui || ui->scroll_stack.empty()) return;
     dai_ui::ScrollFrame f = ui->scroll_stack.back();
     ui->scroll_stack.pop_back();
+    if (!ui->scroll_saved_panel_w.empty()) {
+        ui->panel_w = ui->scroll_saved_panel_w.back();
+        ui->scroll_saved_panel_w.pop_back();
+    }
     if (!ui->clips.empty()) ui->clips.pop_back();
 
     float &off = ui->scroll_of(f.id);
-    float content = (ui->cursor_y + off) - f.start_y;
+    // The cursor sits one `spacing` past the last widget - that gap is not
+    // content, and counting it made a panel that fits exactly report a few
+    // pixels of overflow. The wheel then moved those few pixels and the
+    // clamp put them straight back: scrolling that only ever jittered.
+    float content = (ui->cursor_y + off) - f.start_y - ui->style.spacing;
     float max_off = content - f.h;
-    if (max_off < 0.0f) max_off = 0.0f;
+    if (max_off < 2.0f) max_off = 0.0f;   // under two pixels is not scrolling
     if (off > max_off) off = max_off;
+    // What the NEXT frame's wheel is allowed to do.
+    ui->scroll_max_of(f.id) = max_off;
 
     if (max_off > 0.0f) {
-        float track_x = f.x + f.w - 4.0f;
+        float track_x = f.x + f.w - 7.0f;
+        float track_w = 6.0f;
         float frac = f.h / (content > 0 ? content : 1.0f);
         float bar_h = f.h * (frac > 1 ? 1 : frac);
-        if (bar_h < 16.0f) bar_h = 16.0f;
+        if (bar_h < 20.0f) bar_h = 20.0f;
         float t = off / max_off;
-        dai_ui_rect(ui, track_x, f.y, 4.0f, f.h, ui->style.track);
-        dai_ui_rect(ui, track_x, f.y + (f.h - bar_h) * t, 4.0f, bar_h, ui->style.button_hover);
+        float bar_y = f.y + (f.h - bar_h) * t;
+        // Draggable: press anywhere on the bar and the offset follows the
+        // pointer, press the track and it jumps there. Both are what every
+        // other scrollbar does, and neither existed.
+        float mx = ui->input.mouse_x, my = ui->input.mouse_y;
+        bool over = mx >= track_x - 3.0f && mx < track_x + track_w + 3.0f &&
+                    my >= f.y && my < f.y + f.h;
+        bool pressed = ui->input.mouse_down && !ui->prev.mouse_down;
+        if (over && pressed && inside_chk(ui, f.x, f.y, f.w, f.h)) {
+            ui->scroll_drag_id = f.id;
+            ui->scroll_grab = (my >= bar_y && my < bar_y + bar_h) ? (my - bar_y) : bar_h * 0.5f;
+        }
+        if (!ui->input.mouse_down) ui->scroll_drag_id = 0;
+        if (ui->scroll_drag_id == f.id && ui->input.mouse_down) {
+            float span = f.h - bar_h;
+            float rel = span > 0.5f ? (my - ui->scroll_grab - f.y) / span : 0.0f;
+            if (rel < 0.0f) rel = 0.0f;
+            if (rel > 1.0f) rel = 1.0f;
+            off = rel * max_off;
+            bar_y = f.y + span * rel;
+            ui->mouse_over_ui = true;
+        }
+        uint32_t bc = (over || ui->scroll_drag_id == f.id) ? ui->style.accent
+                                                           : ui->style.button_hover;
+        dai_ui_rrect(ui, track_x, f.y, track_w, f.h, 3.0f, ui->style.track);
+        dai_ui_rrect(ui, track_x, bar_y, track_w, bar_h, 3.0f, bc);
+    } else if (ui->scroll_drag_id == f.id) {
+        ui->scroll_drag_id = 0;
     }
     ui->cursor_x = ui->in_panel ? ui->panel_x + ui->style.padding : 0.0f;
     ui->cursor_y = f.y + f.h + ui->style.spacing;
@@ -2141,16 +3118,70 @@ int dai_ui_right_pressed(const dai_ui *ui) {
     return ui ? (ui->input.right_down && !ui->prev.right_down) : 0;
 }
 
+int dai_ui_icon_button_at(dai_ui *ui, const char *name, float x, float y,
+                          float w, float h, int active) {
+    if (!ui) return 0;
+    uint64_t id = hash_id(name ? name : "icon", x, y);
+    bool over = inside_chk(ui, x, y, w, h);
+    if (over) { ui->hot = id; ui->mouse_over_ui = true; }
+    bool pressed = false;
+    if (over && ui->input.mouse_down && !ui->prev.mouse_down) ui->active = id;
+    if (ui->active == id && !ui->input.mouse_down) { pressed = over; ui->active = 0; }
+
+    uint32_t bg = active ? ui->style.accent : (over ? ui->style.button_hover : ui->style.button);
+    dai_ui_rrect(ui, x, y, w, h, ui->style.rounding, bg);
+    float isz = h - 10.0f;
+    dai_ui_icon_at(ui, name, x + (w - isz) * 0.5f, y + 5.0f, isz,
+                   active ? 0xFF101010u : ui->style.text);
+    return pressed ? 1 : 0;
+}
+
+void dai_ui_popup_panel_begin(dai_ui *ui, dai_ui_popup *m, float w, float min_h) {
+    if (!ui || !m) return;
+    float x = m->x, y = m->y;
+    float h = min_h > 0.0f ? min_h : 400.0f;   // clipped to content by the panel
+    if (x + w > ui->width) x = ui->width - w - 4.0f;
+    if (y + h > ui->height) y = ui->height - h - 4.0f;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    // Same treatment as dai_ui_popup_menu: own layer, no clip, click outside
+    // dismisses. The panel state lives on dai_ui so _end can restore it.
+    ui->pp_save_layer = ui->cur_layer;
+    ui->pp_save_clips.swap(ui->clips);
+    ui->cur_layer = (1 << 20) - 2;
+    ui->in_popup = false;
+    ui->pp_menu = m;
+    float mx = ui->input.mouse_x, my = ui->input.mouse_y;
+    bool over = mx >= x && mx < x + w && my >= y && my < y + h;
+    if (ui->input.mouse_down && !ui->prev.mouse_down && !over) m->open = 0;
+    dai_ui_rect(ui, x + 2.0f, y + 3.0f, w, h, ui->style.shadow);
+    dai_ui_rect(ui, x, y, w, h, ui->style.panel);
+    dai_ui_rect_outline(ui, x, y, w, h, 1.0f, ui->style.panel_border);
+    dai_ui_panel_begin(ui, x + 4.0f, y + 4.0f, w - 8.0f, h - 8.0f, nullptr);
+}
+
+void dai_ui_popup_panel_end(dai_ui *ui) {
+    if (!ui) return;
+    dai_ui_panel_end(ui);
+    ui->cur_layer = ui->pp_save_layer;
+    ui->clips.swap(ui->pp_save_clips);
+    if (ui->input.key_escape && ui->pp_menu) ui->pp_menu->open = 0;
+    ui->pp_menu = nullptr;
+}
+
 void dai_ui_popup_open(dai_ui_popup *m, float x, float y) {
     if (!m) return;
-    m->x = x; m->y = y; m->open = 1;
+    m->x = x; m->y = y; m->open = 1; m->placed = 0;
 }
 
 void dai_ui_popup_close(dai_ui_popup *m) { if (m) m->open = 0; }
 
 int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
                       const dai_ui_menu_item *items, uint32_t count) {
-    if (!ui || !m || !m->open || !items || !count) return -2;
+    if (!ui || !m || !m->open) return -2;
+    // An empty menu is not a menu. Closing it here is the difference between
+    // "nothing happened" and a button that stays stuck open for ever.
+    if (!items || !count) { m->open = 0; return -1; }
 
     float row_h = dai_font_line_height(ui->font) + 8.0f;
     float pad = 4.0f;
@@ -2170,6 +3201,23 @@ int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
     if (y + h > ui->height) y = ui->height - h - 4.0f;
     if (x < 0) x = 0;
     if (y < 0) y = 0;
+    // Never let the menu land beside the pointer: it is dismissed by a press
+    // that is not over it, and the press that OPENED it is still the current
+    // one on the frame it first draws. ONCE, on the first frame - doing it
+    // every frame is a menu that follows the mouse around the screen.
+    if (!m->placed) {
+        float mx0 = ui->input.mouse_x, my0 = ui->input.mouse_y;
+        if (mx0 >= 0.0f && my0 >= 0.0f) {
+            if (mx0 < x)          x = mx0 - 6.0f;
+            if (mx0 >= x + w)     x = mx0 - w + 6.0f;
+            if (my0 < y)          y = my0 - 6.0f;
+            if (my0 >= y + h)     y = my0 - h + 6.0f;
+            if (x < 0) x = 0;
+            if (y < 0) y = 0;
+        }
+        m->x = x; m->y = y;      // frozen: the menu does not move again
+        m->placed = 1;
+    }
 
     int result = -2;
     float mx = ui->input.mouse_x, my = ui->input.mouse_y;
@@ -2195,9 +3243,15 @@ int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
     int hovered = -1;
     if (over && result == -2)
         hovered = (int)((my - y - pad) / row_h);
+    // A caption row is not a choice: it must not highlight and it must not be
+    // returned. A confirm box built from "the question" plus "the action"
+    // otherwise reads as two answers to a yes/no question, which is one
+    // answer too many.
+    if (hovered >= 0 && hovered < (int)count && items[hovered].header) hovered = -1;
 
     for (uint32_t i = 0; i < count; ++i) {
         float ry = y + pad + row_h * (float)i;
+        bool head = items[i].header != 0;
         if ((int)i == hovered)
             dai_ui_rect(ui, x + 1.0f, ry, w - 2.0f, row_h, ui->style.button_hover);
         float tx = x + 8.0f;
@@ -2206,7 +3260,12 @@ int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
             dai_ui_icon_at(ui, items[i].icon, tx, ry + 4.0f, isz, ui->style.text_dim);
             tx += isz + 6.0f;
         }
-        dai_ui_text(ui, tx, ry + 4.0f, items[i].label, ui->style.text);
+        dai_ui_text(ui, tx, ry + 4.0f, items[i].label,
+                    head ? ui->style.text_dim : ui->style.text);
+        if (head) {
+            float ry2 = ry + row_h - 1.0f;
+            dai_ui_rect(ui, x + 6.0f, ry2, w - 12.0f, 1.0f, ui->style.panel_border);
+        }
         if (items[i].shortcut) {
             float sw = dai_ui_text_width(ui, items[i].shortcut);
             dai_ui_text(ui, x + w - sw - 8.0f, ry + 4.0f, items[i].shortcut,
@@ -2250,8 +3309,12 @@ int dai_ui_num_field(dai_ui *ui, const char *label, float *value,
     if (!ui || !value) return 0;
     float h = widget_height(ui), x, y, w;
     field_rect(ui, label, &x, &y, &w, h);
-    return num_field_at(ui, x, y, w, h, value, step, min, max,
-                        id ? id : (label ? label : "num"), true, 0, nullptr);
+    float lx = g_label_x, ly = g_label_y, lw = g_label_w;
+    const char *ids = id ? id : (label ? label : "num");
+    int changed = num_field_at(ui, x, y, w, h, value, step, min, max, ids, true, 0, nullptr);
+    changed |= label_scrub(ui, hash_id(ids, lx, ly) ^ 0xD1B54A32D192ED03ull,
+                           lx, ly, lw, h, value, step, min, max);
+    return changed;
 }
 
 int num_field_at(dai_ui *ui, float x, float y, float w, float h, float *value,
@@ -2384,6 +3447,192 @@ int dai_ui_image_button(dai_ui *ui, dai_texture tex, float w, float h,
                 ui->active == id ? ui->style.button_active : over ? ui->style.button_hover : ui->style.button);
     ui->quad(tex, x, y, x + w, y + h, u0, v0, u1, v1, 0xFFFFFFFFu);
     return pressed ? 1 : 0;
+}
+
+// ------------------------------------------------------------------ arrays
+
+int dai_ui_array_begin(dai_ui *ui, const char *label, int *count,
+                       int *open, int min_n, int max_n) {
+    if (!ui || !count) return 0;
+    float h = 20.0f;
+    float x = ui->in_panel ? ui->panel_x + ui->style.padding : 0.0f;
+    float w = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    float y = ui->cursor_y;
+    dai_ui_advance(ui, 0, h + 1.0f);
+
+    bool over_head = inside_chk(ui, x, y, w - 56.0f, h);
+    bool pressed = ui->input.mouse_down && !ui->prev.mouse_down;
+    if (over_head) { ui->mouse_over_ui = true; ui->cursor_want = DAI_CURSOR_HAND; }
+    int is_open = open ? (*open ? 1 : 0) : 1;
+    if (over_head && pressed && open) { *open = !*open; is_open = *open ? 1 : 0; }
+
+    // The foldout, then the name. No background: Unity's array header is part
+    // of the component it lives in, not a box inside it.
+    const char *chev = is_open ? DAI_ICON_CHEVRON_D : DAI_ICON_CHEVRON_R;
+    float isz = 12.0f;
+    if (dai_ui_has_icon(ui, chev))
+        dai_ui_icon_at(ui, chev, x + 2.0f, y + (h - isz) * 0.5f, isz,
+                       over_head ? ui->style.text : ui->style.text_dim);
+    float lh = dai_font_line_height(ui->font);
+    dai_ui_text(ui, x + 18.0f, y + (h - lh) * 0.5f, label ? label : "Array",
+                ui->style.text);
+
+    // The size, on the right, typeable - that is where Unity puts it and
+    // typing 4 into it is how you make four of something.
+    float bw = 48.0f;
+    float fv = (float)*count;
+    if (num_field_at(ui, x + w - bw, y + 1.0f, bw, h - 2.0f, &fv, 1.0f,
+                     (float)min_n, (float)max_n, "arrsize", false, 0, nullptr)) {
+        int nv = (int)(fv + 0.5f);
+        if (nv < min_n) nv = min_n;
+        if (nv > max_n) nv = max_n;
+        *count = nv;
+    }
+    return is_open;
+}
+
+int dai_ui_array_object_row(dai_ui *ui, int index, const char *value,
+                            const char *icon) {
+    if (!ui) return 0;
+    float h = widget_height(ui);
+    float x = ui->in_panel ? ui->panel_x + ui->style.padding : 0.0f;
+    float w = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    float y = ui->cursor_y;
+    dai_ui_advance(ui, 0, h + 1.0f);
+
+    // The handle. It does not drag yet; it is what tells you the row belongs
+    // to a list rather than being another field that happens to be numbered.
+    float hx = x + 12.0f, hy = y + h * 0.5f - 3.0f;
+    for (int k = 0; k < 3; ++k)
+        dai_ui_rect(ui, hx, hy + (float)k * 3.0f, 9.0f, 1.0f, ui->style.text_dim);
+
+    char lbl[32];
+    std::snprintf(lbl, sizeof(lbl), "Element %d", index);
+    float lh = dai_font_line_height(ui->font);
+    dai_ui_text(ui, x + 28.0f, y + (h - lh) * 0.5f, lbl, ui->style.text_dim);
+
+    float fx = x + (ui->style.label_w > 90.0f ? ui->style.label_w : 90.0f);
+    float fw = x + w - fx;
+    if (fw < 60.0f) { fx = x + w * 0.45f; fw = w * 0.55f; }
+    float bw = h;
+    float vw = fw - bw - 2.0f;
+    if (vw < 20.0f) { vw = fw; bw = 0.0f; }
+
+    bool over_f = inside_chk(ui, fx, y, vw, h);
+    bool over_b = bw > 0.0f && inside_chk(ui, fx + vw + 2.0f, y, bw, h);
+    char rid[24];
+    std::snprintf(rid, sizeof(rid), "arrrow%d", index);
+    uint64_t aid = hash_id(rid, fx, y);
+    if (over_f || over_b) { ui->mouse_over_ui = true; ui->cursor_want = DAI_CURSOR_HAND; }
+    if ((over_f || over_b) && ui->input.mouse_down && !ui->prev.mouse_down) ui->active = aid;
+    bool pressed = false;
+    if (ui->active == aid && !ui->input.mouse_down) { pressed = over_f || over_b; ui->active = 0; }
+
+    dai_ui_rrect(ui, fx, y + 1.0f, vw, h - 2.0f, ui->style.rounding,
+                 over_f ? ui->style.button_hover : ui->style.track);
+    dai_ui_rect_outline(ui, fx, y + 1.0f, vw, h - 2.0f, 1.0f, ui->style.panel_border);
+    float isz = dai_icons_size(ui->icons);
+    if (isz <= 0.0f || isz > h - 4.0f) isz = h - 6.0f;
+    float tx = fx + 5.0f;
+    if (icon && dai_ui_has_icon(ui, icon)) {
+        dai_ui_icon_at(ui, icon, tx, y + (h - isz) * 0.5f, isz, ui->style.accent);
+        tx += isz + 4.0f;
+    }
+    dai_ui_text(ui, tx, y + (h - lh) * 0.5f, value ? value : "None", ui->style.text);
+    if (bw > 0.0f) {
+        float bx = fx + vw + 2.0f;
+        dai_ui_rrect(ui, bx, y + 1.0f, bw, h - 2.0f, ui->style.rounding,
+                     over_b ? ui->style.button_hover : ui->style.button);
+        if (dai_ui_has_icon(ui, "target"))
+            dai_ui_icon_at(ui, "target", bx + (bw - isz) * 0.5f, y + (h - isz) * 0.5f,
+                           isz, ui->style.text);
+    }
+    return pressed ? 1 : 0;
+}
+
+int dai_ui_array_end(dai_ui *ui, int count, int min_n, int max_n) {
+    if (!ui) return 0;
+    float h = 18.0f;
+    float x = ui->in_panel ? ui->panel_x + ui->style.padding : 0.0f;
+    float w = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    float y = ui->cursor_y;
+    dai_ui_advance(ui, 0, h + 3.0f);
+
+    float bw = 22.0f;
+    float px = x + w - bw * 2.0f - 1.0f, mx2 = x + w - bw;
+    int add = dai_ui_icon_button_at(ui, DAI_ICON_PLUS, px, y, bw, h, 0);
+    // A minus glyph the set does not have: two pixels of line, exactly where
+    // the plus has its horizontal bar, so the pair reads as a pair.
+    bool over_m = inside_chk(ui, mx2, y, bw, h);
+    bool pressed = ui->input.mouse_down && !ui->prev.mouse_down;
+    if (over_m) { ui->mouse_over_ui = true; ui->cursor_want = DAI_CURSOR_HAND; }
+    dai_ui_rrect(ui, mx2, y, bw, h, ui->style.rounding,
+                 over_m ? ui->style.button_hover : ui->style.button);
+    dai_ui_rect(ui, mx2 + bw * 0.5f - 4.0f, y + h * 0.5f - 1.0f, 8.0f, 2.0f,
+                count > min_n ? ui->style.text : ui->style.text_dim);
+    int sub = (over_m && pressed) ? 1 : 0;
+
+    if (add && count < max_n) return +1;
+    if (sub && count > min_n) return -1;
+    return 0;
+}
+
+// ------------------------------------------------------------ segmented
+
+int dai_ui_segmented(dai_ui *ui, const char *const *labels, int count, int *value) {
+    if (!ui || !labels || count <= 0 || !value) return 0;
+    float h = widget_height(ui) + 4.0f;
+    float x = ui->in_panel ? ui->panel_x + ui->style.padding : 0.0f;
+    float w = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    float y = ui->cursor_y;
+    dai_ui_advance(ui, 0, h + ui->style.spacing);
+
+    // One track, N cells, the selected one lifted out of it. Marking the
+    // selection by wrapping the label in [brackets] is a debug print, not a
+    // control - it does not say "these are the choices" at a glance.
+    dai_ui_rrect(ui, x, y, w, h, ui->style.rounding + 1.0f, ui->style.track);
+    dai_ui_rect_outline(ui, x, y, w, h, 1.0f, ui->style.panel_border);
+
+    int changed = 0;
+    float cw = w / (float)count;
+    float lh = dai_font_line_height(ui->font);
+    for (int i = 0; i < count; ++i) {
+        float cx = x + cw * (float)i;
+        bool over = inside_chk(ui, cx, y, cw, h);
+        bool sel = (*value == i);
+        if (over) { ui->mouse_over_ui = true; ui->cursor_want = DAI_CURSOR_HAND; }
+        if (sel)
+            dai_ui_rrect(ui, cx + 2.0f, y + 2.0f, cw - 4.0f, h - 4.0f,
+                         ui->style.rounding, ui->style.button_active);
+        else if (over)
+            dai_ui_rrect(ui, cx + 2.0f, y + 2.0f, cw - 4.0f, h - 4.0f,
+                         ui->style.rounding, ui->style.button_hover);
+        const char *lbl = labels[i] ? labels[i] : "";
+        float tw = dai_ui_text_width(ui, lbl);
+        dai_ui_text(ui, cx + (cw - tw) * 0.5f, y + (h - lh) * 0.5f, lbl,
+                    sel ? ui->style.text : ui->style.text_dim);
+        if (over && ui->input.mouse_down && !ui->prev.mouse_down && *value != i) {
+            *value = i;
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
+// A section heading: the label, and a rule that runs to the right edge. The
+// inspector already groups things; the settings page grouped nothing, so it
+// read as one list of forty unrelated rows.
+void dai_ui_section(dai_ui *ui, const char *title) {
+    if (!ui) return;
+    float x = ui->in_panel ? ui->panel_x + ui->style.padding : 0.0f;
+    float w = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    float y = ui->cursor_y;
+    float lh = dai_font_line_height(ui->font);
+    dai_ui_advance(ui, 0, lh + 12.0f);
+    dai_ui_text(ui, x, y + 6.0f, title ? title : "", ui->style.text);
+    float tw = dai_ui_text_width(ui, title ? title : "") + 10.0f;
+    if (tw < w - 8.0f)
+        dai_ui_rect(ui, x + tw, y + 6.0f + lh * 0.5f, w - tw, 1.0f, ui->style.panel_border);
 }
 
 } // extern "C"

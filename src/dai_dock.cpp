@@ -17,16 +17,75 @@
 
 namespace {
 
-const float TAB_H    = 21.0f;   // height of a tab bar
+// Tall enough that a 13 px line with descenders fits with air above and below:
+// 21 clipped the tail of every 'p' and 'y' in a tab title, which is what "the
+// tabs are cut off at the bottom" was.
+const float TAB_H    = 26.0f;   // height of a tab bar
 const float SPLIT_W  = 4.0f;    // grab width of a splitter
 const float MIN_SIDE = 60.0f;   // a panel narrower than this is not a panel
-const float DROP_ZONE_FRAC = 0.30f;
-const float DROP_ZONE_MAX  = 120.0f;
+// The middle square of a leaf means "as a tab"; outside it, the pointer
+// belongs to whichever EDGE it is proportionally nearest. Proportionally is
+// the point. The old rule was a band of min(42%, 220px) per side checked top,
+// bottom, left, right in that order - and on a short wide panel (the Project
+// window across the bottom of the editor, 200 px tall) top and bottom claimed
+// 84% of the height between them, so "right of Project" existed in a 30 pixel
+// stripe you had to find blind. Normalised distance has no such blind spot:
+// every edge of every panel is reachable at every aspect ratio.
+const float DROP_CORE = 0.24f;
+
+// The dock cross. These buttons ARE the drop target, not a picture of one.
+const float CROSS_B = 26.0f;   // button size
+const float CROSS_G = 3.0f;    // gap between them
+const float EDGE_B  = 30.0f;   // the outer buttons: dock against the LAYOUT
+const float EDGE_M  = 10.0f;   // how far in from the border they sit
 
 struct Rect { float x = 0, y = 0, w = 0, h = 0; };
 
 bool hit(const Rect &r, float x, float y) {
     return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+}
+
+struct Slot { Rect r; int kind; };
+
+// Over the leaf under the pointer: centre, left, right, top, bottom.
+void cross_slots(const Rect &r, Slot out[5]) {
+    float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
+    const float B = CROSS_B, G = CROSS_G;
+    out[0] = Slot{ Rect{ cx - B * 0.5f,     cy - B * 0.5f,     B, B }, 0 };
+    out[1] = Slot{ Rect{ cx - B * 1.5f - G, cy - B * 0.5f,     B, B }, 1 };
+    out[2] = Slot{ Rect{ cx + B * 0.5f + G, cy - B * 0.5f,     B, B }, 2 };
+    out[3] = Slot{ Rect{ cx - B * 0.5f,     cy - B * 1.5f - G, B, B }, 3 };
+    out[4] = Slot{ Rect{ cx - B * 0.5f,     cy + B * 0.5f + G, B, B }, 4 };
+}
+
+// Against the edges of the whole dock area: a full height column down one
+// side, a full width strip along the top or the bottom. Splitting a LEAF can
+// never produce those - a panel dropped left of the Hierarchy is only as tall
+// as the Hierarchy - and "put this down the entire left edge" is a thing
+// people want often enough that hunting for the one leaf that spans the
+// height is not an answer. Kinds 6..9.
+void edge_slots(const Rect &a, Slot out[4]) {
+    float cx = a.x + a.w * 0.5f, cy = a.y + a.h * 0.5f;
+    const float B = EDGE_B, M = EDGE_M;
+    out[0] = Slot{ Rect{ a.x + M,           cy - B * 0.5f,   B, B }, 6 };
+    out[1] = Slot{ Rect{ a.x + a.w - M - B, cy - B * 0.5f,   B, B }, 7 };
+    out[2] = Slot{ Rect{ cx - B * 0.5f,     a.y + M,         B, B }, 8 };
+    out[3] = Slot{ Rect{ cx - B * 0.5f,     a.y + a.h - M - B, B, B }, 9 };
+}
+
+// What a drop of this kind would cover, so the preview and the result agree.
+Rect drop_preview_rect(const Rect &r, const Rect &area, int kind) {
+    switch (kind) {
+    case 1: return Rect{ r.x, r.y, r.w * 0.4f, r.h };
+    case 2: return Rect{ r.x + r.w * 0.6f, r.y, r.w * 0.4f, r.h };
+    case 3: return Rect{ r.x, r.y, r.w, r.h * 0.4f };
+    case 4: return Rect{ r.x, r.y + r.h * 0.6f, r.w, r.h * 0.4f };
+    case 6: return Rect{ area.x, area.y, area.w * 0.25f, area.h };
+    case 7: return Rect{ area.x + area.w * 0.75f, area.y, area.w * 0.25f, area.h };
+    case 8: return Rect{ area.x, area.y, area.w, area.h * 0.25f };
+    case 9: return Rect{ area.x, area.y + area.h * 0.75f, area.w, area.h * 0.25f };
+    default: return r;
+    }
 }
 
 // A node is either a split (axis 1 = side by side, 2 = stacked) with exactly
@@ -61,6 +120,21 @@ Node *find_tab(Node *n, const std::string &title, int *index) {
     }
     Node *r = find_tab(n->a, title, index);
     return r ? r : find_tab(n->b, title, index);
+}
+
+// Every leaf that holds this title, with the tab's index inside it. A title is
+// no longer unique - "Inspector" can be open twice - so the host asks for them
+// one after another and this is what it counts through.
+void collect_tab_leaves(Node *n, const std::string &title,
+                        std::vector<std::pair<Node *, int>> *out) {
+    if (!n) return;
+    if (n->leaf()) {
+        for (size_t i = 0; i < n->tabs.size(); ++i)
+            if (n->tabs[i] == title) out->push_back({ n, (int)i });
+        return;
+    }
+    collect_tab_leaves(n->a, title, out);
+    collect_tab_leaves(n->b, title, out);
 }
 
 Node *first_leaf(Node *n) {
@@ -110,6 +184,8 @@ struct dai_dock {
     std::string drag_title;
     bool  dragging = false;
     bool  drag_armed = false;      // pressed on a tab, not yet past the threshold
+    Node *drag_home = nullptr;     // the leaf the drag started in (reorder!)
+    int   reorder_at = -1;         // insertion index while hovering the home bar
     float press_x = 0, press_y = 0;
     float grab_dx = 0, grab_dy = 0;
     Rect  drag_preview;
@@ -131,6 +207,20 @@ struct dai_dock {
     std::string menu_tab;
     int   menu_bar_pressed = 0;      // this frame's press was the menu's
     int   menu_pending = 0;          // left press on the kebab, awaiting release
+
+    // How many instances of a title dai_dock_panel has already handed out THIS
+    // frame. Without it the host's
+    //     for (int inst = 0; dai_dock_panel(dock, "Inspector", ...); ++inst)
+    // never ends: the call kept answering with the same panel forever, the
+    // frame's vertex buffer grew until the process died of std::bad_alloc, and
+    // the editor never drew a single frame. The counter is what makes the loop
+    // terminate - it is not an optimisation.
+    std::vector<std::pair<std::string, int>> panel_seq;
+    int &seq_of(const std::string &t) {
+        for (auto &kv : panel_seq) if (kv.first == t) return kv.second;
+        panel_seq.push_back({ t, 0 });
+        return panel_seq.back().second;
+    }
 
     Node *find(const std::string &t, int *idx) {
         Node *n = find_tab(root, t, idx);
@@ -231,6 +321,8 @@ void split_into(dai_dock *d, Node *target, const std::string &title, int edge, f
 // into a bar selects it (you just put it there), registering a second view
 // must not - otherwise opening the editor shows the Game tab because it was
 // registered after the Scene tab.
+void unclose(dai_dock *d, const std::string &title);
+
 void add_tab_to(Node *leaf, const std::string &title, bool select, int at = -1) {
     if (!leaf->leaf()) leaf = first_leaf(leaf);
     if (!leaf) return;
@@ -247,6 +339,11 @@ void add_tab_to(Node *leaf, const std::string &title, bool select, int at = -1) 
 // different leaves. Whatever just moved (a drop, a restored layout), the
 // partner follows. `keep` is the tab whose location wins: the one that was
 // just dragged, or the first of the pair on a restore.
+void unclose(dai_dock *d, const std::string &title) {
+    for (size_t i = 0; i < d->closed.size(); ++i)
+        if (d->closed[i] == title) { d->closed.erase(d->closed.begin() + (long)i); return; }
+}
+
 void enforce_pair(dai_dock *d, const std::string &keep) {
     if (!d || d->lock_a.empty() || d->lock_b.empty()) return;
     const std::string &win   = keep == d->lock_b ? d->lock_b : d->lock_a;
@@ -289,6 +386,10 @@ void run_leaf_menu(dai_dock *d) {
     }
     int pick = dai_ui_popup_menu(ui, &d->leaf_menu, items.data(), (uint32_t)items.size());
     if (pick == -2) return;
+    if (pick == -1) {                      // dismissed: clicked outside it
+        d->menu_leaf = nullptr;
+        return;
+    }
     if (pick == 0) {
         // "Close Tab" - the closed list remembers it, so Add Tab can undo it.
         if (!d->is_closed(d->menu_tab)) d->closed.push_back(d->menu_tab);
@@ -297,10 +398,13 @@ void run_leaf_menu(dai_dock *d) {
         const std::string &t = d->regs[(size_t)addable[(size_t)(pick - 1)]].title;
         auto it = std::find(d->closed.begin(), d->closed.end(), t);
         if (it != d->closed.end()) d->closed.erase(it);
-        // A panel is a singleton: adding it here MOVES it here.
-        remove_tab(d, t);
+        // Only MOVE it here when it already exists somewhere - dragging a tab
+        // out of another leaf is what gives "the panel teleported" its name.
+        // A title the tree does not hold is a NEW instance (Inspector #2, a
+        // second Console): adding that is not a move, so nothing flickers by
+        // vanishing from somewhere first.
+        if (d->find(t.c_str(), nullptr)) remove_tab(d, t);
         add_tab_to(d->menu_leaf, t, true);
-        enforce_pair(d, t);
         layout(d->root, d->area);
         for (auto &f : d->floats) layout(f.root, f.rect);
     }
@@ -366,6 +470,11 @@ void draw_tab_bar(dai_dock *d, Node *leaf, bool focused) {
     dai_ui_mouse(ui, &mx, &my, &down, &pressed);
     bool over_bar = my >= r.y && my < r.y + TAB_H && mx >= r.x && mx < r.x + r.w;
 
+    // Whatever happens up here, it stays up here: the Scene/Game viewport
+    // behind the bar asks "was the mouse over UI?" and a click it cannot see
+    // as handled is a click that DESELECTS what you were working on.
+    if (over_bar) dai_ui_claim_mouse(ui);
+
     float tx = r.x;
     for (size_t i = 0; i < leaf->tabs.size(); ++i) {
         const std::string &t = leaf->tabs[i];
@@ -373,9 +482,20 @@ void draw_tab_bar(dai_dock *d, Node *leaf, bool focused) {
         bool sel = (int)i == leaf->selected;
         bool over = over_bar && mx >= tx && mx < tx + tw;
         uint32_t bg = sel ? st->panel : (over ? st->titlebar_focused : st->titlebar);
-        dai_ui_rect(ui, tx, r.y, tw - 1.0f, TAB_H, bg);
-        if (sel && focused) dai_ui_rect(ui, tx, r.y, tw - 1.0f, 2.0f, st->accent);
-        dai_ui_text(ui, tx + 8.0f, r.y + 3.0f, t.c_str(), sel ? st->text : st->text_dim);
+        // Tabs round at the TOP only: the bottom edge meets the panel body,
+        // and a rounded seam there reads as a gap, not as a tab.
+        // The tab body starts 3 px down: a tab that touches the top edge of
+        // its bar has no room to look rounded, which is why the corners were
+        // invisible no matter what radius they were given.
+        float ty = r.y + 3.0f, th = TAB_H - 3.0f;
+        dai_ui_rrect_mask(ui, tx, ty, tw - 2.0f, th, 7.0f, bg, 0x3);
+        // The accent stripe is INSET, or it paints square corners back over
+        // the round ones it is supposed to sit on.
+        if (sel && focused)
+            dai_ui_rrect_mask(ui, tx + 6.0f, ty, tw - 14.0f, 2.0f, 1.0f, st->accent, 0x3);
+        float lh = dai_ui_text_height(ui);
+        dai_ui_text(ui, tx + 9.0f, ty + (th - lh) * 0.5f, t.c_str(),
+                    sel ? st->text : st->text_dim);
         tx += tw;
     }
     // The ⋮ button of the leaf, at the right end of its bar.
@@ -389,6 +509,35 @@ void draw_tab_bar(dai_dock *d, Node *leaf, bool focused) {
 } // namespace
 
 extern "C" {
+
+int dai_dock_panel_rect(const dai_dock *d, const char *title, int index,
+                        float *x, float *y, float *w, float *h) {
+    if (!d || !title || index < 0) return 0;
+    int seen = 0;
+    auto walk = [&](Node *n, auto &&walk) -> int {
+        if (!n) return 0;
+        if (n->leaf()) {
+            for (size_t i = 0; i < n->tabs.size(); ++i) {
+                if (n->tabs[i] == title) {
+                    if (seen == index) {
+                        if (x) *x = n->rect.x;
+                        if (y) *y = n->rect.y;
+                        if (w) *w = n->rect.w;
+                        if (h) *h = n->rect.h;
+                        return 1;
+                    }
+                    ++seen;
+                }
+            }
+            return 0;
+        }
+        return walk(n->a, walk) || walk(n->b, walk);
+    };
+    if (walk(d->root, walk)) return 1;
+    for (const dai_dock::Floating &f : d->floats)
+        if (walk(f.root, walk)) return 1;
+    return 0;
+}
 
 dai_dock *dai_dock_create(void) {
     dai_dock *d = new dai_dock();
@@ -432,6 +581,12 @@ void dai_dock_open(dai_dock *d, const char *title) {
 
 void dai_dock_add(dai_dock *d, const char *title, int edge, float fraction) {
     if (!d || !title || !*title) return;
+    // Anything being ADDED is by definition not closed. Leaving it on the
+    // closed list gave a tab in the tree that dai_dock_panel refuses - the
+    // Settings panel that opened as a black rectangle, permanently, because
+    // the closed list is saved with the layout.
+    for (size_t i = 0; i < d->closed.size(); ++i)
+        if (d->closed[i] == title) { d->closed.erase(d->closed.begin() + (long)i); break; }
     for (const auto &r : d->regs)
         if (r.title == title) { dai_dock_open(d, title); return; }   // known: reopen it
     d->regs.push_back(dai_dock::Reg{ title, edge, fraction > 0.02f ? fraction : 0.22f, "" });
@@ -509,7 +664,13 @@ void dai_dock_close(dai_dock *d, const char *title) {
 
 int dai_dock_is_open(const dai_dock *d, const char *title) {
     if (!d || !title) return 0;
-    return const_cast<dai_dock *>(d)->is_closed(title) ? 0 : 1;
+    dai_dock *m = const_cast<dai_dock *>(d);
+    if (m->is_closed(title)) return 0;
+    // "Open" means IN THE TREE, not merely "never closed": a panel nobody
+    // ever added (Settings on first click) is not closed, and the old answer
+    // of 1 here made the opener believe the window already existed - so it
+    // never got added and could never appear at all.
+    return m->find(title, nullptr) ? 1 : 0;
 }
 
 uint32_t dai_dock_panels(const dai_dock *d, const char **out, uint32_t max) {
@@ -528,6 +689,9 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
     if (!d || !ui) return;
     d->ui = ui;
     d->area = Rect{ x, y, w, h };
+
+    // A new frame hands out the instances again from the first one.
+    for (auto &kv : d->panel_seq) kv.second = 0;
 
     // Panels that were registered but are not in the tree (a fresh session, a
     // reopened panel) get put back where they were registered.
@@ -736,6 +900,7 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
         !dai_ui_popup_active(ui)) {
         hit_leaf->selected = hit_tab;
         d->drag_armed = true;
+        d->drag_home = hit_leaf;
         d->drag_title = hit_leaf->tabs[(size_t)hit_tab];
         d->press_x = mx; d->press_y = my;
         d->grab_dx = mx - hit_x;
@@ -772,53 +937,167 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
         // drop handler always saw "nowhere" and the tab never docked.
         d->drag_kind = -1;
         d->drop_node = nullptr;
+        d->reorder_at = -1;
+        // Reorder FIRST: hovering the tab bar the drag started in, on the
+        // bar's strip, is the one gesture that means "put it between these
+        // two". Everything else still means dock/split/float.
+        if (d->drag_home) {
+            Rect hr = d->drag_home->rect;
+            bool on_home_bar = my >= hr.y && my < hr.y + TAB_H &&
+                               mx >= hr.x && mx < hr.x + hr.w;
+            if (on_home_bar && (int)d->drag_home->tabs.size() > 1) {
+                float cx = hr.x;
+                int at = (int)d->drag_home->tabs.size();
+                for (size_t i = 0; i < d->drag_home->tabs.size(); ++i) {
+                    float tw = tab_width(ui, d->drag_home->tabs[i]);
+                    if (mx < cx + tw * 0.5f) { at = (int)i; break; }
+                    cx += tw;
+                }
+                d->reorder_at = at;
+                d->drop_node = d->drag_home;
+                // the insertion line, like every file manager's
+                float ix = hr.x;
+                for (int i = 0; i < at && i < (int)d->drag_home->tabs.size(); ++i)
+                    ix += tab_width(ui, d->drag_home->tabs[(size_t)i]);
+                dai_ui_layer_push(ui, DAI_LAYER_DOCK_PREVIEW);
+                dai_ui_rect(ui, ix - 1.0f, hr.y + 3.0f, 2.0f, TAB_H - 4.0f,
+                            dai_ui_style_of(ui)->accent);
+                dai_ui_layer_pop(ui);
+            }
+        }
+        // Claimed either way: a reorder that does not claim the mouse lets the
+        // same press fall through to the 3D view and clear the selection.
         dai_ui_claim_mouse(ui);
-        // Find the drop target: tab bars first, then the edges of a body.
+        if (d->reorder_at >= 0) goto drag_target_done;
+        // Find the leaf under the pointer. A floating window is checked
+        // first and, once the pointer is inside one, the layout underneath is
+        // not a candidate at all - dropping "into" a window you cannot see is
+        // never what the gesture meant.
         Node *target = nullptr;
+        bool over_float = false;
         for (auto it = order.rbegin(); it != order.rend() && !target; ++it) {
             if (!hit(it->second->rect, mx, my)) continue;
+            over_float = true;
             std::vector<Node *> fl;
             collect_leaves(it->second->root, &fl);
             for (Node *leaf : fl) if (hit(leaf->rect, mx, my)) { target = leaf; break; }
         }
-        if (!target)
+        if (!target && !over_float)
             for (Node *leaf : leaves) if (hit(leaf->rect, mx, my)) { target = leaf; break; }
 
+        d->drop_node = target;
+        int kind = -1;
+        // 1. The leaf's own cross, first: it is drawn on top, it is the most
+        //    specific thing under the pointer, and it is what you were aiming
+        //    at if you were aiming at anything.
         if (target) {
-            d->drop_node = target;
+            Slot cs[5];
+            cross_slots(target->rect, cs);
+            for (const Slot &sl : cs) if (hit(sl.r, mx, my)) { kind = sl.kind; break; }
+        }
+        // 2. The outer buttons - the whole layout's edges.
+        if (kind < 0 && !over_float && hit(d->area, mx, my)) {
+            Slot es[4];
+            edge_slots(d->area, es);
+            for (const Slot &sl : es) if (hit(sl.r, mx, my)) { kind = sl.kind; break; }
+        }
+        if (target) {
             Rect r = target->rect;
-            if (my < r.y + TAB_H + 4.0f) {
-                d->drag_kind = 0;                        // into this tab bar
+            // 3. The tab bar strip still means "another tab of this one",
+            //    which is the gesture everybody tries before they find a
+            //    button, and it must keep working while the cross is up.
+            if (kind < 0 && my < r.y + TAB_H + 4.0f) {
+                kind = 0;
+                d->drag_kind = 0;
                 d->drag_preview = Rect{ r.x, r.y, r.w, TAB_H };
             } else {
-                float zw = std::min(r.w * DROP_ZONE_FRAC, DROP_ZONE_MAX);
-                float zh = std::min(r.h * DROP_ZONE_FRAC, DROP_ZONE_MAX);
-                if (mx < r.x + zw)              { d->drag_kind = 1; d->drag_preview = Rect{ r.x, r.y, r.w * 0.4f, r.h }; }
-                else if (mx > r.x + r.w - zw)   { d->drag_kind = 2; d->drag_preview = Rect{ r.x + r.w * 0.6f, r.y, r.w * 0.4f, r.h }; }
-                else if (my < r.y + zh)         { d->drag_kind = 3; d->drag_preview = Rect{ r.x, r.y, r.w, r.h * 0.4f }; }
-                else if (my > r.y + r.h - zh)   { d->drag_kind = 4; d->drag_preview = Rect{ r.x, r.y + r.h * 0.6f, r.w, r.h * 0.4f }; }
-                else                            { d->drag_kind = 0; d->drag_preview = Rect{ r.x, r.y, r.w, r.h }; }
+                // 4. Otherwise: the middle square is a tab, and everything
+                //    around it belongs to the nearest edge measured as a
+                //    FRACTION of the panel, so a wide short panel has a
+                //    usable right edge and a tall thin one a usable top.
+                if (kind < 0) {
+                    float u = r.w > 1.0f ? (mx - r.x) / r.w : 0.5f;
+                    float v = r.h > 1.0f ? (my - r.y) / r.h : 0.5f;
+                    if (std::fabs(u - 0.5f) < DROP_CORE && std::fabs(v - 0.5f) < DROP_CORE) {
+                        kind = 0;
+                    } else {
+                        float dl = u, dr = 1.0f - u, dt = v, db = 1.0f - v;
+                        float best = dl; kind = 1;
+                        if (dr < best) { best = dr; kind = 2; }
+                        if (dt < best) { best = dt; kind = 3; }
+                        if (db < best) { best = db; kind = 4; }
+                    }
+                }
+                d->drag_kind = kind;
+                d->drag_preview = drop_preview_rect(r, d->area, kind);
             }
+        } else if (kind >= 0) {
+            d->drag_kind = kind;
+            d->drag_preview = drop_preview_rect(d->area, d->area, kind);
         } else {
             d->drag_kind = 5;                            // nowhere: a new window
             d->drag_preview = Rect{ mx - 90.0f, my - 10.0f, 180.0f, 120.0f };
         }
     }
+drag_target_done: (void)0;
 
     if (d->dragging && released) {
         std::string title = d->drag_title;
         int kind = d->drag_kind;
         Node *target = d->drop_node;
+        // A drop that stayed on the home bar is a REORDER, not a dock move:
+        // the tab comes out and goes back in at the insertion index. This
+        // must run before the degenerate check, or a single-tab leaf would
+        // swallow it.
+        if (d->reorder_at >= 0 && d->drag_home) {
+            Node *home = d->drag_home;
+            int from = -1;
+            for (size_t i = 0; i < home->tabs.size(); ++i)
+                if (home->tabs[i] == title) { from = (int)i; break; }
+            if (from >= 0) {
+                int at = d->reorder_at;
+                if (at > from) at--;              // removing shifts the index
+                if (at < 0) at = 0;
+                if (at > (int)home->tabs.size() - 1) at = (int)home->tabs.size() - 1;
+                if (at != from) {
+                    home->tabs.erase(home->tabs.begin() + from);
+                    home->tabs.insert(home->tabs.begin() + at, title);
+                }
+                home->selected = at;
+            }
+            d->dragging = false;
+            d->drag_armed = false;
+            d->reorder_at = -1;
+            d->drag_home = nullptr;
+            return;
+        }
         // Dropping a tab onto its own leaf, when that leaf has only this one
         // tab, must do nothing: it would remove the tab, delete the leaf and
         // then look for the leaf it was going to drop into.
         // Dropping a tab into the leaf it already owns ALONE is a no-op in
         // every direction: splitting a leaf against itself would remove the
         // tab, delete the now empty leaf, and then look for it.
-        bool degenerate = target && target->leaf() && target->tabs.size() == 1 &&
-                          target->tabs[0] == title;
+        // ...but only for the four LEAF splits and the tab drop. Dropping
+        // that same lone tab onto an outer button is not a no-op: it asks for
+        // a full height column, which is a different tree.
+        bool degenerate = kind >= 0 && kind <= 4 && target && target->leaf() &&
+                          target->tabs.size() == 1 && target->tabs[0] == title;
         if (!degenerate) {
-            if (kind == 5) {
+            if (kind >= 6) {
+                // Against the whole layout. The tab comes out first, which
+                // can promote a sibling and REPLACE d->root - so the root is
+                // read again afterwards, never cached across remove_tab.
+                bool only = d->root && d->root->leaf() && d->root->tabs.size() == 1 &&
+                            d->root->tabs[0] == title;
+                if (!only) {
+                    remove_tab(d, title);
+                    if (!d->root) d->root = new Node();
+                    if (d->root->leaf() && d->root->tabs.empty())
+                        add_tab_to(d->root, title, true);
+                    else
+                        split_into(d, d->root, title, kind - 5, 0.25f);
+                }
+            } else if (kind == 5) {
                 remove_tab(d, title);
                 dai_dock::Floating f;
                 f.root = new Node();
@@ -859,25 +1138,46 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
         layout(d->root, d->area);
         for (auto &f : d->floats) layout(f.root, f.rect);
     }
-    if (!down) { d->dragging = false; d->drag_armed = false; d->drag_kind = -1; d->drop_node = nullptr; }
+    if (!down) { d->dragging = false; d->drag_armed = false; d->drag_kind = -1;
+                 d->drop_node = nullptr; d->drag_home = nullptr; d->reorder_at = -1; }
 }
 
 int dai_dock_panel(dai_dock *d, const char *title, float *x, float *y, float *w, float *h) {
     if (!d || !title) return 0;
-    if (!dai_dock_visible(d, title)) return 0;
-    int idx = -1;
-    Node *leaf = d->find(title, &idx);
+    if (d->is_closed(title)) return 0;
+
+    // Which instance of this title is being asked for. The host loops until
+    // this answers 0, so "no more instances" MUST be reachable - see seq_of.
+    int &seq = d->seq_of(title);
+    std::vector<std::pair<Node *, int>> hits;
+    collect_tab_leaves(d->root, title, &hits);
+    for (auto &f : d->floats) collect_tab_leaves(f.root, title, &hits);
+
+    Node *leaf = nullptr;
+    int seen = 0;
+    for (auto &hp : hits) {
+        // A tab that is not the selected one of its leaf is behind another
+        // panel: it has no body to draw into.
+        if (hp.second != hp.first->selected) continue;
+        if (seen++ == seq) { leaf = hp.first; break; }
+    }
     if (!leaf) return 0;
+    ++seq;
+
     if (x) *x = leaf->body.x;
     if (y) *y = leaf->body.y;
     if (w) *w = leaf->body.w;
     if (h) *h = leaf->body.h;
     // A panel is a root: only the frontmost one under the pointer reacts, and
     // since docked panels tile, "frontmost" is simply "the one you are over".
+    // Which floating window this instance belongs to is decided by walking UP
+    // from the leaf - asking "does any float contain this title" would give
+    // every instance the topmost float's layer.
     int layer = DAI_LAYER_WINDOW;
+    Node *top = leaf;
+    while (top->parent) top = top->parent;
     for (size_t i = 0; i < d->floats.size(); ++i)
-        if (find_tab(d->floats[i].root, title, nullptr))
-            layer = DAI_LAYER_WINDOW + 200 + d->floats[i].z;
+        if (d->floats[i].root == top) layer = DAI_LAYER_WINDOW + 200 + d->floats[i].z;
     dai_ui_layer_push(d->ui, layer);
     dai_ui_root_begin(d->ui, title, leaf->body.x, leaf->body.y, leaf->body.w, leaf->body.h);
     d->panel_depth++;
@@ -893,6 +1193,11 @@ void dai_dock_panel_end(dai_dock *d) {
 
 void dai_dock_end(dai_dock *d) {
     if (!d || !d->ui) return;
+    // The frame's panel pass is over: the instance counters start again. A
+    // one-off geometry query between frames ("where is the Hierarchy?") then
+    // answers with the FIRST instance instead of "no more of those", which is
+    // what a caller outside the loop means every time.
+    for (auto &kv : d->panel_seq) kv.second = 0;
     if (!d->dragging) { run_leaf_menu(d); return; }
     dai_ui *ui = d->ui;
     const dai_ui_style *st = dai_ui_style_of(ui);
@@ -901,6 +1206,75 @@ void dai_dock_end(dai_dock *d) {
     dai_ui_rect(ui, d->drag_preview.x, d->drag_preview.y, d->drag_preview.w, d->drag_preview.h, tint);
     dai_ui_rect_outline(ui, d->drag_preview.x, d->drag_preview.y, d->drag_preview.w,
                         d->drag_preview.h, 2.0f, st->accent);
+    // The tab being carried, and what will happen when it is let go. Four of
+    // the five previews are rectangles of the same colour; only a word tells
+    // "as a tab" from "underneath".
+    {
+        const char *what = d->drag_kind == 0 ? "as a tab"
+                         : d->drag_kind == 1 ? "left of"
+                         : d->drag_kind == 2 ? "right of"
+                         : d->drag_kind == 3 ? "above"
+                         : d->drag_kind == 4 ? "below"
+                         : d->drag_kind == 6 ? "down the left edge"
+                         : d->drag_kind == 7 ? "down the right edge"
+                         : d->drag_kind == 8 ? "along the top"
+                         : d->drag_kind == 9 ? "along the bottom"
+                         : "as a window";
+        char note[128];
+        std::snprintf(note, sizeof(note), "%s  -  %s", d->drag_title.c_str(), what);
+        float mx2 = 0, my2 = 0;
+        dai_ui_mouse(ui, &mx2, &my2, nullptr, nullptr);
+        float tw = dai_ui_text_width(ui, note) + 14.0f;
+        float th = dai_ui_text_height(ui) + 8.0f;
+        dai_ui_rrect(ui, mx2 + 14.0f, my2 + 10.0f, tw, th, 4.0f, 0xF01E1E1Eu);
+        dai_ui_rect_outline(ui, mx2 + 14.0f, my2 + 10.0f, tw, th, 1.0f, st->accent);
+        dai_ui_text(ui, mx2 + 21.0f, my2 + 14.0f, note, st->text);
+    }
+
+    // The dock cross, over the leaf the pointer is on. Without it the four
+    // split zones are invisible geography you have to find by waving the
+    // mouse - which is why "I still cannot put the console under the
+    // inspector" is a UI bug and not a missing feature: the feature was
+    // there, the target was not.
+    {
+        // One button drawer for both crosses: the four outer ones against the
+        // area's edges, then the five over the leaf on top of them. Same
+        // geometry the drop reads, so what lights up is what happens.
+        auto draw_slot = [&](const Slot &sl, bool outer) {
+            bool on = d->drag_kind == sl.kind;
+            const Rect &b = sl.r;
+            uint32_t bg = on ? st->accent : ((st->chrome & 0x00FFFFFFu) | 0xD8000000u);
+            dai_ui_rrect(ui, b.x, b.y, b.w, b.h, 4.0f, bg);
+            dai_ui_rect_outline(ui, b.x, b.y, b.w, b.h, 1.0f,
+                                on ? 0xFFFFFFFFu : st->panel_border);
+            uint32_t fg = on ? 0xFF101010u : st->text_dim;
+            float ix = b.x + 5.0f, iy = b.y + 5.0f, iw = b.w - 10.0f, ih = b.h - 10.0f;
+            // The outer buttons draw the strip INSIDE a frame of the whole
+            // window, so "a column down the side of everything" is visibly a
+            // different promise from "the left half of this panel".
+            if (outer) dai_ui_rect_outline(ui, ix, iy, iw, ih, 1.0f, fg);
+            switch (sl.kind) {
+            case 1: dai_ui_rect(ui, ix, iy, iw * 0.5f, ih, fg); break;
+            case 2: dai_ui_rect(ui, ix + iw * 0.5f, iy, iw * 0.5f, ih, fg); break;
+            case 3: dai_ui_rect(ui, ix, iy, iw, ih * 0.5f, fg); break;
+            case 4: dai_ui_rect(ui, ix, iy + ih * 0.5f, iw, ih * 0.5f, fg); break;
+            case 6: dai_ui_rect(ui, ix, iy, iw * 0.34f, ih, fg); break;
+            case 7: dai_ui_rect(ui, ix + iw * 0.66f, iy, iw * 0.34f, ih, fg); break;
+            case 8: dai_ui_rect(ui, ix, iy, iw, ih * 0.34f, fg); break;
+            case 9: dai_ui_rect(ui, ix, iy + ih * 0.66f, iw, ih * 0.34f, fg); break;
+            default: dai_ui_rect(ui, ix, iy, iw, 3.0f, fg);
+                     dai_ui_rect_outline(ui, ix, iy, iw, ih, 1.0f, fg); break;
+            }
+        };
+        Slot es[4];
+        edge_slots(d->area, es);
+        for (const Slot &sl : es) draw_slot(sl, true);
+        if (d->drop_node) {
+            Slot cs[5];
+            cross_slots(d->drop_node->rect, cs);
+            for (const Slot &sl : cs) draw_slot(sl, false);
+        }
+    }
     // The tab itself, under the cursor, so the drag has something to follow.
     float mx = 0, my = 0;
     dai_ui_mouse(ui, &mx, &my, nullptr, nullptr);
@@ -1007,6 +1381,21 @@ dai_result dai_dock_from_text(dai_dock *d, const char *text) {
     d->floats.clear();
     d->closed.clear();
     d->root = root;
+
+    // Every title the file mentions is now a panel this dock KNOWS - the
+    // register is what the Window menu is built from, and loading a layout
+    // used to leave it empty.
+    {
+        std::vector<Node *> all;
+        collect_leaves(d->root, &all);
+        for (auto &f : d->floats) collect_leaves(f.root, &all);
+        for (Node *leaf : all)
+            for (const std::string &t : leaf->tabs) {
+                bool known = false;
+                for (const auto &r : d->regs) if (r.title == t) { known = true; break; }
+                if (!known) d->regs.push_back(dai_dock::Reg{ t, DAI_DOCK_NONE, 0.22f, "" });
+            }
+    }
 
     for (;;) {
         p = skip_ws(p);

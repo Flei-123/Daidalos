@@ -366,7 +366,13 @@ uint32_t dai_assets_list(dai_assets *a, char *out, uint32_t max, uint32_t stride
             for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
             // .js is not placeable but ATTACHABLE ("Assign to selection") -
             // a script the browser cannot show could never be assigned.
-            return e == "glb" || e == "gltf" || e == "js";
+            // Placeable (models), attachable (scripts), instantiable
+            // (prefabs) and openable (text, images, sound). A browser that
+            // hides a file the editor just wrote is a browser that lies.
+            return e == "glb" || e == "gltf" || e == "js" || e == "cpp" ||
+                   e == "daidalos" || e == "hpp" || e == "h" || e == "json" ||
+                   e == "txt" || e == "md" || e == "png" || e == "jpg" ||
+                   e == "jpeg" || e == "wav" || e == "ogg" || e == "glsl";
         }
         static void go(const std::string &root, const std::string &rel,
                        std::vector<std::string> &out, int depth) {

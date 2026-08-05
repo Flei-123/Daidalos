@@ -54,6 +54,19 @@ DAI_API uint32_t dai_svg_shape_count(const dai_svg *s);
  */
 DAI_API int dai_svg_rasterize(const dai_svg *s, uint8_t *out, int w, int h, float pad);
 
+/* A fill/stroke color override for exactly one shape, applied at parse time.
+ * The built in icons are drawn in one neutral color and tinted by the widget;
+ * some icons need to carry their own color (a warning triangle is yellow, an
+ * error cross is red), and baking a second icon set is worse than one byte
+ * swap at load. `rgba` is 0xAABBGGRR. */
+DAI_API void dai_svg_shape_color(dai_svg *s, uint32_t index, uint32_t rgba);
+/* The color of a shape, 0 = "ask the widget". */
+DAI_API uint32_t dai_svg_shape_color_get(const dai_svg *s, uint32_t index);
+/* Rasterises with per-shape colors: out is RGBA, color comes from the shape,
+ * coverage from the same path as dai_svg_rasterize. Shapes with no override
+ * come out white, exactly what the mono path produced. */
+DAI_API int dai_svg_rasterize_rgba(const dai_svg *s, uint8_t *out, int w, int h, float pad);
+
 #ifdef __cplusplus
 }
 #endif

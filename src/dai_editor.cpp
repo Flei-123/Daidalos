@@ -116,6 +116,7 @@ struct dai_editor {
     float cam_speed = 6.0f;
     bool  cam_angles_valid = false;
     int   cam_mode = 0;                // 0 none, 1 look, 2 pan, 3 orbit, 4 dolly
+    int   cam_frozen = 0;              // the mode is locked while any button is held
     float cam_last_x = 0, cam_last_y = 0;
     bool  cam_prev_focus = false;
 
@@ -354,17 +355,141 @@ int dai_editor_project(const dai_editor *e, dai_vec3 world, float *out_x, float 
     return 1;
 }
 
+int dai_editor_project_seg(const dai_editor *e, dai_vec3 a, dai_vec3 b,
+                           float *x1, float *y1, float *x2, float *y2) {
+    if (!e) return 0;
+    dai_vec3 fwd, right, upv;
+    camera_basis(e, &fwd, &right, &upv);
+    float za = dot(sub(a, e->eye), fwd);
+    float zb = dot(sub(b, e->eye), fwd);
+    const float near2 = e->znear + 1e-3f;
+    if (za <= e->znear && zb <= e->znear) return 0;   // fully behind
+    // Move the offending endpoint onto just past the near plane. The screen
+    // position of that clipped end lands off-screen anyway; what matters is
+    // that the part of the line the user can still see keeps drawing.
+    if (za <= e->znear) {
+        float t = (near2 - za) / (zb - za);
+        a = add(a, mul(sub(b, a), t));
+    } else if (zb <= e->znear) {
+        float t = (near2 - zb) / (za - zb);
+        b = add(b, mul(sub(a, b), t));
+    }
+    return dai_editor_project(e, a, x1, y1) && dai_editor_project(e, b, x2, y2);
+}
+
 // ------------------------------------------------------------- selection
 
+// Ray against one node's oriented box, in the node's own space. Returns the
+// entry distance or a negative number for a miss.
+static float ray_box_local(dai_vec3 o, dai_vec3 d, dai_vec3 centre, dai_quat rot,
+                           dai_vec3 half, float far_) {
+    // Into local space: undo the rotation about the box's centre. A world
+    // space AABB would pick a rotated crate by its bounding cube, which is
+    // wrong by up to 73% of its volume and feels like clicking thin air.
+    dai_quat inv{ -rot.x, -rot.y, -rot.z, rot.w };
+    dai_vec3 lo = qrot(inv, sub(o, centre));
+    dai_vec3 ld = qrot(inv, d);
+    float tmin = 0.0f, tmax = far_;
+    const float *pmin = &lo.x, *pdir = &ld.x, *ph = &half.x;
+    for (int i = 0; i < 3; ++i) {
+        float h = ph[i];
+        if (h <= 0.0f) h = 1e-4f;
+        if (std::fabs(pdir[i]) < 1e-7f) {
+            if (pmin[i] < -h || pmin[i] > h) return -1.0f;   // parallel and outside
+            continue;
+        }
+        float inv_d = 1.0f / pdir[i];
+        float t1 = (-h - pmin[i]) * inv_d;
+        float t2 = ( h - pmin[i]) * inv_d;
+        if (t1 > t2) { float t = t1; t1 = t2; t2 = t; }
+        if (t1 > tmin) tmin = t1;
+        if (t2 < tmax) tmax = t2;
+        if (tmin > tmax) return -1.0f;
+    }
+    return tmin;
+}
+
+// Picking is a GRAPHICS question, not a physics one.
+//
+// It used to be dai_raycast against the physics world, which means a node with
+// no collider - a camera, a light, an empty group, anything with "no collider"
+// ticked, and every trigger - was invisible to the mouse: the ray went through
+// it and hit the floor behind, so clicking a cube "selected the plane". You
+// cannot select what you cannot hit, and half the objects in a scene do not
+// exist as far as the solver is concerned.
+//
+// So: test the ray against what is DRAWN. Every node in the document, its own
+// box, nearest wins. The physics raycast is kept as a tiebreaker for compound
+// bodies, whose real shape the document does not describe.
 dai_node dai_editor_pick(dai_editor *e, float mx, float my) {
-    if (!e || !e->sync) return DAI_INVALID_NODE;
+    if (!e) return DAI_INVALID_NODE;
+    dai_doc *d = e->doc;
+    if (!d) return DAI_INVALID_NODE;
+    dai_vec3 o, dir;
+    dai_editor_ray(e, mx, my, &o, &dir);
+
+    std::vector<dai_node> ids(dai_doc_nodes(d, nullptr, 0));
+    if (!ids.empty()) dai_doc_nodes(d, ids.data(), (uint32_t)ids.size());
+
+    dai_node best = DAI_INVALID_NODE;
+    float best_t = e->zfar;
+    for (dai_node n : ids) {
+        dai_node_desc r{};
+        if (dai_doc_get(d, n, &r) != DAI_OK) continue;
+        if (r.hidden) continue;            // you cannot click what is not drawn
+
+        dai_vec3 wp{}, ws{ 1, 1, 1 };
+        dai_quat wr{ 0, 0, 0, 1 };
+        if (dai_doc_world_transform(d, n, &wp, &wr, &ws) != DAI_OK) {
+            wp = r.position; wr = r.rotation; ws = r.scale;
+        }
+        // While playing, the body is where the object IS - the document still
+        // holds the pose from before Play.
+        dai_vec3 live{};
+        if (dai_editor_live_position(e, n, &live)) wp = live;
+
+        // What the user sees: the render box when the collider was detached
+        // from it, the collider otherwise, and a small handle for things that
+        // have neither (cameras, lights, empties) so they are clickable at all.
+        //
+        // Small on purpose: a 0.25 m handle around a camera sitting in the
+        // middle of the skybox eats every click near the horizon - which is
+        // exactly what "clicking nothing selects the camera" was. The handle
+        // is for clicking the icon, not the quadrant it hangs in.
+        dai_vec3 half = r.half_extent;
+        if (r.render_extent.x || r.render_extent.y || r.render_extent.z)
+            half = r.render_extent;
+        if (half.x <= 0.0f && half.y <= 0.0f && half.z <= 0.0f) {
+            // ~9 px on screen, whatever the distance: the handle is for
+            // clicking the icon, not the quadrant of sky it hangs in.
+            float dx = wp.x - o.x, dy = wp.y - o.y, dz = wp.z - o.z;
+            float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+            float per_px = 2.0f * dist * std::tan(e->fov * 3.14159265f / 360.0f) /
+                           (e->vh > 1.0f ? e->vh : 1.0f);
+            float hs = per_px * 16.0f;
+            if (hs < 0.02f) hs = 0.02f;
+            if (hs > 0.5f)  hs = 0.5f;
+            half = dai_vec3{ hs, hs, hs };
+        }
+        half.x = std::fabs(half.x * ws.x);
+        half.y = std::fabs(half.y * ws.y);
+        half.z = std::fabs(half.z * ws.z);
+        dai_vec3 centre = add(wp, qrot(wr, dai_vec3{ r.collider_center.x * ws.x,
+                                                     r.collider_center.y * ws.y,
+                                                     r.collider_center.z * ws.z }));
+        float t = ray_box_local(o, dir, centre, wr, half, best_t);
+        if (t >= 0.0f && t < best_t) { best_t = t; best = n; }
+    }
+    if (best != DAI_INVALID_NODE) return best;
+
+    // Nothing in the document was hit: fall back to the solver, which knows
+    // about compound shapes the document cannot describe.
+    if (!e->sync) return DAI_INVALID_NODE;
     dai_scene *scene = dai_doc_sync_scene(e->sync);
     dai_world *world = scene ? dai_scene_world(scene) : nullptr;
     if (!world) return DAI_INVALID_NODE;
-    dai_vec3 o, d;
-    dai_editor_ray(e, mx, my, &o, &d);
     dai_ray_hit hit{};
-    if (!dai_raycast(world, o, d, e->zfar, &hit)) return DAI_INVALID_NODE;
+    if (!dai_raycast(world, o, dir, e->zfar, &hit)) return DAI_INVALID_NODE;
     return dai_doc_sync_node_of_body(e->sync, hit.body);
 }
 
@@ -971,6 +1096,19 @@ void dai_editor_cam_focus(dai_editor *e) {
     cam_apply(e);
 }
 
+// Re-anchor the drag origin without moving the camera.
+//
+// The window backend reports the mouse in RENDER pixels, scaled from window
+// pixels by render_size/window_size. Resize the window and that factor changes,
+// so the same physical pointer reports a different coordinate - and since a
+// resize is done with the button HELD, the camera saw a huge delta and spun.
+// The host calls this on the frame the render target changed size.
+void dai_editor_cam_anchor(dai_editor *e, float mx, float my) {
+    if (!e) return;
+    e->cam_last_x = mx;
+    e->cam_last_y = my;
+}
+
 int dai_editor_cam_update(dai_editor *e, const dai_editor_cam_input *in) {
     if (!e || !in) return 0;
     cam_ensure_angles(e);
@@ -989,11 +1127,22 @@ int dai_editor_cam_update(dai_editor *e, const dai_editor_cam_input *in) {
     else if (in->mouse_right)                 mode = 1;   // look around
     else if (in->mouse_middle)                mode = 2;   // pan
 
-    // Any change of mode re-anchors the drag origin. Only checking "pressed
-    // while idle" leaves the old mode running when the user switches buttons
-    // without releasing - alt+left after a middle drag would keep panning, and
-    // the first frame would jump by the whole distance between the two presses.
-    if (mode != e->cam_mode) {
+    // The MODE is chosen once, when a button goes down, and frozen while it is
+    // held. Re-evaluating every frame is what made one lost Alt event flip a
+    // drag mid-flight: release Alt for a single frame and "orbit" turned into
+    // "look around", press it again and "pan" came back - the camera felt
+    // possessed.
+    int holding = in->mouse_left || in->mouse_right || in->mouse_middle;
+    if (!holding) e->cam_frozen = 0;
+    else if (e->cam_mode == 0 || !e->cam_frozen) {
+        e->cam_frozen = 1;
+        e->cam_mode = mode;
+        e->cam_last_x = in->mouse_x;
+        e->cam_last_y = in->mouse_y;
+    }
+    // A fresh press still re-anchors the drag origin, or the camera jumps the
+    // whole distance between the two points it was at.
+    if (mode != e->cam_mode && !holding) {
         e->cam_mode = mode;
         e->cam_last_x = in->mouse_x;
         e->cam_last_y = in->mouse_y;
@@ -1174,6 +1323,39 @@ int dai_editor_live_transform(const dai_editor *e, dai_node n,
 int dai_editor_live_position(const dai_editor *e, dai_node n, dai_vec3 *out) {
     if (!e || !out) return 0;
     return dai_editor_live_transform(e, n, out, nullptr, nullptr);
+}
+
+int dai_editor_live_velocity(const dai_editor *e, dai_node n,
+                             dai_vec3 *linear, dai_vec3 *angular) {
+    if (!e || !e->sync || e->state == DAI_EDITOR_EDIT) return 0;
+    dai_entity ent = dai_doc_sync_entity(e->sync, n);
+    dai_scene *sc = dai_doc_sync_scene(e->sync);
+    if (!ent || !sc) return 0;
+    dai_body b = dai_scene_body(sc, ent);
+    if (!b) return 0;
+    return dai_body_get_velocity(editor_world(const_cast<dai_editor *>(e)), b,
+                                 linear, angular) == DAI_OK ? 1 : 0;
+}
+
+void dai_editor_live_set_velocity(dai_editor *e, dai_node n, dai_vec3 linear) {
+    if (!e || !e->sync || e->state == DAI_EDITOR_EDIT) return;
+    dai_entity ent = dai_doc_sync_entity(e->sync, n);
+    dai_scene *sc = dai_doc_sync_scene(e->sync);
+    if (!ent || !sc) return;
+    dai_body b = dai_scene_body(sc, ent);
+    if (!b) return;
+    dai_vec3 ang{ 0, 0, 0 };
+    dai_body_get_velocity(editor_world(e), b, nullptr, &ang);
+    dai_body_set_velocity(editor_world(e), b, linear, ang);
+}
+
+void dai_editor_live_impulse(dai_editor *e, dai_node n, dai_vec3 impulse) {
+    if (!e || !e->sync || e->state == DAI_EDITOR_EDIT) return;
+    dai_entity ent = dai_doc_sync_entity(e->sync, n);
+    dai_scene *sc = dai_doc_sync_scene(e->sync);
+    if (!ent || !sc) return;
+    dai_body b = dai_scene_body(sc, ent);
+    if (b) dai_body_add_impulse(editor_world(e), b, impulse);
 }
 
 void dai_editor_live_set_transform(dai_editor *e, dai_node n,

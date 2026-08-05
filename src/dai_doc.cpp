@@ -272,9 +272,43 @@ uint64_t dai_doc_revision(const dai_doc *d) { return d ? d->revision : 0; }
 
 // ------------------------------------------------------------------ nodes
 
+// Unity never lets two siblings share a name, and neither do we: a second
+// "Box" becomes "Box (1)" the moment it is created, and a script that looks
+// up by name always finds exactly one.
+static void make_unique_name(dai_doc *d, dai_node_desc *desc, dai_node parent) {
+    if (!desc->name[0]) return;
+    char base[DAI_NODE_NAME_MAX];
+    std::snprintf(base, sizeof(base), "%s", desc->name);
+    // The loop must NOT run to a thousand silently: a load that mis-parses a
+    // name would spin here forever and the editor would look "dead" on start
+    // with a white window, which is exactly the bug it just had. Give up after
+    // a sane count and keep the base name - a duplicate is a warning, not a hang.
+    for (int suffix = 0; suffix < 100; ++suffix) {
+        char want[DAI_NODE_NAME_MAX];
+        if (suffix == 0) std::snprintf(want, sizeof(want), "%s", base);
+        else             std::snprintf(want, sizeof(want), "%s (%d)", base, suffix);
+        bool taken = false;
+        for (auto &kv : d->nodes) {
+            if (!kv.second.alive) continue;
+            if (kv.second.d.parent != parent) continue;      // uniqueness is PER LEVEL
+            if (std::strcmp(kv.second.d.name, want) == 0) { taken = true; break; }
+        }
+        if (!taken) {
+            std::snprintf(desc->name, sizeof(desc->name), "%s", want);
+            return;
+        }
+    }
+    // Give up with the base name rather than hang the editor's startup.
+    std::snprintf(desc->name, sizeof(desc->name), "%s", base);
+}
+
 dai_node dai_doc_add(dai_doc *d, const dai_node_desc *desc) {
     if (!d || !desc) return DAI_INVALID_NODE;
     if (desc->parent != DAI_INVALID_NODE && !find(d, desc->parent)) return DAI_INVALID_NODE;
+
+    dai_node_desc unique = *desc;
+    make_unique_name(d, &unique, desc->parent);
+    desc = &unique;
 
     AutoTx tx(d, "Add");
     dai_node id = d->next_id++;
@@ -327,9 +361,24 @@ dai_result dai_doc_set(dai_doc *d, dai_node n, const dai_node_desc *desc) {
     }
     if (same_record(node->d, *desc)) return DAI_OK;
 
+    dai_node_desc fixed = *desc;
+    // A rename obeys the same rule as a create: no two siblings share a name.
+    // Only when the name actually changed and actually collides - every
+    // property edit passes through here, and "Box" staying "Box" is not a
+    // collision with itself.
+    if (fixed.name[0] && std::strcmp(fixed.name, node->d.name) != 0) {
+        bool clash = false;
+        for (auto &kv : d->nodes) {
+            if (!kv.second.alive || kv.first == n) continue;
+            if (kv.second.d.parent != desc->parent) continue;
+            if (std::strcmp(kv.second.d.name, fixed.name) == 0) { clash = true; break; }
+        }
+        if (clash) make_unique_name(d, &fixed, desc->parent);
+    }
+
     AutoTx tx(d, "Edit");
     touch(d, n);
-    node->d = *desc;
+    node->d = fixed;
     node->d.name[DAI_NODE_NAME_MAX - 1] = 0;
     node->d.asset[sizeof(node->d.asset) - 1] = 0;
     bump_subtree(d, n);

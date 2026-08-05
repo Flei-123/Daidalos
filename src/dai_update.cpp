@@ -146,11 +146,25 @@ void *g_fetch_user = nullptr;
 
 // ---- the built in transport ----------------------------------------------
 
+int http_get_diag(const char *url, void **out_bytes, size_t *out_size,
+                  unsigned timeout_ms, char *diag, size_t diag_len);
+
 #ifdef _WIN32
 // WinHTTP ships with Windows, so a shipped editor needs no extra DLL.
 // timeout_ms of 0 keeps WinHTTP's defaults; the update check passes a short
 // one so an absent server costs the editor a beat, not its startup.
 int http_get_to(const char *url, void **out_bytes, size_t *out_size, unsigned timeout_ms) {
+    return http_get_diag(url, out_bytes, out_size, timeout_ms, nullptr, 0);
+}
+
+// The reason goes into `diag` - "cannot fetch" was the entire diagnosis on a
+// fresh Windows install, and that is not a diagnosis.
+int http_get_diag(const char *url, void **out_bytes, size_t *out_size,
+                  unsigned timeout_ms, char *diag, size_t diag_len) {
+    if (diag && diag_len) diag[0] = 0;
+    auto note = [&](const char *what, unsigned long gle) {
+        if (diag && diag_len) std::snprintf(diag, diag_len, "%s (win32 %lu)", what, gle);
+    };
     wchar_t wurl[1024];
     if (!MultiByteToWideChar(CP_UTF8, 0, url, -1, wurl, 1024)) return 0;
 
@@ -159,11 +173,19 @@ int http_get_to(const char *url, void **out_bytes, size_t *out_size, unsigned ti
     uc.dwStructSize = sizeof(uc);
     uc.lpszHostName = host; uc.dwHostNameLength = 256;
     uc.lpszUrlPath = path;  uc.dwUrlPathLength = 1024;
-    if (!WinHttpCrackUrl(wurl, 0, 0, &uc)) return 0;
+    if (!WinHttpCrackUrl(wurl, 0, 0, &uc)) { note("bad url", GetLastError()); return 0; }
 
     HINTERNET s = WinHttpOpen(L"daidalos", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!s) return 0;
+    // A clean Windows has never spoken TLS to anything, and its root
+    // certificate store only fills up on demand - unless the client asks.
+    // Without this, the editor's very first network call (the update check)
+    // fails with "cannot fetch" on every fresh install.
+    {
+        DWORD opt = WINHTTP_AUTOLOGON_SECURITY_LEVEL_MEDIUM;
+        WinHttpSetOption(s, WINHTTP_OPTION_AUTOLOGON_POLICY, &opt, sizeof(opt));
+    }
     if (timeout_ms)
         WinHttpSetTimeouts(s, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
     int ok = 0;
@@ -173,12 +195,15 @@ int http_get_to(const char *url, void **out_bytes, size_t *out_size, unsigned ti
         HINTERNET r = WinHttpOpenRequest(c, L"GET", path, nullptr, WINHTTP_NO_REFERER,
                                          WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
         if (r) {
-            if (WinHttpSendRequest(r, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                                   WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
-                WinHttpReceiveResponse(r, nullptr)) {
+            if (!(WinHttpSendRequest(r, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                     WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+                  WinHttpReceiveResponse(r, nullptr))) {
+                note("request failed", GetLastError());   // 12175 = TLS handshake
+            } else {
                 DWORD status = 0, slen = sizeof(status);
                 WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                                     WINHTTP_HEADER_NAME_BY_INDEX, &status, &slen, WINHTTP_NO_HEADER_INDEX);
+                if (status != 200) note("http status", status);
                 if (status == 200) {
                     std::vector<uint8_t> body;
                     DWORD avail = 0;
@@ -201,7 +226,7 @@ int http_get_to(const char *url, void **out_bytes, size_t *out_size, unsigned ti
             WinHttpCloseHandle(r);
         }
         WinHttpCloseHandle(c);
-    }
+    } else note("connect failed", GetLastError());
     WinHttpCloseHandle(s);
     return ok;
 }
@@ -234,12 +259,31 @@ int http_get_to(const char *url, void **out_bytes, size_t *out_size, unsigned ti
 }
 #endif
 
+#ifndef _WIN32
+// POSIX fetch cannot say more than "curl failed" - curl keeps its reasons on
+// stderr, and keeping them out of the log beats a second popen.
+int http_get_diag(const char *url, void **out_bytes, size_t *out_size,
+                  unsigned timeout_ms, char *diag, size_t diag_len) {
+    if (diag && diag_len) diag[0] = 0;
+    return http_get_to(url, out_bytes, out_size, timeout_ms);
+}
+#endif
+
 int fetch(const char *url, void **b, size_t *n, char *err, size_t err_len,
           unsigned timeout_ms = 0) {
     *b = nullptr; *n = 0;
     int ok = g_fetch ? g_fetch(url, b, n, g_fetch_user)
-                     : http_get_to(url, b, n, timeout_ms);
-    if (!ok && err && err_len) std::snprintf(err, err_len, "cannot fetch %s", url);
+                     : http_get_diag(url, b, n, timeout_ms, err, err_len);
+    if (!ok && err && err_len) {
+        if (err[0]) {
+            // append the url to the diagnosis already written
+            size_t used = std::strlen(err);
+            if (used + 2 < err_len)
+                std::snprintf(err + used, err_len - used, " - %s", url);
+        } else {
+            std::snprintf(err, err_len, "cannot fetch %s", url);
+        }
+    }
     return ok;
 }
 

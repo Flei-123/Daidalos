@@ -754,7 +754,13 @@ dai_result dai_project_settings_load(dai_project *p, dai_project_settings *out) 
         if      (key == "gravity")     ok = parse_floats(after, out->gravity, 3);
         else if (key == "tick-hz")     ok = parse_int(after, &out->tick_hz);
         else if (key == "max-bodies")  ok = parse_int(after, &out->max_bodies);
-        else if (key == "physics-backend") ok = parse_int(after, &out->physics_backend);
+        else if (key == "physics-backend") {
+            ok = parse_int(after, &out->physics_backend);
+            // 2 was Jolt. The backend is gone; the project opens on Talos
+            // rather than on a number nothing answers to.
+            if (out->physics_backend != DAI_PHYSICS_NULL)
+                out->physics_backend = DAI_PHYSICS_TALOS;
+        }
         else if (key == "friction")    ok = parse_floats(after, &out->default_friction, 1);
         else if (key == "restitution") ok = parse_floats(after, &out->default_restitution, 1);
         else if (key == "app-name")    copy_str(out->app_name, sizeof(out->app_name), rest_of_line(after));
@@ -916,6 +922,9 @@ dai_result dai_prefs_load(dai_prefs *out) {
         else if (key == "snap-translate")parse_floats(after, &out->snap_translate, 1);
         else if (key == "snap-rotate")   parse_floats(after, &out->snap_rotate_deg, 1);
         else if (key == "autosave")      parse_int(after, &out->autosave_seconds);
+        else if (key == "language")      parse_int(after, &out->language);
+        else if (key == "script-editor") parse_int(after, &out->script_editor);
+        else if (key == "dpi-scale")     parse_floats(after, &out->dpi_scale, 1);
         else if (key == "last-project")  copy_str(out->last_project, sizeof(out->last_project),
                                                   rest_of_line(after));
         // Unknown keys are skipped and NOT preserved: unlike the project file,
@@ -946,6 +955,9 @@ dai_result dai_prefs_save(const dai_prefs *pr) {
     if (pr->snap_translate != d.snap_translate)   put(t, "snap-translate %s\n", fstr(pr->snap_translate).c_str());
     if (pr->snap_rotate_deg != d.snap_rotate_deg) put(t, "snap-rotate %s\n", fstr(pr->snap_rotate_deg).c_str());
     if (pr->autosave_seconds != d.autosave_seconds) put(t, "autosave %d\n", pr->autosave_seconds);
+    if (pr->language != d.language)                 put(t, "language %d\n", pr->language);
+    if (pr->script_editor != d.script_editor)       put(t, "script-editor %d\n", pr->script_editor);
+    if (pr->dpi_scale != d.dpi_scale)               put(t, "dpi-scale %s\n", fstr(pr->dpi_scale).c_str());
     if (pr->last_project[0])                      put(t, "last-project %s\n", sanitise(pr->last_project).c_str());
 
     return write_file_atomic(full, t) ? DAI_OK : DAI_ERR_FILE;

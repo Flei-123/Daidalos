@@ -18,6 +18,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <shellapi.h>          /* DragAcceptFiles / DragQueryFile: WM_DROPFILES */
 #include <vulkan/vulkan_win32.h>
 
 #include <cstdio>
@@ -57,6 +58,15 @@ struct dai_window {
     HCURSOR cursor = nullptr;
     int     cursor_id = -1;
     int     dbl_click = 0;
+
+    // What Explorer dropped, held until the host asks for it. A fixed buffer
+    // rather than a vector of strings: a drop is a handful of paths, this file
+    // allocates nothing anywhere else, and a queue that cannot grow cannot be
+    // a memory bug in a message handler.
+    char     dropped[4096] = { 0 };
+    uint32_t dropped_len = 0;
+    uint32_t dropped_count = 0;
+    int      drop_x = 0, drop_y = 0;
 };
 
 namespace {
@@ -140,9 +150,23 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // hash the other backends use, so dai_window_key_down stays one function.
     case WM_KEYDOWN: case WM_SYSKEYDOWN:
         set_key(w, wp, true);
-        if (wp == VK_ESCAPE) w->open = false;
+        // Escape is NOT quit. It cancels a menu, a rename, a drag - and an
+        // editor that shuts down when you back out of a text field loses
+        // work for a living.
         return 0;
     case WM_KEYUP: case WM_SYSKEYUP:   set_key(w, wp, false); return 0;
+    // Focus left: every key and every button is released as far as this
+    // window is concerned. It will never see the KEYUP that follows, and a
+    // key stuck down is an editor that walks by itself and eats every
+    // shortcut - which is exactly how "I suddenly cannot move" happens.
+    case WM_KILLFOCUS:
+        std::memset(w->keys, 0, sizeof(w->keys));
+        w->buttons = 0;
+        if (GetCapture() == hwnd) ReleaseCapture();
+        return 0;
+    case WM_CAPTURECHANGED:
+        w->buttons = 0;
+        return 0;
     case WM_CHAR: {
         // Control characters arrive here too (backspace, tab, enter) - the
         // fields handle those as keys, so only printable code points go into
@@ -163,14 +187,47 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (LOWORD(lp) == HTCLIENT && w->cursor) { SetCursor(w->cursor); return TRUE; }
         break;
     case WM_MOUSEMOVE:  w->mouse_x = (int)(short)LOWORD(lp); w->mouse_y = (int)(short)HIWORD(lp); return 0;
-    case WM_LBUTTONDBLCLK: w->buttons |= 1u << 1; w->dbl_click = 1; return 0;
-    case WM_LBUTTONDOWN: w->buttons |= 1u << 1; return 0;
-    case WM_LBUTTONUP:   w->buttons &= ~(1u << 1); return 0;
-    case WM_MBUTTONDOWN: w->buttons |= 1u << 2; return 0;
-    case WM_MBUTTONUP:   w->buttons &= ~(1u << 2); return 0;
-    case WM_RBUTTONDOWN: w->buttons |= 1u << 3; return 0;
-    case WM_RBUTTONUP:   w->buttons &= ~(1u << 3); return 0;
+    // SetCapture while any button is held: without it a drag that leaves the
+    // client area never sees its own button-up, and the editor is left
+    // believing the button is still down for ever after.
+    case WM_LBUTTONDBLCLK: w->buttons |= 1u << 1; w->dbl_click = 1; SetCapture(hwnd); return 0;
+    case WM_LBUTTONDOWN: w->buttons |= 1u << 1; SetCapture(hwnd); return 0;
+    case WM_LBUTTONUP:   w->buttons &= ~(1u << 1); if (!w->buttons && GetCapture() == hwnd) ReleaseCapture(); return 0;
+    case WM_MBUTTONDOWN: w->buttons |= 1u << 2; SetCapture(hwnd); return 0;
+    case WM_MBUTTONUP:   w->buttons &= ~(1u << 2); if (!w->buttons && GetCapture() == hwnd) ReleaseCapture(); return 0;
+    case WM_RBUTTONDOWN: w->buttons |= 1u << 3; SetCapture(hwnd); return 0;
+    case WM_RBUTTONUP:   w->buttons &= ~(1u << 3); if (!w->buttons && GetCapture() == hwnd) ReleaseCapture(); return 0;
     case WM_MOUSEWHEEL:  w->wheel += (float)GET_WHEEL_DELTA_WPARAM(wp) / (float)WHEEL_DELTA; return 0;
+    case WM_DROPFILES: {
+        HDROP hd = (HDROP)wp;
+        POINT pt{ 0, 0 };
+        DragQueryPoint(hd, &pt);            // already client coordinates
+        w->drop_x = pt.x; w->drop_y = pt.y;
+        UINT n = DragQueryFileW(hd, 0xFFFFFFFFu, nullptr, 0);
+        for (UINT i = 0; i < n; ++i) {
+            wchar_t wpath[MAX_PATH * 2];
+            UINT len = DragQueryFileW(hd, i, wpath, (UINT)(sizeof(wpath) / sizeof(wpath[0])));
+            if (!len) continue;
+            char u8[MAX_PATH * 4];
+            int got = WideCharToMultiByte(CP_UTF8, 0, wpath, (int)len, u8,
+                                          (int)sizeof(u8) - 1, nullptr, nullptr);
+            if (got <= 0) continue;
+            u8[got] = 0;
+            // Windows hands out backslashes; everything above this line speaks
+            // '/'. Normalising here means the editor never has to care which
+            // window system a path came from.
+            for (int c = 0; c < got; ++c) if (u8[c] == '\\') u8[c] = '/';
+            uint32_t need = (uint32_t)got + 1;
+            if (w->dropped_len + need >= sizeof(w->dropped)) break;
+            std::memcpy(w->dropped + w->dropped_len, u8, (size_t)got);
+            w->dropped_len += (uint32_t)got;
+            w->dropped[w->dropped_len++] = '\n';
+            w->dropped[w->dropped_len] = 0;
+            ++w->dropped_count;
+        }
+        DragFinish(hd);
+        return 0;
+    }
     default: break;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -283,6 +340,10 @@ dai_window *dai_window_open(dai_renderer *r, const char *title, uint32_t width, 
     wc.hInstance = w->inst;
     wc.style |= CS_DBLCLKS;                                 // WM_LBUTTONDBLCLK at all
     wc.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);   // IDC_* are MAKEINTRESOURCE ordinals
+    // Icon 1 in the exe's resources, when the host embedded one (editor_demo
+    // links daidalos.res). No resource, no icon - LoadIcon fails soft.
+    HICON app_icon = LoadIconW(w->inst, MAKEINTRESOURCEW(1));
+    if (app_icon) { wc.hIcon = app_icon; wc.hIconSm = app_icon; }
     wc.lpszClassName = L"DaidalosWindow";
     RegisterClassExW(&wc);          // duplicate registration is harmless
 
@@ -296,6 +357,9 @@ dai_window *dai_window_open(dai_renderer *r, const char *title, uint32_t width, 
                               nullptr, nullptr, w->inst, nullptr);
     if (!w->hwnd) { delete w; return bail("CreateWindowEx failed"); }
     SetWindowLongPtrW(w->hwnd, GWLP_USERDATA, (LONG_PTR)w);
+    // "This window takes files from Explorer." Without it WM_DROPFILES is
+    // never sent and the drop handler below is dead code.
+    DragAcceptFiles(w->hwnd, TRUE);
     ShowWindow(w->hwnd, SW_SHOW);
 
     VkWin32SurfaceCreateInfoKHR sci{ VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR };
@@ -335,6 +399,8 @@ void dai_window_close(dai_window *w) {
     if (w->hwnd) DestroyWindow(w->hwnd);
     delete w;
 }
+
+void dai_window_keep_open(dai_window *w) { if (w) w->open = true; }
 
 int dai_window_poll(dai_window *w) {
     if (!w || !w->open) return 0;
@@ -412,6 +478,46 @@ dai_result dai_window_present(dai_window *w) {
 
 int dai_window_key_down(dai_window *w, uint32_t code) { return (w && w->keys[key_slot(code)]) ? 1 : 0; }
 
+// The OS clipboard, as UTF-8 out here and UTF-16 towards Windows - the editor
+// keeps its own clipboard for kinds (node vs component vs log line), but copy
+// that cannot leave the process is copy you have to retype.
+int dai_window_clipboard_set(dai_window *w, const char *utf8) {
+    if (!w || !utf8) return 0;
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
+    if (wlen <= 0) return 0;
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)wlen * sizeof(wchar_t));
+    if (!mem) return 0;
+    wchar_t *dst = (wchar_t *)GlobalLock(mem);
+    if (!dst) { GlobalFree(mem); return 0; }
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, dst, wlen);
+    GlobalUnlock(mem);
+    if (!OpenClipboard(nullptr)) { GlobalFree(mem); return 0; }
+    EmptyClipboard();
+    HANDLE put = SetClipboardData(CF_UNICODETEXT, mem);
+    CloseClipboard();
+    if (!put) { GlobalFree(mem); return 0; }
+    return 1;
+}
+
+uint32_t dai_window_clipboard_get(dai_window *w, char *out, uint32_t max) {
+    if (!w || !out || !max) return 0;
+    out[0] = 0;
+    if (!OpenClipboard(nullptr)) return 0;
+    HANDLE h = GetClipboardData(CF_UNICODETEXT);
+    uint32_t n = 0;
+    if (h) {
+        const wchar_t *ws = (const wchar_t *)GlobalLock(h);
+        if (ws) {
+            int need = WideCharToMultiByte(CP_UTF8, 0, ws, -1, nullptr, 0, nullptr, nullptr);
+            if (need > 0 && (uint32_t)need <= max)
+                n = (uint32_t)WideCharToMultiByte(CP_UTF8, 0, ws, -1, out, (int)max, nullptr, nullptr) - 1;
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    return n;
+}
+
 uint32_t dai_window_text(dai_window *w, uint32_t *out, uint32_t max) {
     if (!w || !out || !max) return 0;
     uint32_t n = 0;
@@ -463,6 +569,66 @@ void dai_window_cursor(dai_window *w, int cursor) {
     w->cursor = h;
     w->cursor_id = cursor;
     SetCursor(h);
+}
+
+float dai_window_dpi_scale(dai_window *w) {
+    if (!w || !w->hwnd) return 1.0f;
+    // GetDpiForWindow is Windows 10 1607+. Resolved dynamically for the same
+    // reason SetProcessDpiAwarenessContext is: linking it would refuse to
+    // start on anything older, and older is exactly where 96 dpi is right.
+    UINT dpi = 0;
+    if (HMODULE user32 = GetModuleHandleW(L"user32.dll")) {
+        typedef UINT (WINAPI *GetDpiFn)(HWND);
+        if (auto fn = (GetDpiFn)(void *)GetProcAddress(user32, "GetDpiForWindow"))
+            dpi = fn(w->hwnd);
+    }
+    if (!dpi) {
+        HDC dc = GetDC(w->hwnd);
+        if (dc) { dpi = (UINT)GetDeviceCaps(dc, LOGPIXELSX); ReleaseDC(w->hwnd, dc); }
+    }
+    if (!dpi) return 1.0f;
+    float sc = (float)dpi / 96.0f;
+    if (sc < 0.5f) sc = 0.5f;
+    if (sc > 4.0f) sc = 4.0f;
+    return sc;
+}
+
+void dai_window_caption_color(dai_window *w, uint32_t argb) {
+    if (!w || !w->hwnd) return;
+    // Windows 11's DWMWA_CAPTION_COLOR wants a COLORREF (0x00BBGGRR); the UI
+    // packs 0xAABBGGRR, so it is the low three bytes as they are. Attribute
+    // 20 is the dark-mode switch, 35 the caption colour, 36 the text colour -
+    // named constants exist only in very new SDKs, the numbers are stable.
+    COLORREF caption = argb & 0x00FFFFFFu;
+    // Pick caption text that stays readable on whatever the theme chose.
+    uint32_t r = argb & 0xFF, g = (argb >> 8) & 0xFF, b = (argb >> 16) & 0xFF;
+    uint32_t lum = (r * 299 + g * 587 + b * 114) / 1000;
+    COLORREF text = lum > 140 ? 0x00000000 : 0x00FFFFFF;
+    BOOL dark = lum > 140 ? FALSE : TRUE;
+    HMODULE dwm = GetModuleHandleW(L"dwmapi.dll");
+    if (!dwm) dwm = LoadLibraryW(L"dwmapi.dll");
+    if (!dwm) return;
+    typedef HRESULT (WINAPI *SetAttr)(HWND, DWORD, LPCVOID, DWORD);
+    SetAttr set_attr = (SetAttr)GetProcAddress(dwm, "DwmSetWindowAttribute");
+    if (!set_attr) return;
+    set_attr(w->hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
+    set_attr(w->hwnd, 35 /*DWMWA_CAPTION_COLOR*/, &caption, sizeof(caption));
+    set_attr(w->hwnd, 36 /*DWMWA_TEXT_COLOR*/, &text, sizeof(text));
+}
+
+uint32_t dai_window_dropped_files(dai_window *w, char *out, uint32_t max, int *x, int *y) {
+    if (!w || !out || !max) return 0;
+    out[0] = 0;
+    if (!w->dropped_count) return 0;
+    uint32_t n = w->dropped_len;
+    if (n >= max) n = max - 1;
+    std::memcpy(out, w->dropped, n);
+    out[n] = 0;
+    if (x) *x = w->drop_x;
+    if (y) *y = w->drop_y;
+    uint32_t c = w->dropped_count;
+    w->dropped_len = 0; w->dropped_count = 0; w->dropped[0] = 0;
+    return c;
 }
 
 int dai_window_double_click(dai_window *w) {

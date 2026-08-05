@@ -6,7 +6,7 @@ painful to retrofit later.
 
 ```
   simulation   deterministic fixed tick, snapshots, rollback, input queue
-  physics      swappable backend (Jolt today, null backend for proof)
+  physics      swappable backend (Talos ships; Jolt as reference, null for proof)
   scene        entities: a body plus how it looks, compounds, camera helpers
   rendering    Vulkan 1.3, meshes, materials, sun, sky, shadows, MSAA
   audio        event driven, decoupled from the sim (Aulos)
@@ -59,9 +59,11 @@ DAI_SHADER_DIR=shaders ./build/sandbox_demo 6 /tmp       # general sandbox scene
 DAI_SHADER_DIR=shaders ./build/vehicle_demo  6 /tmp      # machine built from joints
 ```
 
-`build.sh` compiles `dai_engine.cpp` **without the Jolt include path**. If a
-Jolt header ever leaks into the engine core, the build breaks. That is the
-entire point of `src/dai_physics.hpp`.
+`build.sh` compiles `dai_engine.cpp` **without any backend's include path** -
+not Jolt's, not Talos's. If a backend header ever leaks into the engine core,
+the build breaks. That is the entire point of `src/dai_physics.hpp`, and it is
+what made swapping the default from Jolt to Talos a link-line change rather
+than a rewrite.
 
 The same trick guards the renderer: the build fails if any Vulkan symbol
 appears outside `src/rhi_vulkan*`, and it links and runs a program that uses
@@ -70,8 +72,12 @@ or a bridge into someone else's engine means writing one `rhi_*.cpp`.
 
 ### Dependencies, in full
 
-Jolt (physics) and Aulos (audio) are vendored. Vulkan is an API, not a library
-that does work for us. Everything else - matrix maths, mesh generation, OBJ,
+Aulos (audio) is vendored. Talos - the physics engine that ships in the editor
+- is a sibling project built alongside this one; Jolt is vendored too but is
+opt-in now (`WITH_JOLT=1`), kept as the reference implementation the physics
+tests compare against rather than as something the binary carries. The Windows
+editor links Talos and the null backend only, which is what it says on start-up.
+Vulkan is an API, not a library that does work for us. Everything else - matrix maths, mesh generation, OBJ,
 PNG **encode and decode**, DEFLATE, JSON, glTF, base64, the whole renderer - is
 written here. No stb, no zlib, no libpng, no GLM, no tinygltf, no VMA.
 
@@ -136,10 +142,20 @@ Bodies: box, sphere, capsule, compound. Joints: fixed, hinge (bearing), slider
 
 ### Physics backend - `src/dai_physics.hpp`
 
-One interface, no foreign types: `dai_vec3`, `dai_quat`, slot indices. Two
-implementations: `physics_jolt.cpp` (the only file in the project that includes
-Jolt) and `physics_null.cpp` (gravity and a floor - it exists so the abstraction
-can be proven, not assumed).
+One interface, no foreign types: `dai_vec3`, `dai_quat`, slot indices. Three
+implementations:
+
+* `physics_talos.cpp` - **what ships.** Talos is this project's own solver, and
+  the only backend the editor you download contains.
+* `physics_jolt.cpp` - the only file that includes Jolt. Opt-in (`WITH_JOLT=1`),
+  and worth keeping: an independent implementation is the only honest way to
+  tell "our solver is right" from "our solver and our test agree".
+* `physics_null.cpp` - gravity and a floor. It exists so the abstraction can be
+  proven, not assumed.
+
+Two backends that both pass the same suite is the reason the interface is
+trusted; a third that does almost nothing is the reason it is known to be an
+interface at all.
 
 ### Scene document - `include/dai_doc.h`
 
@@ -757,7 +773,9 @@ library generated from a name list is enough to link against it
 the calls the engine actually makes). The shipped `.exe` needs no runtime, no
 redistributable and no SDK. It is statically linked, so it is one file.
 
-*Jolt for Windows.* `tools/build_jolt_win.sh`, once. Two traps in there, both
+*Jolt for Windows.* Only needed with `WITH_JOLT=1` - the shipped editor uses
+Talos and does not link Jolt at all. Kept here because the traps are real and
+cost a day each. `tools/build_jolt_win.sh`, once. Two traps in there, both
 already sprung and documented in the script: Debian's default mingw uses the
 win32 thread model, which has no `std::mutex`, so Jolt does not compile at all -
 the `-posix` variants of the same compiler do. And Jolt turns on a DX12 compute

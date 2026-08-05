@@ -16,6 +16,7 @@
 #include "dai_font.h"
 
 #include <X11/Xlib.h>
+#include <X11/Xatom.h>       /* XA_ATOM: the XdndAware property is a list of them */
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
 #include <vulkan/vulkan_xlib.h>
@@ -56,6 +57,21 @@ struct dai_window {
     Cursor cursors[7] = { 0, 0, 0, 0, 0, 0, 0 };
     int    cursor_now = -1;
 
+    // XDND, receiver side. X11 has no "drop" event: a drop is a conversation
+    // of ClientMessages with the dragging program, ending in a selection
+    // transfer - which is why this is six atoms and a state machine instead
+    // of one case label.
+    Atom xdnd_aware = 0, xdnd_enter = 0, xdnd_position = 0, xdnd_status = 0;
+    Atom xdnd_drop = 0, xdnd_finished = 0, xdnd_selection = 0, xdnd_action_copy = 0;
+    Atom xdnd_type_list = 0, xdnd_uri_list = 0;
+    Window xdnd_source = 0;
+    Atom   xdnd_type = 0;        // what the source offers that we can read
+    int    xdnd_version = 0;
+    char     dropped[4096] = { 0 };
+    uint32_t dropped_len = 0;
+    uint32_t dropped_count = 0;
+    int      drop_x = 0, drop_y = 0;
+
     // Double click: X11 does not have one. It hands out presses with a
     // millisecond timestamp and leaves the policy to the toolkit - 400 ms and
     // 4 px is what every toolkit picks.
@@ -67,6 +83,54 @@ struct dai_window {
 namespace {
 
 uint32_t key_slot(uint32_t keysym) { return (keysym ^ (keysym >> 8)) & 0xFF; }
+
+int hexv(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// "file:///home/me/a%20file.png\r\n..." -> one absolute path per line. Only
+// file:// URIs: a drag from a browser hands over an http one, and downloading
+// it is not something a window backend should decide to do.
+void xdnd_take_uri_list(dai_window *w, const char *text, size_t n) {
+    size_t i = 0;
+    while (i < n) {
+        size_t e = i;
+        while (e < n && text[e] != '\n' && text[e] != '\r') ++e;
+        const char *line = text + i;
+        size_t len = e - i;
+        i = e;
+        while (i < n && (text[i] == '\n' || text[i] == '\r')) ++i;
+        if (!len || line[0] == '#') continue;
+        const char *pfx = "file://";
+        size_t pl = 7;
+        if (len <= pl || std::strncmp(line, pfx, pl) != 0) continue;
+        const char *p = line + pl;
+        size_t rem = len - pl;
+        // file://host/path is legal; we only ever see an empty host in
+        // practice, and a remote one is not a path we could open anyway.
+        while (rem && *p != '/') { ++p; --rem; }
+        char out[1024];
+        size_t o = 0;
+        for (size_t k = 0; k < rem && o + 1 < sizeof(out); ++k) {
+            if (p[k] == '%' && k + 2 < rem) {
+                int hi = hexv(p[k + 1]), lo = hexv(p[k + 2]);
+                if (hi >= 0 && lo >= 0) { out[o++] = (char)(hi * 16 + lo); k += 2; continue; }
+            }
+            out[o++] = p[k];
+        }
+        out[o] = 0;
+        if (!o) continue;
+        if (w->dropped_len + o + 2 >= sizeof(w->dropped)) break;
+        std::memcpy(w->dropped + w->dropped_len, out, o);
+        w->dropped_len += (uint32_t)o;
+        w->dropped[w->dropped_len++] = '\n';
+        w->dropped[w->dropped_len] = 0;
+        ++w->dropped_count;
+    }
+}
 
 bool create_swapchain(dai_window *w, char *err, size_t err_len) {
     dai_renderer *r = w->r;
@@ -153,6 +217,23 @@ dai_window *dai_window_open(dai_renderer *r, const char *title, uint32_t width, 
                  ButtonPressMask | ButtonReleaseMask | PointerMotionMask | StructureNotifyMask);
     w->wm_delete = XInternAtom(w->dpy, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(w->dpy, w->win, &w->wm_delete, 1);
+    // XDND: announcing version 5 on the window is the whole of "this window
+    // accepts drops". Everything else happens in the message pump.
+    w->xdnd_aware       = XInternAtom(w->dpy, "XdndAware", False);
+    w->xdnd_enter       = XInternAtom(w->dpy, "XdndEnter", False);
+    w->xdnd_position    = XInternAtom(w->dpy, "XdndPosition", False);
+    w->xdnd_status      = XInternAtom(w->dpy, "XdndStatus", False);
+    w->xdnd_drop        = XInternAtom(w->dpy, "XdndDrop", False);
+    w->xdnd_finished    = XInternAtom(w->dpy, "XdndFinished", False);
+    w->xdnd_selection   = XInternAtom(w->dpy, "XdndSelection", False);
+    w->xdnd_action_copy = XInternAtom(w->dpy, "XdndActionCopy", False);
+    w->xdnd_type_list   = XInternAtom(w->dpy, "XdndTypeList", False);
+    w->xdnd_uri_list    = XInternAtom(w->dpy, "text/uri-list", False);
+    {
+        long version = 5;
+        XChangeProperty(w->dpy, w->win, w->xdnd_aware, XA_ATOM, 32,
+                        PropModeReplace, (unsigned char *)&version, 1);
+    }
     XMapWindow(w->dpy, w->win);
     XFlush(w->dpy);
 
@@ -198,14 +279,115 @@ void dai_window_close(dai_window *w) {
     delete w;
 }
 
+void dai_window_keep_open(dai_window *w) { if (w) w->open = true; }
+
 int dai_window_poll(dai_window *w) {
     if (!w || !w->open) return 0;
     while (XPending(w->dpy)) {
         XEvent e;
         XNextEvent(w->dpy, &e);
         switch (e.type) {
+        case SelectionNotify:
+            // The answer to the XConvertSelection sent from XdndDrop: a
+            // text/uri-list, which is "file:///path" lines with the awkward
+            // characters percent encoded.
+            if (e.xselection.property == None) break;
+            if (e.xselection.selection != w->xdnd_selection) break;
+            {
+                Atom type = 0; int fmt = 0;
+                unsigned long items = 0, after = 0;
+                unsigned char *data = nullptr;
+                if (XGetWindowProperty(w->dpy, w->win, w->xdnd_selection, 0, 65536, True,
+                                       AnyPropertyType, &type, &fmt, &items, &after,
+                                       &data) == Success && data) {
+                    xdnd_take_uri_list(w, (const char *)data, (size_t)items);
+                    XFree(data);
+                }
+                if (w->xdnd_source) {
+                    XEvent r{};
+                    r.xclient.type = ClientMessage;
+                    r.xclient.display = w->dpy;
+                    r.xclient.window = w->xdnd_source;
+                    r.xclient.message_type = w->xdnd_finished;
+                    r.xclient.format = 32;
+                    r.xclient.data.l[0] = (long)w->win;
+                    r.xclient.data.l[1] = 1;
+                    r.xclient.data.l[2] = (long)w->xdnd_action_copy;
+                    XSendEvent(w->dpy, w->xdnd_source, False, NoEventMask, &r);
+                    XFlush(w->dpy);
+                }
+                w->xdnd_source = 0;
+            }
+            break;
         case ClientMessage:
-            if ((Atom)e.xclient.data.l[0] == w->wm_delete) w->open = false;
+            if ((Atom)e.xclient.data.l[0] == w->wm_delete) { w->open = false; break; }
+            if (e.xclient.message_type == w->xdnd_enter) {
+                w->xdnd_source = (Window)e.xclient.data.l[0];
+                w->xdnd_version = (int)(((unsigned long)e.xclient.data.l[1]) >> 24);
+                w->xdnd_type = 0;
+                if (e.xclient.data.l[1] & 1) {
+                    // More than three types: they are in a property instead.
+                    Atom type = 0; int fmt = 0;
+                    unsigned long items = 0, after = 0;
+                    unsigned char *data = nullptr;
+                    if (XGetWindowProperty(w->dpy, w->xdnd_source, w->xdnd_type_list, 0, 64,
+                                           False, XA_ATOM, &type, &fmt, &items, &after,
+                                           &data) == Success && data) {
+                        Atom *ats = (Atom *)data;
+                        for (unsigned long i = 0; i < items; ++i)
+                            if (ats[i] == w->xdnd_uri_list) { w->xdnd_type = ats[i]; break; }
+                        XFree(data);
+                    }
+                } else {
+                    for (int i = 2; i <= 4; ++i)
+                        if ((Atom)e.xclient.data.l[i] == w->xdnd_uri_list)
+                            { w->xdnd_type = w->xdnd_uri_list; break; }
+                }
+                break;
+            }
+            if (e.xclient.message_type == w->xdnd_position) {
+                // Root coordinates on the wire; the editor thinks in client
+                // ones, so translate before storing.
+                int rx = (int)(e.xclient.data.l[2] >> 16);
+                int ry = (int)(e.xclient.data.l[2] & 0xFFFF);
+                int cx = 0, cy = 0; Window child = 0;
+                XTranslateCoordinates(w->dpy, DefaultRootWindow(w->dpy), w->win,
+                                      rx, ry, &cx, &cy, &child);
+                w->drop_x = cx; w->drop_y = cy;
+                XEvent r{};
+                r.xclient.type = ClientMessage;
+                r.xclient.display = w->dpy;
+                r.xclient.window = (Window)e.xclient.data.l[0];
+                r.xclient.message_type = w->xdnd_status;
+                r.xclient.format = 32;
+                r.xclient.data.l[0] = (long)w->win;
+                r.xclient.data.l[1] = w->xdnd_type ? 1 : 0;   // bit 0: we accept
+                r.xclient.data.l[2] = 0;                      // no "silent" rect
+                r.xclient.data.l[3] = 0;
+                r.xclient.data.l[4] = (long)w->xdnd_action_copy;
+                XSendEvent(w->dpy, (Window)e.xclient.data.l[0], False, NoEventMask, &r);
+                XFlush(w->dpy);
+                break;
+            }
+            if (e.xclient.message_type == w->xdnd_drop) {
+                w->xdnd_source = (Window)e.xclient.data.l[0];
+                if (!w->xdnd_type) {
+                    XEvent r{};
+                    r.xclient.type = ClientMessage;
+                    r.xclient.display = w->dpy;
+                    r.xclient.window = w->xdnd_source;
+                    r.xclient.message_type = w->xdnd_finished;
+                    r.xclient.format = 32;
+                    r.xclient.data.l[0] = (long)w->win;
+                    XSendEvent(w->dpy, w->xdnd_source, False, NoEventMask, &r);
+                    w->xdnd_source = 0;
+                } else {
+                    Time t = (Time)e.xclient.data.l[2];
+                    XConvertSelection(w->dpy, w->xdnd_selection, w->xdnd_type,
+                                      w->xdnd_selection, w->win, t);
+                }
+                break;
+            }
             break;
         case KeyPress: case KeyRelease: {
             KeySym ks = XLookupKeysym(&e.xkey, 0);
@@ -351,6 +533,14 @@ int dai_window_key_down(dai_window *w, uint32_t keysym) {
     return (w && w->keys[key_slot(keysym)]) ? 1 : 0;
 }
 
+// X11 selection ownership means answering SelectionRequest events from the
+// event loop - that bridge is not built yet. Returning 0 keeps the editor's
+// internal clipboard (which is what Windows had before the bridge too).
+int dai_window_clipboard_set(dai_window *w, const char *utf8) { (void)w; (void)utf8; return 0; }
+uint32_t dai_window_clipboard_get(dai_window *w, char *out, uint32_t max) {
+    (void)w; if (out && max) out[0] = 0; return 0;
+}
+
 float dai_window_wheel(dai_window *w) {
     if (!w) return 0.0f;
     float v = w->wheel;
@@ -376,6 +566,32 @@ int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {
     if (y) *y = (int)((double)w->mouse_y * sy);
     if (buttons) *buttons = w->buttons;
     return 1;
+}
+
+float dai_window_dpi_scale(dai_window *w) {
+    (void)w;
+    return 1.0f;   /* X11/Wayland report scale through other channels */
+}
+
+void dai_window_caption_color(dai_window *w, uint32_t argb) {
+    // X11/Wayland paint their own server-side decorations; there is nothing
+    // here to recolour. The call exists so hosts compile unchanged.
+    (void)w; (void)argb;
+}
+
+uint32_t dai_window_dropped_files(dai_window *w, char *out, uint32_t max, int *x, int *y) {
+    if (!w || !out || !max) return 0;
+    out[0] = 0;
+    if (!w->dropped_count) return 0;
+    uint32_t n = w->dropped_len;
+    if (n >= max) n = max - 1;
+    std::memcpy(out, w->dropped, n);
+    out[n] = 0;
+    if (x) *x = w->drop_x;
+    if (y) *y = w->drop_y;
+    uint32_t c = w->dropped_count;
+    w->dropped_len = 0; w->dropped_count = 0; w->dropped[0] = 0;
+    return c;
 }
 
 int dai_window_double_click(dai_window *w) {

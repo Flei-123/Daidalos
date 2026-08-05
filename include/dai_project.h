@@ -190,6 +190,12 @@ typedef struct dai_prefs {
     float snap_translate;    /* metres, 0 = off                               */
     float snap_rotate_deg;   /* degrees, 0 = off                              */
     int   autosave_seconds;  /* 0 = never                                     */
+    int   language;          /* dai_lang, 0 = English                         */
+    int   script_editor;     /* 0 = the built-in editor, 1 = the external one */
+    /* The DISPLAY scale override: 0 = follow the monitor, 1.5 = force 150%.
+     * Not the same thing as ui_scale, which is how big the interface font is.
+     * They shared one field once; the interface size was lost every restart. */
+    float dpi_scale;
     char  last_project[256]; /* reopened at startup                           */
 } dai_prefs;
 
@@ -210,6 +216,37 @@ DAI_API dai_result dai_prefs_save(const dai_prefs *p);
  * Points at a static buffer, rebuilt on every call: not thread safe, same as
  * dai_version(). */
 DAI_API const char *dai_prefs_path(void);
+
+/* ---- shipping: the project becomes one file -----------------------------
+ *
+ * Copies `runtime_template` (a Daidalos runtime binary built once by
+ * tools/build_runtime.sh - the same engine WITHOUT the editor) to `out_path`
+ * and appends an archive holding the project's scenes, assets, settings and a
+ * generated boot.cfg. The result needs nothing installed where it lands: it
+ * finds its own archive by reading the last 16 bytes of its own file.
+ *
+ * Nothing is compiled. This is Godot's export template model, not Unity's
+ * "build the player from source" - for an engine this size the difference is
+ * an export that takes a second and works on a machine with no toolchain.
+ *
+ *   char e[256];
+ *   dai_project_export(p, "MyGame.exe", "build-win/daidalos_runtime.exe", e, sizeof e);
+ *
+ * The window title comes from the project settings' app_name, the startup
+ * scene from default_scene, and gravity/tick rate/backend travel with it, so
+ * the shipped game simulates what the editor simulated.
+ *
+ * DAI_ERR_FILE with a reason in `err` when the template is missing, the
+ * startup scene is not in the project, or the disk fills up. On failure
+ * nothing is left at `out_path`: the archive is written to a temporary file
+ * and renamed only when it is complete.
+ *
+ * Implemented in src/dai_export.cpp, NOT in dai_project.cpp - build.sh links
+ * the project test against dai_project.cpp alone to prove the project layer
+ * pulls nothing in behind it, and an archive writer would break that. */
+DAI_API dai_result dai_project_export(dai_project *project, const char *out_path,
+                                      const char *runtime_template,
+                                      char *err, size_t err_len);
 
 #ifdef __cplusplus
 }

@@ -6,6 +6,9 @@
 // objects actually resolves. Round trip is exact - floats print at the shortest
 // precision that still reads back bit identical (see fstr below).
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "dai_doc.h"
 #include "dai_doc_internal.hpp"
 
@@ -161,6 +164,11 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
         const dai_node_desc &r = n->d;
         put(s, "\nnode %u\n", (unsigned)id);
         if (r.name[0])                      put(s, "  name %s\n", r.name);
+        // The tag was the one field the format forgot, and it is not
+        // decoration: dai_editor_ui finds the game camera BY TAG, so a
+        // scene that lost it came back with no camera at all - and the
+        // shipped game had nothing to render from.
+        if (r.tag[0])                       put(s, "  tag %s\n", r.tag);
         if (r.parent)                       put(s, "  parent %u\n", (unsigned)r.parent);
         if (!v3eq(r.position, def.position))    write_v3(s, "pos", r.position);
         if (!qeq(r.rotation, def.rotation))
@@ -183,12 +191,37 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
         if (r.script[0])                        put(s, "  script %s\n", r.script);
         if (r.mesh != def.mesh)             put(s, "  mesh %u\n", (unsigned)r.mesh);
         if (r.asset[0])                     put(s, "  asset %s\n", r.asset);
+        if (r.materials[0])                 put(s, "  materials %s\n", r.materials);
         if (r.prefab[0])                    put(s, "  prefab %s\n", r.prefab);
         if (!v3eq(r.color, def.color))          write_v3(s, "color", r.color);
         if (!feq(r.roughness, def.roughness))   put(s, "  roughness %s\n", fstr(r.roughness).c_str());
         if (!feq(r.emissive, def.emissive))     put(s, "  emissive %s\n", fstr(r.emissive).c_str());
+        // Optional components. Only written when present, so a scene that has
+        // none reads exactly as it did before these existed.
+        if (r.camera != def.camera)   put(s, "  camera %d\n", r.camera);
+        if (!feq(r.camera_fov, def.camera_fov))   put(s, "  camfov %s\n", fstr(r.camera_fov).c_str());
+        if (!feq(r.camera_size, def.camera_size)) put(s, "  camsize %s\n", fstr(r.camera_size).c_str());
+        if (r.light != def.light)     put(s, "  light %d\n", r.light);
+        if (!feq(r.light_color.x, def.light_color.x) || !feq(r.light_color.y, def.light_color.y) ||
+            !feq(r.light_color.z, def.light_color.z))
+            put(s, "  lcolor %s %s %s\n", fstr(r.light_color.x).c_str(),
+                fstr(r.light_color.y).c_str(), fstr(r.light_color.z).c_str());
+        if (!feq(r.light_range, def.light_range))         put(s, "  lrange %s\n", fstr(r.light_range).c_str());
+        if (!feq(r.light_intensity, def.light_intensity)) put(s, "  lpower %s\n", fstr(r.light_intensity).c_str());
+        if (!feq(r.light_cone, def.light_cone))           put(s, "  lcone %s\n", fstr(r.light_cone).c_str());
+        if (r.sprite != def.sprite)   put(s, "  sprite %d\n", r.sprite);
+        if (!feq(r.sprite_size.x, def.sprite_size.x) || !feq(r.sprite_size.y, def.sprite_size.y) ||
+            !feq(r.sprite_size.z, def.sprite_size.z))
+            put(s, "  spsize %s %s %s\n", fstr(r.sprite_size.x).c_str(),
+                fstr(r.sprite_size.y).c_str(), fstr(r.sprite_size.z).c_str());
+        if (r.audio_event[0])            put(s, "  audio %s\n", r.audio_event);
+        if (r.audio_bus != def.audio_bus) put(s, "  abus %d\n", r.audio_bus);
+        if (!feq(r.audio_volume, def.audio_volume)) put(s, "  avol %s\n", fstr(r.audio_volume).c_str());
+        if (r.audio_loop != def.audio_loop)         put(s, "  aloop %d\n", r.audio_loop);
+        if (r.audio_autoplay != def.audio_autoplay) put(s, "  aplay %d\n", r.audio_autoplay);
         if (r.render_flags != def.render_flags) put(s, "  rflags %u\n", (unsigned)r.render_flags);
         if (r.hidden != def.hidden)             put(s, "  hidden %d\n", r.hidden);
+        if (r.disabled != def.disabled)         put(s, "  disabled %d\n", r.disabled);
         if (r.user_data != def.user_data)       put(s, "  user %u\n", (unsigned)r.user_data);
         put(s, "end\n");
     }
@@ -271,6 +304,8 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         bool ok = true;
         if      (key == "name")   { std::string v = rest_of_line(after);
                                     snprintf(rec.name, sizeof(rec.name), "%s", v.c_str()); }
+        else if (key == "tag")    { std::string v = rest_of_line(after);
+                                    snprintf(rec.tag, sizeof(rec.tag), "%s", v.c_str()); }
         else if (key == "parent") { ok = parse_u32(after, &rec.parent); }
         else if (key == "pos")    { ok = parse_floats(after, &rec.position.x, 3); }
         else if (key == "rot")    { ok = parse_floats(after, &rec.rotation.x, 4); }
@@ -303,11 +338,31 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
                                     snprintf(rec.asset, sizeof(rec.asset), "%s", v.c_str()); }
         else if (key == "prefab") { std::string v = rest_of_line(after);
                                     snprintf(rec.prefab, sizeof(rec.prefab), "%s", v.c_str()); }
+        else if (key == "materials") { std::string v = rest_of_line(after);
+                                    snprintf(rec.materials, sizeof(rec.materials), "%s", v.c_str()); }
         else if (key == "color")  { ok = parse_floats(after, &rec.color.x, 3); }
         else if (key == "roughness") { ok = parse_floats(after, &rec.roughness, 1); }
         else if (key == "emissive")  { ok = parse_floats(after, &rec.emissive, 1); }
+        else if (key == "camera")  { ok = parse_i32(after, &rec.camera); }
+        else if (key == "camfov")  { ok = parse_floats(after, &rec.camera_fov, 1); }
+        else if (key == "camsize") { ok = parse_floats(after, &rec.camera_size, 1); }
+        else if (key == "light")   { ok = parse_i32(after, &rec.light); }
+        else if (key == "lcolor")  { ok = parse_floats(after, &rec.light_color.x, 3); }
+        else if (key == "lrange")  { ok = parse_floats(after, &rec.light_range, 1); }
+        else if (key == "lpower")  { ok = parse_floats(after, &rec.light_intensity, 1); }
+        else if (key == "lcone")   { ok = parse_floats(after, &rec.light_cone, 1); }
+        else if (key == "sprite")  { ok = parse_i32(after, &rec.sprite); }
+        else if (key == "spsize")  { ok = parse_floats(after, &rec.sprite_size.x, 3); }
+        else if (key == "audio")   { std::string v = rest_of_line(after);
+            if (v.size() >= sizeof(rec.audio_event)) ok = false;
+            else std::snprintf(rec.audio_event, sizeof(rec.audio_event), "%s", v.c_str()); }
+        else if (key == "abus")    { ok = parse_i32(after, &rec.audio_bus); }
+        else if (key == "avol")    { ok = parse_floats(after, &rec.audio_volume, 1); }
+        else if (key == "aloop")   { ok = parse_i32(after, &rec.audio_loop); }
+        else if (key == "aplay")   { ok = parse_i32(after, &rec.audio_autoplay); }
         else if (key == "rflags") { ok = parse_u32(after, &rec.render_flags); }
         else if (key == "hidden") { ok = parse_i32(after, &rec.hidden); }
+        else if (key == "disabled") { ok = parse_i32(after, &rec.disabled); }
         else if (key == "user")   { ok = parse_u32(after, &rec.user_data); }
         else {
             // Strict on purpose: silently swallowing an unknown key turns a
@@ -361,12 +416,43 @@ dai_result dai_doc_save(const dai_doc *d, const char *path) {
     int flushed = fflush(f);
     fclose(f);
     if (written != need || flushed != 0) { remove(tmp.c_str()); return DAI_ERR_FILE; }
+#ifdef _WIN32
+    // The Windows CRT rename() does NOT replace an existing target - the first
+    // save works, every Ctrl+S after that fails and the scene silently stays
+    // as it was on disk. MoveFileEx with REPLACE_EXISTING behaves like POSIX.
+    if (!MoveFileExA(tmp.c_str(), path, MOVEFILE_REPLACE_EXISTING)) {
+        remove(tmp.c_str());
+        return DAI_ERR_FILE;
+    }
+#else
     if (rename(tmp.c_str(), path) != 0) { remove(tmp.c_str()); return DAI_ERR_FILE; }
+#endif
     return DAI_OK;
 }
 
 // ---- prefabs ---------------------------------------------------------------
 //
+// Copies every node of `sub` EXCEPT `skip_root` under `into`, keeping the
+// shape: a child of the skipped root becomes a child of `into`.
+static void graft_children(dai_doc *d, const dai_doc *sub, dai_node skip_root, dai_node into) {
+    if (!d || !sub || !into) return;
+    std::vector<dai_node> ids((size_t)dai_doc_count(sub));
+    if (ids.empty()) return;
+    dai_doc_nodes(sub, ids.data(), (uint32_t)ids.size());
+    std::unordered_map<dai_node, dai_node> map;
+    map[skip_root] = into;              // the root maps onto the instance itself
+    for (dai_node id : ids) {
+        if (id == skip_root) continue;
+        dai_node_desc rec{};
+        if (dai_doc_get(sub, id, &rec) != DAI_OK) continue;
+        auto it = map.find(rec.parent);
+        rec.parent = it == map.end() ? into : it->second;
+        rec.prefab[0] = 0;              // only the instance root points at the file
+        dai_node made = dai_doc_add(d, &rec);
+        if (made) map[id] = made;
+    }
+}
+
 // A prefab is just a scene file, and an instance is a node that points at one.
 // Expansion happens on load rather than in dai_doc_from_text, because only the
 // load knows what directory the paths are relative to.
@@ -501,6 +587,12 @@ dai_result dai_doc_prefab_save(const dai_doc *d, dai_node n, const char *path) {
         if (id == n) {
             rec.parent = 0;
             rec.prefab[0] = 0;     // the original is not an instance of itself
+            // At its OWN origin, never where it happened to be standing when
+            // it was made. A prefab that carries the world position of the
+            // crate you dragged it from drops every future instance in that
+            // one spot, and the children - which are stored relative to this
+            // root - are the only things that were ever meant to be offsets.
+            rec.position = dai_vec3{ 0, 0, 0 };
         } else {
             auto it = map.find(rec.parent);
             rec.parent = it == map.end() ? 0 : it->second;
@@ -525,24 +617,49 @@ dai_node dai_doc_prefab_instantiate(dai_doc *d, const char *path, dai_node paren
         dai_doc_destroy(sub);
         return 0;
     }
-    // The instance root is a transform node that points at the file. It gets
-    // the prefab root's own transform so the instance lands where the original
-    // was authored.
-    dai_node_desc root = dai_node_desc_default();
     std::vector<dai_node> sids((size_t)dai_doc_count(sub));
-    if (!sids.empty()) {
-        dai_doc_nodes(sub, sids.data(), (uint32_t)sids.size());
-        dai_doc_get(sub, sids[0], &root);
+    if (!sids.empty()) dai_doc_nodes(sub, sids.data(), (uint32_t)sids.size());
+
+    // A prefab of ONE object instantiates as ONE object.
+    //
+    // It used to always build a wrapper: an empty transform pointing at the
+    // file, with the prefab's contents grafted underneath. For a crate made of
+    // twelve pieces that is right - they need something to hang off. For a
+    // prefab of a single cube it is a box inside a box, and the thing you
+    // select, move and look at in the inspector is the empty one, which has no
+    // mesh, no collider and nothing to edit. Unity gives you the cube.
+    //
+    // So: when the file holds exactly one node, THAT node is the instance and
+    // carries the prefab link itself.
+    if (sids.size() == 1) {
+        dai_node_desc only = dai_node_desc_default();
+        dai_doc_get(sub, sids[0], &only);
+        only.parent = parent;
+        snprintf(only.prefab, sizeof(only.prefab), "%s", path);
+        dai_doc_begin(d, "Instantiate prefab");
+        dai_node made1 = dai_doc_add(d, &only);
+        dai_doc_commit(d);
+        dai_doc_destroy(sub);
+        return made1;
     }
+
+    // The prefab's OWN root is the instance root - never an extra node above
+    // it. The wrapper was convenient (somewhere to hang the children and the
+    // file reference) and wrong: instantiate a prefab twice, or make a prefab
+    // of an instance, and you get a parent inside a parent inside a parent,
+    // each one empty, each one the thing your click actually selects.
+    //
+    // The root keeps its mesh, its collider and its transform; it just also
+    // carries the prefab path. Its children come from the file underneath it.
+    dai_node_desc root = dai_node_desc_default();
+    if (!sids.empty()) dai_doc_get(sub, sids[0], &root);
     root.parent = parent;
-    root.no_body = 1;                 // the pieces carry the physics
-    root.mesh = 0xFFFFFFFFu;
-    root.asset[0] = 0;
     snprintf(root.prefab, sizeof(root.prefab), "%s", path);
 
     dai_doc_begin(d, "Instantiate prefab");
     dai_node made = dai_doc_add(d, &root);
-    if (made) graft(d, sub, made);
+    // Everything except the root, re-parented under the new instance.
+    if (made) graft_children(d, sub, sids.empty() ? 0 : sids[0], made);
     dai_doc_commit(d);
     dai_doc_destroy(sub);
     return made;

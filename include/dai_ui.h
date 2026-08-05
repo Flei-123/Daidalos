@@ -152,6 +152,13 @@ DAI_API dai_ui_style *dai_ui_style_of(dai_ui *ui);
 
 /* Frame lifecycle. Everything between begin and end describes this frame. */
 DAI_API void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in);
+/* Display scale. The UI keeps laying itself out in LOGICAL pixels - the host
+ * feeds it a logical size and a logical pointer - and the vertex list that
+ * comes out is multiplied by this on the way to the renderer. 1.25 on a 125%
+ * desktop; the font and the icons must be rasterised at that scale too, or
+ * the text is simply magnified. */
+DAI_API void  dai_ui_scale_set(dai_ui *ui, float scale);
+DAI_API float dai_ui_scale_get(const dai_ui *ui);
 DAI_API void dai_ui_end(dai_ui *ui);
 DAI_API uint32_t dai_ui_draws(dai_ui *ui, const dai_ui_draw **out);
 /* True when the pointer is over UI, so the game can ignore that click. */
@@ -167,6 +174,10 @@ DAI_API void dai_ui_mouse(const dai_ui *ui, float *x, float *y, int *down, int *
 /* The wheel delta fed this frame. The scroll region handles its own; a list
  * drawn by hand (a file browser column) reads it here. */
 DAI_API float dai_ui_wheel(const dai_ui *ui);
+/* Was this frame's press a double click? Read by list rows that open what was
+ * clicked twice - a single click selects, a double one opens, and telling
+ * them apart from the host is a timer nobody needs. */
+DAI_API int  dai_ui_double_click(const dai_ui *ui);
 /* The right button, held this frame and pressed this frame. The context menu
  * is the only consumer of the right button in the whole UI, so these are
  * top level rather than buried in the input struct. */
@@ -273,6 +284,18 @@ DAI_API void dai_ui_row_end(dai_ui *ui);
  * right at one width and wrong at every other. */
 DAI_API float dai_ui_panel_width(const dai_ui *ui);
 DAI_API void dai_ui_spacing(dai_ui *ui, float pixels);
+/* Where the next widget WOULD be drawn, without moving the cursor. Chrome
+ * that draws one composite row by hand (the inspector's object header: check,
+ * icon, name field on one line) has to place its pieces, and only the layout
+ * knows where the cursor is. */
+DAI_API void dai_ui_cursor_pos(const dai_ui *ui, float *x, float *y);
+/* The rectangle the widget that was just drawn occupies. What drag & drop
+ * needs to mark a row as the drop target: the caller knows it IS the target,
+ * the layout knows where it is. Valid until the next widget. */
+DAI_API void dai_ui_last_rect(const dai_ui *ui, float *x, float *y,
+                              float *w, float *h);
+/* Advances the layout as if a widget of this size had been drawn. */
+DAI_API void dai_ui_advance(dai_ui *ui, float w, float h);
 /* Clip everything drawn until dai_ui_clip_end to a rectangle. The editor's
  * wireframes (gizmo, colliders, camera frustums) are UI lines drawn over the
  * 3D view - without this they spill over the panels when the object sits
@@ -283,6 +306,11 @@ DAI_API void dai_ui_clip_end(dai_ui *ui);
 /* ---- widgets ----------------------------------------------------------- */
 
 DAI_API void dai_ui_label(dai_ui *ui, const char *utf8);
+/* Switch translation of widget text on/off. OFF by default: an engine header
+ * has no business rewriting the strings a game feeds it. The EDITOR turns it
+ * on, and then every label/button/option it draws goes through the table in
+ * dai_tr - the key being the English text, which is also the fallback. */
+DAI_API void dai_ui_translate(dai_ui *ui, int on);
 DAI_API void dai_ui_label_fmt(dai_ui *ui, const char *fmt, ...);
 DAI_API int  dai_ui_button(dai_ui *ui, const char *utf8);
 DAI_API int  dai_ui_checkbox(dai_ui *ui, const char *utf8, int *value);
@@ -293,6 +321,15 @@ DAI_API int  dai_ui_toggle_button(dai_ui *ui, const char *utf8, int active);
 DAI_API int  dai_ui_slider(dai_ui *ui, const char *utf8, float *value, float min, float max);
 DAI_API void dai_ui_progress(dai_ui *ui, float fraction, const char *utf8);
 DAI_API void dai_ui_separator(dai_ui *ui);
+/* One track, N cells, one of them lit: the control every settings page has
+ * and the reason none of them writes [Preferences] to mark the current one.
+ * Returns 1 the frame the choice changes. */
+DAI_API int  dai_ui_segmented(dai_ui *ui, const char *const *labels, int count, int *value);
+/* A heading with a rule running off to the right. */
+DAI_API void dai_ui_section(dai_ui *ui, const char *title);
+/* Drop the keyboard focus. The scene view calls this when a camera gesture
+ * starts: a text field that still owns W A S D is a camera that only turns. */
+DAI_API void dai_ui_text_defocus(dai_ui *ui);
 
 /* A collapsible section header - the bar a Unity style inspector groups its
  * components under. `open` is the caller's fold state. Pass `enabled` for a
@@ -301,7 +338,13 @@ DAI_API void dai_ui_separator(dai_ui *ui);
 DAI_API int dai_ui_header(dai_ui *ui, const char *title, int *open, int *enabled);
 /* The same with the component's icon in front of its name. `icon` is a name
  * from the icon set; an unknown one simply draws nothing, so a host that never
- * called dai_ui_set_icons still gets a working header. */
+ * called dai_ui_set_icons still gets a working header. Returns 1 on header
+ * click, 2 on checkbox click, 3 on right click (context menu). */
+/* The same header with the icon in the component's own colour. Unity tells
+ * its components apart by hue before anything is read; one accent-blue glyph
+ * per row is a list you have to spell out to yourself. */
+DAI_API int dai_ui_header_icon_col(dai_ui *ui, const char *icon, uint32_t tint,
+                                   const char *title, int *open, int *enabled);
 DAI_API int dai_ui_header_icon(dai_ui *ui, const char *icon, const char *title,
                                int *open, int *enabled);
 
@@ -339,6 +382,7 @@ DAI_API void dai_ui_toolbar_gap(dai_ui *ui, float w);
  * Returns -2 while it is open and nothing happened yet, -1 the frame it
  * closed (anywhere else clicked), or the item's index. */
 typedef struct dai_ui_popup {
+    int      placed;     /* 0 until the first draw has put it on screen */
     float x, y;
     int   open;
 } dai_ui_popup;
@@ -347,9 +391,27 @@ typedef struct dai_ui_menu_item {
     const char *icon;        /* dai_icons name, or NULL  */
     const char *label;
     const char *shortcut;    /* shown right aligned, or NULL */
+    /* A caption row: drawn dim and small, never highlighted, never returned as
+     * a pick, skipped by the arrow keys. Zero for a normal item, so every
+     * existing three-element initialiser keeps meaning exactly what it did.
+     *
+     * It exists because a searchlist that groups its rows has to draw the
+     * group name SOMEWHERE, and drawing it as an ordinary row makes a
+     * category look like a component you can add - which is a thing you then
+     * click, and nothing happens, and you conclude the editor is broken. */
+    int         header;
 } dai_ui_menu_item;
 
 DAI_API void dai_ui_popup_open(dai_ui_popup *m, float x, float y);
+/* An icon button at explicit coordinates (toolbars that are not laid out by
+ * panels). Returns 1 on click. */
+DAI_API int  dai_ui_icon_button_at(dai_ui *ui, const char *name, float x, float y,
+                                   float w, float h, int active);
+/* A popup that hosts arbitrary widgets instead of menu items: begin draws the
+ * panel and sets up layer/clip, end restores. Widgets in between behave like
+ * panel widgets but float above everything. */
+DAI_API void dai_ui_popup_panel_begin(dai_ui *ui, dai_ui_popup *m, float w, float min_h);
+DAI_API void dai_ui_popup_panel_end(dai_ui *ui);
 DAI_API void dai_ui_popup_close(dai_ui_popup *m);
 DAI_API int  dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
                                const dai_ui_menu_item *items, uint32_t count);
@@ -383,6 +445,15 @@ DAI_API int  dai_ui_image_button(dai_ui *ui, dai_texture tex, float w, float h,
  * The old one was a button that added one to the index per click. That is not
  * a dropdown, it is a counter: picking the third of five values took three
  * clicks, and there was no way to see what the other values even were. */
+/* An asset reference field: what is assigned now, plus the button that opens
+ * the list of what could be. Returns 1 on click - the CALLER opens the picker,
+ * because only it knows what kind of thing goes in there.
+ *
+ * Two arrows that cycle a value are not a picker: they hide the list, and
+ * choosing the fifth of six is five clicks and a memory test. */
+DAI_API int  dai_ui_object_field(dai_ui *ui, const char *label, const char *value,
+                                 const char *icon);
+
 DAI_API int  dai_ui_option(dai_ui *ui, const char *label, int *value,
                            const char *const *items, int count);
 /* Same, laid out by the caller. */
@@ -424,6 +495,45 @@ DAI_API void dai_ui_text_focus_next(dai_ui *ui);
 DAI_API const char *dai_ui_hot_label(const dai_ui *ui);
 DAI_API int  dai_ui_text_active(const dai_ui *ui);
 
+/* ---- the code editor ----------------------------------------------------
+ *
+ * A multi-line text widget that edits the caller's buffer in place. It is not
+ * a text field with newlines: a code editor has to keep a caret across lines,
+ * a selection that spans them, a viewport that follows the caret, and colour
+ * that comes from what the text MEANS - and a field that does none of those
+ * is the reason people alt-tab to a real editor and never come back.
+ *
+ * The state is the caller's so several editors can be open at once (one per
+ * file, which is what a tab bar is).
+ *
+ *   static dai_ui_code_state st = {0};
+ *   dai_ui_code_edit(ui, "script", x, y, w, h, buf, sizeof(buf), &st,
+ *                    DAI_CODE_LANG_JS);
+ *
+ * Returns 1 on any frame the buffer changed. */
+typedef struct dai_ui_code_state {
+    int   caret;        /* byte offset of the caret                          */
+    int   anchor;       /* the other end of the selection; == caret when none */
+    float scroll_x, scroll_y;
+    int   focused;
+    int   want_focus;   /* set to 1 to take the keyboard on the next draw    */
+    float blink;
+    float prefer_x;     /* remembered column, so up/down do not drift left   */
+    int   dragging;
+} dai_ui_code_state;
+
+enum {
+    DAI_CODE_LANG_NONE = 0,
+    DAI_CODE_LANG_JS   = 1,
+    DAI_CODE_LANG_CPP  = 2
+};
+
+DAI_API int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y,
+                             float w, float h, char *buf, size_t buf_size,
+                             dai_ui_code_state *st, int lang);
+/* Which line the caret is on (1 based) and its column, for a status bar. */
+DAI_API void dai_ui_code_caret_pos(const char *buf, int caret, int *line, int *col);
+
 /* One row of a hierarchy. `depth` indents, `open` is the caller's fold state
  * (pass NULL for a leaf). Returns 1 when the row itself was clicked. */
 DAI_API int  dai_ui_tree_item(dai_ui *ui, const char *label, int depth,
@@ -433,6 +543,16 @@ DAI_API int  dai_ui_tree_item(dai_ui *ui, const char *label, int depth,
  * the left click half of this. */
 DAI_API int  dai_ui_tree_item_ex(dai_ui *ui, const char *label, int depth,
                                  int has_children, int *open, int selected);
+/* The same row with the object's KIND drawn in front of its name. A hierarchy
+ * that has to spell "MainCamera" into the name to say "this is a camera" has
+ * given up its only readable column; a glyph says it in 16 pixels and leaves
+ * the name to be the name. */
+DAI_API int  dai_ui_tree_item_icon(dai_ui *ui, const char *icon, const char *label,
+                                   int depth, int has_children, int *open, int selected);
+/* Colours the label of the NEXT tree row, then forgets. What a hierarchy needs
+ * to say "this one is a prefab instance" the way Unity does - in blue, on the
+ * name, without a second column. Pass 0 to go back to the normal colour. */
+DAI_API void dai_ui_tree_label_color(dai_ui *ui, uint32_t rgba);
 /* The row as a text field, for renaming. 0 while editing, 1 to commit (Enter
  * or a click elsewhere). A rename that needs a special key to keep is a
  * rename you will lose. */
@@ -441,18 +561,119 @@ DAI_API int  dai_ui_tree_rename(dai_ui *ui, char *buf, size_t buf_size, int dept
 
 /* A clipped, scrollable region inside a panel. Everything drawn between the
  * two calls is cut to the region and moves with the wheel. */
+/* ---- arrays -------------------------------------------------------------
+ *
+ * Unity's array, which is a shape and not a widget: a foldout carrying the
+ * element count on the right, one indented row per element with a drag
+ * handle, and the +/- pair under the list. Written once here because the
+ * inspector has more than one array in it and drawing that layout by hand
+ * twice is how two lists start looking different.
+ *
+ *     if (dai_ui_array_begin(ui, "Materials", &n, &open, 1, 8)) {
+ *         for (int i = 0; i < n; ++i)
+ *             if (dai_ui_array_object_row(ui, i, names[i], DAI_ICON_MATERIAL))
+ *                 open_picker(i);
+ *         n += dai_ui_array_end(ui, &n, 1, 8);
+ *     }
+ */
+DAI_API int  dai_ui_array_begin(dai_ui *ui, const char *label, int *count,
+                                int *open, int min_n, int max_n);
+/* One element: handle, "Element n", and an object field. 1 when clicked. */
+DAI_API int  dai_ui_array_object_row(dai_ui *ui, int index, const char *value,
+                                     const char *icon);
+/* The +/- pair. Returns +1, -1 or 0; the caller owns the list. */
+DAI_API int  dai_ui_array_end(dai_ui *ui, int count, int min_n, int max_n);
+
+/* ---- arrays -------------------------------------------------------------
+ *
+ * Unity's array, which is a shape and not a widget: a foldout carrying the
+ * element count on the right, one indented row per element with a drag
+ * handle, and the +/- pair under the list. Written once here because the
+ * inspector has more than one array in it and drawing that layout by hand
+ * twice is how two lists start looking different.
+ *
+ *     if (dai_ui_array_begin(ui, "Materials", &n, &open, 1, 8)) {
+ *         for (int i = 0; i < n; ++i)
+ *             if (dai_ui_array_object_row(ui, i, names[i], DAI_ICON_MATERIAL))
+ *                 open_picker(i);
+ *         n += dai_ui_array_end(ui, &n, 1, 8);
+ *     }
+ */
+DAI_API int  dai_ui_array_begin(dai_ui *ui, const char *label, int *count,
+                                int *open, int min_n, int max_n);
+/* One element: handle, "Element n", and an object field. 1 when clicked. */
+DAI_API int  dai_ui_array_object_row(dai_ui *ui, int index, const char *value,
+                                     const char *icon);
+/* The +/- pair. Returns +1, -1 or 0; the caller owns the list. */
+DAI_API int  dai_ui_array_end(dai_ui *ui, int count, int min_n, int max_n);
+
 DAI_API void dai_ui_scroll_begin(dai_ui *ui, const char *id, float height);
 DAI_API void dai_ui_scroll_end(dai_ui *ui);
+/* Bring a rectangle inside the current scroll region into view. What "Focus
+ * selection" needs: an object selected in the viewport is no use if its row
+ * in the hierarchy is forty rows below the fold. */
+DAI_API void dai_ui_scroll_reveal(dai_ui *ui, float y, float h);
+
+/* ---- the searchable list -------------------------------------------------
+ *
+ * Unity's "Add Component" menu: a search field at the top, what you can pick
+ * below it, typing filters by name. A flat list of seven buttons is fine for
+ * seven things and unusable for forty - and scripts are things, so the list
+ * grows whether the UI is ready for it or not.
+ *
+ * State lives in the caller like every other popup, because typing has to
+ * survive the frames between opening the list and picking a row:
+ *
+ *   static dai_ui_searchlist sl = { 0 };
+ *   if (open_now) { dai_ui_searchlist_open(&sl, x, y); sl.wants_focus = 1; }
+ *   int pick = dai_ui_searchlist(ui, &sl, items, count);   // >= 0 = chosen
+ *
+ * The list stays open while the result is DAI_SEARCHLIST_OPEN (-2) and closes
+ * with DAI_SEARCHLIST_CLOSED (-1): a click outside, Escape, or a pick. */
+enum {
+    DAI_SEARCHLIST_CLOSED = -1,
+    DAI_SEARCHLIST_OPEN   = -2
+};
+
+typedef struct dai_ui_searchlist {
+    float x, y;            /* where the popup opens                          */
+    int   open;
+    int   wants_focus;     /* set when opening: the search field takes keys  */
+    int   highlight;       /* the row Enter would pick                       */
+    float scroll;
+    char  query[64];
+    float w, h;            /* read by the host: where the panel ended up     */
+} dai_ui_searchlist;
+
+DAI_API void dai_ui_searchlist_open(dai_ui_searchlist *s, float x, float y);
+DAI_API int  dai_ui_searchlist_draw(dai_ui *ui, dai_ui_searchlist *s,
+                                    const dai_ui_menu_item *items, uint32_t count);
 
 /* ---- direct drawing, for HUDs that are not widgets --------------------- */
 
 DAI_API void dai_ui_rect(dai_ui *ui, float x, float y, float w, float h, uint32_t color);
+/* Filled rectangle with rounded corners (style.rounding is the usual radius).
+ * Drawn as a centre cross plus four corner fans; falls back to dai_ui_rect
+ * when the radius is too small to see. */
+DAI_API void dai_ui_rrect(dai_ui *ui, float x, float y, float w, float h, float radius, uint32_t color);
+/* Same, with a corner mask: bit 0 = top left, 1 = top right, 2 = bottom left,
+ * 3 = bottom right. Tabs want 0x3 (top only), panels want 0xF. */
+DAI_API void dai_ui_rrect_mask(dai_ui *ui, float x, float y, float w, float h,
+                               float radius, uint32_t color, int corners);
 DAI_API void dai_ui_rect_outline(dai_ui *ui, float x, float y, float w, float h, float thickness, uint32_t color);
 /* Any angle, given thickness. The gizmo overlay is built from these. */
 DAI_API void dai_ui_line(dai_ui *ui, float x0, float y0, float x1, float y1,
                          float thickness, uint32_t color);
 DAI_API void dai_ui_text(dai_ui *ui, float x, float y, const char *utf8, uint32_t color);
 DAI_API float dai_ui_text_width(dai_ui *ui, const char *utf8);
+/* Line height of the current font. Host chrome that lays itself out (the dock
+ * tab bar, the console button row) needs it to centre a label - a hardcoded
+ * offset is right at one font size and clips descenders at every other. */
+DAI_API float dai_ui_text_height(dai_ui *ui);
+/* Attaches an explanation to the field drawn immediately before this call; it
+ * is shown while the pointer rests on that row. Units belong here: "Friction"
+ * with no tooltip is a number whose meaning you have to already know. */
+DAI_API void dai_ui_help(dai_ui *ui, const char *text);
 
 #ifdef __cplusplus
 }

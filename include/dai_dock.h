@@ -69,6 +69,12 @@ DAI_API void dai_dock_end(dai_dock *d);
 
 /* Is this panel the visible one in its leaf? For a host that has to decide
  * whether to render a 3D view at all. */
+/* The screen rectangle of the Nth instance of a panel, including its tab
+ * bar. 0 when there is no such instance. Drop targets and hover checks ask
+ * the dock, not the caller's last frame - the caller's frame is finished. */
+DAI_API int  dai_dock_panel_rect(const dai_dock *d, const char *title, int index,
+                                 float *x, float *y, float *w, float *h);
+
 DAI_API int  dai_dock_visible(const dai_dock *d, const char *title);
 /* Makes it the selected tab (and raises its floating window). */
 DAI_API void dai_dock_focus(dai_dock *d, const char *title);

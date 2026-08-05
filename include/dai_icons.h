@@ -41,6 +41,7 @@ typedef struct dai_icons dai_icons;
 #define DAI_ICON_EYE        "eye"
 #define DAI_ICON_EYE_OFF    "eye-off"
 #define DAI_ICON_FOLDER     "folder"
+#define DAI_ICON_FOLDER_FULL "folder-full"
 #define DAI_ICON_FILE       "file"
 #define DAI_ICON_PLUS       "plus"
 #define DAI_ICON_CHECK      "check"
@@ -54,6 +55,7 @@ typedef struct dai_icons dai_icons;
 #define DAI_ICON_GRID       "grid"
 #define DAI_ICON_SETTINGS   "settings"
 #define DAI_ICON_LAYERS     "layers"
+#define DAI_ICON_WINDOW     "window"
 /* asset kinds - the project browser picks one per file extension */
 #define DAI_ICON_SCRIPT     "script"
 #define DAI_ICON_MODEL      "model"
@@ -61,6 +63,41 @@ typedef struct dai_icons dai_icons;
 #define DAI_ICON_IMAGE      "image"
 #define DAI_ICON_SCENE      "scene"
 #define DAI_ICON_CONSOLE    "console"
+#define DAI_ICON_LIGHT      "light"
+#define DAI_ICON_EMPTY      "empty"
+#define DAI_ICON_CUBE       "cube"
+#define DAI_ICON_SPRITE     "sprite"
+#define DAI_ICON_VOLUME     "volume"
+#define DAI_ICON_VOLUME_X   "volume-x"
+#define DAI_ICON_MATERIAL   "material"
+#define DAI_ICON_PREFAB     "prefab"
+#define DAI_ICON_INFO       "info"
+#define DAI_ICON_WARNING    "warning"
+#define DAI_ICON_ERROR      "error"
+#define DAI_ICON_MORE       "more"
+#define DAI_ICON_RESET      "reset"
+#define DAI_ICON_ARROW_UP   "arrow-up"
+#define DAI_ICON_ARROW_DOWN "arrow-down"
+#define DAI_ICON_TARGET     "target"
+#define DAI_ICON_MINUS      "minus"
+#define DAI_ICON_REFRESH    "refresh"
+#define DAI_ICON_FOLDER_OPEN "folder-open"
+#define DAI_ICON_CODE       "code"
+#define DAI_ICON_LOCK       "lock"
+/* The component glyphs. Line drawings, deliberately: the colour comes from
+ * whoever draws them, so one icon serves the hover state, the dimmed state
+ * and the component's own hue. */
+#define DAI_ICON_C_TRANSFORM "transform"
+#define DAI_ICON_C_MESH      "mesh"
+#define DAI_ICON_C_COLLIDER  "collider"
+#define DAI_ICON_C_BODY      "body"
+#define DAI_ICON_C_SCRIPT    "braces"
+#define DAI_ICON_C_CAMERA    "cam"
+#define DAI_ICON_C_LIGHT     "bulb"
+#define DAI_ICON_C_AUDIO     "speaker"
+#define DAI_ICON_C_MATERIAL  "surface"
+#define DAI_ICON_C_SPRITE    "quad"
+#define DAI_ICON_C_PREFAB    "package"
 
 /* Rasterises the built-in set at `pixel_size` and packs it. */
 DAI_API dai_icons *dai_icons_create(float pixel_size);
@@ -76,12 +113,18 @@ DAI_API int dai_icons_add_file(dai_icons *ic, const char *name, const char *path
 DAI_API const uint8_t *dai_icons_atlas(const dai_icons *ic, uint32_t *w, uint32_t *h);
 /* The same expanded to white RGBA with coverage in alpha. */
 DAI_API const uint8_t *dai_icons_atlas_rgba(dai_icons *ic, uint32_t *w, uint32_t *h);
+/* 1 when the icon carries its own colors and must be drawn WITHOUT a tint. */
+DAI_API int dai_icons_colored(const dai_icons *ic, const char *name);
 
 /* Where an icon sits in the atlas, 0..1. Returns 0 for an unknown name, which
  * is how a widget decides to fall back to text. */
 DAI_API int dai_icons_uv(const dai_icons *ic, const char *name,
                          float *u0, float *v0, float *u1, float *v1);
 DAI_API float    dai_icons_size(const dai_icons *ic);
+/* What the LAYOUT should treat the icons as being, when they were rasterised
+ * larger for a scaled display: create at 16 * 1.25 real pixels, display at 16.
+ * Zero (the default) means "the size they were rasterised at". */
+DAI_API void     dai_icons_display_size(dai_icons *ic, float logical_px);
 DAI_API uint32_t dai_icons_count(const dai_icons *ic);
 DAI_API const char *dai_icons_name(const dai_icons *ic, uint32_t index);
 

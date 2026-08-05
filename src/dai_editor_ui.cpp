@@ -5,6 +5,7 @@
 // is the model, and a second copy would be the thing that goes stale.
 
 #include "dai_editor_ui.h"
+#include "dai_tr.h"
 #include "dai_dock.h"
 
 #include <algorithm>
@@ -43,6 +44,31 @@ static void quat_to_euler(dai_quat q, float *deg) {
     float yaw = std::atan2(siny, cosy);
     const float R2D = 57.2957795f;
     deg[0] = roll * R2D; deg[1] = pitch * R2D; deg[2] = yaw * R2D;
+}
+
+// The nearest spelling to `near_deg` of the same orientation. See above.
+static void quat_to_euler_near(dai_quat q, const float *near_deg, float *deg) {
+    float a[3];
+    quat_to_euler(q, a);
+    // The other family: flip roll and yaw by half a turn, mirror pitch.
+    float b[3] = { a[0] + 180.0f, 180.0f - a[1], a[2] + 180.0f };
+
+    auto unwrap = [](float v, float target) {
+        // v + 360k, k chosen so the result is within half a turn of target.
+        float d = v - target;
+        float k = d / 360.0f;
+        k = k >= 0.0f ? std::floor(k + 0.5f) : std::ceil(k - 0.5f);
+        return v - k * 360.0f;
+    };
+    float cost_a = 0.0f, cost_b = 0.0f;
+    for (int i = 0; i < 3; ++i) {
+        a[i] = unwrap(a[i], near_deg[i]);
+        b[i] = unwrap(b[i], near_deg[i]);
+        cost_a += std::fabs(a[i] - near_deg[i]);
+        cost_b += std::fabs(b[i] - near_deg[i]);
+    }
+    const float *win = cost_b + 0.001f < cost_a ? b : a;
+    for (int i = 0; i < 3; ++i) deg[i] = win[i];
 }
 
 static dai_quat euler_to_quat(const float *deg) {
@@ -92,8 +118,9 @@ struct dai_editor_ui {
     // Fold state of the inspector's component blocks. Retained because it
     // cannot be derived from the document - the same reason the hierarchy's
     // folds live here.
-    int fold_transform = 1, fold_body = 1, fold_collider = 1, fold_render = 1, fold_script = 0;
-    char     script_buf[96] = { 0 };
+    int fold_transform = 1, fold_body = 1, fold_collider = 1, fold_render = 1;
+    std::vector<int> fold_scripts;   // one fold per attached script (Unity: each is its own component)
+    char     script_buf[512] = { 0 };   // a full script list fits, not one path
     dai_node script_buf_node = DAI_INVALID_NODE;
 
     // ---- scene view / game view ------------------------------------------
@@ -140,6 +167,14 @@ struct dai_editor_ui {
 
     // asset browser: the list is the host's, the selection is ours
     std::vector<const char *> assets;
+    // "Open this file in whatever edits it" - the host decides what that is
+    // (VS Code if it can find one, the OS default otherwise). NULL = do nothing.
+    dai_editor_ui_rename_fn open_asset = nullptr;
+    void *open_asset_user = nullptr;
+    // Real directories on disk, fed by the host: the tree is otherwise derived
+    // from FILE paths alone, so an empty folder was invisible - "New Folder"
+    // vanished the moment it was created, and a renamed one with it.
+    std::vector<const char *> folders_disk;
     int asset_sel = -1;
 
     // ---- projects --------------------------------------------------------
@@ -179,7 +214,8 @@ struct dai_editor_ui {
     float       drag_px = 0, drag_py = 0;
     dai_node    hover_node = DAI_INVALID_NODE;  // hierarchy row under the pointer
     // Inline rename of a just-created asset (Unity's create flow).
-    std::string rename_click;           // row the Project right click landed on
+    std::string rename_click;
+    std::string last_pick;         // last row clicked in the Project window           // row the Project right click landed on
     std::string rename_asset;
     char        rename_asset_buf[160] = { 0 };
     int         rename_seen_active = 0;
@@ -188,6 +224,47 @@ struct dai_editor_ui {
     dai_editor_ui_rename_fn prefab_save = nullptr;   // (node_name, rel_path) -> 1
     dai_editor_ui_rename_fn asset_rename = nullptr;
     void       *rename_user = nullptr;
+    // Importing from outside the project: the desktop's file manager drops
+    // onto the Project window, the host does the copying.
+    dai_editor_ui_rename_fn asset_import = nullptr;
+    void       *import_user = nullptr;
+    // Deleting a file is not undoable, so it asks first - and the asking is a
+    // small popup rather than a modal, because a modal in an editor stops the
+    // world for a question about one file.
+    dai_editor_ui_rename_fn asset_delete = nullptr;
+    void       *delete_user = nullptr;
+    std::string delete_ask;            // what Delete is about to remove
+    dai_ui_popup menu_delete{};
+
+    // ---- the built-in script editor ------------------------------------
+    // One entry per open file. The buffer is the file plus room to type in:
+    // a code editor that stops accepting characters at the file's original
+    // length is a code editor you use once.
+    struct OpenScript {
+        std::string       path;
+        std::vector<char> buf;
+        dai_ui_code_state st{};
+        int               dirty = 0;
+    };
+    std::vector<OpenScript> scripts_open;
+    int  script_tab = 0;
+    int  script_external = 0;          // 0 = edit here, 1 = hand to VS Code
+    dai_editor_ui_read_fn  file_read = nullptr;
+    dai_editor_ui_write_fn file_write = nullptr;
+    void *file_user = nullptr;
+    // A row of the Project window dragged onto a FOLDER moves it there. The
+    // row that is aimed at is worked out while the folders are drawn and
+    // consumed at the end of the frame, where the release is handled - the
+    // two cannot be the same place, because the folder rows are drawn long
+    // before anyone knows whether the button came up over one of them.
+    std::string proj_drop_dir;
+    int         proj_drop_ok = 0;
+    // Which folder ROW of the listing is selected. Unity's rule, and every
+    // file manager's: one click picks a folder up (rename it, drag it, see
+    // what it is), two clicks go inside. Entering on the first click makes
+    // the folder unselectable - there is no gesture left that means "this
+    // one" - which is why renaming a folder needed the tree or a right click.
+    std::string proj_sel_folder;
     // Scenes as files (Unity: several per project, opened by click).
     dai_editor_ui_project_list_fn   scene_list = nullptr;
     dai_editor_ui_project_action_fn scene_open = nullptr;
@@ -218,8 +295,26 @@ struct dai_editor_ui {
     dai_dock *dock = nullptr;
     int   settings_open = 0;
     dai_ui_popup menu_project{};      // right click in the project window
-    dai_ui_popup menu_addcomp{};      // the Add Component button's list
+    dai_ui_popup menu_addcomp{};      // (superseded by addcomp_list below)
+    dai_ui_searchlist addcomp_list{}; // Add Component, Unity style: search +
+                                      // filtered list, scripts included
+    dai_ui_popup menu_mesh{};         // the mesh object field's picker
+    dai_node    mesh_menu_node = DAI_INVALID_NODE;
+    dai_node    addcomp_node = DAI_INVALID_NODE;   // who Add Component was opened for
+    dai_ui_searchlist mat_list{};     // the material row's picker
+    dai_node    mat_menu_node = DAI_INVALID_NODE;
+    int         mat_menu_slot = 0;
+    dai_ui_popup menu_comp{};         // right click on a component header
+    int  comp_menu_target = -1;       // 0 transform 1 rigidbody 2 collider 3 camera 4 light 5 sprite 6 audio
     dai_ui_popup menu_window{};       // the Window menu: bring a panel back
+    char clipboard[4096] = { 0 };     // objects, fields, console lines, free text
+    unsigned clip_rev = 0;            // bumped on every set - the host mirrors
+                                      // changes into the OS clipboard
+    int  clip_kind = -1;
+    int  last_ctrl_held = 0;          // refreshed from the cam input each frame
+    int  fold_camera = 1, fold_light = 1, fold_sprite = 1, fold_audio = 1;
+    char audio_buf[64] = { 0 };
+    dai_node audio_buf_node = DAI_INVALID_NODE;
     // Console: one ring buffer for engine messages and script print().
     struct LogLine { int level; std::string text; uint32_t count; };
     std::vector<LogLine> log;
@@ -230,6 +325,7 @@ struct dai_editor_ui {
     float bus_gain[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
     int   bus_mute[4] = { 0, 0, 0, 0 };
     char scene_label[128] = { 0 };    // the active scene, shown as the hierarchy root
+    int  scene_dirty = 0;             // the host owns the file; it says when
     char toast[160] = { 0 };          // "saved main.daidalos" and friends
     float toast_left = 0.0f;          // seconds it stays up
     int  rename_drawn = 0;            // the rename row existed THIS frame
@@ -237,14 +333,30 @@ struct dai_editor_ui {
 
     // ---- settings ----------------------------------------------------------
     float settings_font_px = 13.0f;
+    void (*apply_scale)(float, void *) = nullptr;
+    void *apply_scale_user = nullptr;
+    float settings_ui_scale = 0.0f;   // 0 = follow the display
+    int   fold_materials = 1;      // the Materials array, open like Unity's
+    int   reveal_selection = 0;    // scroll the hierarchy to the selection
+    int   reveal_row_wanted = 0;
     int   settings_tab = 0;
     void (*proj_settings_host)(void *user) = nullptr;
     int   settings_theme = 0;
+    float def_friction = 0.6f, def_restitution = 0.0f;   // host pushes project defaults
     float settings_gizmo_px = 90.0f;
     float settings_snap = 0.0f;
     void (*apply_font)(float px, void *user) = nullptr;
     void *apply_user = nullptr;
     const char *pending_asset = nullptr;   // clicked in the Project window
+    // Where a dragged asset was let go, in the world. A double click has no
+    // such place, which is what the flag is for.
+    int      pending_at_valid = 0;
+    dai_vec3 pending_at{ 0, 0, 0 };
+    // Prefab mode: the name shown in the bar, and the two one-shot flags the
+    // host reads.
+    std::string prefab_mode;
+    std::string prefab_open_want;
+    int         prefab_exit_want = 0;
     int   pending_as_tree = 0;
     bool  layout_ready = false;
     float layout_w = 0, layout_h = 0;
@@ -255,6 +367,18 @@ struct dai_editor_ui {
     float game_x = 0, game_y = 0, game_w = 0, game_h = 0;
 
     // viewport interaction
+    int  component_remove = 0;   // pending Remove Component: 1 rigidbody, 2 collider, 3 camera, 4 light, 5 sprite, 6 audio
+    dai_ui_popup menu_layout{};       // named layouts: save current, pick one
+    dai_ui_popup menu_gizmos{};       // scene view toolbar: gizmo visibility
+    dai_ui_popup menu_scecam{};       // scene view toolbar: camera settings
+    char layout_name_buf[64] = { 0 };
+    int  gizmo_grid = 1;            // the floor grid in the scene view
+    int  gizmo_colliders = 1;
+    int  gizmo_cameras = 1;
+    int  floating_outside = 1;      // floating panels may leave the main window
+    void (*layout_save_host)(const char *name, const char *text, size_t n, void *user) = nullptr;
+    int  (*layout_load_host)(const char *name, char *out, size_t n, void *user) = nullptr;
+    void *layout_host_user = nullptr;
     bool viewport_dragging = false;
     bool prev_viewport_down = false;
     bool prev_right_down = false;
@@ -299,20 +423,45 @@ static const char *icon_for_asset(const std::string &path) {
     std::string e = path.substr(dot + 1);
     for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
     if (e == "js" || e == "ts")                       return DAI_ICON_SCRIPT;
+    if (e == "cpp" || e == "cc" || e == "cxx" || e == "h" || e == "hpp") return DAI_ICON_SCRIPT;
     if (e == "glb" || e == "gltf" || e == "obj")      return DAI_ICON_MODEL;
     if (e == "wav" || e == "ogg" || e == "mp3" || e == "flac") return DAI_ICON_AUDIO;
     if (e == "png" || e == "jpg" || e == "jpeg" || e == "tga" || e == "svg") return DAI_ICON_IMAGE;
-    if (e == "daidalos" || e == "prefab")             return DAI_ICON_SCENE;
+    if (e == "daidalos" || e == "prefab")             return DAI_ICON_C_PREFAB;
     return DAI_ICON_FILE;
+}
+
+// A file the engine can run on an object: QuickJS, or a native C++ behaviour
+// (see dai_native.h). Both attach the same way and both are components.
+// Anything an external editor can open, as opposed to something the scene
+// places. A .cpp is both a behaviour and text; the check above wins.
+static bool is_text_file(const std::string &path) {
+    size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string e = path.substr(dot + 1);
+    for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return e == "txt" || e == "md" || e == "json" || e == "h" || e == "hpp" ||
+           e == "glsl";
+}
+
+static bool is_behaviour_file(const std::string &path) {
+    size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string e = path.substr(dot + 1);
+    for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return e == "js" || e == "cpp" || e == "cc" || e == "cxx";
 }
 
 static bool script_name_ok(const std::string &s) {
     if (s.empty()) return false;
-    for (char c : s) {
-        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                  (c >= '0' && c <= '9') || c == '-' || c == '_';
-        if (!ok) return false;
-    }
+    if (s.find("..") != std::string::npos) return false;
+    // Windows-illegal filename characters are the only real constraint; a
+    // space is perfectly legal - rejecting it is what made renaming
+    // "New Folder" into anything (or keeping its name) silently fail.
+    for (char c : s)
+        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
+            c == '"' || c == '<' || c == '>' || c == '|')
+            return false;
     return true;
 }
 // Reparenting keeps the object exactly where it is on screen: the document
@@ -414,6 +563,42 @@ static std::string entry_param(const std::string &e, const std::string &key) {
     }
     return std::string();
 }
+// One "// @param" declaration, as the host reports it: "float:speed=6".
+// A missing type means node, which is what every declaration meant before
+// types existed - so every script written until now keeps its fields.
+enum ParamType { PARAM_NODE = 0, PARAM_FLOAT, PARAM_INT, PARAM_BOOL, PARAM_STRING };
+struct ParamDecl { std::string name, def; int type = PARAM_NODE; };
+
+static std::vector<ParamDecl> parse_params(const char *csv) {
+    std::vector<ParamDecl> out;
+    std::string cur;
+    for (const char *c = csv ? csv : ""; ; ++c) {
+        if (*c == ',' || !*c) {
+            if (!cur.empty()) {
+                ParamDecl d;
+                std::string rest = cur;
+                size_t colon = rest.find(':');
+                if (colon != std::string::npos) {
+                    std::string t = rest.substr(0, colon);
+                    rest = rest.substr(colon + 1);
+                    if (t == "float" || t == "number") d.type = PARAM_FLOAT;
+                    else if (t == "int")               d.type = PARAM_INT;
+                    else if (t == "bool")              d.type = PARAM_BOOL;
+                    else if (t == "string" || t == "text") d.type = PARAM_STRING;
+                    else                               d.type = PARAM_NODE;
+                }
+                size_t eq = rest.find('=');
+                if (eq != std::string::npos) { d.def = rest.substr(eq + 1); rest = rest.substr(0, eq); }
+                d.name = rest;
+                if (!d.name.empty()) out.push_back(d);
+            }
+            cur.clear();
+            if (!*c) break;
+        } else cur += *c;
+    }
+    return out;
+}
+
 static void entry_set_param(std::string &e, const std::string &key, const std::string &val) {
     std::string path = entry_path(e);
     std::string inner;
@@ -464,21 +649,32 @@ void close_field_tx_on_release(dai_editor_ui *p) {
     end_field_tx_if_released(p, down);
 }
 
+// Just the name. The tag used to be glued in front of it ("MainCamera
+// Camera"), which reads as part of the name, is not editable there, and costs
+// the column its whole job. The tag lives in the inspector, where it is a
+// field; what the object IS is now the row's icon.
 const char *node_label(const dai_node_desc &r, dai_node id, char *buf, size_t n) {
-    if (r.tag[0] && r.name[0]) {
-        // bounded by hand: snprintf's %s %s of two fixed arrays trips the
-        // truncation warning even though the total fits
-        size_t used = 0;
-        for (const char *c = r.tag; *c && used + 1 < n; ++c) buf[used++] = *c;
-        if (used + 1 < n) buf[used++] = ' ';
-        for (const char *c = r.name; *c && used + 1 < n; ++c) buf[used++] = *c;
-        buf[used] = 0;
-        return buf;
-    }
     if (r.name[0]) return r.name;
     if (r.tag[0])  return r.tag;
     std::snprintf(buf, n, "node %u", (unsigned)id);
     return buf;
+}
+
+// The icon that says what a node is, in the order a person would answer the
+// question: a camera is a camera even when it also has a script.
+const char *node_icon(const dai_node_desc &r) {
+    if (r.camera)         return DAI_ICON_CAMERA;
+    if (r.light)          return DAI_ICON_LIGHT;
+    if (r.audio_event[0]) return DAI_ICON_VOLUME;
+    if (r.sprite)         return DAI_ICON_SPRITE;
+    if (r.asset[0])       return DAI_ICON_MODEL;
+    if (r.no_body && r.no_collider && r.no_rigidbody && !r.asset[0])
+        return r.script[0] ? DAI_ICON_SCRIPT : DAI_ICON_EMPTY;
+    switch (r.shape) {
+    case DAI_SHAPE_SPHERE:  return DAI_ICON_SPHERE;
+    case DAI_SHAPE_CAPSULE: return DAI_ICON_CAPSULE;
+    default:                return DAI_ICON_CUBE;
+    }
 }
 
 bool has_children(dai_doc *d, dai_node n) {
@@ -520,10 +716,35 @@ void draw_subtree(dai_editor_ui *p, dai_doc *d, dai_node n, int depth) {
     } else {
         char tmp[80];
         const char *label = node_label(r, n, tmp, sizeof(tmp));
-        int rc = dai_ui_tree_item_ex(p->ui, label, depth, kids, kids ? &open : nullptr,
-                                     dai_editor_is_selected(p->ed, n));
+        // "Focus selection" has to work when the row is below the fold.
+        if (p->reveal_row_wanted && dai_editor_is_selected(p->ed, n)) {
+            float rvx = 0, rvy = 0;
+            dai_ui_cursor_pos(p->ui, &rvx, &rvy);
+            dai_ui_scroll_reveal(p->ui, rvy, 20.0f);
+            p->reveal_row_wanted = 0;
+        }
+        // Unity's one visual rule for prefabs, and it is a good one: the NAME
+        // is blue. Not a badge, not a second column - the thing you are
+        // already reading tells you this object came from a file, so "why did
+        // my change come back" is answered before it is asked.
+        if (r.prefab[0]) dai_ui_tree_label_color(p->ui, rgba(0x6C, 0xB6, 0xF5, 255));
+        int rc = dai_ui_tree_item_icon(p->ui, node_icon(r), label, depth, kids,
+                                       kids ? &open : nullptr,
+                                       dai_editor_is_selected(p->ed, n));
         if (rc & 4) {
             p->hover_node = n;   // a dragged script aims at this row
+            // ...and while a node IS being dragged, say so ON the row. A
+            // re-parent whose target only becomes visible after the button
+            // comes up is a re-parent you undo half the time - and the
+            // hierarchy is where people actually build the scene graph.
+            if (p->drag_node != DAI_INVALID_NODE && p->drag_node != n) {
+                const dai_ui_style *hs = dai_ui_style_of(p->ui);
+                float lx = 0, ly = 0, lw = 0, lh = 0;
+                dai_ui_last_rect(p->ui, &lx, &ly, &lw, &lh);
+                dai_ui_rect(p->ui, lx, ly, lw, lh, (hs->accent & 0x00FFFFFFu) | 0x55000000u);
+                dai_ui_rect_outline(p->ui, lx, ly, lw, lh, 1.0f, hs->accent);
+                dai_ui_cursor_set(p->ui, DAI_CURSOR_HAND);
+            }
             int lpe = 0;
             dai_ui_mouse(p->ui, nullptr, nullptr, nullptr, &lpe);
             if (lpe && p->drag_pending.empty()) {
@@ -534,9 +755,9 @@ void draw_subtree(dai_editor_ui *p, dai_doc *d, dai_node n, int depth) {
             }
         }
         if (rc & 1) {
-            // Ctrl-less toggle is not discoverable; additive selection is left
-            // to the viewport, where the modifier keys live.
-            dai_editor_select(p->ed, n, 0);
+            // Ctrl-click ADDS to the selection, the way Unity multi-selects in
+            // the hierarchy; a plain click replaces.
+            dai_editor_select(p->ed, n, p->last_ctrl_held);
         }
         if (rc & 2) {
             // Right click selects what it opens the menu for - a menu that
@@ -604,6 +825,35 @@ void dai_editor_ui_log(dai_editor_ui *p, int level, const char *text) {
     if (p->log.size() > 2000) p->log.erase(p->log.begin(), p->log.begin() + 500);
 }
 
+uint32_t dai_editor_ui_log_tail(const dai_editor_ui *p, char *buf, uint32_t buf_size) {
+    if (!buf || buf_size < 2) return 0;
+    buf[0] = 0;
+    if (!p) return 0;
+    // Walk BACKWARDS to find how many of the newest lines fit, then write them
+    // in order. Nothing is allocated: this runs inside a crash handler, where
+    // the heap is exactly the thing that might be broken.
+    uint32_t need = 0;
+    size_t first = p->log.size();
+    while (first > 0) {
+        const auto &l = p->log[first - 1];
+        uint32_t line = (uint32_t)l.text.size() + 1;
+        if (need + line >= buf_size) break;
+        need += line;
+        --first;
+    }
+    uint32_t used = 0;
+    for (size_t i = first; i < p->log.size(); ++i) {
+        const std::string &t = p->log[i].text;
+        uint32_t n = (uint32_t)t.size();
+        if (used + n + 2 >= buf_size) break;
+        std::memcpy(buf + used, t.data(), n);
+        used += n;
+        buf[used++] = '\n';
+    }
+    buf[used] = 0;
+    return used;
+}
+
 void dai_editor_ui_log_clear(dai_editor_ui *p) { if (p) p->log.clear(); }
 
 float dai_editor_ui_bus_gain(const dai_editor_ui *p, int bus) {
@@ -611,10 +861,31 @@ float dai_editor_ui_bus_gain(const dai_editor_ui *p, int bus) {
     return p->bus_mute[bus] ? 0.0f : p->bus_gain[bus];
 }
 
+void dai_editor_ui_clipboard_set(dai_editor_ui *p, int kind, const char *text) {
+    if (!p) return;
+    p->clip_kind = kind;
+    ++p->clip_rev;
+    std::snprintf(p->clipboard, sizeof(p->clipboard), "%s", text ? text : "");
+}
+unsigned dai_editor_ui_clipboard_rev(const dai_editor_ui *p) { return p ? p->clip_rev : 0; }
+const char *dai_editor_ui_clipboard_get(const dai_editor_ui *p, int *kind) {
+    if (!p || !p->clipboard[0]) { if (kind) *kind = -1; return nullptr; }
+    if (kind) *kind = p->clip_kind;
+    return p->clipboard;
+}
+int dai_editor_ui_clipboard_has(const dai_editor_ui *p) { return p && p->clipboard[0]; }
+
 void dai_editor_ui_toast(dai_editor_ui *p, const char *text, float seconds) {
     if (!p) return;
     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
     p->toast_left = seconds > 0.0f ? seconds : 2.0f;
+}
+
+void dai_editor_ui_scene_dirty(dai_editor_ui *p, int dirty) {
+    if (p) p->scene_dirty = dirty ? 1 : 0;
+}
+int dai_editor_ui_scene_dirty_get(const dai_editor_ui *p) {
+    return p ? p->scene_dirty : 0;
 }
 
 void dai_editor_ui_scene_label(dai_editor_ui *p, const char *name) {
@@ -653,8 +924,165 @@ void dai_editor_ui_rename_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn, voi
     p->asset_rename = fn; p->rename_user = user;
 }
 
+void dai_editor_ui_import_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn, void *user) {
+    if (!p) return;
+    p->asset_import = fn; p->import_user = user;
+}
+
+void dai_editor_ui_file_host(dai_editor_ui *p, dai_editor_ui_read_fn r,
+                             dai_editor_ui_write_fn w, void *user) {
+    if (!p) return;
+    p->file_read = r; p->file_write = w; p->file_user = user;
+}
+
+void dai_editor_ui_script_editor_pref(dai_editor_ui *p, int external) {
+    if (p) p->script_external = external ? 1 : 0;
+}
+int dai_editor_ui_script_editor_pref_get(const dai_editor_ui *p) {
+    return p ? p->script_external : 0;
+}
+
+int dai_editor_ui_script_open(dai_editor_ui *p, const char *rel_path) {
+    if (!p || !rel_path || !*rel_path) return 0;
+    // Already open? Then this is "show me that one", which is what clicking a
+    // file a second time means in every editor there is.
+    for (size_t i = 0; i < p->scripts_open.size(); ++i)
+        if (p->scripts_open[i].path == rel_path) {
+            p->script_tab = (int)i;
+            dai_editor_ui_panel_open(p, "Script");
+            dai_dock_focus(p->dock, "Script");
+            return 1;
+        }
+    if (!p->file_read) {
+        dai_editor_ui_toast(p, "this build cannot read files", 2.0f);
+        return 0;
+    }
+    dai_editor_ui::OpenScript o;
+    o.path = rel_path;
+    // Room to type. A file opened at exactly its own size is read-only in
+    // practice, and nothing says so.
+    o.buf.assign(96 * 1024, 0);
+    uint32_t got = p->file_read(rel_path, o.buf.data(), (uint32_t)o.buf.size() - 1,
+                                p->file_user);
+    if (!got && o.buf[0] == 0) {
+        // An empty file is fine; an unreadable one is not, and the difference
+        // is whether the host said anything.
+        o.buf[0] = 0;
+    }
+    p->scripts_open.push_back(std::move(o));
+    p->script_tab = (int)p->scripts_open.size() - 1;
+    p->scripts_open.back().st.want_focus = 1;
+    dai_editor_ui_panel_open(p, "Script");
+    dai_dock_focus(p->dock, "Script");
+    return 1;
+}
+
+int dai_editor_ui_script_save(dai_editor_ui *p) {
+    if (!p || p->scripts_open.empty()) return 0;
+    if (p->script_tab < 0 || p->script_tab >= (int)p->scripts_open.size()) return 0;
+    auto &cur = p->scripts_open[(size_t)p->script_tab];
+    if (!p->file_write) {
+        dai_editor_ui_toast(p, "this build cannot write files", 2.0f);
+        return 0;
+    }
+    if (p->file_write(cur.path.c_str(), cur.buf.data(), p->file_user)) {
+        cur.dirty = 0;
+        char msg[192];
+        std::snprintf(msg, sizeof(msg), "saved %s", base_of(cur.path).c_str());
+        dai_editor_ui_toast(p, msg, 1.5f);
+        p->want_refresh = 1;
+        return 1;
+    }
+    dai_editor_ui_toast(p, "could not write that file", 2.5f);
+    return 0;
+}
+
+void dai_editor_ui_delete_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn, void *user) {
+    if (!p) return;
+    p->asset_delete = fn; p->delete_user = user;
+}
+
+int dai_editor_ui_delete_project_pick(dai_editor_ui *p) {
+    if (!p) return 0;
+    // Only when the Project window is the one under the pointer: Delete in the
+    // scene means the selected OBJECT, and the two must never be confused.
+    if (!dai_ui_root_hovered(p->ui, "Project")) return 0;
+    std::string target;
+    if (!p->proj_sel_folder.empty()) target = p->proj_sel_folder;
+    else if (p->asset_sel >= 0 && p->asset_sel < (int)p->assets.size() &&
+             p->assets[(size_t)p->asset_sel])
+        target = p->assets[(size_t)p->asset_sel];
+    else if (!p->last_pick.empty())      target = p->last_pick;   // the tree, or a right click
+    if (target.empty()) {
+        dai_editor_ui_toast(p, "select a file or folder first", 1.8f);
+        return 1;      // still ours: Delete over the browser is never the scene's
+    }
+    if (!p->asset_delete) {
+        dai_editor_ui_toast(p, "this build cannot delete files", 2.0f);
+        return 1;                       // still ours: do not delete the object
+    }
+    p->delete_ask = target;
+    float mx = 0, my = 0;
+    dai_ui_mouse(p->ui, &mx, &my, nullptr, nullptr);
+    dai_ui_popup_open(&p->menu_delete, mx, my);
+    return 1;
+}
+
+int dai_editor_ui_drop_files(dai_editor_ui *p, const char *paths_nl, float x, float y) {
+    if (!p || !paths_nl || !*paths_nl) return 0;
+    // Only the Project window takes files. Asking the dock where it is - and
+    // not remembering it from the draw - is the rule everywhere else in here:
+    // a drop arrives between frames, and last frame's rectangle is the only
+    // one that exists.
+    float px = 0, py = 0, pw = 0, ph = 0;
+    if (!dai_dock_panel_rect(p->dock, "Project", 0, &px, &py, &pw, &ph)) return 0;
+    if (x < px || x >= px + pw || y < py || y >= py + ph) return 0;
+    if (!p->asset_import) {
+        dai_editor_ui_toast(p, "no import host - this build cannot copy files in", 3.0f);
+        return 0;
+    }
+    // The Projects half of the window has no folder to import INTO; a drop
+    // there means the files, so switch to them first.
+    p->proj_tab = 0;
+    int n = 0, seen = 0;
+    std::string one;
+    for (const char *c = paths_nl; ; ++c) {
+        if (*c && *c != '\n') { one += *c; continue; }
+        while (!one.empty() && (one.back() == '\r' || one.back() == ' ')) one.pop_back();
+        if (!one.empty()) {
+            ++seen;
+            std::string b = one;
+            size_t sl = b.find_last_of("/\\");
+            if (sl != std::string::npos) b = b.substr(sl + 1);
+            if (!b.empty()) {
+                std::string dest = p->proj_dir.empty() ? b : p->proj_dir + "/" + b;
+                if (p->asset_import(one.c_str(), dest.c_str(), p->import_user)) ++n;
+            }
+            one.clear();
+        }
+        if (!*c) break;
+    }
+    char msg[128];
+    if (n > 0) {
+        p->want_refresh = 1;
+        std::snprintf(msg, sizeof(msg), n == 1 ? "imported %d item into %s"
+                                               : "imported %d items into %s",
+                      n, p->proj_dir.empty() ? "Assets" : p->proj_dir.c_str());
+        dai_editor_ui_toast(p, msg, 2.0f);
+    } else if (seen > 0) {
+        dai_editor_ui_toast(p, "nothing imported - could not copy it in", 2.5f);
+    }
+    return n > 0;
+}
+
 void dai_editor_ui_prefab_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn) {
     if (p) p->prefab_save = fn;
+}
+
+void dai_editor_ui_open_asset_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn, void *user) {
+    if (!p) return;
+    p->open_asset = fn;
+    p->open_asset_user = user;
 }
 
 void dai_editor_ui_params_host(dai_editor_ui *p, dai_editor_ui_params_fn fn, void *user) {
@@ -683,6 +1111,12 @@ void dai_editor_ui_projects_refresh(dai_editor_ui *p) {
     }
 }
 
+void dai_editor_ui_physics_defaults(dai_editor_ui *p, float friction, float restitution) {
+    if (!p) return;
+    p->def_friction = friction;
+    p->def_restitution = restitution;
+}
+
 void dai_editor_ui_settings_host(dai_editor_ui *p,
                                  void (*apply_font)(float px, void *user),
                                  float current_px, void *user) {
@@ -701,6 +1135,15 @@ void dai_editor_ui_script_host(dai_editor_ui *p,
 
 const char *dai_editor_ui_project(const dai_editor_ui *p) {
     return p ? p->proj_current.c_str() : "";
+}
+
+void dai_editor_ui_scale_host(dai_editor_ui *p,
+                              void (*apply_scale)(float scale, void *user),
+                              float current, void *user) {
+    if (!p) return;
+    p->apply_scale = apply_scale;
+    p->apply_scale_user = user;
+    p->settings_ui_scale = current;
 }
 
 void dai_editor_ui_project_settings_host(dai_editor_ui *p, void (*draw)(void *user), void *user) {
@@ -740,6 +1183,32 @@ dai_result dai_editor_ui_layout_load(dai_editor_ui *p, const char *text) {
     return r;
 }
 
+static void project_expand_to(dai_editor_ui *p, const std::string &dir);
+/* The Project window's small button, used by the inspector's prefab bar too -
+ * one button shape for the whole editor beats two that nearly match. */
+static int browser_button(dai_editor_ui *p, float x, float y, float w, float h,
+                          const char *label);
+
+int dai_editor_ui_rename_project_pick(dai_editor_ui *p) {
+    if (!p) return 0;
+    std::string pick = p->last_pick;
+    if (pick.empty() && p->asset_sel >= 0 && p->asset_sel < (int)p->assets.size())
+        pick = p->assets[(size_t)p->asset_sel] ? p->assets[(size_t)p->asset_sel] : "";
+    if (pick.empty()) return 0;
+    // The rename field is drawn in the list of the CURRENT folder, so open
+    // the parent first or the row never exists and the rename cancels itself.
+    p->rename_asset = pick;
+    p->proj_dir = parent_of(pick);
+    project_expand_to(p, p->proj_dir);
+    std::string base = base_of(pick);
+    size_t dot = base.find_last_of('.');
+    if (dot != std::string::npos && dot > 0) base.resize(dot);
+    std::snprintf(p->rename_asset_buf, sizeof(p->rename_asset_buf), "%s", base.c_str());
+    p->rename_seen_active = 0;
+    p->proj_tab = 0;
+    return 1;
+}
+
 void dai_editor_ui_panel_open(dai_editor_ui *p, const char *title) {
     if (!p || !title) return;
     dai_dock_focus(p->dock, title);
@@ -752,17 +1221,29 @@ void dai_editor_ui_mesh_host(dai_editor_ui *p,
     p->mesh_name = name; p->mesh_count = mesh_count; p->mesh_user = user;
 }
 
+// No panel is open twenty times. The cap is a seatbelt, not a feature: a dock
+// that ever answers "here is another instance" forever must cost a missing
+// panel, never a hung editor.
+#define DAI_MAX_PANEL_INSTANCES 8
+
 // ------------------------------------------------------------- hierarchy
 
 // The contents, without deciding where they live. The panel version and the
 // window version both call this - two copies of a tree walk is how the two
 // slowly stop agreeing.
+static dai_vec3 spawn_point(dai_editor_ui *p, dai_doc *d, float half_y);
+
 static void hierarchy_body(dai_editor_ui *p, float h) {
     dai_doc *d = dai_editor_doc(p->ed);
     p->visible_rows = 0;
-    p->hover_node = DAI_INVALID_NODE;   // rebuilt per frame, for script drops
     p->param_hover_entry = -1;          // same, for reference assign fields
+    // Which row the pointer is over is a fact about THIS frame. Left standing
+    // from the last one, the empty space below the tree quietly still means
+    // "the last row you touched" - and every drop into nothing re-parented
+    // onto the bottom object.
+    p->hover_node = DAI_INVALID_NODE;
     dai_ui_scroll_begin(p->ui, "hierarchy", h);
+    p->reveal_row_wanted = p->reveal_selection;
 
     // The scene itself is the root row, the way Unity puts the .unity file
     // above everything: it says WHICH scene is open, and dropping a node on
@@ -770,11 +1251,25 @@ static void hierarchy_body(dai_editor_ui *p, float h) {
     int have_root = p->scene_label[0] != 0;
     int root_open = !p->scene_root_folded;
     if (have_root) {
-        char label[160];
-        std::snprintf(label, sizeof(label), "%s", p->scene_label);
+        // The asterisk every editor uses, in the one row that names the file.
+        // Without it "did I save that" has no answer except pressing Ctrl+S
+        // again and hoping.
+        char label[172];
+        std::snprintf(label, sizeof(label), "%s%s", p->scene_label,
+                      p->scene_dirty ? " *" : "");
         int rc = dai_ui_tree_item_ex(p->ui, label, 0, 1, &root_open, 0);
         p->scene_root_folded = !root_open;
-        if (rc & 4) p->hover_node = DAI_SCENE_ROOT_NODE;   // drop here = unparent
+        if (rc & 4) {
+            p->hover_node = DAI_SCENE_ROOT_NODE;   // drop here = unparent
+            if (p->drag_node != DAI_INVALID_NODE) {
+                const dai_ui_style *hs = dai_ui_style_of(p->ui);
+                float lx = 0, ly = 0, lw = 0, lh = 0;
+                dai_ui_last_rect(p->ui, &lx, &ly, &lw, &lh);
+                dai_ui_rect(p->ui, lx, ly, lw, lh, (hs->accent & 0x00FFFFFFu) | 0x55000000u);
+                dai_ui_rect_outline(p->ui, lx, ly, lw, lh, 1.0f, hs->accent);
+                dai_ui_cursor_set(p->ui, DAI_CURSOR_HAND);
+            }
+        }
         ++p->visible_rows;
     }
     if (!have_root || root_open) {
@@ -788,6 +1283,7 @@ static void hierarchy_body(dai_editor_ui *p, float h) {
             draw_subtree(p, d, id, have_root ? 1 : 0);
         }
     }
+    p->reveal_selection = 0;
     dai_ui_scroll_end(p->ui);
 }
 
@@ -872,29 +1368,172 @@ static void inspector_body(dai_editor_ui *p) {
     // ---- the object header: icon, active, name, then tag ------------------
     // Same shape as Unity's: what the thing is, whether it is on, what it is
     // called. The name is a text field you can put a caret in, not a label.
-    if (p->name_buf_node != n) {
+    // One line, Unity's object header: is it on, what is it, what is it
+    // called. Three stacked fields for that read like a form, and the
+    // inspector is not a form.
+    // Refreshed when the DOCUMENT's name no longer matches the buffer and the
+    // field is not being typed into: a rename from the hierarchy or an undo
+    // has to reach the inspector, and the buffer must not fight the user's
+    // keystrokes while it does.
+    if (p->name_buf_node != n ||
+        (std::strcmp(p->name_buf, r.name) != 0 && !dai_ui_text_active(p->ui))) {
         std::snprintf(p->name_buf, sizeof(p->name_buf), "%s", r.name);
         p->name_buf_node = n;
     }
-    if (dai_ui_input_text(p->ui, "Name", p->name_buf, sizeof(p->name_buf)))
-        std::snprintf(r.name, sizeof(r.name), "%s", p->name_buf);
-
     if (p->tag_buf_node != n) {
         std::snprintf(p->tag_buf, sizeof(p->tag_buf), "%s", r.tag);
         p->tag_buf_node = n;
     }
-    if (dai_ui_input_text(p->ui, "Tag", p->tag_buf, sizeof(p->tag_buf)))
-        std::snprintf(r.tag, sizeof(r.tag), "%s", p->tag_buf);
-
     if (p->asset_buf_node != n) {
         std::snprintf(p->asset_buf, sizeof(p->asset_buf), "%s", r.asset);
         p->asset_buf_node = n;
     }
-    if (dai_ui_input_text(p->ui, "Asset", p->asset_buf, sizeof(p->asset_buf)))
-        std::snprintf(r.asset, sizeof(r.asset), "%s", p->asset_buf);
+    {
+        dai_ui *ui2 = p->ui;
+        const dai_ui_style *st2 = dai_ui_style_of(ui2);
+        float hx, hy;
+        dai_ui_cursor_pos(ui2, &hx, &hy);
+        dai_ui_advance(ui2, 0, 34.0f);
+        float hw = dai_ui_panel_width(ui2) - st2->padding * 2;
+        float mx2 = 0, my2 = 0;
+        int d2 = 0, p2 = 0;
+        dai_ui_mouse(ui2, &mx2, &my2, &d2, &p2);
+        // A card, not a strip: the object header is the one thing in the
+        // inspector that says WHAT you are editing, and it was the same
+        // height as a numeric field.
+        dai_ui_rrect(ui2, hx, hy, hw, 34.0f, 5.0f, rgba(0x3A, 0x3A, 0x3A, 255));
+        dai_ui_rect_outline(ui2, hx, hy, hw, 34.0f, 1.0f, st2->panel_border);
+        dai_ui_rect(ui2, hx, hy + 33.0f, hw, 1.0f, st2->accent);
+
+        // the active checkbox
+        float bx = hx + 8.0f, by = hy + 10.0f, bsz = 14.0f;
+        bool over_box = mx2 >= bx && mx2 < bx + bsz && my2 >= by && my2 < by + bsz;
+        dai_ui_rect(ui2, bx, by, bsz, bsz, over_box ? st2->button_hover : st2->track);
+        dai_ui_rect_outline(ui2, bx, by, bsz, bsz, 1.0f, st2->panel_border);
+        {
+            int on = !r.disabled;
+            if (on) {
+                dai_ui_line(ui2, bx + 3.0f, by + 7.0f, bx + 6.0f, by + 10.5f, 2.0f, st2->text);
+                dai_ui_line(ui2, bx + 6.0f, by + 10.5f, bx + 11.5f, by + 3.5f, 2.0f, st2->text);
+            }
+            // The OBJECT, not its renderer. They were the same flag, which
+            // is why ticking a camera back on switched its Mesh Renderer on.
+            if (over_box && p2)
+                r.disabled = !r.disabled;
+        }
+        // The kind, in a tile of its own - Unity's inspector puts the icon
+        // on a plate so the eye finds it before it reads anything.
+        dai_ui_rrect(ui2, hx + 28.0f, hy + 5.0f, 24.0f, 24.0f, 4.0f, st2->track);
+        dai_ui_icon_at(ui2, node_icon(r), hx + 32.0f, hy + 9.0f, 16.0f, st2->accent);
+
+        // Static, on the right, where Unity has it. It is the motion type
+        // here, which is the same promise: this thing does not move.
+        float sw = dai_ui_text_width(ui2, "Static") + 22.0f;
+        float sx = hx + hw - sw - 6.0f;
+        {
+            float cx = sx, cy = hy + 10.0f;
+            bool over_s = mx2 >= cx && mx2 < cx + sw && my2 >= hy + 4.0f && my2 < hy + 30.0f;
+            dai_ui_rect(ui2, cx, cy, 14.0f, 14.0f, over_s ? st2->button_hover : st2->track);
+            dai_ui_rect_outline(ui2, cx, cy, 14.0f, 14.0f, 1.0f, st2->panel_border);
+            int is_static = r.motion == DAI_STATIC;
+            if (is_static) {
+                dai_ui_line(ui2, cx + 3.0f, cy + 7.0f, cx + 6.0f, cy + 10.5f, 2.0f, st2->text);
+                dai_ui_line(ui2, cx + 6.0f, cy + 10.5f, cx + 11.5f, cy + 3.5f, 2.0f, st2->text);
+            }
+            dai_ui_text(ui2, cx + 18.0f, cy + 1.0f, "Static", st2->text_dim);
+            if (over_s && p2) r.motion = is_static ? DAI_DYNAMIC : DAI_STATIC;
+        }
+
+        // Written back only when it actually changed, or every frame would
+        // count as an edit and every rename from elsewhere would be undone.
+        float nfw = sx - (hx + 58.0f) - 8.0f;
+        if (nfw < 60.0f) nfw = 60.0f;
+        if (dai_ui_text_field(ui2, "objname", hx + 58.0f, hy + 8.0f, nfw, 18.0f,
+                              p->name_buf, sizeof(p->name_buf), nullptr))
+            std::snprintf(r.name, sizeof(r.name), "%s", p->name_buf);
+    }
+    dai_ui_spacing(p->ui, 2.0f);
+    // Tag and asset share one secondary line; the asset field only exists
+    // when the node has an asset to show.
+    // Tag on its own line, asset only when there is one. Two full width
+    // fields squeezed into one row is how the asset field ended up off the
+    // right edge of the panel.
+    if (dai_ui_input_text(p->ui, "Tag", p->tag_buf, sizeof(p->tag_buf)))
+        std::snprintf(r.tag, sizeof(r.tag), "%s", p->tag_buf);
+    if (r.asset[0]) {
+        if (dai_ui_input_text(p->ui, "Asset", p->asset_buf, sizeof(p->asset_buf)))
+            std::snprintf(r.asset, sizeof(r.asset), "%s", p->asset_buf);
+    }
+    // ---- Prefab -------------------------------------------------------------
+    // A node with a prefab path IS an instance: its children are not stored in
+    // this scene, they are expanded from that file. Unity puts a blue bar and
+    // the source name at the top of the inspector for exactly this, because
+    // "why did my edit come back" has one answer and it is this line.
+    if (r.prefab[0]) {
+        dai_ui *ui3 = p->ui;
+        const dai_ui_style *st3 = dai_ui_style_of(ui3);
+        float hx3, hy3;
+        dai_ui_cursor_pos(ui3, &hx3, &hy3);
+        float hw3 = dai_ui_panel_width(ui3) - st3->padding * 2;
+        float hh3 = dai_ui_text_height(ui3) + 10.0f;
+        dai_ui_advance(ui3, 0, hh3 + 2.0f);
+        dai_ui_rrect(ui3, hx3, hy3, hw3, hh3, 4.0f, rgba(0x25, 0x3A, 0x52, 255));
+        dai_ui_rect(ui3, hx3, hy3, 3.0f, hh3, st3->accent);
+        float tx3 = hx3 + 9.0f;
+        if (dai_ui_has_icon(ui3, DAI_ICON_C_PREFAB)) {
+            dai_ui_icon_at(ui3, DAI_ICON_C_PREFAB, tx3, hy3 + (hh3 - 14.0f) * 0.5f, 14.0f,
+                           st3->accent);
+            tx3 += 19.0f;
+        }
+        char pl3[160];
+        std::snprintf(pl3, sizeof(pl3), "Prefab  %s", base_of(r.prefab).c_str());
+        dai_ui_text(ui3, tx3, hy3 + (hh3 - dai_ui_text_height(ui3)) * 0.5f, pl3, st3->text);
+        // Select shows the source in the Project window; Unpack breaks the
+        // link and keeps the objects, which is Unity's "Unpack Prefab".
+        float bw3 = dai_ui_text_width(ui3, "Unpack") + 16.0f;
+        float sw3 = dai_ui_text_width(ui3, "Select") + 16.0f;
+        float by3 = hy3 + (hh3 - 18.0f) * 0.5f;
+        if (browser_button(p, hx3 + hw3 - bw3 - 4.0f, by3, bw3, 18.0f, "Unpack")) {
+            r.prefab[0] = 0;
+            dai_editor_ui_toast(p, "prefab link removed - the objects stay", 2.0f);
+        }
+        if (browser_button(p, hx3 + hw3 - bw3 - sw3 - 10.0f, by3, sw3, 18.0f, "Select")) {
+            p->proj_dir = parent_of(r.prefab);
+            project_expand_to(p, p->proj_dir);
+            p->proj_list_scroll = 0.0f;
+            for (size_t ai = 0; ai < p->assets.size(); ++ai)
+                if (p->assets[ai] && r.prefab == p->assets[ai]) { p->asset_sel = (int)ai; break; }
+            dai_editor_ui_panel_open(p, "Project");
+            dai_dock_focus(p->dock, "Project");
+        }
+    }
+    dai_ui_separator(p->ui);
 
     // ---- Transform ---------------------------------------------------------
-    dai_ui_header_icon(p->ui, DAI_ICON_MOVE, "Transform", &p->fold_transform, nullptr);
+    // Right click on the header copies the whole transform - three vectors a
+    // designer would otherwise retype by hand.
+    if (dai_ui_header_icon_col(p->ui, DAI_ICON_C_TRANSFORM, rgba(0x6C, 0xA9, 0xF5, 255), "Transform", &p->fold_transform, nullptr) == 3) {
+        p->comp_menu_target = 0;
+        float cmx = 0, cmy = 0;
+        dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
+        dai_ui_popup_open(&p->menu_comp, cmx, cmy);
+    }
+    {
+        float mx = 0, my = 0;
+        dai_ui_mouse(p->ui, &mx, &my, nullptr, nullptr);
+        // header rows are full width; a right click over them while this
+        // section is open is ours.
+        if (dai_ui_right_pressed(p->ui) && dai_editor_selection_count(p->ed) > 0) {
+            char line[384];
+            std::snprintf(line, sizeof(line), "%s pos=%.3f,%.3f,%.3f rot=%.4f,%.4f,%.4f,%.4f scale=%.3f,%.3f,%.3f",
+                          r.name[0] ? r.name : "node",
+                          (double)r.position.x, (double)r.position.y, (double)r.position.z,
+                          (double)r.rotation.x, (double)r.rotation.y, (double)r.rotation.z, (double)r.rotation.w,
+                          (double)r.scale.x, (double)r.scale.y, (double)r.scale.z);
+            dai_editor_ui_clipboard_set(p, 0, line);
+            dai_editor_ui_toast(p, "transform copied", 1.5f);
+        }
+    }
     if (p->fold_transform) {
         // While playing the document still holds the pose from before play -
         // that is exactly what makes Stop able to restore it - so a panel that
@@ -915,10 +1554,17 @@ static void inspector_body(dai_editor_ui *p) {
         // quaternion moved from anywhere that is not this field - the gizmo,
         // an undo, the simulation - so typing is never fought by a conversion
         // that rounds differently than the last keystroke.
-        if (p->euler_node != n || !quat_eq(p->euler_cached_q, rot)) {
+        if (p->euler_node != n) {
+            // A different object: no previous reading to stay near.
             p->euler_node = n;
             p->euler_cached_q = rot;
             quat_to_euler(rot, p->euler_deg);
+        } else if (!quat_eq(p->euler_cached_q, rot)) {
+            // The same object, turned from somewhere else - the gizmo, an
+            // undo, the simulation. Re-read it in the spelling closest to what
+            // is already on screen, so one axis of gizmo drag moves one field.
+            p->euler_cached_q = rot;
+            quat_to_euler_near(rot, p->euler_deg, p->euler_deg);
         }
         if (dai_ui_num_vec3(p->ui, "Rotation", p->euler_deg, 0.5f)) {
             r.rotation = euler_to_quat(p->euler_deg);
@@ -929,7 +1575,7 @@ static void inspector_body(dai_editor_ui *p) {
 
     // ---- Mesh Renderer -----------------------------------------------------
     int visible = !r.hidden;
-    if (dai_ui_header_icon(p->ui, visible ? DAI_ICON_EYE : DAI_ICON_EYE_OFF, "Mesh Renderer",
+    if (dai_ui_header_icon_col(p->ui, DAI_ICON_C_MESH, rgba(0x4F, 0xD1, 0xC5, 255), "Mesh Renderer",
                            &p->fold_render, &visible) == 2)
         r.hidden = !visible;
     if (p->fold_render) {
@@ -937,17 +1583,16 @@ static void inspector_body(dai_editor_ui *p) {
             const char *cur = r.mesh == 0xFFFFFFFFu ? "(from shape)"
                             : r.mesh == 0xFFFFFFFEu ? "(from asset)"
                             : p->mesh_name(r.mesh, p->mesh_user);
-            dai_ui_label_fmt(p->ui, "Mesh: %s", cur ? cur : "?");
-            dai_ui_row(p->ui, 20.0f);
-            if (dai_ui_button(p->ui, "<") && p->mesh_count > 0) {
-                r.mesh = r.mesh >= 0xFFFFFFFEu ? p->mesh_count - 1
-                       : (r.mesh + p->mesh_count - 1) % p->mesh_count;
+            // Unity's object field: the current value, and a target button
+            // that opens the list of everything you could put there. The old
+            // "< >" pair made picking the fifth mesh a five click guessing
+            // game with no way to see what the other four were.
+            if (dai_ui_object_field(p->ui, "Mesh", cur ? cur : "None", DAI_ICON_CUBE)) {
+                float mx2 = 0, my2 = 0;
+                dai_ui_mouse(p->ui, &mx2, &my2, nullptr, nullptr);
+                dai_ui_popup_open(&p->menu_mesh, mx2 - 150.0f, my2);
+                p->mesh_menu_node = n;
             }
-            if (dai_ui_button(p->ui, ">") && p->mesh_count > 0) {
-                r.mesh = r.mesh >= 0xFFFFFFFEu ? 0 : (r.mesh + 1) % p->mesh_count;
-            }
-            if (dai_ui_button(p->ui, "auto")) r.mesh = 0xFFFFFFFFu;
-            dai_ui_row_end(p->ui);
         }
         // The size of the DRAWN mesh. Zero means "same as the collider", so a
         // fresh box shows the collider's numbers and stops following it the
@@ -960,17 +1605,47 @@ static void inspector_body(dai_editor_ui *p) {
             r.render_extent = { full.x * 0.5f, full.y * 0.5f, full.z * 0.5f };
             if (r.mesh == 0xFFFFFFFFu) r.mesh = mesh_of_shape(r.shape);
         }
-        // Show what the object IS, not what the document happens to store. A
-        // node that never had a colour set carries 0,0,0 and the scene picked
-        // one from the palette - showing the zeros makes the first drag paint
-        // it black.
-        dai_vec3 shown = r.color;
-        bool implicit = (r.color.x == 0.0f && r.color.y == 0.0f && r.color.z == 0.0f);
-        if (implicit) dai_editor_node_color(p->ed, n, &shown);
-        if (dai_ui_num_vec3(p->ui, "Colour", &shown.x, 0.004f) || !implicit)
-            r.color = shown;
-        dai_ui_num_field(p->ui, "Rough", &r.roughness, 0.005f, 0.02f, 1.0f, "rough");
-        dai_ui_num_field(p->ui, "Emissive", &r.emissive, 0.01f, 0.0f, 100.0f, "emissive");
+        // Colour used to sit here. It belongs to the MATERIAL - a surface
+        // property next to the material that owns it is two places the same
+        // fact can disagree, and the array below is where materials live.
+        // ---- Materials, Unity's array -------------------------------------
+        // The roughness and emissive fields that used to sit here moved IN:
+        // a surface property next to the material that owns it is two places
+        // the same fact can disagree.
+        //
+        // The layout is Unity's, element by element: the header line carries
+        // the size, the rows carry a handle and the field, and the +/- lives
+        // under the list on the right.
+        {
+            std::vector<std::string> mats = script_list(r.materials);
+            if (mats.empty()) mats.push_back("Default");
+            int mcount = (int)mats.size();
+            if (dai_ui_array_begin(p->ui, "Materials", &mcount, &p->fold_materials, 1, 8)) {
+                // The size field can be typed into: match the list to it
+                // before drawing the rows, or the last row shows a slot that
+                // does not exist yet.
+                while ((int)mats.size() < mcount) mats.push_back("Default");
+                while ((int)mats.size() > mcount) mats.pop_back();
+                for (size_t mi = 0; mi < mats.size(); ++mi) {
+                    if (dai_ui_array_object_row(p->ui, (int)mi, mats[mi].c_str(),
+                                                DAI_ICON_C_MATERIAL)) {
+                        float mx2 = 0, my2 = 0;
+                        dai_ui_mouse(p->ui, &mx2, &my2, nullptr, nullptr);
+                        dai_ui_searchlist_open(&p->mat_list, mx2 - 150.0f, my2);
+                        p->mat_list.wants_focus = 1;
+                        p->mat_menu_node = n;
+                        p->mat_menu_slot = (int)mi;
+                    }
+                }
+                int delta = dai_ui_array_end(p->ui, (int)mats.size(), 1, 8);
+                if (delta > 0) mats.push_back("Default");
+                else if (delta < 0 && mats.size() > 1) mats.pop_back();
+            } else {
+                while ((int)mats.size() < mcount) mats.push_back("Default");
+                while ((int)mats.size() > mcount) mats.pop_back();
+            }
+            script_join(r.materials, sizeof(r.materials), mats);
+        }
     }
 
     // ---- Collider ----------------------------------------------------------
@@ -980,11 +1655,19 @@ static void inspector_body(dai_editor_ui *p) {
     // never the model, that was the bug where a component toggle made the
     // mesh vanish.
     int has_collider = !r.no_collider && !r.no_body;
-    if (dai_ui_header_icon(p->ui, DAI_ICON_BOX, collider_title(r.shape),
-                           &p->fold_collider, &has_collider) == 2) {
-        r.no_collider = !has_collider;
-        if (!has_collider && r.no_rigidbody) r.no_body = 1;
-        else r.no_body = 0;
+    {
+        int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_COLLIDER, rgba(0x7A, 0xD9, 0x7A, 255), collider_title(r.shape),
+                                     &p->fold_collider, &has_collider);
+        if (hrc == 2) {
+            r.no_collider = !has_collider;
+            if (!has_collider && r.no_rigidbody) r.no_body = 1;
+            else r.no_body = 0;
+        } else if (hrc == 3) {
+            p->comp_menu_target = 2;
+            float cmx = 0, cmy = 0;
+            dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
+            dai_ui_popup_open(&p->menu_comp, cmx, cmy);
+        }
     }
     if (p->fold_collider) {
         if (!has_collider) {
@@ -1021,10 +1704,18 @@ static void inspector_body(dai_editor_ui *p) {
 
     // ---- Rigidbody ---------------------------------------------------------
     int has_body = !r.no_rigidbody && !r.no_body;
-    if (dai_ui_header_icon(p->ui, DAI_ICON_SETTINGS, "Rigidbody", &p->fold_body, &has_body) == 2) {
-        r.no_rigidbody = !has_body;
-        if (!has_body && r.no_collider) r.no_body = 1;
-        else r.no_body = 0;
+    {
+        int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_BODY, rgba(0xA7, 0x9B, 0xF0, 255), "Rigidbody", &p->fold_body, &has_body);
+        if (hrc == 2) {
+            r.no_rigidbody = !has_body;
+            if (!has_body && r.no_collider) r.no_body = 1;
+            else r.no_body = 0;
+        } else if (hrc == 3) {
+            p->comp_menu_target = 1;
+            float cmx = 0, cmy = 0;
+            dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
+            dai_ui_popup_open(&p->menu_comp, cmx, cmy);
+        }
     }
     if (p->fold_body) {
         if (!has_body) {
@@ -1033,11 +1724,22 @@ static void inspector_body(dai_editor_ui *p) {
             dai_ui_label(p->ui, "no rigidbody - nothing drives this");
         } else {
             dai_ui_option(p->ui, "Motion", &r.motion, MOTIONS, 3);
+            dai_ui_help(p->ui, "Dynamic: moved by physics. Kinematic: moved by "
+                               "script, pushes others. Static: never moves.");
             // No mass field on purpose: mass = density x shape volume.
             // 0 falls back to water (1000) in dai_engine.
+            // Every one of these is a physical quantity with a unit, and a
+            // number with no unit is a number you have to guess at: "Friction
+            // 10" was read as a percentage more than once.
             dai_ui_num_field(p->ui, "Density", &r.density, 10.0f, 0.0f, 100000.0f, "density");
+            dai_ui_help(p->ui, "kg/m3. Mass = density x collider volume. 0 = water (1000). "
+                               "Wood 600, concrete 2400, steel 7850.");
             dai_ui_num_field(p->ui, "Friction", &r.friction, 0.005f, 0.0f, 10.0f, "friction");
+            dai_ui_help(p->ui, "Coefficient mu, not a percentage. 0 = ice, 0.3 = wet road, "
+                               "0.6 = wood, 1.0 = rubber. Combined with the other body's mu.");
             dai_ui_num_field(p->ui, "Bounce", &r.restitution, 0.005f, 0.0f, 1.0f, "bounce");
+            dai_ui_help(p->ui, "Restitution 0..1. 0 = stays put, 0.8 = basketball, "
+                               "1 = keeps all its energy.");
         }
     }
 
@@ -1058,38 +1760,199 @@ static void inspector_body(dai_editor_ui *p) {
     // one script field, so every old single-script file stays valid. There is
     // deliberately no assign button: a script attaches by DRAG, onto the node
     // in the hierarchy or anywhere in this panel.
-    dai_ui_header_icon(p->ui, DAI_ICON_FILE, "Scripts", &p->fold_script, nullptr);
-    if (p->fold_script) {
+    {
         std::vector<std::string> slist = script_list(r.script);
+        if (slist.empty())
+            dai_ui_label(p->ui, "no scripts - drag a .js or .cpp from Project onto this object");
+        if (p->fold_scripts.size() != slist.size())
+            p->fold_scripts.assign(slist.size(), 1);
         int remove_at = -1;
         for (size_t si = 0; si < slist.size(); ++si) {
-            dai_ui_row(p->ui, 20.0f);
-            dai_ui_label(p->ui, base_of(entry_path(slist[si])).c_str());
-            if (dai_ui_button(p->ui, "x")) remove_at = (int)si;
-            // "// @param name" lines in the file show what they were given.
+            // Every script is its own component, the Unity rule: its own
+            // header, its own fold, remove on the header's context click.
+            std::string label = base_of(entry_path(slist[si]));
+            int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_SCRIPT, rgba(0xF2, 0xC1, 0x4E, 255), label.c_str(),
+                                         &p->fold_scripts[si], nullptr);
+            if (hrc == 3) remove_at = (int)si;   // right click removes
+            if (!p->fold_scripts[si]) continue;
+            // "// @param [type] name [= default]" lines in the file are the
+            // object's serialized fields: a widget each, edited here, stored
+            // on the node, handed to the script at Play.
             if (p->params_fn) {
-                char keys[512] = { 0 };
+                char keys[1024] = { 0 };
                 p->params_fn(entry_path(slist[si]).c_str(), keys, sizeof(keys), p->params_user);
-                std::string k;
-                for (const char *c = keys; ; ++c) {
-                    if (*c == ',' || !*c) {
-                        if (!k.empty()) {
-                            std::string val = entry_param(slist[si], k);
-                            dai_ui_label_fmt(p->ui, "   %s: %s", k.c_str(),
-                                             val.empty() ? "none" : val.c_str());
-                            k.clear();
+                std::string entry_before = slist[si];
+                for (const ParamDecl &pd : parse_params(keys)) {
+                    std::string val = entry_param(slist[si], pd.name);
+                    if (val.empty()) val = pd.def;      // the file's own default
+                    char fid[96];
+                    std::snprintf(fid, sizeof(fid), "p%zu_%s", si, pd.name.c_str());
+                    if (pd.type == PARAM_FLOAT || pd.type == PARAM_INT) {
+                        float fv = (float)std::atof(val.c_str());
+                        float was = fv;
+                        if (dai_ui_num_field(p->ui, pd.name.c_str(), &fv,
+                                             pd.type == PARAM_INT ? 1.0f : 0.1f,
+                                             0.0f, 0.0f, fid) || fv != was) {
+                            char nb[48];
+                            if (pd.type == PARAM_INT) std::snprintf(nb, sizeof(nb), "%d", (int)(fv + (fv < 0 ? -0.5f : 0.5f)));
+                            else                      std::snprintf(nb, sizeof(nb), "%g", (double)fv);
+                            entry_set_param(slist[si], pd.name, nb);
                         }
-                        if (!*c) break;
-                    } else k += *c;
+                    } else if (pd.type == PARAM_BOOL) {
+                        int bv = (val == "true" || val == "1") ? 1 : 0;
+                        if (dai_ui_checkbox(p->ui, pd.name.c_str(), &bv))
+                            entry_set_param(slist[si], pd.name, bv ? "true" : "false");
+                    } else if (pd.type == PARAM_STRING) {
+                        char sb[160];
+                        std::snprintf(sb, sizeof(sb), "%s", val.c_str());
+                        if (dai_ui_input_text(p->ui, pd.name.c_str(), sb, sizeof(sb))) {
+                            // ',' '=' '{' '}' and ';' are the separators this
+                            // is stored between - a value carrying one would
+                            // split the field list in half.
+                            std::string clean;
+                            for (char c : std::string(sb))
+                                clean += (c == ',' || c == '=' || c == '{' ||
+                                          c == '}' || c == ';') ? ' ' : c;
+                            entry_set_param(slist[si], pd.name, clean);
+                        }
+                    } else {
+                        // A node reference: still a drop target, because the
+                        // only sane way to name an object is to point at it.
+                        char pl[384];
+                        std::snprintf(pl, sizeof(pl), "%s: %s", pd.name.c_str(),
+                                      val.empty() ? "none (drag an object here)" : val.c_str());
+                        if (dai_ui_button(p->ui, pl) && !val.empty())
+                            entry_set_param(slist[si], pd.name, "");   // click clears it
+                        const char *hot2 = dai_ui_hot_label(p->ui);
+                        if (hot2 && std::strcmp(hot2, pl) == 0) {
+                            p->param_hover_entry = (int)si;
+                            std::snprintf(p->param_hover_key, sizeof(p->param_hover_key),
+                                          "%s", pd.name.c_str());
+                        }
+                    }
                 }
+                if (slist[si] != entry_before) script_join(r.script, sizeof(r.script), slist);
             }
         }
-        if (slist.empty())
-            dai_ui_label(p->ui, "none - drag a .js from the Project window onto this object");
         if (remove_at >= 0) {
             slist.erase(slist.begin() + remove_at);
             script_join(r.script, sizeof(r.script), slist);
         }
+    }
+
+    // ---- Camera -------------------------------------------------------------
+    // The 2D/3D switch lives here: orthographic + a flat world is a 2D game.
+    if (r.camera) {
+        int on = 1;
+        {
+            int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_CAMERA, rgba(0x9F, 0xB4, 0xD8, 255), "Camera", &p->fold_camera, &on);
+            if (hrc == 2 && !on) r.camera = 0;
+            else if (hrc == 3) {
+                p->comp_menu_target = 3;
+                float cmx = 0, cmy = 0;
+                dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
+                dai_ui_popup_open(&p->menu_comp, cmx, cmy);
+            }
+        }
+        if (p->fold_camera && r.camera) {
+            static const char *const PROJ[] = { "Perspective", "Orthographic" };
+            int proj = r.camera == 2 ? 1 : 0;
+            if (dai_ui_option(p->ui, "Projection", &proj, PROJ, 2)) r.camera = proj ? 2 : 1;
+            if (r.camera == 2) dai_ui_num_field(p->ui, "Size", &r.camera_size, 0.05f, 0.1f, 1000.0f, "camsize");
+            else               dai_ui_num_field(p->ui, "FOV", &r.camera_fov, 0.25f, 5.0f, 170.0f, "camfov");
+        }
+    }
+
+    // ---- Light --------------------------------------------------------------
+    if (r.light) {
+        int on = 1;
+        {
+            int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_LIGHT, rgba(0xF5, 0xD7, 0x6E, 255), "Light", &p->fold_light, &on);
+            if (hrc == 2 && !on) r.light = 0;
+            else if (hrc == 3) {
+                p->comp_menu_target = 4;
+                float cmx = 0, cmy = 0;
+                dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
+                dai_ui_popup_open(&p->menu_comp, cmx, cmy);
+            }
+        }
+        if (p->fold_light && r.light) {
+            static const char *const LT[] = { "Point", "Spot", "Directional" };
+            int lt = r.light - 1;
+            if (lt < 0) lt = 0;
+            if (lt > 2) lt = 2;
+            if (dai_ui_option(p->ui, "Type", &lt, LT, 3)) r.light = lt + 1;
+            dai_ui_num_vec3(p->ui, "Colour", &r.light_color.x, 0.004f);
+            dai_ui_num_field(p->ui, "Intensity", &r.light_intensity, 0.01f, 0.0f, 100.0f, "lpower");
+            if (r.light != 3) dai_ui_num_field(p->ui, "Range", &r.light_range, 0.05f, 0.01f, 1000.0f, "lrange");
+            if (r.light == 2) dai_ui_num_field(p->ui, "Cone", &r.light_cone, 0.5f, 1.0f, 89.0f, "lcone");
+        }
+    }
+
+    // ---- Sprite (2D) --------------------------------------------------------
+    if (r.sprite) {
+        int on = 1;
+        {
+            int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_SPRITE, rgba(0x6F, 0xC7, 0xEA, 255), "Sprite", &p->fold_sprite, &on);
+            if (hrc == 2 && !on) r.sprite = 0;
+            else if (hrc == 3) {
+                p->comp_menu_target = 5;
+                float cmx = 0, cmy = 0;
+                dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
+                dai_ui_popup_open(&p->menu_comp, cmx, cmy);
+            }
+        }
+        if (p->fold_sprite && r.sprite) {
+            dai_ui_label(p->ui, "texture comes from the Asset field above");
+            dai_ui_num_vec3(p->ui, "Size", &r.sprite_size.x, 0.01f);
+        }
+    }
+
+    // ---- Audio Source -------------------------------------------------------
+    if (r.audio_event[0] || r.audio_autoplay || r.audio_bus) {
+        int on = 1;
+        {
+            int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_AUDIO, rgba(0xF2, 0x9D, 0x5B, 255), "Audio Source", &p->fold_audio, &on);
+            if (hrc == 2 && !on) { r.audio_event[0] = 0; r.audio_autoplay = 0; r.audio_bus = 0; }
+            else if (hrc == 3) {
+                p->comp_menu_target = 6;
+                float cmx = 0, cmy = 0;
+                dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
+                dai_ui_popup_open(&p->menu_comp, cmx, cmy);
+            }
+        }
+        if (p->fold_audio && (r.audio_event[0] || r.audio_autoplay || r.audio_bus)) {
+            if (p->audio_buf_node != n) {
+                std::snprintf(p->audio_buf, sizeof(p->audio_buf), "%s", r.audio_event);
+                p->audio_buf_node = n;
+            }
+            if (dai_ui_input_text(p->ui, "Event", p->audio_buf, sizeof(p->audio_buf)))
+                std::snprintf(r.audio_event, sizeof(r.audio_event), "%s", p->audio_buf);
+            static const char *const BUSN[] = { "Master", "Music", "SFX", "UI" };
+            dai_ui_option(p->ui, "Bus", &r.audio_bus, BUSN, 4);
+            dai_ui_num_field(p->ui, "Volume", &r.audio_volume, 0.01f, 0.0f, 1.0f, "avol");
+            int lp = r.audio_loop, ap = r.audio_autoplay;
+            if (dai_ui_checkbox(p->ui, "Loop", &lp)) r.audio_loop = lp;
+            if (dai_ui_checkbox(p->ui, "Play on start", &ap)) r.audio_autoplay = ap;
+        }
+    }
+
+    // ---- Remove Component ---------------------------------------------------
+    // Add and Remove are siblings, not the same toggle in two coats: a right
+    // click on the component title removes it, like Unity's gear menu.
+    if (p->component_remove > 0) {
+        dai_doc_begin(d, "Remove Component");
+        if (p->component_remove == 1) r.no_rigidbody = 1;
+        else if (p->component_remove == 2) r.no_collider = 1;
+        else if (p->component_remove == 3) r.camera = 0;
+        else if (p->component_remove == 4) r.light = 0;
+        else if (p->component_remove == 5) r.sprite = 0;
+        else if (p->component_remove == 6) {
+            r.audio_event[0] = 0; r.audio_autoplay = 0; r.audio_bus = 0;
+        }
+        r.no_body = (r.no_rigidbody && r.no_collider) ? 1 : 0;
+        dai_editor_ui_toast(p, "component removed", 2.0f);
+        p->component_remove = 0;
     }
 
     // ---- Add Component ------------------------------------------------------
@@ -1098,10 +1961,12 @@ static void inspector_body(dai_editor_ui *p) {
     // gives it sane values, removing one switches it off. The mesh is never
     // touched by either, which is the bug this replaced.
     dai_ui_separator(p->ui);
-    if (dai_ui_button(p->ui, "Add Component")) {
+    if (dai_ui_button(p->ui, "Add Component...")) {
         float mx2 = 0, my2 = 0;
         dai_ui_mouse(p->ui, &mx2, &my2, nullptr, nullptr);
-        dai_ui_popup_open(&p->menu_addcomp, mx2, my2);
+        dai_ui_searchlist_open(&p->addcomp_list, mx2, my2);
+        p->addcomp_list.wants_focus = 1;
+        p->addcomp_node = dai_editor_selected(p->ed, 0);
     }
 
     // While a hierarchy node is being dragged it BECAME the selection on
@@ -1119,25 +1984,20 @@ static void inspector_body(dai_editor_ui *p) {
             std::vector<std::string> tlist = script_list(tr.script);
             const char *hot = dai_ui_hot_label(p->ui);
             for (size_t si = 0; si < tlist.size(); ++si) {
-                char keys[512] = { 0 };
+                char keys[1024] = { 0 };
                 p->params_fn(entry_path(tlist[si]).c_str(), keys, sizeof(keys), p->params_user);
-                std::string k;
-                for (const char *c = keys; ; ++c) {
-                    if (*c == ',' || !*c) {
-                        if (!k.empty()) {
-                            std::string val = entry_param(tlist[si], k);
-                            char pl[384];
-                            std::snprintf(pl, sizeof(pl), "%s: %s", k.c_str(),
-                                          val.empty() ? "none" : val.c_str());
-                            dai_ui_button(p->ui, pl);
-                            if (hot && std::strcmp(hot, pl) == 0) {
-                                p->param_hover_entry = (int)si;
-                                std::snprintf(p->param_hover_key, sizeof(p->param_hover_key), "%s", k.c_str());
-                            }
-                            k.clear();
-                        }
-                        if (!*c) break;
-                    } else k += *c;
+                for (const ParamDecl &pd : parse_params(keys)) {
+                    if (pd.type != PARAM_NODE) continue;   // a float takes no object
+                    std::string val = entry_param(tlist[si], pd.name);
+                    char pl[384];
+                    std::snprintf(pl, sizeof(pl), "%s: %s", pd.name.c_str(),
+                                  val.empty() ? "none" : val.c_str());
+                    dai_ui_button(p->ui, pl);
+                    if (hot && std::strcmp(hot, pl) == 0) {
+                        p->param_hover_entry = (int)si;
+                        std::snprintf(p->param_hover_key, sizeof(p->param_hover_key),
+                                      "%s", pd.name.c_str());
+                    }
                 }
             }
         }
@@ -1219,15 +2079,33 @@ void dai_editor_ui_toolbar(dai_editor_ui *p, float x, float y, float w) {
         if (dai_ui_icon_button(p->ui, DAI_ICON_CHECK, "Keep", 0)) dai_editor_apply_sim(p->ed);
     }
 
-    // The way back from a layout the user dragged into a corner.
+    // Frame the selection, the way F does in the viewport - and reveal it in
+    // the hierarchy, because "where is that object" is two questions.
     dai_ui_toolbar_gap(p->ui, 10.0f);
-    if (dai_ui_icon_button(p->ui, DAI_ICON_LAYOUT, "Layout", 0) && p->layout_ready)
-        dai_editor_ui_layout_reset(p, p->layout_w, p->layout_h);
-    if (dai_ui_icon_button(p->ui, DAI_ICON_SETTINGS, "Settings", p->settings_open))
-        p->settings_open = !p->settings_open;
+    if (dai_ui_icon_button(p->ui, DAI_ICON_TARGET, "Focus selection (F)", 0) &&
+        dai_editor_selection_count(p->ed) > 0) {
+        dai_editor_cam_focus(p->ed);
+        p->reveal_selection = 1;
+    }
+
+    // Layouts: several named arrangements, Unity's layout dropdown.
+    dai_ui_toolbar_gap(p->ui, 10.0f);
+    if (dai_ui_icon_button(p->ui, DAI_ICON_LAYOUT, "Layout", p->menu_layout.open)) {
+        float lx = 0, ly = 0;
+        dai_ui_mouse(p->ui, &lx, &ly, nullptr, nullptr);
+        dai_ui_popup_open(&p->menu_layout, lx, ly);
+    }
+    if (dai_ui_icon_button(p->ui, DAI_ICON_SETTINGS, "Settings", 0)) {
+        // Wherever it is - a tab behind another one, a floating window, or
+        // nowhere yet - one click brings it to the front. Toggling a flag and
+        // hoping was how it ended up selected but never focused.
+        p->settings_open = 1;
+        dai_dock_open(p->dock, "Settings");
+        dai_dock_focus(p->dock, "Settings");
+    }
     // Window menu: every panel the editor knows, one click to bring it back.
     // Closing a panel used to be one-way - it was gone until restart.
-    if (dai_ui_icon_button(p->ui, DAI_ICON_LAYERS, "Window", p->menu_window.open)) {
+    if (dai_ui_icon_button(p->ui, DAI_ICON_WINDOW, "Window", 0)) {
         float wx = 0, wy = 0;
         dai_ui_mouse(p->ui, &wx, &wy, nullptr, nullptr);
         dai_ui_popup_open(&p->menu_window, wx, wy);
@@ -1297,8 +2175,7 @@ void dai_editor_ui_gizmo(dai_editor_ui *p) {
     dai_editor_gizmo_lines(p->ed, lines.data(), n);
     for (const dai_gizmo_line &l : lines) {
         float ax, ay, bx, by;
-        if (!dai_editor_project(p->ed, l.a, &ax, &ay)) continue;
-        if (!dai_editor_project(p->ed, l.b, &bx, &by)) continue;
+        if (!dai_editor_project_seg(p->ed, l.a, l.b, &ax, &ay, &bx, &by)) continue;
         auto ch = [](float v) { return (uint32_t)(v < 0 ? 0 : (v > 1 ? 255 : v * 255.0f + 0.5f)); };
         uint32_t col = ch(l.color.x) | (ch(l.color.y) << 8) | (ch(l.color.z) << 16) | 0xFF000000u;
         dai_ui_line(p->ui, ax, ay, bx, by, l.highlighted ? 4.0f : 2.5f, col);
@@ -1365,8 +2242,9 @@ bool collider_of(dai_editor_ui *p, dai_node n, ColliderBox *out) {
 
 void wire_line(dai_editor_ui *p, dai_vec3 a, dai_vec3 b, uint32_t col, float thick) {
     float ax, ay, bx, by;
-    if (!dai_editor_project(p->ed, a, &ax, &ay)) return;
-    if (!dai_editor_project(p->ed, b, &bx, &by)) return;
+    // Clipped against the near plane, so wires stay drawn when the camera
+    // flies through a collider or the camera-frustum overlay.
+    if (!dai_editor_project_seg(p->ed, a, b, &ax, &ay, &bx, &by)) return;
     dai_ui_line(p->ui, ax, ay, bx, by, thick, col);
 }
 
@@ -1453,6 +2331,56 @@ void face_handles(const ColliderBox &c, dai_vec3 *out, int *axis, int *sign) {
 
 int dai_editor_ui_collider_edit(const dai_editor_ui *p) { return p ? p->collider_edit : 0; }
 void dai_editor_ui_collider_edit_set(dai_editor_ui *p, int on) { if (p) p->collider_edit = on ? 1 : 0; }
+
+uint32_t dai_editor_ui_grid_lines(const dai_editor_ui *p, float *out, uint32_t max_points) {
+    if (!p || !p->gizmo_grid || !out) return 0;
+    uint32_t n = 0;
+    auto put = [&](dai_vec3 a, dai_vec3 b) {
+        if (n + 2 > max_points) return;
+        out[n*3+0] = a.x; out[n*3+1] = a.y; out[n*3+2] = a.z; ++n;
+        out[n*3+0] = b.x; out[n*3+1] = b.y; out[n*3+2] = b.z; ++n;
+    };
+    for (int g = -20; g <= 20; ++g) {
+        if (g == 0) continue;
+        put(dai_vec3{ (float)g, 0, -20 }, dai_vec3{ (float)g, 0, 20 });
+        put(dai_vec3{ -20, 0, (float)g }, dai_vec3{ 20, 0, (float)g });
+    }
+    put(dai_vec3{ -20, 0, 0 }, dai_vec3{ 20, 0, 0 });
+    put(dai_vec3{ 0, 0, -20 }, dai_vec3{ 0, 0, 20 });
+    return n;
+}
+
+// The floor grid, the thing that makes "infinite empty space" readable as a
+// floor: a metre-grid on y=0 through the same project path the gizmo uses.
+// NOTE: the 2D overlay version is retired - the host draws the grid as
+// world-space lines with depth testing (dai_editor_ui_grid_lines), because a
+// screen-space overlay shines through every object in the scene.
+void dai_editor_ui_grid(dai_editor_ui *p) {
+    if (!p || !p->gizmo_grid) return;
+    const dai_ui_style *st = dai_ui_style_of(p->ui);
+    uint32_t minor = st->panel_border & 0xC0FFFFFFu;   // ~75% opacity
+    uint32_t axis  = rgba(120, 170, 230, 160);
+    // Segments, near-plane clipped: flying the camera low over the floor used
+    // to swallow every line whose near end crossed the near plane - the grid
+    // "disappearing" right where you stand. project_seg keeps the visible part.
+    for (int g = -20; g <= 20; ++g) {
+        if (g == 0) continue;
+        float x1, y1, x2, y2;
+        if (dai_editor_project_seg(p->ed, dai_vec3{ (float)g, 0, -20 },
+                                   dai_vec3{ (float)g, 0,  20 }, &x1, &y1, &x2, &y2))
+            dai_ui_line(p->ui, x1, y1, x2, y2, 1.0f, minor);
+        if (dai_editor_project_seg(p->ed, dai_vec3{ -20, 0, (float)g },
+                                   dai_vec3{  20, 0, (float)g }, &x1, &y1, &x2, &y2))
+            dai_ui_line(p->ui, x1, y1, x2, y2, 1.0f, minor);
+    }
+    float x1, y1, x2, y2;
+    if (dai_editor_project_seg(p->ed, dai_vec3{ -20, 0, 0 }, dai_vec3{ 20, 0, 0 },
+                               &x1, &y1, &x2, &y2))
+        dai_ui_line(p->ui, x1, y1, x2, y2, 1.5f, axis);
+    if (dai_editor_project_seg(p->ed, dai_vec3{ 0, 0, -20 }, dai_vec3{ 0, 0, 20 },
+                               &x1, &y1, &x2, &y2))
+        dai_ui_line(p->ui, x1, y1, x2, y2, 1.5f, axis);
+}
 
 void dai_editor_ui_colliders(dai_editor_ui *p) {
     if (!p || p->view != DAI_VIEW_SCENE) return;
@@ -1578,7 +2506,9 @@ dai_node find_camera(const dai_editor_ui *p) {
     for (dai_node id : ids) {
         dai_node_desc r{};
         if (dai_doc_get(d, id, &r) != DAI_OK) continue;
-        if (std::strcmp(r.tag, CAMERA_TAG) == 0) return id;
+        // The Camera COMPONENT is the truth now; the old MainCamera tag still
+        // counts so scenes made before components keep working.
+        if (r.camera != 0 || std::strcmp(r.tag, CAMERA_TAG) == 0) return id;
     }
     return DAI_INVALID_NODE;
 }
@@ -1640,8 +2570,64 @@ int dai_editor_ui_game_camera(const dai_editor_ui *p, dai_vec3 *eye, dai_vec3 *l
     dai_vec3 dir = qrot_v(wr, dai_vec3{ 0, 0, -1 });
     if (eye) *eye = wp;
     if (look) *look = v_add(wp, dir);
-    if (fov_deg) *fov_deg = 60.0f;
+    dai_node_desc cr{};
+    dai_doc_get(d, cam, &cr);
+    if (fov_deg) *fov_deg = cr.camera_fov > 0.0f ? cr.camera_fov : 60.0f;
     return 1;
+}
+
+int dai_editor_ui_camera_preview(const dai_editor_ui *p,
+                                 float *x, float *y, float *w, float *h,
+                                 dai_vec3 *eye, dai_vec3 *look, float *fov_deg,
+                                 float *ortho_size) {
+    if (!p || !p->ed) return 0;
+    if (!p->view_w || !p->view_h) return 0;
+    // The Game panel already shows this, full size and continuously; a second
+    // copy in the corner of the scene would be two answers to one question.
+    if (p->has_game) return 0;
+    if (dai_editor_selection_count(p->ed) == 0) return 0;
+    dai_node sel = dai_editor_selected(p->ed, 0);
+    dai_doc *d = dai_editor_doc(p->ed);
+    dai_node_desc r{};
+    if (dai_doc_get(d, sel, &r) != DAI_OK || !r.camera) return 0;
+
+    dai_vec3 wp{}, ws{ 1, 1, 1 };
+    dai_quat wr{ 0, 0, 0, 1 };
+    if (!dai_editor_live_transform(p->ed, sel, &wp, &wr, &ws) &&
+        dai_doc_world_transform(d, sel, &wp, &wr, &ws) != DAI_OK) return 0;
+    dai_vec3 dir = qrot_v(wr, dai_vec3{ 0, 0, -1 });
+    if (eye) *eye = wp;
+    if (look) *look = v_add(wp, dir);
+    if (fov_deg) *fov_deg = r.camera_fov > 0.0f ? r.camera_fov : 60.0f;
+    if (ortho_size) *ortho_size = r.camera == 2 ? (r.camera_size > 0.0f ? r.camera_size : 5.0f)
+                                                : 0.0f;
+
+    // Bottom right, 16:9, a quarter of the view's width, with a floor and a
+    // ceiling so it is neither a postage stamp on a 4K monitor nor the whole
+    // panel on a small one.
+    float pw2 = p->view_w * 0.25f;
+    if (pw2 < 180.0f) pw2 = 180.0f;
+    if (pw2 > 420.0f) pw2 = 420.0f;
+    if (pw2 > p->view_w - 40.0f) pw2 = p->view_w - 40.0f;
+    float ph2 = pw2 * 9.0f / 16.0f;
+    if (ph2 > p->view_h - 60.0f) { ph2 = p->view_h - 60.0f; pw2 = ph2 * 16.0f / 9.0f; }
+    if (pw2 < 80.0f || ph2 < 45.0f) return 0;          // no room: no preview
+    const float M = 12.0f;
+    if (x) *x = p->view_x + p->view_w - pw2 - M;
+    if (y) *y = p->view_y + p->view_h - ph2 - M;
+    if (w) *w = pw2;
+    if (h) *h = ph2;
+    return 1;
+}
+
+float dai_editor_ui_game_ortho(const dai_editor_ui *p) {
+    if (!p) return 0.0f;
+    dai_node cam = find_camera(p);
+    if (cam == DAI_INVALID_NODE) return 0.0f;
+    dai_node_desc cr{};
+    if (dai_doc_get(dai_editor_doc(p->ed), cam, &cr) != DAI_OK) return 0.0f;
+    if (cr.camera != 2) return 0.0f;
+    return cr.camera_size > 0.0f ? cr.camera_size : 5.0f;
 }
 
 dai_node dai_editor_ui_add_camera(dai_editor_ui *p) {
@@ -1656,6 +2642,7 @@ dai_node dai_editor_ui_add_camera(dai_editor_ui *p) {
     dai_node_desc r = dai_node_desc_default();
     std::snprintf(r.name, sizeof(r.name), "Main Camera");
     std::snprintf(r.tag, sizeof(r.tag), "%s", CAMERA_TAG);
+    r.camera = 1; r.camera_fov = 60.0f; r.camera_size = 5.0f;
     r.position = o;
     r.rotation = look_quat(dir);
     r.no_body = 1;          // a camera is a transform, not a thing to collide with
@@ -1738,11 +2725,20 @@ static void settings_body(dai_editor_ui *p) {
     // describes THIS DESK and lives outside the project; what is below
     // describes the GAME and lives in the project, in version control, the
     // same for everyone on the team.
-    dai_ui_row(ui, 22.0f);
-    if (dai_ui_button(ui, p->settings_tab == 0 ? "[Preferences]" : "Preferences")) p->settings_tab = 0;
-    if (dai_ui_button(ui, p->settings_tab == 1 ? "[Project Settings]" : "Project Settings")) p->settings_tab = 1;
-    dai_ui_row_end(ui);
-    dai_ui_separator(ui);
+    {
+        static const char *const TABS[] = { "Preferences", "Project", "Gizmos" };
+        dai_ui_segmented(ui, TABS, 3, &p->settings_tab);
+    }
+    // The Gizmos tab: which overlays show in the scene view.
+    if (p->settings_tab == 2) {
+        dai_ui_label(ui, "Shown in the scene view:");
+        { int g = p->gizmo_grid;      if (dai_ui_checkbox(p->ui, "Floor grid", &g))      p->gizmo_grid = g; }
+        { int g = p->gizmo_colliders; if (dai_ui_checkbox(p->ui, "Collider frames", &g)) p->gizmo_colliders = g; }
+        { int g = p->gizmo_cameras;   if (dai_ui_checkbox(p->ui, "Camera frustums", &g)) p->gizmo_cameras = g; }
+        dai_ui_separator(ui);
+        dai_ui_label(ui, "Gizmo size and snapping live in Preferences.");
+        return;
+    }
     if (p->settings_tab == 1) {
         dai_ui_label(ui, "These belong to the project, not to you:");
         dai_ui_label(ui, "they are saved in settings/project.txt and");
@@ -1756,12 +2752,15 @@ static void settings_body(dai_editor_ui *p) {
         return;
     }
 
-    dai_ui_label(ui, "Appearance");
+    dai_ui_section(ui, "Appearance");
     // Font size is the ONE thing the host owns (it made the font and the
     // texture), so the editor asks. Everything else it can do itself.
     int size_idx = 0;
-    if (p->settings_font_px >= 15.5f) size_idx = 2;
-    else if (p->settings_font_px >= 13.5f) size_idx = 1;
+    // Thresholds sit BETWEEN the offered sizes: 13.0 is "Normal", and a
+    // boundary that eats it (13.5) made the option snap back to Klein and
+    // look unselectable.
+    if (p->settings_font_px >= 14.5f) size_idx = 2;
+    else if (p->settings_font_px >= 12.5f) size_idx = 1;
     static const char *const SIZES[] = { "Klein (12)", "Normal (13)", "Gross (16)" };
     if (dai_ui_option(ui, "UI size", &size_idx, SIZES, 3)) {
         float px = size_idx == 0 ? 12.0f : size_idx == 1 ? 13.0f : 16.0f;
@@ -1769,7 +2768,44 @@ static void settings_body(dai_editor_ui *p) {
         if (p->apply_font) p->apply_font(px, p->apply_user);
     }
 
+    // The display scale. Auto is right almost everywhere; "almost" is why
+    // this row exists - a laptop panel that reports the wrong physical size
+    // makes the whole interface half or double the size it should be.
+    {
+        static const float SCALE_V[6] = { 0.0f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };
+        static const char *const SCALES[] = { "Auto (display)", "100%", "125%",
+                                              "150%", "175%", "200%" };
+        int si = 0;
+        for (int i = 1; i < 6; ++i)
+            if (p->settings_ui_scale > SCALE_V[i] - 0.06f &&
+                p->settings_ui_scale < SCALE_V[i] + 0.06f) si = i;
+        if (dai_ui_option(ui, "UI scale", &si, SCALES, 6)) {
+            p->settings_ui_scale = SCALE_V[si];
+            if (p->apply_scale) p->apply_scale(SCALE_V[si], p->apply_scale_user);
+        }
+        char now[64];
+        std::snprintf(now, sizeof(now), "now: %.0f%%", dai_ui_scale_get(ui) * 100.0f);
+        dai_ui_label(ui, now);
+    }
+
+    {
+        static const char *const LANGS[] = { "English", "Deutsch" };
+        int lang = dai_tr_lang_get();
+        if (dai_ui_option(ui, "Language", &lang, LANGS, 2))
+            dai_tr_lang(lang == 1 ? DAI_LANG_DE : DAI_LANG_EN);
+    }
+
     static const char *const THEMES[] = { "Unity Dark", "Darker", "Slate" };
+    {
+        // Which editor a double click on a script opens. Both are real
+        // answers: the built-in one is here and instant, the external one has
+        // your extensions - and the project carries a .d.ts so it understands
+        // the engine either way.
+        static const char *const SCRIPT_ED[] = { "Built-in editor", "External (VS Code)" };
+        if (dai_ui_option(ui, "Scripts open in", &p->script_external, SCRIPT_ED, 2))
+            dai_editor_ui_toast(p, p->script_external ? "scripts open externally"
+                                                      : "scripts open in the Script tab", 2.0f);
+    }
     if (dai_ui_option(ui, "Theme", &p->settings_theme, THEMES, 3)) {
         dai_ui_style *st = dai_ui_style_of(ui);
         if (p->settings_theme == 1) {          // one step darker everywhere
@@ -1843,6 +2879,14 @@ int dai_editor_ui_viewport_input(dai_editor_ui *p, float mx, float my, int mouse
     // A press that started over a panel must not fall through to the scene, or
     // clicking a button would also deselect whatever was selected.
     if (over_ui) return 0;
+    // Nor may a press that is not IN the scene view at all. "Not over a
+    // widget" is not the same thing as "in the 3D view": tab bars, the
+    // toolbar and the splitters between panels are all neither, and a click
+    // on any of them used to pick - which is why changing tabs deselected.
+    if (p->view_w > 0.0f && p->view_h > 0.0f &&
+        (mx < p->view_x || mx >= p->view_x + p->view_w ||
+         my < p->view_y || my >= p->view_y + p->view_h))
+        return 0;
 
     if (pressed) {
         int axis = p->collider_edit ? DAI_AXIS_NONE : dai_editor_gizmo_hit(p->ed, mx, my);
@@ -1861,6 +2905,7 @@ int dai_editor_ui_viewport_input(dai_editor_ui *p, float mx, float my, int mouse
 
 int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in) {
     if (!p || !in) return 0;
+    p->last_ctrl_held = in->key_ctrl != 0;
 
     // The game view is not navigable - it is the player's camera, and dragging
     // it around would be editing the scene by accident.
@@ -1881,6 +2926,10 @@ int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in) {
         ci.wheel = 0.0f;
         if (ci.key_alt) ci.mouse_left = 0;
     }
+    // The right button in the scene view means "I am flying now": whatever
+    // text field still had the keyboard gives it up, or W A S D go on being
+    // typed into it and the camera only ever turns.
+    if (ci.mouse_right && !p->prev_right_down && !over_ui) dai_ui_text_defocus(p->ui);
     int cam_used = dai_editor_cam_update(p->ed, &ci);
     if (cam_used) {
         // Cancel a half finished object drag rather than letting the camera and
@@ -1921,6 +2970,15 @@ int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in) {
 
 // ------------------------------------------------------------------ frame
 
+// The selected asset's path, or "" when the selection no longer names one.
+// Never returns a pointer the caller has to test: the whole point is that
+// there is exactly one place left where this can be got wrong.
+static const char *asset_at(const dai_editor_ui *p, int index) {
+    if (!p || index < 0 || index >= (int)p->assets.size()) return "";
+    const char *a = p->assets[(size_t)index];
+    return a ? a : "";
+}
+
 void dai_editor_ui_asset_list(dai_editor_ui *p, const char *const *paths, uint32_t count) {
     if (!p) return;
     p->assets.clear();
@@ -1928,7 +2986,16 @@ void dai_editor_ui_asset_list(dai_editor_ui *p, const char *const *paths, uint32
     if (p->asset_sel >= (int)p->assets.size()) p->asset_sel = -1;
 }
 
-int dai_editor_ui_asset_selected(const dai_editor_ui *p) { return p ? p->asset_sel : -1; }
+void dai_editor_ui_folder_list(dai_editor_ui *p, const char *const *paths, uint32_t count) {
+    if (!p) return;
+    p->folders_disk.clear();
+    if (paths && count) p->folders_disk.assign(paths, paths + count);
+}
+
+int dai_editor_ui_asset_selected(const dai_editor_ui *p) {
+    // Same rule as everywhere else: an index the list no longer has is no
+    // selection at all.
+    if (p && (p->asset_sel < 0 || p->asset_sel >= (int)p->assets.size())) return -1; return p ? p->asset_sel : -1; }
 
 static int assets_body(dai_editor_ui *p, float h, const char **out_path, int *out_as_tree);
 
@@ -1963,13 +3030,21 @@ static int assets_body(dai_editor_ui *p, float h, const char **out_path, int *ou
     if (fits < 1) fits = 1;
     uint32_t shown = (uint32_t)p->assets.size() < fits ? (uint32_t)p->assets.size() : fits;
     for (uint32_t i = 0; i < shown; ++i) {
-        const char *full = p->assets[i] ? p->assets[i] : "";
+        const char *full = asset_at(p, (int)i);
         const char *slash = std::strrchr(full, '/');
         const char *label = slash ? slash + 1 : full;
         int selected = (int)i == p->asset_sel;
         char row[128];
         std::snprintf(row, sizeof(row), "%s%s", selected ? "> " : "  ", label);
-        if (dai_ui_button(p->ui, row)) p->asset_sel = selected ? -1 : (int)i;
+        if (dai_ui_button(p->ui, row)) {
+            if (selected && dai_ui_double_click(p->ui)) {
+                // Double click opens it - a script in the external editor, the
+                // way Unity hands the file to whatever edits it. The host
+                // knows the machine; the editor only knows the path.
+                if (p->open_asset) p->open_asset(nullptr, full, p->open_asset_user);
+            }
+            p->asset_sel = selected ? -1 : (int)i;
+        }
     }
     if (shown < p->assets.size())
         dai_ui_label_fmt(p->ui, "... %u more", (unsigned)(p->assets.size() - shown));
@@ -1986,8 +3061,7 @@ static int assets_body(dai_editor_ui *p, float h, const char **out_path, int *ou
     // A script is not placed, it is ATTACHED - the same click as typing its
     // name into the Script block, which is the only place it can mean
     // anything.
-    size_t plen = pick ? std::strlen(pick) : 0;
-    if (plen > 3 && std::strcmp(pick + plen - 3, ".js") == 0) {
+    if (pick && is_behaviour_file(pick)) {
         if (dai_ui_button(p->ui, "Assign to selection") &&
             dai_editor_selection_count(p->ed) > 0) {
             dai_node n = dai_editor_selected(p->ed, 0);
@@ -2026,6 +3100,34 @@ void dai_editor_ui_layout_dump(const dai_editor_ui *p, char *out, size_t n) {
     dai_dock_dump(p->dock, out, n);
 }
 
+// The host owns the disk: it hands the editor a save/load pair so named
+// layouts live in files the editor itself never has to know about.
+void dai_editor_ui_layout_save_as(dai_editor_ui *p, const char *name) {
+    if (!p || !name || !*name || !p->layout_save_host) return;
+    char buf[4096];
+    size_t n = dai_dock_to_text(p->dock, buf, sizeof(buf));
+    if (n) p->layout_save_host(name, buf, n, p->layout_host_user);
+}
+
+void dai_editor_ui_layout_host(dai_editor_ui *p,
+                                 void (*save)(const char *, const char *, size_t, void *),
+                                 int  (*load)(const char *, char *, size_t, void *),
+                                 void *user) {
+    if (!p) return;
+    p->layout_save_host = save;
+    p->layout_load_host = load;
+    p->layout_host_user = user;
+}
+
+int dai_editor_ui_layout_apply_name(dai_editor_ui *p, const char *name) {
+    if (!p || !name || !*name || !p->layout_load_host) return 0;
+    char buf[4096];
+    int n = p->layout_load_host(name, buf, sizeof(buf), p->layout_host_user);
+    if (n <= 0) return 0;
+    if (dai_dock_from_text(p->dock, buf) == DAI_OK) { p->layout_ready = true; return 1; }
+    return 0;
+}
+
 void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
     if (!p) return;
     // The layout every 3D editor opens with: hierarchy on the left, project
@@ -2039,9 +3141,14 @@ void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
     dai_dock_add(p->dock, "Project", DAI_DOCK_BOTTOM, 0.26f);
     // Registered so the Window menu can list them; they start as tabs of the
     // Project panel rather than stealing space from the scene view.
-    dai_dock_add(p->dock, "Console", DAI_DOCK_BOTTOM, 0.26f);
+    // ONLY add_tab: a dai_dock_add() first would carve its own bottom strip
+    // (0.26 of what is left, three times over) and then add_tab would see the
+    // title already registered and return - which is how a fresh install ended
+    // up with a 246px tall scene view in a 720px window.
     dai_dock_add_tab(p->dock, "Console", "Project");
-    dai_dock_add(p->dock, "Audio", DAI_DOCK_BOTTOM, 0.26f);
+    // The script editor starts beside the scene, where a code window belongs -
+    // as a TAB of it, so it costs no space until something is opened in it.
+    dai_dock_add_tab(p->dock, "Script", "Scene");
     dai_dock_add_tab(p->dock, "Audio", "Project");
     p->layout_ready = true;
     p->layout_w = vw; p->layout_h = vh;
@@ -2083,15 +3190,165 @@ static void project_expand_to(dai_editor_ui *p, const std::string &dir) {
 // The two right click menus of the hierarchy and the viewport. They are run
 // LAST in the frame so they paint above every window, and they mutate through
 // the document like every other edit.
+// A component's values as one line of text - the same "clipboard is text"
+// idea as node copy, so a copied Rigidbody can leave the editor too.
+static std::string comp_to_text(int id, const dai_node_desc &r) {
+    char b[640];
+    switch (id) {
+    case 0: std::snprintf(b, sizeof(b), "comp:0 px=%g py=%g pz=%g rx=%g ry=%g rz=%g rw=%g sx=%g sy=%g sz=%g",
+                          (double)r.position.x, (double)r.position.y, (double)r.position.z,
+                          (double)r.rotation.x, (double)r.rotation.y, (double)r.rotation.z, (double)r.rotation.w,
+                          (double)r.scale.x, (double)r.scale.y, (double)r.scale.z); break;
+    case 1: std::snprintf(b, sizeof(b), "comp:1 motion=%d density=%g friction=%g restitution=%g",
+                          r.motion, (double)r.density, (double)r.friction, (double)r.restitution); break;
+    case 2: std::snprintf(b, sizeof(b), "comp:2 shape=%d hx=%g hy=%g hz=%g cx=%g cy=%g cz=%g trigger=%d",
+                          r.shape, (double)r.half_extent.x, (double)r.half_extent.y, (double)r.half_extent.z,
+                          (double)r.collider_center.x, (double)r.collider_center.y, (double)r.collider_center.z,
+                          r.trigger); break;
+    case 3: std::snprintf(b, sizeof(b), "comp:3 camera=%d fov=%g size=%g",
+                          r.camera, (double)r.camera_fov, (double)r.camera_size); break;
+    case 4: std::snprintf(b, sizeof(b), "comp:4 light=%d lr=%g lg=%g lb=%g range=%g intensity=%g cone=%g",
+                          r.light, (double)r.light_color.x, (double)r.light_color.y, (double)r.light_color.z,
+                          (double)r.light_range, (double)r.light_intensity, (double)r.light_cone); break;
+    case 5: std::snprintf(b, sizeof(b), "comp:5 sx=%g sy=%g sz=%g",
+                          (double)r.sprite_size.x, (double)r.sprite_size.y, (double)r.sprite_size.z); break;
+    case 6: std::snprintf(b, sizeof(b), "comp:6 event=%s bus=%d vol=%g loop=%d autoplay=%d",
+                          r.audio_event, r.audio_bus, (double)r.audio_volume, r.audio_loop, r.audio_autoplay); break;
+    default: b[0] = 0; break;
+    }
+    return b;
+}
+
+// One named float/int out of the text line; missing keys keep their value.
+static float kv_f(const char *t, const char *key, float def) {
+    const char *at = std::strstr(t, key);
+    if (!at) return def;
+    return (float)std::atof(at + std::strlen(key));
+}
+static int kv_i(const char *t, const char *key, int def) {
+    const char *at = std::strstr(t, key);
+    if (!at) return def;
+    return std::atoi(at + std::strlen(key));
+}
+
+static int comp_from_text(const char *t, int want_id, dai_node_desc *r) {
+    char prefix[16];
+    std::snprintf(prefix, sizeof(prefix), "comp:%d ", want_id);
+    if (!t || std::strncmp(t, prefix, std::strlen(prefix)) != 0) {
+        // "comp:0" with no field would never match - space is part of prefix.
+        std::snprintf(prefix, sizeof(prefix), "comp:%d", want_id);
+        size_t pl = std::strlen(prefix);
+        if (!t || std::strncmp(t, prefix, pl) != 0 || (t[pl] && t[pl] != ' ')) return 0;
+    }
+    switch (want_id) {
+    case 0:
+        r->position = { kv_f(t,"px=",r->position.x), kv_f(t,"py=",r->position.y), kv_f(t,"pz=",r->position.z) };
+        r->rotation = { kv_f(t,"rx=",r->rotation.x), kv_f(t,"ry=",r->rotation.y),
+                        kv_f(t,"rz=",r->rotation.z), kv_f(t,"rw=",r->rotation.w) };
+        r->scale    = { kv_f(t,"sx=",r->scale.x), kv_f(t,"sy=",r->scale.y), kv_f(t,"sz=",r->scale.z) };
+        break;
+    case 1:
+        r->motion = kv_i(t,"motion=",r->motion);
+        r->density = kv_f(t,"density=",r->density);
+        r->friction = kv_f(t,"friction=",r->friction);
+        r->restitution = kv_f(t,"restitution=",r->restitution);
+        break;
+    case 2:
+        r->shape = kv_i(t,"shape=",r->shape);
+        r->half_extent = { kv_f(t,"hx=",r->half_extent.x), kv_f(t,"hy=",r->half_extent.y), kv_f(t,"hz=",r->half_extent.z) };
+        r->collider_center = { kv_f(t,"cx=",r->collider_center.x), kv_f(t,"cy=",r->collider_center.y), kv_f(t,"cz=",r->collider_center.z) };
+        r->trigger = kv_i(t,"trigger=",r->trigger);
+        break;
+    case 3:
+        r->camera = kv_i(t,"camera=",r->camera);
+        r->camera_fov = kv_f(t,"fov=",r->camera_fov);
+        r->camera_size = kv_f(t,"size=",r->camera_size);
+        if (r->camera && r->tag[0] == 0) std::snprintf(r->tag, sizeof(r->tag), "%s", CAMERA_TAG);
+        break;
+    case 4:
+        r->light = kv_i(t,"light=",r->light);
+        r->light_color = { kv_f(t,"lr=",r->light_color.x), kv_f(t,"lg=",r->light_color.y), kv_f(t,"lb=",r->light_color.z) };
+        r->light_range = kv_f(t,"range=",r->light_range);
+        r->light_intensity = kv_f(t,"intensity=",r->light_intensity);
+        r->light_cone = kv_f(t,"cone=",r->light_cone);
+        break;
+    case 5:
+        r->sprite = 1;
+        r->sprite_size = { kv_f(t,"sx=",1.0f), kv_f(t,"sy=",1.0f), kv_f(t,"sz=",1.0f) };
+        break;
+    case 6: {
+        const char *ev = std::strstr(t, "event=");
+        if (ev) {
+            ev += 6;
+            size_t el = 0;
+            while (ev[el] && ev[el] != ' ' && el < sizeof(r->audio_event) - 1) ++el;
+            std::memcpy(r->audio_event, ev, el);
+            r->audio_event[el] = 0;
+        }
+        r->audio_bus = kv_i(t,"bus=",r->audio_bus);
+        r->audio_volume = kv_f(t,"vol=",r->audio_volume);
+        r->audio_loop = kv_i(t,"loop=",r->audio_loop);
+        r->audio_autoplay = kv_i(t,"autoplay=",r->audio_autoplay);
+        break;
+    }
+    default: return 0;
+    }
+    return 1;
+}
+
 static void run_context_menus(dai_editor_ui *p) {
     dai_doc *d = dai_editor_doc(p->ed);
+
+    // Named layouts: the current one saved under a new name, or one picked
+    // from disk and applied.
+    if (p->menu_layout.open) {
+        const char *defs[] = { "Default", "2 by 3", "Tall", "Wide" };
+        dai_ui_menu_item items[12];
+        int n = 0;
+        for (const char *df : defs) {
+            items[n++] = { DAI_ICON_LAYOUT, df, nullptr };
+        }
+        items[n++] = { DAI_ICON_SAVE, "Save current as: (type name below)", nullptr };
+        int pick = dai_ui_popup_menu(p->ui, &p->menu_layout, items, n);
+        if (pick >= 0 && pick < 4) {
+            if (dai_editor_ui_layout_apply_name(p, defs[pick])) {
+                dai_editor_ui_toast(p, "layout loaded", 2.0f);
+            } else {
+                // No saved preset by that name yet: reset to the base layout.
+                dai_editor_ui_layout_reset(p, p->layout_w, p->layout_h);
+                dai_editor_ui_toast(p, "layout: default", 2.0f);
+            }
+        } else if (pick == 4) {
+            // Name it after the focused panel if the user gave no name - that
+            // is the layout they were actually shaping.
+            std::string nm = p->layout_name_buf[0] ? p->layout_name_buf : "my layout";
+            dai_editor_ui_layout_save_as(p, nm.c_str());
+            char msg[96];
+            std::snprintf(msg, sizeof(msg), "layout saved as '%s'", nm.c_str());
+            dai_editor_ui_toast(p, msg, 2.0f);
+            p->layout_name_buf[0] = 0;
+        }
+        (void)p;
+    }
 
     // The Window menu, built from what the dock actually knows - so a panel
     // added later shows up here without anyone remembering to list it.
     if (p->menu_window.open) {
+        // The dock's own register, plus the set this editor always has. A
+        // layout loaded from disk restores the TREE, not the register - so
+        // after the first restart the menu was empty and the button did
+        // nothing at all, which is exactly what it looked like.
+        static const char *const ALWAYS[] = { "Scene", "Game", "Hierarchy", "Inspector",
+                                              "Project", "Console", "Audio", "Settings" };
         const char *names[16];
         uint32_t n = dai_dock_panels(p->dock, names, 16);
         if (n > 16) n = 16;
+        for (uint32_t k = 0; k < 8 && n < 16; ++k) {
+            bool have = false;
+            for (uint32_t i = 0; i < n; ++i)
+                if (std::strcmp(names[i], ALWAYS[k]) == 0) { have = true; break; }
+            if (!have) names[n++] = ALWAYS[k];
+        }
         dai_ui_menu_item items[16];
         char labels[16][64];
         for (uint32_t i = 0; i < n; ++i) {
@@ -2106,23 +3363,266 @@ static void run_context_menus(dai_editor_ui *p) {
         }
     }
 
+    // The mesh picker's list: every builtin plus the two "derive it" entries.
+    // Opened by the object field in the inspector, applied to the node it was
+    // opened for - not to the selection, which can change while it is open.
+    if (p->menu_mesh.open) {
+        std::vector<std::string> names;
+        std::vector<uint32_t>    ids;
+        names.push_back("From shape (auto)"); ids.push_back(0xFFFFFFFFu);
+        names.push_back("From asset file");   ids.push_back(0xFFFFFFFEu);
+        for (uint32_t i = 0; i < p->mesh_count && i < 64; ++i) {
+            const char *nm = p->mesh_name ? p->mesh_name(i, p->mesh_user) : nullptr;
+            char buf[64];
+            if (!nm) { std::snprintf(buf, sizeof(buf), "mesh %u", i); nm = buf; }
+            names.push_back(nm); ids.push_back(i);
+        }
+        std::vector<dai_ui_menu_item> items(names.size());
+        for (size_t i = 0; i < names.size(); ++i) {
+            items[i].icon = i < 2 ? DAI_ICON_RESET : DAI_ICON_CUBE;
+            items[i].label = names[i].c_str();
+            items[i].shortcut = nullptr;
+        }
+        int pick = dai_ui_popup_menu(p->ui, &p->menu_mesh, items.data(), (uint32_t)items.size());
+        if (pick >= 0 && pick < (int)ids.size() && p->mesh_menu_node != DAI_INVALID_NODE) {
+            dai_doc *md = dai_editor_doc(p->ed);
+            dai_node_desc mr{};
+            if (dai_doc_get(md, p->mesh_menu_node, &mr) == DAI_OK) {
+                dai_doc_begin(md, "Mesh");
+                mr.mesh = ids[(size_t)pick];
+                dai_doc_set(md, p->mesh_menu_node, &mr);
+                dai_doc_commit(md);
+                dai_editor_resync(p->ed);
+            }
+            p->mesh_menu_node = DAI_INVALID_NODE;
+        }
+    }
+
+    // Add Component, the Unity shape: a search field over everything you
+    // could add - the built-in components AND every behaviour file in the
+    // project. Flat lists stop working the day a project has forty scripts,
+    // and forty scripts is a Tuesday.
+    if (p->addcomp_list.open && p->addcomp_node != DAI_INVALID_NODE) {
+        struct CompEntry { std::string label; std::string cat; int kind; std::string path; };
+        // kind: 0 add rigidbody, 1 add collider, 2 add camera, 3 add light,
+        //       4 add sprite, 5 add audio, 6 attach the behaviour in `path`.
+        dai_node_desc ar2{};
+        int have_node = dai_doc_get(d, p->addcomp_node, &ar2) == DAI_OK;
+        std::vector<CompEntry> entries;
+        if (have_node) {
+            if (ar2.no_rigidbody) entries.push_back({ "Rigidbody", "Physics", 0, "" });
+            if (ar2.no_collider)  entries.push_back({ "Collider", "Physics", 1, "" });
+            if (!ar2.camera)      entries.push_back({ "Camera", "Rendering", 2, "" });
+            if (!ar2.light)       entries.push_back({ "Light", "Rendering", 3, "" });
+            if (!ar2.sprite)      entries.push_back({ "Sprite (2D)", "Rendering", 4, "" });
+            if (!ar2.audio_event[0]) entries.push_back({ "Audio Source", "Audio", 5, "" });
+            // NO "Remove X" entries. A menu called Add Component that offers
+            // to remove things is a menu you have to read twice, and the
+            // component is already removable where it lives: the header's
+            // tick box switches it off, its context menu takes it away. A
+            // component that is on the object simply does not appear here -
+            // that IS the feedback, and it is the same one Unity gives.
+            (void)0;
+        }
+        // Every script in the project is a component. Listed with its folder,
+        // because two scripts called "player" in different folders are not
+        // the same thing.
+        for (const char *a : p->assets) {
+            if (!a || !is_behaviour_file(a)) continue;
+            bool on_node = false;
+            if (have_node && ar2.script[0]) {
+                std::string cur;
+                for (const char *c = ar2.script; ; ++c) {
+                    if (*c == ';' || !*c) {
+                        if (cur == a) on_node = true;
+                        cur.clear();
+                        if (!*c) break;
+                    } else cur += *c;
+                }
+            }
+            if (on_node) continue;
+            // Name without the extension, folder in front when it is not at
+            // the top: two scripts called "player" in different folders are
+            // not the same component, and "player.js" tells you nothing that
+            // the icon has not already said.
+            std::string b = base_of(a);
+            size_t dot = b.find_last_of('.');
+            if (dot != std::string::npos && dot > 0) b = b.substr(0, dot);
+            std::string dir = parent_of(a);
+            if (!dir.empty()) b = base_of(dir) + "/" + b;
+            entries.push_back({ b, "Scripts", 6, a });
+        }
+
+        // Category headers, Unity's grey separators: they are items too, so
+        // the keyboard can walk past them without treating them as picks.
+        std::vector<std::string> flat;
+        std::vector<int>         row_kind;   // -1 = header, else index into entries
+        std::string last_cat;
+        for (const CompEntry &e : entries) {
+            if (e.cat != last_cat) { last_cat = e.cat; flat.push_back(e.cat); row_kind.push_back(-1); }
+            flat.push_back(e.label); row_kind.push_back(1);
+        }
+        std::vector<dai_ui_menu_item> items(flat.size());
+        for (size_t i = 0; i < flat.size(); ++i) {
+            if (row_kind[i] < 0) items[i] = { nullptr, flat[i].c_str(), nullptr, 1 };
+            else {
+                const char *ic = DAI_ICON_SCRIPT;
+                for (const CompEntry &e : entries)
+                    if (e.label == flat[i]) {
+                        if (e.cat == "Physics") ic = DAI_ICON_SETTINGS;
+                        else if (e.cat == "Audio") ic = DAI_ICON_AUDIO;
+                        else if (e.cat == "Rendering")
+                            ic = e.kind == 2 ? DAI_ICON_CAMERA
+                               : e.kind == 3 ? DAI_ICON_LIGHT : DAI_ICON_SPRITE;
+                        break;
+                    }
+                items[i] = { ic, flat[i].c_str(), nullptr, 0 };
+            }
+        }
+        int pick = dai_ui_searchlist_draw(p->ui, &p->addcomp_list, items.data(), (uint32_t)items.size());
+        if (pick >= 0 && pick < (int)flat.size() && row_kind[pick] >= 0 && have_node) {
+            const std::string &lbl = flat[pick];
+            const CompEntry *sel = nullptr;
+            for (const CompEntry &e : entries) if (e.label == lbl) { sel = &e; break; }
+            if (sel) {
+                dai_doc_begin(d, "Add component");
+                switch (sel->kind) {
+                case 0: ar2.no_rigidbody = 0; ar2.no_body = 0;
+                        ar2.friction = p->def_friction; ar2.restitution = p->def_restitution; break;
+                case 1: ar2.no_collider = 0; ar2.no_body = 0; break;
+                case 2: ar2.camera = 1; break;
+                case 3: ar2.light = 1; break;
+                case 4: ar2.sprite = 1; break;
+                case 5: std::snprintf(ar2.audio_event, sizeof(ar2.audio_event), "click"); break;
+                case 6: {
+                    std::vector<std::string> list = script_list(ar2.script);
+                    list.push_back(sel->path);
+                    script_join(ar2.script, sizeof(ar2.script), list);
+                    break;
+                }
+                }   /* nothing removes from here any more - see above */
+                dai_doc_set(d, p->addcomp_node, &ar2);
+                dai_doc_commit(d);
+                dai_editor_resync(p->ed);
+            }
+        }
+        if (!p->addcomp_list.open) p->addcomp_node = DAI_INVALID_NODE;
+    }
+
+    // "Delete X?" - two words and two buttons, over the row it is about.
+    if (p->menu_delete.open && !p->delete_ask.empty()) {
+        std::string q = "Delete " + base_of(p->delete_ask) + "?";
+        dai_ui_menu_item items[2] = {
+            { DAI_ICON_TRASH, q.c_str(), nullptr, 1 },   // the question, not a choice
+            { nullptr, "Delete permanently", nullptr, 0 },
+        };
+        int pick = dai_ui_popup_menu(p->ui, &p->menu_delete, items, 2);
+        if (pick == 1) {
+            if (p->asset_delete && p->asset_delete(p->delete_ask.c_str(), nullptr,
+                                                   p->delete_user)) {
+                char msg[192];
+                std::snprintf(msg, sizeof(msg), "deleted %s",
+                              base_of(p->delete_ask).c_str());
+                dai_editor_ui_toast(p, msg, 2.0f);
+                p->want_refresh = 1;
+                if (p->proj_sel_folder == p->delete_ask) p->proj_sel_folder.clear();
+                p->asset_sel = -1;
+            } else {
+                dai_editor_ui_toast(p, "could not delete it", 2.5f);
+            }
+            p->delete_ask.clear();
+        } else if (!p->menu_delete.open) {
+            p->delete_ask.clear();
+        }
+    }
+
+    // The material picker's list. A material is a name today (the renderer
+    // has no material files yet), so the list offers the ones the palette
+    // already knows; typing in the search field filters them.
+    if (p->mat_list.open && p->mat_menu_node != DAI_INVALID_NODE) {
+        static const char *MATS[] = { "Default", "Plastic", "Metal", "Glass", "Rubber", "Emissive" };
+        dai_ui_menu_item items[6];
+        for (int i = 0; i < 6; ++i) items[i] = { DAI_ICON_MATERIAL, MATS[i], nullptr };
+        int pick = dai_ui_searchlist_draw(p->ui, &p->mat_list, items, 6);
+        if (pick >= 0 && pick < 6) {
+            dai_doc *md = dai_editor_doc(p->ed);
+            dai_node_desc mr{};
+            if (dai_doc_get(md, p->mat_menu_node, &mr) == DAI_OK) {
+                std::vector<std::string> mats = script_list(mr.materials);
+                while ((int)mats.size() <= p->mat_menu_slot) mats.push_back("Default");
+                mats[(size_t)p->mat_menu_slot] = MATS[pick];
+                dai_doc_begin(md, "Material");
+                script_join(mr.materials, sizeof(mr.materials), mats);
+                dai_doc_set(md, p->mat_menu_node, &mr);
+                dai_doc_commit(md);
+                dai_editor_resync(p->ed);
+            }
+            p->mat_menu_node = DAI_INVALID_NODE;
+        }
+    }
+
     // The Add Component list. Entries flip between add and remove so one menu
     // covers both directions - a component that is already there offers to go.
-    if (p->menu_addcomp.open && dai_editor_selection_count(p->ed) > 0) {
+    if (0 && p->menu_addcomp.open && dai_editor_selection_count(p->ed) > 0) {
         dai_node an = dai_editor_selected(p->ed, 0);
         dai_node_desc ar{};
         if (dai_doc_get(d, an, &ar) == DAI_OK) {
             int has_rb = !ar.no_rigidbody && !ar.no_body;
             int has_col = !ar.no_collider && !ar.no_body;
-            dai_ui_menu_item items[3];
-            items[0] = { DAI_ICON_SETTINGS, has_rb ? "Remove Rigidbody" : "Rigidbody", nullptr };
-            items[1] = { DAI_ICON_BOX, has_col ? "Remove Collider" : "Collider", nullptr };
-            items[2] = { DAI_ICON_FILE, "Script (drag a .js here)", nullptr };
-            int pick = dai_ui_popup_menu(p->ui, &p->menu_addcomp, items, 3);
-            if (pick == 0 || pick == 1) {
+            int has_cam = ar.camera != 0;
+            int has_light = ar.light != 0;
+            int has_sprite = ar.sprite != 0;
+            int has_audio = ar.audio_event[0] || ar.audio_autoplay || ar.audio_bus;
+            // One list, entries flip between add and remove - the same menu
+            // covers both directions, which is what "components" means here.
+            char lbl[6][40];
+            std::snprintf(lbl[0], 40, "%sRigidbody", has_rb ? "Remove " : "");
+            std::snprintf(lbl[1], 40, "%sCollider", has_col ? "Remove " : "");
+            std::snprintf(lbl[2], 40, "%sCamera", has_cam ? "Remove " : "");
+            std::snprintf(lbl[3], 40, "%sLight", has_light ? "Remove " : "");
+            std::snprintf(lbl[4], 40, "%sSprite (2D)", has_sprite ? "Remove " : "");
+            std::snprintf(lbl[5], 40, "%sAudio Source", has_audio ? "Remove " : "");
+            dai_ui_menu_item items[7];
+            items[0] = { DAI_ICON_SETTINGS, lbl[0], nullptr };
+            items[1] = { DAI_ICON_BOX, lbl[1], nullptr };
+            items[2] = { DAI_ICON_CAMERA, lbl[2], nullptr };
+            items[3] = { DAI_ICON_SUN, lbl[3], nullptr };
+            items[4] = { DAI_ICON_IMAGE, lbl[4], nullptr };
+            items[5] = { DAI_ICON_AUDIO, lbl[5], nullptr };
+            items[6] = { DAI_ICON_SCRIPT, "Script (drag a .js or .cpp here)", nullptr };
+            int pick = dai_ui_popup_menu(p->ui, &p->menu_addcomp, items, 7);
+            if (pick >= 0 && pick <= 5) {
                 dai_doc_begin(d, "Component");
-                if (pick == 0) ar.no_rigidbody = has_rb ? 1 : 0;
-                else           ar.no_collider = has_col ? 1 : 0;
+                switch (pick) {
+                case 0:
+                    ar.no_rigidbody = has_rb ? 1 : 0;
+                    if (!has_rb) {   // adding: start from the project's defaults
+                        ar.friction = p->def_friction;
+                        ar.restitution = p->def_restitution;
+                    }
+                    break;
+                case 1: ar.no_collider = has_col ? 1 : 0; break;
+                case 2:
+                    if (has_cam) ar.camera = 0;
+                    else { ar.camera = 1; ar.camera_fov = 60.0f; ar.camera_size = 5.0f;
+                           std::snprintf(ar.tag, sizeof(ar.tag), "%s", CAMERA_TAG); }
+                    break;
+                case 3:
+                    if (has_light) ar.light = 0;
+                    else { ar.light = 1; ar.light_color = { 1, 1, 1 };
+                           ar.light_range = 10.0f; ar.light_intensity = 1.0f; ar.light_cone = 30.0f; }
+                    break;
+                case 4:
+                    if (has_sprite) ar.sprite = 0;
+                    else { ar.sprite = 1; ar.sprite_size = { 1, 1, 1 }; }
+                    break;
+                case 5:
+                    if (has_audio) { ar.audio_event[0] = 0; ar.audio_autoplay = 0; ar.audio_bus = 0; }
+                    else { ar.audio_bus = 2; ar.audio_volume = 1.0f; ar.audio_autoplay = 1; }
+                    p->audio_buf_node = DAI_INVALID_NODE;
+                    break;
+                default: break;
+                }
                 // no_body is the "neither" state: the node stops being physical
                 // at all only once BOTH are gone, and comes back the moment
                 // either returns. Getting this wrong made the mesh disappear.
@@ -2137,16 +3637,124 @@ static void run_context_menus(dai_editor_ui *p) {
         dai_ui_popup_menu(p->ui, &p->menu_addcomp, none, 1);
     }
 
+    // Right click on a component header: Unity's gear menu - copy the values,
+    // paste them onto the same component of another object, or remove it.
+    if (p->menu_comp.open) {
+        static const dai_ui_menu_item COMP_MENU[3] = {
+            { DAI_ICON_COPY,  "Copy Component",  nullptr },
+            { DAI_ICON_FILE,  "Paste Component", nullptr },
+            { DAI_ICON_TRASH, "Remove Component", nullptr },
+        };
+        int target = p->comp_menu_target;
+        static const dai_ui_menu_item COMP_MENU_X[] = {
+            { DAI_ICON_RESET, "Reset", nullptr },
+            { DAI_ICON_COPY, "Copy Component", nullptr },
+            { DAI_ICON_SAVE, "Paste Component Values", nullptr },
+            { DAI_ICON_CLOSE, "Remove Component", nullptr },
+        };
+        int cpick = dai_ui_popup_menu(p->ui, &p->menu_comp, COMP_MENU_X, 4);
+        if (cpick >= 0 && target >= 0 && dai_editor_selection_count(p->ed) > 0) {
+            dai_node an = dai_editor_selected(p->ed, 0);
+            dai_node_desc ar{};
+            if (dai_doc_get(d, an, &ar) == DAI_OK) {
+                if (cpick == 0) {
+                    // Reset is what a grown-up editor answers when you clicked
+                    // three values too far: the component goes back to the
+                    // defaults, the rest of the object stays put.
+                    dai_doc_begin(d, "Reset Component");
+                    switch (target) {
+                    case 1: ar.density = 0.0f; ar.friction = p->def_friction;
+                            ar.restitution = p->def_restitution; ar.motion = DAI_DYNAMIC; break;
+                    case 2: ar.trigger = 0; ar.collider_center = dai_vec3{ 0, 0, 0 }; break;
+                    case 3: ar.camera_fov = 0.0f; ar.camera_size = 0.0f; break;
+                    case 4: ar.light_color = dai_vec3{ 0, 0, 0 }; ar.light_range = 0.0f;
+                            ar.light_intensity = 0.0f; ar.light_cone = 0.0f; break;
+                    default: break;
+                    }
+                    dai_doc_set(d, an, &ar);
+                    dai_doc_commit(d);
+                    dai_editor_resync(p->ed);
+                    dai_editor_ui_toast(p, "component reset", 1.5f);
+                } else if (cpick == 1) {
+                    dai_editor_ui_clipboard_set(p, 2, comp_to_text(target, ar).c_str());
+                    dai_editor_ui_toast(p, "component copied", 1.5f);
+                } else if (cpick == 2) {
+                    int kind = -1;
+                    const char *text = dai_editor_ui_clipboard_get(p, &kind);
+                    if (text && kind == 2 && comp_from_text(text, target, &ar)) {
+                        dai_doc_begin(d, "Paste Component");
+                        ar.no_body = (ar.no_rigidbody && ar.no_collider) ? 1 : 0;
+                        dai_doc_set(d, an, &ar);
+                        dai_doc_commit(d);
+                        dai_editor_resync(p->ed);
+                        dai_editor_ui_toast(p, "component pasted", 1.5f);
+                    } else {
+                        dai_editor_ui_toast(p, "clipboard holds a different component", 2.0f);
+                    }
+                } else if (cpick == 3) {
+                    dai_doc_begin(d, "Remove Component");
+                    if (target == 1) ar.no_rigidbody = 1;
+                    else if (target == 2) ar.no_collider = 1;
+                    else if (target == 3) ar.camera = 0;
+                    else if (target == 4) ar.light = 0;
+                    else if (target == 5) ar.sprite = 0;
+                    else if (target == 6) { ar.audio_event[0] = 0; ar.audio_autoplay = 0; ar.audio_bus = 0; }
+                    ar.no_body = (ar.no_rigidbody && ar.no_collider) ? 1 : 0;
+                    dai_doc_set(d, an, &ar);
+                    dai_doc_commit(d);
+                    dai_editor_resync(p->ed);
+                    dai_editor_ui_toast(p, "component removed", 1.5f);
+                }
+            }
+        }
+        if (!p->menu_comp.open) p->comp_menu_target = -1;
+    }
+
     // The project window's own Create menu. The editor owns the click, the
     // host owns the disk - the same split the asset browser already uses.
+    // Rename and Delete only exist when the click landed ON something. A menu
+    // that offers to delete when you right clicked the background is a menu
+    // that will eventually delete the wrong thing.
+    const bool on_row = !p->rename_click.empty();
     static const dai_ui_menu_item PROJ_ITEMS[] = {
-        { DAI_ICON_FILE, "Create: Script", nullptr },
+        { DAI_ICON_SCRIPT, "Create: JS Script", nullptr },
         { DAI_ICON_FOLDER, "Create: Folder", nullptr },
         { DAI_ICON_PLUS, "Rename", "F2" },
         { DAI_ICON_SAVE, "Save scene", "Ctrl+S" },
         { DAI_ICON_SEARCH, "Refresh", nullptr },
+        { DAI_ICON_SCRIPT, "Create: C++ Behaviour", nullptr },
+        { DAI_ICON_TRASH, "Delete", "Del" },
     };
-    int ppick = dai_ui_popup_menu(p->ui, &p->menu_project, PROJ_ITEMS, 5);
+    // The two row-only entries sit at 2 and 6; without a row the menu is the
+    // other five, and the indices below are mapped back so nothing else moves.
+    static const int WITH_ROW[7]    = { 0, 1, 2, 3, 4, 5, 6 };
+    static const int WITHOUT_ROW[5] = { 0, 1, 3, 4, 5 };
+    dai_ui_menu_item shown_items[7];
+    const int *map = on_row ? WITH_ROW : WITHOUT_ROW;
+    uint32_t shown_n = on_row ? 7u : 5u;
+    for (uint32_t i = 0; i < shown_n; ++i) shown_items[i] = PROJ_ITEMS[map[i]];
+    int raw = dai_ui_popup_menu(p->ui, &p->menu_project, shown_items, shown_n);
+    int ppick = (raw >= 0 && raw < (int)shown_n) ? map[raw] : raw;
+    if (ppick == 6) {
+        // Whatever the right click landed on, or failing that the selection.
+        std::string target = !p->rename_click.empty() ? p->rename_click
+                           : !p->proj_sel_folder.empty() ? p->proj_sel_folder
+                           : (p->asset_sel >= 0 && p->asset_sel < (int)p->assets.size() &&
+                              p->assets[(size_t)p->asset_sel]
+                              ? std::string(p->assets[(size_t)p->asset_sel])
+                              : std::string());
+        p->rename_click.clear();
+        if (target.empty()) {
+            dai_editor_ui_toast(p, "nothing selected to delete", 2.0f);
+        } else if (!p->asset_delete) {
+            dai_editor_ui_toast(p, "this build cannot delete files", 2.0f);
+        } else {
+            p->delete_ask = target;
+            float dmx2 = 0, dmy2 = 0;
+            dai_ui_mouse(p->ui, &dmx2, &dmy2, nullptr, nullptr);
+            dai_ui_popup_open(&p->menu_delete, dmx2, dmy2);
+        }
+    }
     if (ppick == 2) {
         // Rename works on whatever the browser has selected - a file OR a
         // folder. std::rename does both, so there was never a reason for
@@ -2158,6 +3766,12 @@ static void run_context_menus(dai_editor_ui *p) {
                          : p->rename_click;
         if (!pick.empty()) {
             p->rename_asset = pick;
+            // The rename field is drawn in the list of the CURRENT folder.
+            // Renaming from the tree with another folder open meant the row
+            // never existed, and "row not drawn" cancels the rename on the
+            // spot - so open the parent first.
+            p->proj_dir = parent_of(pick);
+            project_expand_to(p, p->proj_dir);
             std::string base = base_of(pick);
             if (base.size() > 3 && base.compare(base.size() - 3, 3, ".js") == 0)
                 base.resize(base.size() - 3);
@@ -2167,16 +3781,39 @@ static void run_context_menus(dai_editor_ui *p) {
         p->rename_click.clear();
     }
     else if (ppick > 2) ppick += 0;   // Save/Refresh keep their meaning below
+    // "New C++ Script" is the same flow one entry down: the host writes the
+    // file, the row goes straight into rename. The extension is what tells
+    // the runner which engine to hand it to.
+    if (ppick == 5 && p->script_create) {
+        p->proj_tab = 0;
+        std::string base5 = p->proj_dir.empty() ? std::string() : p->proj_dir + "/";
+        for (int i = 0; i < 30; ++i) {
+            char nm[64], rel[224];
+            if (i == 0) std::snprintf(nm, sizeof(nm), "NewBehaviour.cpp");
+            else        std::snprintf(nm, sizeof(nm), "NewBehaviour (%d).cpp", i);
+            std::snprintf(rel, sizeof(rel), "%s%s", base5.c_str(), nm);
+            if (p->script_create(rel, p->script_user)) {
+                p->rename_asset = rel;
+                std::string stem = nm;
+                stem.resize(stem.size() - 4);
+                std::snprintf(p->rename_asset_buf, sizeof(p->rename_asset_buf), "%s", stem.c_str());
+                p->rename_seen_active = 0;
+                project_expand_to(p, p->proj_dir);
+                p->want_refresh = 1;
+                break;
+            }
+        }
+    }
     if (ppick == 0 && p->script_create) {
         // Unity's create flow: the file exists the moment the menu closes -
         // NewScript, NewScript2, ... - and its row in the list is in rename
         // right away. Enter commits the name, Escape keeps the default.
         p->proj_tab = 0;
         std::string base = p->proj_dir.empty() ? std::string() : p->proj_dir + "/";
-        for (int i = 0; i < 20; ++i) {
+        for (int i = 0; i < 30; ++i) {
             char nm[64], rel[224];
             if (i == 0) std::snprintf(nm, sizeof(nm), "NewScript");
-            else        std::snprintf(nm, sizeof(nm), "NewScript%d", i + 1);
+            else        std::snprintf(nm, sizeof(nm), "NewScript (%d)", i);
             std::snprintf(rel, sizeof(rel), "%s%s", base.c_str(), nm);
             if (p->script_create(rel, p->script_user)) {
                 p->rename_asset = std::string(rel) + ".js";
@@ -2197,9 +3834,13 @@ static void run_context_menus(dai_editor_ui *p) {
             if (i == 0) std::snprintf(name, sizeof(name), "%sNew Folder", base.c_str());
             else        std::snprintf(name, sizeof(name), "%sNew Folder %d", base.c_str(), i);
             if (p->folder_create(name, p->script_user)) {
-                p->proj_dir = name;
-                project_expand_to(p, p->proj_dir);
-                p->proj_list_scroll = 0.0f;
+                // Selected, not entered. Walking into a folder you have just
+                // made hides the folder you were working in, and the next
+                // thing anybody does is click Back - Unity selects it and
+                // starts the rename right there instead.
+                p->proj_sel_folder = name;
+                p->last_pick = name;
+                p->asset_sel = -1;
                 p->want_refresh = 1;
                 break;
             }
@@ -2276,6 +3917,7 @@ static void run_context_menus(dai_editor_ui *p) {
     }
     if (cpick >= 0) {
         dai_node_desc r = dai_node_desc_default();
+        (void)0;
         const char *undo = "New box";
         if (cpick == 0) {
             std::snprintf(r.name, sizeof(r.name), "GameObject");
@@ -2290,7 +3932,7 @@ static void run_context_menus(dai_editor_ui *p) {
             r.shape = shapes[cpick];
             r.motion = DAI_DYNAMIC;
             r.half_extent = { 0.5f, 0.5f, 0.5f };
-            r.position = { 0, 0.5f, 0 };
+            r.position = spawn_point(p, d, 0.5f);
             undo = cpick == 2 ? "New sphere" : cpick == 3 ? "New capsule"
                  : cpick == 4 ? "New cylinder" : "New box";
         }
@@ -2300,6 +3942,52 @@ static void run_context_menus(dai_editor_ui *p) {
         dai_editor_resync(p->ed);
         dai_editor_select(p->ed, n, 0);
     }
+}
+
+// Where a newly created object goes. Two rules, both of them Unity's: in
+// FRONT of the camera, not at the origin behind you, and never inside
+// something that is already there - two primitives at the same coordinates
+// look exactly like two primitives that refuse to collide.
+static dai_vec3 spawn_point(dai_editor_ui *p, dai_doc *d, float half_y) {
+    dai_vec3 o{ 0, 0, 0 }, dir{ 0, 0, -1 };
+    if (p->view_w > 1.0f && p->view_h > 1.0f)
+        dai_editor_ray(p->ed, p->view_x + p->view_w * 0.5f,
+                       p->view_y + p->view_h * 0.5f, &o, &dir);
+    // The ground plane if the camera is looking down at it, eight metres out
+    // otherwise - the same answer Unity gives when you drop a cube in.
+    float t = 8.0f;
+    if (dir.y < -0.05f) {
+        float tg = (half_y - o.y) / dir.y;
+        if (tg > 0.5f && tg < 60.0f) t = tg;
+    }
+    dai_vec3 pos{ o.x + dir.x * t, o.y + dir.y * t, o.z + dir.z * t };
+    if (pos.y < half_y) pos.y = half_y;
+    // Round to a tenth so the numbers in the inspector are readable.
+    pos.x = (float)((int)(pos.x * 10.0f + (pos.x < 0 ? -0.5f : 0.5f))) * 0.1f;
+    pos.z = (float)((int)(pos.z * 10.0f + (pos.z < 0 ? -0.5f : 0.5f))) * 0.1f;
+
+    // Step aside until the spot is free. Sixteen tries, then take it anyway:
+    // a create that silently does nothing would be worse than an overlap.
+    uint32_t n = dai_doc_count(d);
+    std::vector<dai_node> ids(n);
+    if (n) dai_doc_nodes(d, ids.data(), n);
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        bool clash = false;
+        for (dai_node id : ids) {
+            dai_node_desc e{};
+            if (dai_doc_get(d, id, &e) != DAI_OK) continue;
+            if (e.no_body && e.hidden) continue;         // empties do not block
+            dai_vec3 wp{};
+            dai_quat wr{ 0, 0, 0, 1 };
+            dai_vec3 ws{ 1, 1, 1 };
+            if (dai_doc_world_transform(d, id, &wp, &wr, &ws) != DAI_OK) wp = e.position;
+            float dx = wp.x - pos.x, dy = wp.y - pos.y, dz = wp.z - pos.z;
+            if (dx * dx + dy * dy + dz * dz < 1.1f * 1.1f) { clash = true; break; }
+        }
+        if (!clash) break;
+        pos.x += 1.3f;
+    }
+    return pos;
 }
 
 // ---- the project window, Unity's two column browser -------------------------
@@ -2325,7 +4013,7 @@ static int browser_row(dai_editor_ui *p, float x, float y, float w, float h,
                        selected ? st->text : st->text_dim);
         tx += 19.0f;
     }
-    dai_ui_text(ui, tx, y + 3.0f, label, st->text);
+    dai_ui_text(ui, tx, y + (h - dai_ui_text_height(ui)) * 0.5f, label, st->text);
     return over && pressed && !dai_ui_popup_active(ui);
 }
 
@@ -2337,11 +4025,69 @@ static int browser_button(dai_editor_ui *p, float x, float y, float w, float h,
     int pressed = 0;
     dai_ui_mouse(ui, &mx, &my, nullptr, &pressed);
     bool over = mx >= x && mx < x + w && my >= y && my < y + h;
-    dai_ui_rect(ui, x, y, w, h, over ? st->button_hover : st->titlebar);
-    dai_ui_rect_outline(ui, x, y, w, h, 1.0f, st->panel_border);
+    dai_ui_rrect(ui, x, y, w, h, 4.0f, over ? st->button_hover : st->titlebar);
     float tw = dai_ui_text_width(ui, label);
-    dai_ui_text(ui, x + (w - tw) * 0.5f, y + 5.0f, label, st->text);
+    // Vertically centred against the REAL line height. The old constant 13
+    // was the font size, not the line box, so descenders were shaved off at
+    // every size - which is what "the console buttons are cut off" was.
+    dai_ui_text(ui, x + (w - tw) * 0.5f, y + (h - dai_ui_text_height(ui)) * 0.5f, label, st->text);
     return over && pressed && !dai_ui_popup_active(ui);
+}
+
+// Drag a row onto a folder and it moves there. On disk this is a rename with
+// a different parent, which is exactly what the host's rename callback does -
+// so an explorer's most basic gesture needs no new plumbing, only the two
+// guards that make it safe:
+//
+//   - a folder cannot move into itself or into its own descendant. Left to
+//     std::rename that is EINVAL on Linux and a lost subtree on some others;
+//     either way it is never what was meant.
+//   - dropping something into the folder it already lives in does nothing,
+//     silently. It is the commonest miss-drop there is.
+static void project_move(dai_editor_ui *p, const std::string &src, const std::string &dir) {
+    if (!p || !p->asset_rename || src.empty()) return;
+    if (parent_of(src) == dir) return;
+    if (dir == src) return;
+    if (dir.size() > src.size() && dir.compare(0, src.size(), src) == 0 &&
+        dir[src.size()] == '/') return;
+    std::string b = base_of(src);
+    if (b.empty()) return;
+    std::string dst = dir.empty() ? b : dir + "/" + b;
+    if (dst == src) return;
+    if (p->asset_rename(src.c_str(), dst.c_str(), p->rename_user)) {
+        p->want_refresh = 1;
+        char msg[192];
+        std::snprintf(msg, sizeof(msg), "moved %s to %s", b.c_str(),
+                      dir.empty() ? "Assets" : dir.c_str());
+        dai_editor_ui_toast(p, msg, 1.6f);
+    } else {
+        dai_editor_ui_toast(p, "could not move it - is something with that name already there?", 2.5f);
+    }
+}
+
+// Does this folder hold anything at all - a file or another folder? The two
+// folder icons differ by exactly this, and a hollow folder that turns out to
+// be full is worse than no icon difference at all.
+static bool folder_has_content(dai_editor_ui *p, const std::set<std::string> &folders,
+                               const std::string &dir) {
+    for (const auto &f : folders)
+        if (parent_of(f) == dir) return true;
+    for (const char *a : p->assets)
+        if (a && parent_of(a) == dir) return true;
+    return false;
+}
+
+// How many rows the tree WILL draw, before it draws them - the scroll offset
+// has to be clamped against the real height, and the real height cannot be a
+// number left over from last frame. Mirrors project_tree_rows exactly: this
+// row, plus the children of an open folder.
+static int project_tree_count(dai_editor_ui *p, const std::set<std::string> &folders,
+                              const std::string &dir) {
+    int n = 1;
+    if (p->proj_folds.count(dir))
+        for (const auto &f : folders)
+            if (parent_of(f) == dir) n += project_tree_count(p, folders, f);
+    return n;
 }
 
 // One folder row of the tree, then its visible children. `ry` walks down the
@@ -2356,6 +4102,7 @@ static void project_tree_rows(dai_editor_ui *p, const std::set<std::string> &fol
     int pressed = 0;
     dai_ui_mouse(ui, &mx, &my, nullptr, &pressed);
     int clicks_ok = !dai_ui_popup_active(ui);
+    int right_pressed = dai_ui_right_pressed(ui);
 
     bool has_kids = false;
     for (const auto &f : folders)
@@ -2372,12 +4119,31 @@ static void project_tree_rows(dai_editor_ui *p, const std::set<std::string> &fol
             dai_ui_text(ui, px + indent, ry + 3.0f, open ? "v" : ">", st->text_dim);
         std::string label = dir.empty() ? "Assets" : base_of(dir);
         float text_x = px + indent + 14.0f;
-        if (dai_ui_has_icon(ui, DAI_ICON_FOLDER)) {
-            dai_ui_icon_at(ui, DAI_ICON_FOLDER, text_x, ry + 3.5f, 13.0f,
+        const char *fic = folder_has_content(p, folders, dir) ? DAI_ICON_FOLDER_FULL
+                                                             : DAI_ICON_FOLDER;
+        if (dai_ui_has_icon(ui, fic)) {
+            dai_ui_icon_at(ui, fic, text_x, ry + 3.5f, 13.0f,
                            selected ? st->text : st->text_dim);
             text_x += 19.0f;
         }
         dai_ui_text(ui, text_x, ry + 3.0f, label.c_str(), st->text);
+        // A row being dragged aims at this folder: light it up, and remember
+        // it for the release. The tree is the only way to reach a folder that
+        // is not in the current listing - "up one level", in other words.
+        if (!p->drag_script.empty() && over && p->drag_script != dir) {
+            p->proj_drop_dir = dir;
+            p->proj_drop_ok = 1;
+            dai_ui_rect_outline(ui, px, ry, tree_w, ROW, 1.0f, st->accent);
+        }
+        if (over && right_pressed && clicks_ok) {
+            // Selects, does not navigate: opening the folder moves the listing
+            // out from under the pointer before the menu has even appeared,
+            // and then the menu is about a folder you are now inside.
+            p->rename_click = dir;
+            p->proj_sel_folder = dir;
+            p->last_pick = dir;
+            p->asset_sel = -1;
+        }
         if (over && pressed && clicks_ok) {
             if (has_kids && mx < px + indent + 14.0f) {
                 // The chevron folds, the name selects: hitting the triangle
@@ -2399,26 +4165,154 @@ static void project_tree_rows(dai_editor_ui *p, const std::set<std::string> &fol
                               ry, rows);
 }
 
+// While the game runs, everything that is NOT the game goes behind glass.
+// Unity does this for one reason and it is a good one: edits made in play mode
+// are thrown away on Stop, and an editor that looks identical either way will
+// eat an afternoon of work exactly once per user.
+//
+// Drawn INSIDE the panel's own layer (before dock_panel_end pops it), so it
+// covers that panel and nothing else - the scene and game views never call it.
+static void play_dim(dai_editor_ui *p, float px, float py, float pw, float ph) {
+    if (dai_editor_state_get(p->ed) == DAI_EDITOR_EDIT) return;
+    dai_ui_rect(p->ui, px, py, pw, ph, 0x66000000u);
+}
+
+// Where the pointer is pointing, on the ground. The scene view's ray against
+// the y = 0 plane, which is the plane everything in an editor is placed on
+// until it is moved. Falls back to a point a few metres in front of the camera
+// when the ray runs parallel to the floor or points at the sky - "somewhere in
+// front of you" beats "at the origin, behind you".
+static bool viewport_ground_point(dai_editor_ui *p, float mx, float my, dai_vec3 *out) {
+    if (!p || !p->ed || !out) return false;
+    dai_vec3 o{}, d{};
+    dai_editor_ray(p->ed, mx, my, &o, &d);
+    if (d.y < -0.0001f) {
+        float t = -o.y / d.y;
+        if (t > 0.0f && t < 5000.0f) {
+            *out = dai_vec3{ o.x + d.x * t, 0.0f, o.z + d.z * t };
+            return true;
+        }
+    }
+    const float FAR_ = 8.0f;
+    *out = dai_vec3{ o.x + d.x * FAR_, o.y + d.y * FAR_, o.z + d.z * FAR_ };
+    return true;
+}
+
+// A scene file - which is also what a prefab is. The two are the same format
+// on purpose (a prefab is a scene with one root), so the only thing that can
+// tell them apart is where they live: Scenes/ holds scenes, everything else
+// holding a .daidalos holds a prefab.
+static bool is_scene_file(const std::string &path) {
+    const std::string ext = ".daidalos";
+    return path.size() > ext.size() &&
+           path.compare(path.size() - ext.size(), ext.size(), ext) == 0;
+}
+
+static bool is_scene_asset(const std::string &path) {
+    return is_scene_file(path) &&
+           (path.compare(0, 7, "Scenes/") == 0 || path.compare(0, 7, "scenes/") == 0);
+}
+
+// One console filter chip: the level's icon in its OWN colours, the count in
+// the level's colour, on a plate that is never the level's colour.
+//
+// It used to be a browser_row, and a browser_row fills a SELECTED row with
+// st->accent - which is blue. The info icon is also blue (COLOR_RULES paints
+// it #4C8CCE) and a coloured icon refuses to be tinted, so switching the info
+// filter on drew a blue glyph onto a blue plate and the chip went blank at
+// exactly the moment it mattered. Warnings and errors only survived by luck
+// of hue; nothing about that arrangement was deliberate.
+//
+// The fix is not a different blue. It is that state never rides on the fill:
+// off is the chrome one step DARKER than the panel, on is one step lighter
+// plus a rule underneath in the level's colour, which is the same "this tab
+// is the live one" language the tab bars already speak. The glyph keeps its
+// own colours in both states and only loses opacity when the filter is off -
+// so the chip reads on all three of the dark themes, and would read on a
+// light one, without the icon's hue entering into it at all.
+static int console_chip(dai_editor_ui *p, float x, float y, float w, float h,
+                        const char *icon, const char *label, uint32_t level_col,
+                        int on) {
+    dai_ui *ui = p->ui;
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    float mx = 0, my = 0;
+    int pressed = 0;
+    dai_ui_mouse(ui, &mx, &my, nullptr, &pressed);
+    bool over = mx >= x && mx < x + w && my >= y && my < y + h;
+    uint32_t bg = on ? (over ? st->button_hover : st->button)
+                     : (over ? st->button      : st->titlebar);
+    dai_ui_rrect(ui, x, y, w, h, 4.0f, bg);
+    dai_ui_rect_outline(ui, x, y, w, h, 1.0f, on ? level_col : st->panel_border);
+    if (on) dai_ui_rect(ui, x + 3.0f, y + h - 3.0f, w - 6.0f, 2.0f, level_col);
+    const float IS = 14.0f;
+    float tx = x + 7.0f;
+    if (icon && dai_ui_has_icon(ui, icon)) {
+        dai_ui_icon_at(ui, icon, tx, y + (h - IS) * 0.5f, IS,
+                       on ? 0xFFFFFFFFu : 0x7AFFFFFFu);
+        tx += IS + 5.0f;
+    }
+    dai_ui_text(ui, tx, y + (h - dai_ui_text_height(ui)) * 0.5f, label,
+                on ? level_col : st->text_dim);
+    return over && pressed && !dai_ui_popup_active(ui);
+}
+
 // The project window's body, so it can live in a dock panel of any size.
 // The console: engine messages and script print(), filterable by level.
 static void console_body(dai_editor_ui *p, float px, float py, float pw, float ph) {
     dai_ui *ui = p->ui;
     const dai_ui_style *st = dai_ui_style_of(ui);
-    const float BAR = 24.0f;
+    // 30 still clipped the bottom border of the buttons against the divider
+    // line drawn at py + BAR. Height of the row + the 3 px it starts at + a
+    // pixel of air, measured from the font instead of guessed.
+    const float BTN_H = dai_ui_text_height(ui) + 9.0f;
+    const float BAR = BTN_H + 8.0f;
     static const char *LEVEL_NAME[3] = { "Info", "Warnings", "Errors" };
     const uint32_t LEVEL_COL[3] = { st->text_dim, rgba(230, 190, 90, 255), rgba(235, 105, 95, 255) };
+    // What the chips use. Info is the icon's own blue instead of the body
+    // text's grey: on a chip, "dim grey" is what OFF already means.
+    const uint32_t CHIP_COL[3] = { rgba(0x76, 0xB4, 0xF0, 255), LEVEL_COL[1], LEVEL_COL[2] };
 
     uint32_t counts[3] = { 0, 0, 0 };
     for (const auto &l : p->log) counts[l.level] += l.count;
 
     float bx = px + 4.0f;
-    if (browser_button(p, bx, py + 2.0f, 54.0f, BAR - 4.0f, "Clear")) dai_editor_ui_log_clear(p);
-    bx += 58.0f;
+    if (browser_button(p, bx, py + 4.0f, 56.0f, BTN_H, "Clear")) dai_editor_ui_log_clear(p);
+    bx += 60.0f;
+    // Copy: every visible line, one per row - for pasting an error into a
+    // chat or a search. One line copies by clicking it, this is the batch.
+    if (browser_button(p, bx, py + 4.0f, 56.0f, BTN_H, "Copy")) {
+        std::string all;
+        for (const auto &l : p->log) {
+            if (!p->log_show[l.level]) continue;
+            if (l.count > 1) { char pre[24]; std::snprintf(pre, sizeof(pre), "(%u) ", l.count); all += pre; }
+            all += l.text;
+            all += '\n';
+        }
+        if (!all.empty()) {
+            dai_editor_ui_clipboard_set(p, 0, all.c_str());
+            dai_editor_ui_toast(p, "console copied", 1.5f);
+        }
+    }
+    bx += 60.0f;
+    static const char *LEVEL_ICON[3] = { DAI_ICON_INFO, DAI_ICON_WARNING, DAI_ICON_ERROR };
+    // Named while the panel is wide enough to say the words. A bare "0 0 0"
+    // next to three small glyphs is a puzzle the first time you meet it, and
+    // the console is usually docked across the whole bottom of the editor
+    // where there is room for the answer.
+    float need = 0.0f;
     for (int i = 0; i < 3; ++i) {
-        char lbl[48];
-        std::snprintf(lbl, sizeof(lbl), "%s %u", LEVEL_NAME[i], counts[i]);
-        float w = dai_ui_text_width(ui, lbl) + 18.0f;
-        if (browser_row(p, bx, py + 2.0f, w, BAR - 4.0f, nullptr, lbl, p->log_show[i]))
+        char t[64];
+        std::snprintf(t, sizeof(t), "%s  %u", LEVEL_NAME[i], counts[i]);
+        need += dai_ui_text_width(ui, t) + 37.0f;
+    }
+    bool wide = bx + need < px + pw - 8.0f;
+    for (int i = 0; i < 3; ++i) {
+        char lbl[64];
+        if (wide) std::snprintf(lbl, sizeof(lbl), "%s  %u", LEVEL_NAME[i], counts[i]);
+        else      std::snprintf(lbl, sizeof(lbl), "%u", counts[i]);
+        float w = dai_ui_text_width(ui, lbl) + 33.0f;
+        if (console_chip(p, bx, py + 4.0f, w, BTN_H, LEVEL_ICON[i], lbl,
+                         CHIP_COL[i], p->log_show[i]))
             p->log_show[i] = !p->log_show[i];
         bx += w + 4.0f;
     }
@@ -2438,20 +4332,135 @@ static void console_body(dai_editor_ui *p, float px, float py, float pw, float p
     if (p->log_scroll < 0.0f) p->log_scroll = 0.0f;
 
     dai_ui_clip_begin(ui, px, py + BAR + 1.0f, pw, ph - BAR - 1.0f);
-    float ry = ly - p->log_scroll;
+    float ry = ly - p->log_scroll + 6.0f;   // air under the buttons - it read as stuck-on
     if (p->log.empty())
         dai_ui_text(ui, px + 8.0f, ry, "no messages - script print() and engine warnings land here", st->text_dim);
+    int ddown = 0, dpressed = 0;
+    float dmx = 0, dmy = 0;
+    dai_ui_mouse(ui, &dmx, &dmy, &ddown, &dpressed);
     for (const auto &l : p->log) {
         if (!p->log_show[l.level]) continue;
         if (ry + ROW > py + BAR && ry < py + ph) {
             char line[400];
             if (l.count > 1) std::snprintf(line, sizeof(line), "(%u) %s", l.count, l.text.c_str());
             else             std::snprintf(line, sizeof(line), "%s", l.text.c_str());
+            // A click copies the line - an error message you cannot copy is a
+            // search you have to type by hand.
+            if (dpressed && dmx >= px && dmx < px + pw && dmy >= ry && dmy < ry + ROW) {
+                dai_editor_ui_clipboard_set(p, 0, line);
+                dai_editor_ui_toast(p, "copied", 1.0f);
+            }
             dai_ui_text(ui, px + 8.0f, ry, line, LEVEL_COL[l.level]);
         }
         ry += ROW;
     }
     dai_ui_clip_end(ui);
+}
+
+// The Script panel: the files you are editing, as tabs, with the code editor
+// underneath and one line of status at the bottom.
+//
+// Why build one at all when VS Code exists: because the round trip matters.
+// Changing a number in a behaviour and pressing Play should be two keys, not
+// alt-tab, edit, save, alt-tab, play - and an editor that cannot show you the
+// script you just attached is an editor you are always leaving. This one is
+// deliberately small: no completion, no language server, no extensions. When
+// you want those, the preference sends the file to the real thing and the
+// project already carries the .d.ts that makes it understand the engine.
+static void script_body(dai_editor_ui *p, float px, float py, float pw, float ph) {
+    dai_ui *ui = p->ui;
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    const float BAR = dai_ui_text_height(ui) + 12.0f;
+
+    if (p->scripts_open.empty()) {
+        dai_ui_text(ui, px + 10.0f, py + 10.0f,
+                    "no file open - double click a script in the Project window",
+                    st->text_dim);
+        return;
+    }
+    if (p->script_tab >= (int)p->scripts_open.size()) p->script_tab = 0;
+    if (p->script_tab < 0) p->script_tab = 0;
+
+    // ---- the tab strip -----------------------------------------------------
+    float tx = px + 2.0f;
+    int close_at = -1;
+    float mx = 0, my = 0;
+    int pressed = 0;
+    dai_ui_mouse(ui, &mx, &my, nullptr, &pressed);
+    for (size_t i = 0; i < p->scripts_open.size(); ++i) {
+        std::string lbl = base_of(p->scripts_open[i].path);
+        if (p->scripts_open[i].dirty) lbl += " *";
+        float tw = dai_ui_text_width(ui, lbl.c_str()) + 34.0f;
+        if (tx + tw > px + pw - 4.0f) break;
+        bool on = (int)i == p->script_tab;
+        bool over = mx >= tx && mx < tx + tw && my >= py + 2.0f && my < py + BAR - 2.0f;
+        dai_ui_rrect(ui, tx, py + 2.0f, tw, BAR - 4.0f, 4.0f,
+                     on ? st->button : (over ? st->button_hover : st->titlebar));
+        if (on) dai_ui_rect(ui, tx + 3.0f, py + BAR - 5.0f, tw - 6.0f, 2.0f, st->accent);
+        dai_ui_text(ui, tx + 9.0f, py + 2.0f + (BAR - 4.0f - dai_ui_text_height(ui)) * 0.5f,
+                    lbl.c_str(), on ? st->text : st->text_dim);
+        // the close cross
+        float cx = tx + tw - 15.0f, cy = py + BAR * 0.5f;
+        bool over_x = mx >= cx - 6.0f && mx < cx + 6.0f && my >= cy - 6.0f && my < cy + 6.0f;
+        uint32_t xc = over_x ? st->text : st->text_dim;
+        dai_ui_line(ui, cx - 3.5f, cy - 3.5f, cx + 3.5f, cy + 3.5f, 1.4f, xc);
+        dai_ui_line(ui, cx + 3.5f, cy - 3.5f, cx - 3.5f, cy + 3.5f, 1.4f, xc);
+        if (pressed && over && !dai_ui_popup_active(ui)) {
+            if (over_x) close_at = (int)i;
+            else        p->script_tab = (int)i;
+        }
+        tx += tw + 3.0f;
+    }
+    dai_ui_rect(ui, px, py + BAR, pw, 1.0f, st->panel_border);
+
+    // ---- the editor --------------------------------------------------------
+    auto &cur = p->scripts_open[(size_t)p->script_tab];
+    const float STATUS = dai_ui_text_height(ui) + 10.0f;
+    float ey = py + BAR + 1.0f;
+    float eh = ph - BAR - 1.0f - STATUS;
+    if (eh > 20.0f) {
+        // Only the comment/string/keyword sets differ, and they overlap
+        // almost entirely - the extension picks which one leads.
+        std::string ext = cur.path;
+        size_t d = ext.find_last_of('.');
+        ext = d == std::string::npos ? std::string() : ext.substr(d + 1);
+        int lang = (ext == "cpp" || ext == "cc" || ext == "cxx" || ext == "h" ||
+                    ext == "hpp") ? DAI_CODE_LANG_CPP : DAI_CODE_LANG_JS;
+        char cid[64];
+        std::snprintf(cid, sizeof(cid), "code%d", p->script_tab);
+        if (dai_ui_code_edit(ui, cid, px + 2.0f, ey, pw - 4.0f, eh,
+                             cur.buf.data(), cur.buf.size(), &cur.st, lang))
+            cur.dirty = 1;
+    }
+
+    // ---- the status line ---------------------------------------------------
+    float sy = py + ph - STATUS;
+    dai_ui_rect(ui, px, sy, pw, 1.0f, st->panel_border);
+    int line = 1, col = 1;
+    dai_ui_code_caret_pos(cur.buf.data(), cur.st.caret, &line, &col);
+    char info[256];
+    std::snprintf(info, sizeof(info), "%s   Ln %d, Col %d%s",
+                  cur.path.c_str(), line, col, cur.dirty ? "   (unsaved)" : "");
+    dai_ui_text(ui, px + 8.0f, sy + 5.0f, info, st->text_dim);
+    float bw = dai_ui_text_width(ui, "Save") + 18.0f;
+    float ow = dai_ui_text_width(ui, "Open externally") + 18.0f;
+    if (browser_button(p, px + pw - bw - 6.0f, sy + 3.0f, bw, STATUS - 6.0f, "Save"))
+        dai_editor_ui_script_save(p);
+    if (browser_button(p, px + pw - bw - ow - 12.0f, sy + 3.0f, ow, STATUS - 6.0f,
+                       "Open externally") && p->open_asset)
+        p->open_asset(nullptr, cur.path.c_str(), p->open_asset_user);
+
+    if (close_at >= 0) {
+        // A tab with unsaved work says so rather than dropping it.
+        if (p->scripts_open[(size_t)close_at].dirty) {
+            dai_editor_ui_toast(p, "unsaved - press Save first, then close", 2.5f);
+        } else {
+            p->scripts_open.erase(p->scripts_open.begin() + close_at);
+            if (p->script_tab >= (int)p->scripts_open.size())
+                p->script_tab = (int)p->scripts_open.size() - 1;
+            if (p->script_tab < 0) p->script_tab = 0;
+        }
+    }
 }
 
 // The audio mixer: the four busses every game grows anyway.
@@ -2463,8 +4472,10 @@ static void audio_body(dai_editor_ui *p, float px, float py, float pw, float ph)
     float y = py + 26.0f;
     for (int i = 0; i < 4; ++i) {
         dai_ui_text(ui, px + 8.0f, y + 4.0f, BUS[i], st->text);
-        if (browser_row(p, px + 70.0f, y, 44.0f, 20.0f, nullptr,
-                        p->bus_mute[i] ? "muted" : "on", p->bus_mute[i]))
+        // A speaker with a cross through it needs no translation and no
+        // column width; "muted"/"on" needed both.
+        if (dai_ui_icon_button_at(ui, p->bus_mute[i] ? DAI_ICON_VOLUME_X : DAI_ICON_VOLUME,
+                                  px + 70.0f, y, 24.0f, 20.0f, p->bus_mute[i]))
             p->bus_mute[i] = !p->bus_mute[i];
         // The slider is a bar you drag - the same widget the inspector uses
         // for a number, without pretending to be a knob.
@@ -2648,6 +4659,16 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
              slash = sa.find('/', slash + 1))
             folders.insert(sa.substr(0, slash));
     }
+    // Directories the host saw on disk: empty ones too. Without this a fresh
+    // "New Folder" had no file to hide behind and simply never appeared.
+    for (const char *a : p->folders_disk) {
+        std::string sa = a ? a : "";
+        if (sa.empty()) continue;
+        folders.insert(sa);
+        for (size_t slash = sa.find('/'); slash != std::string::npos;
+             slash = sa.find('/', slash + 1))
+            folders.insert(sa.substr(0, slash));
+    }
     // The folder being shown exists even with nothing in it (a fresh one).
     if (!p->proj_dir.empty()) {
         folders.insert(p->proj_dir);
@@ -2665,6 +4686,11 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
     float list_x = px + tree_w + 5.0f;
     float list_w = px + pw - list_x;
 
+    // Whatever the last right click hit is a fact about THAT click. Cleared
+    // before the rows redraw, so a press on empty space leaves it empty and
+    // the menu below can tell the difference between "this file" and "here".
+    if (right_pressed) p->rename_click.clear();
+
     // The divider between the columns drags, like every other split.
     bool over_div = mx >= px + tree_w && mx < px + tree_w + 5.0f &&
                     my >= cols_y && my < cols_y + cols_h;
@@ -2677,16 +4703,17 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
     // ---- the tree column ------------------------------------------------------
     {
         dai_ui_clip_begin(ui, px, cols_y, tree_w, cols_h);
+        float tmax = (float)project_tree_count(p, folders, std::string()) * 20.0f
+                   + 4.0f - cols_h;
+        if (tmax < 0.0f) tmax = 0.0f;
         if (mx >= px && mx < px + tree_w && my >= cols_y && my < cols_y + cols_h)
             p->proj_tree_scroll -= wheel * 32.0f;
+        if (p->proj_tree_scroll > tmax) p->proj_tree_scroll = tmax;
         if (p->proj_tree_scroll < 0.0f) p->proj_tree_scroll = 0.0f;
         float ry = cols_y + 2.0f - p->proj_tree_scroll;
         int rows = 0;
         project_tree_rows(p, folders, std::string(), 0, px, tree_w, cols_y, cols_h,
                           ry, rows);
-        float max_off = (float)rows * 20.0f + 4.0f - cols_h;
-        if (max_off < 0.0f) max_off = 0.0f;
-        if (p->proj_tree_scroll > max_off) p->proj_tree_scroll = max_off;
         dai_ui_clip_end(ui);
     }
 
@@ -2714,14 +4741,27 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
             return std::strcmp(p->assets[(size_t)a], p->assets[(size_t)b]) < 0;
         });
 
-    int sel_valid = p->asset_sel >= 0 && p->asset_sel < (int)p->assets.size();
-    float strip_h = (sel_valid || p->script_focus) ? 28.0f : 0.0f;
+    // Recomputed here and used here. It used to be decided at the top of the
+    // function and trusted a hundred lines later, across every row the browser
+    // draws - and a row can change the selection.
+    if (p->asset_sel >= (int)p->assets.size()) p->asset_sel = -1;
+    int sel_valid = p->asset_sel >= 0 && p->assets[(size_t)p->asset_sel] != nullptr;
+    int folder_sel = !p->proj_sel_folder.empty();
+    float strip_h = (sel_valid || folder_sel || p->script_focus) ? 28.0f : 0.0f;
     float list_h = cols_h - strip_h;
     const float ROW = 20.0f;
     {
         dai_ui_clip_begin(ui, list_x, cols_y, list_w, list_h);
+        // The listing knows its own length before it draws a thing: the
+        // folders and the files it already collected, or the one line that
+        // says there are none.
+        int want_rows = (int)subfolders.size() + (int)files.size();
+        if (want_rows == 0) want_rows = 1;
+        float lmax = (float)want_rows * ROW + 4.0f - list_h;
+        if (lmax < 0.0f) lmax = 0.0f;
         if (mx >= list_x && mx < list_x + list_w && my >= cols_y && my < cols_y + list_h)
             p->proj_list_scroll -= wheel * 32.0f;
+        if (p->proj_list_scroll > lmax) p->proj_list_scroll = lmax;
         if (p->proj_list_scroll < 0.0f) p->proj_list_scroll = 0.0f;
         float ry = cols_y + 2.0f - p->proj_list_scroll;
         int rows = 0;
@@ -2762,14 +4802,50 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                 } else {
                     int over_f = mx >= list_x + 2.0f && mx < list_x + list_w - 4.0f &&
                                  my >= ry && my < ry + ROW;
-                    if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
-                                    DAI_ICON_FOLDER, name.c_str(), 0) && clicks_ok) {
-                        p->proj_dir = p->proj_dir.empty() ? name : p->proj_dir + "/" + name;
-                        project_expand_to(p, p->proj_dir);
-                        p->proj_list_scroll = 0.0f;
+                    {
+                        int fpress = 0;
+                        dai_ui_mouse(ui, nullptr, nullptr, nullptr, &fpress);
+                        if (over_f && fpress && clicks_ok) {
+                            p->drag_pending = ffull;      // a folder drags too
+                            p->drag_px = mx; p->drag_py = my;
+                        }
                     }
-                    // Right click aims Rename at THIS folder.
-                    if (over_f && right_pressed && clicks_ok) p->rename_click = ffull;
+                    const char *fic2 = folder_has_content(p, folders, ffull)
+                                     ? DAI_ICON_FOLDER_FULL : DAI_ICON_FOLDER;
+                    if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
+                                    fic2, name.c_str(),
+                                    ffull == p->proj_sel_folder) && clicks_ok) {
+                        // One click SELECTS it. Two go in. Anything else and
+                        // a folder can never be the thing you are pointing at
+                        // - which is the state F2, drag and the strip at the
+                        // bottom all need it to be able to reach.
+                        p->last_pick = ffull;      // F2 renames THIS folder
+                        p->proj_sel_folder = ffull;
+                        p->asset_sel = -1;         // a folder and a file cannot both be it
+                        if (dai_ui_double_click(ui)) {
+                            p->proj_dir = p->proj_dir.empty() ? name : p->proj_dir + "/" + name;
+                            project_expand_to(p, p->proj_dir);
+                            p->proj_list_scroll = 0.0f;
+                            p->proj_sel_folder.clear();
+                        }
+                    }
+                    // ...and it is where a dragged row lands.
+                    if (!p->drag_script.empty() && over_f && p->drag_script != ffull) {
+                        p->proj_drop_dir = ffull;
+                        p->proj_drop_ok = 1;
+                        dai_ui_rect_outline(ui, list_x + 2.0f, ry, list_w - 4.0f, ROW,
+                                            1.0f, st->accent);
+                    }
+                    // A right click SELECTS the folder it landed on, the way
+                    // a left click does. Acting on the old selection while the
+                    // pointer sits on another row is how the wrong folder gets
+                    // deleted - and it is the one mistake with no undo.
+                    if (over_f && right_pressed && clicks_ok) {
+                        p->rename_click = ffull;
+                        p->proj_sel_folder = ffull;
+                        p->last_pick = ffull;
+                        p->asset_sel = -1;
+                    }
                 }
             }
             ry += ROW;
@@ -2777,7 +4853,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
         for (int fi : files) {
             ++rows;
             if (ry + ROW > cols_y && ry < cols_y + list_h) {
-                std::string full = p->assets[(size_t)fi] ? p->assets[(size_t)fi] : "";
+                std::string full = asset_at(p, fi);
                 std::string label = searching ? full : base_of(full);
                 int selected = fi == p->asset_sel;
                 bool over = mx >= list_x + 2.0f && mx < list_x + list_w - 4.0f &&
@@ -2816,17 +4892,57 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                     }
                 } else {
                     if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
-                                    icon_for_asset(full), label.c_str(), selected) && clicks_ok)
+                                    icon_for_asset(full), label.c_str(), selected) && clicks_ok) {
+                        // Double click is what everyone tries first: a script
+                        // opens in the external editor, a prefab drops into
+                        // the scene, a model is placed. A browser where the
+                        // only way in is a button at the bottom is a browser
+                        // people call broken.
+                        if (dai_ui_double_click(ui)) {
+                            if (is_behaviour_file(full) || is_text_file(full)) {
+                                // Here or out there, whichever Settings says.
+                                if (!p->script_external && p->file_read)
+                                    dai_editor_ui_script_open(p, full.c_str());
+                                else if (p->open_asset)
+                                    p->open_asset(nullptr, full.c_str(), p->open_asset_user);
+                            } else if (is_scene_file(full) && !is_scene_asset(full)) {
+                                // A prefab OPENS. Dropping a copy into the
+                                // scene is what dragging it does; a double
+                                // click that silently added an object was
+                                // never anybody's intention.
+                                p->prefab_open_want = full;
+                            } else {
+                                // The PENDING pick is handed to the host after
+                                // the frame, so it must be the host's own
+                                // pointer and not a temporary - asset_at
+                                // returns "" for a bad index, which the host
+                                // then ignores.
+                                p->pending_asset = fi >= 0 && fi < (int)p->assets.size()
+                                                 ? p->assets[(size_t)fi] : nullptr;
+                                p->pending_as_tree = 0;
+                                p->pending_at_valid = 0;   // no drop point: it was a click
+                            }
+                        }
                         p->asset_sel = fi;
+                        p->last_pick = full;
+                        p->proj_sel_folder.clear();
+                    }
                     // A right click selects what it landed on, then the menu opens.
-                    if (over && right_pressed && clicks_ok) { p->asset_sel = fi; p->rename_click = full; }
-                    // A .js arms a drag: press, move 6 px, and it travels
-                    // with the cursor until it lands on a node (or nowhere).
-                    size_t fl2 = full.size();
+                    if (over && right_pressed && clicks_ok) {
+                        p->asset_sel = fi;
+                        p->rename_click = full;
+                        p->last_pick = full;
+                        p->proj_sel_folder.clear();   // a file and a folder are not both it
+                    }
+                    // EVERY row arms a drag now, not just a .js: press, move
+                    // 6 px, and it travels with the cursor. Where it lands
+                    // decides what it meant - a folder moves it there, a
+                    // hierarchy node still attaches a script. A browser in
+                    // which only one file type can be picked up is not a file
+                    // browser, it is a script list with icons.
                     int lpress = 0;
                     dai_ui_mouse(ui, nullptr, nullptr, nullptr, &lpress);
-                    if (fl2 > 3 && full.compare(fl2 - 3, 3, ".js") == 0 && over &&
-                        lpress && clicks_ok) {
+                    if (over && lpress && clicks_ok) {
                         p->drag_pending = full;
                         p->drag_px = mx; p->drag_py = my;
                     }
@@ -2834,9 +4950,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
             }
             ry += ROW;
         }
-        float max_off = (float)rows * ROW + 4.0f - list_h;
-        if (max_off < 0.0f) max_off = 0.0f;
-        if (p->proj_list_scroll > max_off) p->proj_list_scroll = max_off;
+        (void)rows;   // the clamp happened before the draw, where it belongs
         dai_ui_clip_end(ui);
     }
 
@@ -2866,12 +4980,21 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
             if (browser_button(p, list_x + list_w - 68.0f, sy + 3.0f, 64.0f, 22.0f,
                                "Cancel"))
                 p->script_focus = 0;
-        } else if (sel_valid) {
-            const char *pick = p->assets[(size_t)p->asset_sel];
-            std::string base = base_of(pick ? pick : "");
+        } else if (folder_sel && !sel_valid) {
+            std::string b = base_of(p->proj_sel_folder);
+            dai_ui_text(ui, list_x + 4.0f, sy + 7.0f, b.c_str(), st->text);
+            float bw2 = dai_ui_text_width(ui, "Open") + 20.0f;
+            if (browser_button(p, list_x + list_w - bw2 - 6.0f, sy + 3.0f, bw2, 22.0f, "Open")) {
+                p->proj_dir = p->proj_sel_folder;
+                project_expand_to(p, p->proj_dir);
+                p->proj_list_scroll = 0.0f;
+                p->proj_sel_folder.clear();
+            }
+        } else if (p->asset_sel >= 0 && p->asset_sel < (int)p->assets.size()) {
+            const char *pick = asset_at(p, p->asset_sel);
+            std::string base = base_of(pick);
             dai_ui_text(ui, list_x + 4.0f, sy + 7.0f, base.c_str(), st->text_dim);
-            size_t plen = pick ? std::strlen(pick) : 0;
-            if (plen > 3 && std::strcmp(pick + plen - 3, ".js") == 0) {
+            if (*pick && is_behaviour_file(pick)) {
                 // No assign button on purpose: a script attaches by DRAG -
                 // onto the object in the hierarchy or into the inspector.
                 dai_ui_text(ui, list_x + list_w - 220.0f, sy + 7.0f,
@@ -2894,10 +5017,16 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
     }
 
     // Right click anywhere in the panel: the Create menu, the way Unity's
-    // project window does it.
+    // project window does it - and a SECOND right click somewhere else moves
+    // it there. Refusing while one was already open meant the first press was
+    // swallowed and you had to press twice, which reads as the menu being
+    // stuck to the spot it first appeared.
     if (right_pressed && dai_ui_root_hovered(ui, "Project") &&
-        !p->menu_project.open && !p->menu_node.open && !p->menu_canvas.open)
+        !p->menu_node.open && !p->menu_canvas.open) {
+        p->menu_project.open = 0;          // forget where it was
+        p->menu_project.placed = 0;        // ...including the frozen position
         dai_ui_popup_open(&p->menu_project, mx, my);
+    }
 }
 
 void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
@@ -2930,12 +5059,20 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         dai_dock_focus(p->dock, "Settings");
     }
 
+    // Panels this build knows about, every frame. Idempotent by design (see
+    // dai_dock_add_tab): the first call registers, the rest return at once.
+    // A closed panel stays closed - dai_dock_begin skips closed registrations.
+    dai_dock_add_tab(p->dock, "Console", "Project");
+    dai_dock_add_tab(p->dock, "Audio", "Project");
+    dai_dock_add_tab(p->dock, "Script", "Scene");
+
     dai_dock_begin(p->dock, ui, 0.0f, TOP, vw, vh - TOP - BOTTOM);
 
     float px, py, pw, ph;
     if (dai_dock_panel(p->dock, "Hierarchy", &px, &py, &pw, &ph)) {
         dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
         hierarchy_body(p, ph - 8.0f);
+        play_dim(p, px, py, pw, ph);
         // Right click on empty space in the hierarchy: the GameObject menu.
         float mx = 0, my = 0;
         dai_ui_mouse(ui, &mx, &my, nullptr, nullptr);
@@ -2948,33 +5085,53 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     if (dai_dock_panel(p->dock, "Project", &px, &py, &pw, &ph)) {
         dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
         project_body(p, px, py, pw, ph);
+        play_dim(p, px, py, pw, ph);
         dai_ui_panel_end(ui);
         dai_dock_panel_end(p->dock);
     }
     (void)0;
-    if (dai_dock_panel(p->dock, "Console", &px, &py, &pw, &ph)) {
+    // Add Tab can put a second Inspector or Console next to the first - two
+    // locks on two different objects is a real workflow, not a bug. So the
+    // dock is asked for EVERY instance, not the first.
+    for (int inst = 0; inst < DAI_MAX_PANEL_INSTANCES &&
+                       dai_dock_panel(p->dock, "Console", &px, &py, &pw, &ph); ++inst) {
         dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
         console_body(p, px, py, pw, ph);
+        play_dim(p, px, py, pw, ph);
         dai_ui_panel_end(ui);
         dai_dock_panel_end(p->dock);
     }
-    if (dai_dock_panel(p->dock, "Audio", &px, &py, &pw, &ph)) {
+    for (int inst = 0; inst < DAI_MAX_PANEL_INSTANCES &&
+                       dai_dock_panel(p->dock, "Script", &px, &py, &pw, &ph); ++inst) {
+        dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
+        script_body(p, px, py, pw, ph);
+        dai_ui_panel_end(ui);
+        dai_dock_panel_end(p->dock);
+    }
+    for (int inst = 0; inst < DAI_MAX_PANEL_INSTANCES &&
+                       dai_dock_panel(p->dock, "Audio", &px, &py, &pw, &ph); ++inst) {
         dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
         audio_body(p, px, py, pw, ph);
+        play_dim(p, px, py, pw, ph);
         dai_ui_panel_end(ui);
         dai_dock_panel_end(p->dock);
     }
-    if (dai_dock_panel(p->dock, "Inspector", &px, &py, &pw, &ph)) {
+    for (int inst = 0; inst < DAI_MAX_PANEL_INSTANCES &&
+                       dai_dock_panel(p->dock, "Inspector", &px, &py, &pw, &ph); ++inst) {
         dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
-        dai_ui_scroll_begin(ui, "inspector", ph - 6.0f);
+        char sid[24];
+        std::snprintf(sid, sizeof(sid), "inspector%d", inst);
+        dai_ui_scroll_begin(ui, sid, ph - 6.0f);
         inspector_body(p);
         dai_ui_scroll_end(ui);
+        play_dim(p, px, py, pw, ph);
         dai_ui_panel_end(ui);
         dai_dock_panel_end(p->dock);
     }
     if (dai_dock_panel(p->dock, "Settings", &px, &py, &pw, &ph)) {
         dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
         settings_body(p);
+        play_dim(p, px, py, pw, ph);
         dai_ui_panel_end(ui);
         dai_dock_panel_end(p->dock);
     } else if (p->settings_open && !dai_dock_visible(p->dock, "Settings") &&
@@ -2993,7 +5150,54 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     if (dai_dock_panel(p->dock, "Scene", &px, &py, &pw, &ph)) {
         p->view_x = px; p->view_y = py; p->view_w = pw; p->view_h = ph;
         have_view = 1;
+        // In prefab mode the scene view belongs to ONE prefab, and it has to
+        // say so - Unity puts a bar across the top with a way back, because
+        // an editor that looks identical whether you are editing the world or
+        // one object in isolation is an editor you save the wrong thing in.
+        if (!p->prefab_mode.empty()) {
+            const dai_ui_style *bs = dai_ui_style_of(ui);
+            float bh = dai_ui_text_height(ui) + 12.0f;
+            dai_ui_layer_push(ui, DAI_LAYER_WINDOW + 5);
+            dai_ui_rect(ui, px, py, pw, bh, rgba(0x25, 0x3A, 0x52, 255));
+            dai_ui_rect(ui, px, py + bh - 1.0f, pw, 1.0f, bs->accent);
+            float bx2 = px + 8.0f;
+            float bwid = dai_ui_text_width(ui, "< Scene") + 18.0f;
+            if (browser_button(p, bx2, py + 3.0f, bwid, bh - 6.0f, "< Scene"))
+                p->prefab_exit_want = 1;
+            bx2 += bwid + 10.0f;
+            if (dai_ui_has_icon(ui, DAI_ICON_C_PREFAB)) {
+                dai_ui_icon_at(ui, DAI_ICON_C_PREFAB, bx2, py + (bh - 14.0f) * 0.5f, 14.0f,
+                               bs->accent);
+                bx2 += 19.0f;
+            }
+            char pb[200];
+            std::snprintf(pb, sizeof(pb), "Prefab  %s", base_of(p->prefab_mode).c_str());
+            dai_ui_text(ui, bx2, py + (bh - dai_ui_text_height(ui)) * 0.5f, pb, bs->text);
+            const char *hint = "editing the prefab - changes reach every instance";
+            float hw = dai_ui_text_width(ui, hint);
+            if (px + pw - hw - 10.0f > bx2 + 200.0f)
+                dai_ui_text(ui, px + pw - hw - 10.0f,
+                            py + (bh - dai_ui_text_height(ui)) * 0.5f, hint, bs->text_dim);
+            dai_ui_layer_pop(ui);
+        }
         dai_dock_panel_end(p->dock);
+    }
+    {
+        // The preview's chrome. Drawn AFTER the scene panel has reported its
+        // rectangle and before the host renders into it - the world lands on
+        // top of this plate and inside this border.
+        float cx2, cy2, cw2, ch2;
+        if (dai_editor_ui_camera_preview(p, &cx2, &cy2, &cw2, &ch2,
+                                         nullptr, nullptr, nullptr, nullptr)) {
+            const dai_ui_style *cs2 = dai_ui_style_of(ui);
+            dai_ui_layer_push(ui, DAI_LAYER_WINDOW + 4);
+            dai_ui_rect(ui, cx2 - 1.0f, cy2 - 1.0f, cw2 + 2.0f, ch2 + 2.0f, cs2->panel_border);
+            dai_ui_rect(ui, cx2, cy2, cw2, ch2, rgba(0x0A, 0x0A, 0x0C, 255));
+            float lh2 = dai_ui_text_height(ui) + 6.0f;
+            dai_ui_rect(ui, cx2, cy2 - lh2, cw2, lh2, (cs2->chrome & 0x00FFFFFFu) | 0xE6000000u);
+            dai_ui_text(ui, cx2 + 6.0f, cy2 - lh2 + 3.0f, "Camera Preview", cs2->text_dim);
+            dai_ui_layer_pop(ui);
+        }
     }
     if (dai_dock_panel(p->dock, "Game", &px, &py, &pw, &ph)) {
         p->game_x = px; p->game_y = py; p->game_w = pw; p->game_h = ph;
@@ -3031,12 +5235,57 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     dai_editor_ui_timeline(p, p->view_x + 8.0f, vh - BOTTOM - 50.0f, p->view_w - 16.0f);
     dai_editor_ui_status(p, 0.0f, vh - BOTTOM, vw, BOTTOM);
     if (p->view == DAI_VIEW_SCENE && have_view) {
+        // Scene view toolbar, top right, the way Unity does it: a Gizmos
+        // dropdown (what overlays the view) and a camera dropdown (how the
+        // editor camera moves). It floats over the 3D, so it must not be
+        // clipped by the viewport rect.
+        {
+            const float TBH = 22.0f, TBW = 30.0f, GAP = 4.0f;
+            float bx = p->view_x + p->view_w - TBW - 6.0f;
+            float by = p->view_y + 6.0f;
+            dai_ui_layer_push(ui, 1 << 18);
+            dai_ui_root_begin(ui, "scenetb", bx - TBW - GAP, by, TBW * 2 + GAP, TBH);
+            // camera settings (speed) - the rightmost button
+            if (dai_ui_icon_button_at(ui, DAI_ICON_CAMERA, bx, by, TBW, TBH, p->menu_scecam.open))
+                dai_ui_popup_open(&p->menu_scecam, bx - 150.0f, by + TBH + 2.0f);
+            bx -= TBW + GAP;
+            if (dai_ui_icon_button_at(ui, DAI_ICON_EYE, bx, by, TBW, TBH, p->menu_gizmos.open))
+                dai_ui_popup_open(&p->menu_gizmos, bx - 170.0f, by + TBH + 2.0f);
+            dai_ui_root_end(ui);
+            if (p->menu_gizmos.open) {
+                dai_ui_popup_panel_begin(ui, &p->menu_gizmos, 180.0f, 0.0f);
+                int g = p->gizmo_grid;      if (dai_ui_checkbox(ui, "Floor grid", &g))      p->gizmo_grid = g;
+                int c = p->gizmo_colliders; if (dai_ui_checkbox(ui, "Collider frames", &c)) p->gizmo_colliders = c;
+                int f = p->gizmo_cameras;   if (dai_ui_checkbox(ui, "Camera frustums", &f)) p->gizmo_cameras = f;
+                float gpx = p->settings_gizmo_px;
+                if (dai_ui_num_field(ui, "Gizmo px", &gpx, 1.0f, 30.0f, 300.0f, "tbgizmo")) {
+                    p->settings_gizmo_px = gpx;
+                    dai_editor_gizmo_size(p->ed, gpx);
+                }
+                dai_ui_popup_panel_end(ui);
+            }
+            if (p->menu_scecam.open) {
+                dai_ui_popup_panel_begin(ui, &p->menu_scecam, 190.0f, 0.0f);
+                float speed = dai_editor_cam_speed_get(p->ed);
+                if (dai_ui_num_field(ui, "Cam speed", &speed, 0.05f, 0.1f, 200.0f, "tbcamspd"))
+                    dai_editor_cam_speed(p->ed, speed);
+                float snap = p->settings_snap;
+                if (dai_ui_num_field(ui, "Snap step", &snap, 0.01f, 0.0f, 100.0f, "tbsnap")) {
+                    p->settings_snap = snap;
+                    dai_editor_snap(p->ed, snap, 15.0f, 0.1f);
+                }
+                dai_ui_popup_panel_end(ui);
+            }
+            dai_ui_layer_pop(ui);
+        }
         // The wireframes are UI lines over the 3D - clipped to the panel the
         // 3D lives in, or an object behind the inspector draws its gizmo on
         // the inspector.
         dai_ui_clip_begin(ui, p->view_x, p->view_y, p->view_w, p->view_h);
-        dai_editor_ui_colliders(p);
-        draw_cameras(p);
+        // grid: world lines via dai_editor_ui_grid_lines, drawn by the host
+        (void)0;
+        if (p->gizmo_colliders) dai_editor_ui_colliders(p);
+        if (p->gizmo_cameras) draw_cameras(p);
         dai_editor_ui_gizmo(p);
         dai_ui_clip_end(ui);
     }
@@ -3053,22 +5302,111 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         }
         if (!ddown && !p->drag_pending.empty()) {
             if (!p->drag_script.empty()) {
-                dai_node target = DAI_INVALID_NODE;
-                if (p->hover_node != DAI_INVALID_NODE) target = p->hover_node;
-                else if (dai_ui_root_hovered(ui, "Inspector") &&
-                         dai_editor_selection_count(p->ed) > 0)
-                    target = dai_editor_selected(p->ed, 0);
-                if (target != DAI_INVALID_NODE) script_attach(p, target, p->drag_script);
+                // A folder under the pointer wins: that gesture is a MOVE and
+                // it is the only meaning it can have. Only then does the old
+                // "drop a script on a node" reading get a look in - and only
+                // for a file that actually is a script, or dropping a .png on
+                // a crate would add a behaviour called crate.png.
+                if (p->proj_drop_ok) {
+                    project_move(p, p->drag_script, p->proj_drop_dir);
+                } else if (is_scene_file(p->drag_script) && !is_scene_asset(p->drag_script) &&
+                           (dai_ui_root_hovered(ui, "Scene") ||
+                            dai_ui_root_hovered(ui, "Hierarchy"))) {
+                    // A prefab dragged into the viewport (or onto the
+                    // hierarchy) is placed. The host does the instantiating -
+                    // it owns the assets root - so this hands over the same
+                    // pending pick a double click produces, which already
+                    // links the instance to the file it came from.
+                    for (const char *a : p->assets) {
+                        if (a && p->drag_script == a) { p->pending_asset = a; break; }
+                    }
+                    p->pending_as_tree = 0;
+                    // ...and WHERE. A prefab dropped into the viewport belongs
+                    // under the pointer; dropping it at the origin is how you
+                    // end up with nine crates inside each other.
+                    if (dai_ui_root_hovered(ui, "Scene")) {
+                        dai_vec3 g{};
+                        if (viewport_ground_point(p, dmx, dmy, &g)) {
+                            p->pending_at = g;
+                            p->pending_at_valid = 1;
+                        }
+                    }
+                } else if (is_behaviour_file(p->drag_script)) {
+                    dai_node target = DAI_INVALID_NODE;
+                    if (p->hover_node != DAI_INVALID_NODE) target = p->hover_node;
+                    else if (dai_ui_root_hovered(ui, "Inspector") &&
+                             dai_editor_selection_count(p->ed) > 0)
+                        target = dai_editor_selected(p->ed, 0);
+                    if (target != DAI_INVALID_NODE) script_attach(p, target, p->drag_script);
+                }
             }
             p->drag_pending.clear();
             p->drag_script.clear();
         }
         if (!p->drag_script.empty()) {
             std::string lbl = base_of(p->drag_script);
-            float tw = dai_ui_text_width(ui, lbl.c_str()) + 12.0f;
-            dai_ui_rect(ui, dmx + 10.0f, dmy + 8.0f, tw, 18.0f, st->accent);
-            dai_ui_text(ui, dmx + 16.0f, dmy + 11.0f, lbl.c_str(), st->text);
+            if (p->proj_drop_ok)
+                lbl += "  ->  " + (p->proj_drop_dir.empty() ? std::string("Assets")
+                                                            : p->proj_drop_dir);
+            else if (is_behaviour_file(p->drag_script) && p->hover_node != DAI_INVALID_NODE)
+                lbl += "  ->  attach";
+            else if (is_scene_file(p->drag_script) &&
+                     (dai_ui_root_hovered(ui, "Scene") || dai_ui_root_hovered(ui, "Hierarchy")))
+                lbl += "  ->  place in scene";
+            // A ghost where it would land: a footprint on the ground plus a
+            // box standing on it, drawn in the accent colour. It is not the
+            // mesh - the editor has no renderer of its own and will not gain
+            // one for a drag - but it is the POSITION, the SIZE and the
+            // ORIENTATION of what is about to appear, which is what the
+            // question "where will this go" is actually asking.
+            if (is_scene_file(p->drag_script) && !is_scene_asset(p->drag_script) &&
+                dai_ui_root_hovered(ui, "Scene")) {
+                dai_vec3 g{};
+                if (viewport_ground_point(p, dmx, dmy, &g)) {
+                    const float R = 0.5f;      // half a metre: a default cube
+                    dai_vec3 c[8] = {
+                        { g.x - R, g.y,       g.z - R }, { g.x + R, g.y,       g.z - R },
+                        { g.x + R, g.y,       g.z + R }, { g.x - R, g.y,       g.z + R },
+                        { g.x - R, g.y + 2*R, g.z - R }, { g.x + R, g.y + 2*R, g.z - R },
+                        { g.x + R, g.y + 2*R, g.z + R }, { g.x - R, g.y + 2*R, g.z + R },
+                    };
+                    static const int E[12][2] = {
+                        {0,1},{1,2},{2,3},{3,0}, {4,5},{5,6},{6,7},{7,4}, {0,4},{1,5},{2,6},{3,7}
+                    };
+                    uint32_t ghost = (st->accent & 0x00FFFFFFu) | 0xCC000000u;
+                    dai_ui_layer_push(ui, DAI_LAYER_WINDOW + 99);
+                    for (const auto &e : E) {
+                        float ax, ay, bx, by;
+                        if (dai_editor_project(p->ed, c[e[0]], &ax, &ay) &&
+                            dai_editor_project(p->ed, c[e[1]], &bx, &by))
+                            dai_ui_line(ui, ax, ay, bx, by, 1.5f, ghost);
+                    }
+                    // The footprint, so the height reads against the floor.
+                    for (int k = 0; k < 4; ++k) {
+                        float ax, ay, bx, by;
+                        if (dai_editor_project(p->ed, c[k], &ax, &ay) &&
+                            dai_editor_project(p->ed, c[(k + 1) % 4], &bx, &by))
+                            dai_ui_line(ui, ax, ay, bx, by, 2.5f, ghost);
+                    }
+                    dai_ui_layer_pop(ui);
+                }
+            }
+            float tw = dai_ui_text_width(ui, lbl.c_str()) + 18.0f;
+            float th = dai_ui_text_height(ui) + 8.0f;
+            // Drawn on the window layer so the pill survives leaving the
+            // editor window - a drag you cannot see outside is a drag lost.
+            dai_ui_layer_push(ui, DAI_LAYER_WINDOW + 100);
+            dai_ui_rrect(ui, dmx + 12.0f, dmy + 10.0f, tw, th, 4.0f, st->accent);
+            dai_ui_rect_outline(ui, dmx + 12.0f, dmy + 10.0f, tw, th, 1.0f, 0xFFFFFFFFu);
+            dai_ui_text(ui, dmx + 21.0f, dmy + 14.0f, lbl.c_str(), st->text);
+            dai_ui_layer_pop(ui);
+            dai_ui_claim_mouse(ui);
         }
+        // Set while the folders were drawn, spent above, gone by the next
+        // frame - so a stale target cannot survive the Project window being
+        // closed, or hidden behind another tab.
+        p->proj_drop_ok = 0;
+        p->proj_drop_dir.clear();
 
         // A hierarchy node in flight: arm, drag, drop on an assign field.
         if (p->drag_node_pending != DAI_INVALID_NODE && p->drag_node == DAI_INVALID_NODE && ddown) {
@@ -3076,14 +5414,62 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             if (ddx * ddx + ddy * ddy > 36.0f) p->drag_node = p->drag_node_pending;
         }
         if (!ddown && p->drag_node_pending != DAI_INVALID_NODE) {
+            // Dropped on the PROJECT window: the object becomes a prefab
+            // file, exactly the Unity gesture. Asked by position, not by a
+            // hover flag - the flag is rebuilt per panel per frame, and the
+            // drop can land between rebuilds.
+            float dmx2 = 0, dmy2 = 0;
+            dai_ui_mouse(ui, &dmx2, &dmy2, nullptr, nullptr);
+            bool over_project = false;
+            {
+                float qx, qy, qw, qh;
+                for (int inst = 0; inst < 8 &&
+                     dai_dock_panel_rect(p->dock, "Project", inst, &qx, &qy, &qw, &qh); ++inst) {
+                    if (dmx2 >= qx && dmx2 < qx + qw && dmy2 >= qy && dmy2 < qy + qh)
+                        { over_project = true; break; }
+                }
+            }
+            if (p->drag_node != DAI_INVALID_NODE && over_project) {
+                dai_doc *doc3 = dai_editor_doc(p->ed);
+                dai_node_desc pr3{};
+                if (p->prefab_save && dai_doc_get(doc3, p->drag_node, &pr3) == DAI_OK) {
+                // The folder the pointer was actually over wins; otherwise
+                // the folder the browser is showing - and "" IS a folder, it
+                // is Assets. There is no third place to guess at: an object
+                // dropped in Assets belongs in Assets.
+                std::string dir = p->proj_drop_ok ? p->proj_drop_dir : p->proj_dir;
+                char rel[224];
+                if (dir.empty())
+                    std::snprintf(rel, sizeof(rel), "%s.daidalos",
+                                  pr3.name[0] ? pr3.name : "Prefab");
+                else
+                    std::snprintf(rel, sizeof(rel), "%s/%s.daidalos", dir.c_str(),
+                                  pr3.name[0] ? pr3.name : "Prefab");
+                char nm[32];
+                std::snprintf(nm, sizeof(nm), "%u", (unsigned)p->drag_node);
+                if (p->prefab_save(nm, rel, p->rename_user)) {
+                    dai_editor_ui_toast(p, "prefab created", 2.0f);
+                    p->want_refresh = 1;
+                }
+                }
+            }
             // A node dropped on a hierarchy ROW re-parents; dropped on a
             // script's reference field it becomes that reference. The row wins
             // when both could apply - that is where the pointer actually is.
-            if (p->drag_node != DAI_INVALID_NODE && p->hover_node != DAI_INVALID_NODE &&
+            else if (p->drag_node != DAI_INVALID_NODE && p->hover_node != DAI_INVALID_NODE &&
                 p->hover_node != p->drag_node) {
                 reparent_node(p, p->drag_node,
                               p->hover_node == DAI_SCENE_ROOT_NODE ? DAI_INVALID_NODE
                                                                    : p->hover_node);
+            } else if (p->drag_node != DAI_INVALID_NODE &&
+                       p->hover_node == DAI_INVALID_NODE &&
+                       dai_ui_root_hovered(ui, "Hierarchy")) {
+                // Let go over the empty part of the hierarchy: the object
+                // leaves its parent and becomes a root. Without this there is
+                // no gesture for "out" at all - only "into something else" -
+                // and a child that was dragged into a group by mistake can
+                // never be dragged back out of it.
+                reparent_node(p, p->drag_node, DAI_INVALID_NODE);
             } else if (p->drag_node != DAI_INVALID_NODE && p->param_hover_entry >= 0 &&
                 p->drag_ref_target != DAI_INVALID_NODE) {
                 dai_doc *d = dai_editor_doc(p->ed);
@@ -3109,9 +5495,33 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             const char *nm = "node";
             if (dai_doc_get(dai_editor_doc(p->ed), p->drag_node, &dr) == DAI_OK && dr.name[0])
                 nm = dr.name;
-            float tw = dai_ui_text_width(ui, nm) + 12.0f;
-            dai_ui_rect(ui, dmx + 10.0f, dmy + 8.0f, tw, 18.0f, st->accent);
-            dai_ui_text(ui, dmx + 16.0f, dmy + 11.0f, nm, st->text);
+            // What letting go would DO, not just what is being held. Three
+            // gestures share this drag - re-parent, unparent, save a prefab -
+            // and they are told apart by where the pointer is, which is
+            // exactly the thing the pointer is covering up.
+            char note[224];
+            dai_node_desc tr2{};
+            if (p->hover_node == DAI_SCENE_ROOT_NODE)
+                std::snprintf(note, sizeof(note), "%s  ->  scene root", nm);
+            else if (p->hover_node != DAI_INVALID_NODE && p->hover_node != p->drag_node &&
+                     dai_doc_get(dai_editor_doc(p->ed), p->hover_node, &tr2) == DAI_OK &&
+                     tr2.name[0])
+                std::snprintf(note, sizeof(note), "%s  ->  child of %s", nm, tr2.name);
+            else if (dai_ui_root_hovered(ui, "Project"))
+                std::snprintf(note, sizeof(note), "%s  ->  prefab", nm);
+            else
+                std::snprintf(note, sizeof(note), "%s", nm);
+            float tw = dai_ui_text_width(ui, note) + 18.0f;
+            float th = dai_ui_text_height(ui) + 8.0f;
+            // On the window layer, like the script drag: a pill clipped to
+            // the panel it started in disappears the moment the drag leaves
+            // the hierarchy, which is every drag that matters.
+            dai_ui_layer_push(ui, DAI_LAYER_WINDOW + 100);
+            dai_ui_rrect(ui, dmx + 12.0f, dmy + 10.0f, tw, th, 4.0f, st->accent);
+            dai_ui_rect_outline(ui, dmx + 12.0f, dmy + 10.0f, tw, th, 1.0f, 0xFFFFFFFFu);
+            dai_ui_text(ui, dmx + 21.0f, dmy + 14.0f, note, st->text);
+            dai_ui_layer_pop(ui);
+            dai_ui_claim_mouse(ui);
         }
     }
 
@@ -3139,9 +5549,45 @@ void dai_editor_ui_status(dai_editor_ui *p, float x, float y, float w, float h) 
         dai_ui_text(ui, x + (w - tw2) * 0.5f, y + 3.0f, p->toast, st->accent);
     }
     char right[96];
-    std::snprintf(right, sizeof(right), "viewport %.0fx%.0f", p->view_w, p->view_h);
+    {
+        float sc = dai_ui_scale_get(p->ui);
+        if (sc > 1.01f || sc < 0.99f)
+            std::snprintf(right, sizeof(right), "viewport %.0fx%.0f  (%.0fx%.0f px, UI %.0f%%)",
+                          p->view_w, p->view_h, p->view_w * sc, p->view_h * sc, sc * 100.0f);
+        else
+            std::snprintf(right, sizeof(right), "viewport %.0fx%.0f", p->view_w, p->view_h);
+    }
     float rw = dai_ui_text_width(ui, right);
     dai_ui_text(ui, x + w - rw - 8.0f, y + 3.0f, right, st->text_dim);
+}
+
+void dai_editor_ui_prefab_mode(dai_editor_ui *p, const char *prefab_rel) {
+    if (!p) return;
+    p->prefab_mode = prefab_rel ? prefab_rel : "";
+}
+const char *dai_editor_ui_prefab_mode_get(const dai_editor_ui *p) {
+    return p && !p->prefab_mode.empty() ? p->prefab_mode.c_str() : nullptr;
+}
+int dai_editor_ui_take_prefab_exit(dai_editor_ui *p) {
+    if (!p || !p->prefab_exit_want) return 0;
+    p->prefab_exit_want = 0;
+    return 1;
+}
+int dai_editor_ui_take_prefab_open(dai_editor_ui *p, const char **out_rel) {
+    if (!p || p->prefab_open_want.empty()) return 0;
+    static std::string held;      // stays alive until the next call, like the
+    held = p->prefab_open_want;   // asset pick above
+    p->prefab_open_want.clear();
+    if (out_rel) *out_rel = held.c_str();
+    return 1;
+}
+
+int dai_editor_ui_take_asset_at(const dai_editor_ui *p, float *x, float *y, float *z) {
+    if (!p || !p->pending_at_valid) return 0;
+    if (x) *x = p->pending_at.x;
+    if (y) *y = p->pending_at.y;
+    if (z) *z = p->pending_at.z;
+    return 1;
 }
 
 int dai_editor_ui_take_asset(dai_editor_ui *p, const char **out_path, int *out_as_tree) {

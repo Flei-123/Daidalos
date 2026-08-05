@@ -51,6 +51,15 @@ DAI_API void      dai_font_free(dai_font *f);
  * it tried into err so the failure is actionable. */
 DAI_API dai_font *dai_font_load_ui(float pixel_height, char *err, size_t err_len);
 
+/* The same font, rasterised for a scaled display. `pixel_height` is the size
+ * the LAYOUT wants (13 px of interface); `scale` is the desktop's, so the
+ * glyphs are rasterised at pixel_height * scale REAL pixels and every metric
+ * this font reports is divided back down. The caller keeps laying out in 13 px
+ * and the texture holds 16 - which is the only arrangement where a 125%
+ * display gets sharp text without a different layout. */
+DAI_API dai_font *dai_font_load_ui_scaled(float pixel_height, float scale,
+                                          char *err, size_t err_len);
+
 /* Where the solid texel is. Every atlas reserves a small block of full
  * coverage, so a UI that draws its rectangles from this texture needs no second
  * texture and no pipeline switch between text and panels. Without it the

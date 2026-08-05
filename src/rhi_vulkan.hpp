@@ -166,6 +166,13 @@ struct dai_renderer {
 
     VkPipeline pipe_ui = VK_NULL_HANDLE;
     GpuBuffer ui_verts;
+
+    // World-space line list with depth testing (editor grid, debug geometry):
+    // an overlay would shine through every object in the scene.
+    VkPipeline pipe_lines = VK_NULL_HANDLE;
+    GpuBuffer lines;
+    uint32_t lines_count = 0, lines_capacity = 0;
+    float lines_color[4] = { 1, 1, 1, 1 };
     uint32_t ui_capacity = 0, ui_vertex_count = 0;
     std::vector<uint32_t> ui_batch_counts, ui_batch_textures;
 
@@ -180,6 +187,11 @@ struct dai_renderer {
     // state the host sets
     float eye[3] = { 8, 6, 12 }, target[3] = { 0, 1, 0 }, up[3] = { 0, 1, 0 };
     float fov = 55.0f, znear = 0.1f, zfar = 500.0f;
+    // Orthographic when > 0: the value is half the visible height in world
+    // units. This is the whole 2D mode - the renderer draws the same world,
+    // it just stops applying perspective.
+    float ortho_size = 0.0f;
+    float view2_ortho = 0.0f;
     float sun_dir[3] = { 0.35f, 0.8f, 0.45f };
     float sun_color[3] = { 1.0f, 0.96f, 0.9f };
     float sun_intensity = 1.3f;

@@ -669,6 +669,8 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     VkShaderModule fs_par = load_module(r, "particle.frag.spv", &ok);
     VkShaderModule vs_ui = load_module(r, "ui.vert.spv", &ok);
     VkShaderModule fs_ui = load_module(r, "ui.frag.spv", &ok);
+    VkShaderModule vs_lines = load_module(r, "lines.vert.spv", &ok);
+    VkShaderModule fs_lines = load_module(r, "lines.frag.spv", &ok);
     if (!ok) { dai_render_destroy(r); return fail("SPIR-V shaders not found (set DAI_SHADER_DIR)"); }
 
     VkDescriptorSetLayout sets[2] = { r->dsl, r->mat_dsl };
@@ -848,7 +850,28 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
     VkResult uir = vkCreateGraphicsPipelines(r->dev, VK_NULL_HANDLE, 1, &gui, nullptr, &r->pipe_ui);
     if (uir != VK_SUCCESS) pr = uir;
 
-    for (VkShaderModule m : { vs_mesh, fs_mesh, vs_shadow, vs_sky, fs_sky, vs_par, fs_par, vs_ui, fs_ui })
+    // World lines: line list, depth tested against the scene, no depth write,
+    // premultiplied-alpha blend like the particles. Vertex is a bare vec3.
+    VkVertexInputBindingDescription lbind{ 0, 12, VK_VERTEX_INPUT_RATE_VERTEX };
+    VkVertexInputAttributeDescription lattr{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0 };
+    VkPipelineVertexInputStateCreateInfo lvi{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+    lvi.vertexBindingDescriptionCount = 1; lvi.pVertexBindingDescriptions = &lbind;
+    lvi.vertexAttributeDescriptionCount = 1; lvi.pVertexAttributeDescriptions = &lattr;
+    VkPipelineInputAssemblyStateCreateInfo ia_line{ VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+    ia_line.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+    VkPipelineDepthStencilStateCreateInfo ds_line{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+    ds_line.depthTestEnable = VK_TRUE; ds_line.depthWriteEnable = VK_FALSE;
+    ds_line.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    VkPipelineRasterizationStateCreateInfo rs_line = rs_ui;
+    VkPipelineShaderStageCreateInfo st_line[2] = { stage(VK_SHADER_STAGE_VERTEX_BIT, vs_lines),
+                                                   stage(VK_SHADER_STAGE_FRAGMENT_BIT, fs_lines) };
+    VkGraphicsPipelineCreateInfo gli = gui;
+    gli.pStages = st_line; gli.pVertexInputState = &lvi; gli.pInputAssemblyState = &ia_line;
+    gli.pDepthStencilState = &ds_line; gli.pRasterizationState = &rs_line;
+    VkResult lir = vkCreateGraphicsPipelines(r->dev, VK_NULL_HANDLE, 1, &gli, nullptr, &r->pipe_lines);
+    if (lir != VK_SUCCESS) pr = lir;
+
+    for (VkShaderModule m : { vs_mesh, fs_mesh, vs_shadow, vs_sky, fs_sky, vs_par, fs_par, vs_ui, fs_ui, vs_lines, fs_lines })
         vkDestroyShaderModule(r->dev, m, nullptr);
     if (pr != VK_SUCCESS || sr != VK_SUCCESS || hr != VK_SUCCESS || par != VK_SUCCESS)
         { dai_render_destroy(r); return fail("vkCreateGraphicsPipelines failed"); }
@@ -879,6 +902,8 @@ void dai_render_destroy(dai_renderer *r) {
         if (r->pipe_shadow) vkDestroyPipeline(r->dev, r->pipe_shadow, nullptr);
         if (r->pipe_particle) vkDestroyPipeline(r->dev, r->pipe_particle, nullptr);
         if (r->pipe_ui) vkDestroyPipeline(r->dev, r->pipe_ui, nullptr);
+        if (r->pipe_lines) vkDestroyPipeline(r->dev, r->pipe_lines, nullptr);
+        vk_free_buffer(r, &r->lines);
         vk_free_buffer(r, &r->ui_verts);
         vk_free_buffer(r, &r->particles);
         if (r->layout) vkDestroyPipelineLayout(r->dev, r->layout, nullptr);
@@ -1044,6 +1069,28 @@ void dai_render_ui(dai_renderer *r, const void *vertices, uint32_t vertex_count,
     }
 }
 
+void dai_render_lines(dai_renderer *r, const float *xyz, uint32_t count,
+                      float red, float green, float blue, float alpha) {
+    if (!r) return;
+    if (!xyz || !count) { r->lines_count = 0; return; }
+    if (count > r->lines_capacity) {
+        uint32_t cap = r->lines_capacity ? r->lines_capacity : 512;
+        while (cap < count) cap *= 2;
+        GpuBuffer nb{};
+        if (!vk_make_buffer(r, (VkDeviceSize)cap * 12, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                            &nb, true)) { r->lines_count = 0; return; }
+        vkDeviceWaitIdle(r->dev);
+        vk_free_buffer(r, &r->lines);
+        r->lines = nb;
+        r->lines_capacity = cap;
+    }
+    std::memcpy(r->lines.mapped, xyz, (size_t)count * 12);
+    r->lines_count = count;
+    r->lines_color[0] = red * alpha; r->lines_color[1] = green * alpha;
+    r->lines_color[2] = blue * alpha; r->lines_color[3] = 1.0f;
+}
+
 void dai_render_particles(dai_renderer *r, const dai_particle *particles, uint32_t count) {
     if (!r) return;
     if (!particles || !count) { r->particle_count = 0; return; }
@@ -1134,6 +1181,14 @@ dai_result dai_render_resize(dai_renderer *r, uint32_t width, uint32_t height) {
     // back or presented until the next one is drawn.
     r->have_frame = false;
     return DAI_OK;
+}
+
+void dai_render_ortho(dai_renderer *r, float half_height) {
+    if (r) r->ortho_size = half_height > 0.0f ? half_height : 0.0f;
+}
+
+void dai_render_ortho2(dai_renderer *r, float half_height) {
+    if (r) r->view2_ortho = half_height > 0.0f ? half_height : 0.0f;
 }
 
 void dai_render_camera2(dai_renderer *r, dai_vec3 eye, dai_vec3 target, dai_vec3 up,

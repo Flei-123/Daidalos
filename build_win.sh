@@ -40,10 +40,13 @@ JOLT_DEFS="-DJPH_DEBUG_RENDERER -DJPH_OBJECT_STREAM -DJPH_PROFILE_ENABLED \
  -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DNDEBUG"
 ARCH="-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse"
 
-if [ ! -f "$JOLT_LIB/libJolt.a" ]; then
-    echo "!! no Windows Jolt at $JOLT_LIB - run tools/build_jolt_win.sh first"
-    exit 1
-fi
+# Jolt is OPT-IN for Windows now (WITH_JOLT=1). Talos is the shipped backend;
+# Jolt stays in the Linux build as the reference the tests compare against, but
+# the editor Justin runs should neither carry it nor claim it on start-up.
+WITH_JOLT=0
+    JOLT_DEFS="-DDAI_NO_JOLT -DNDEBUG"
+    JOLT_LINK=""
+
 
 mkdir -p "$OUT"
 
@@ -81,7 +84,7 @@ echo "-- engine"
 CORE="dai_engine dai_scene dai_input dai_doc dai_doc_text dai_doc_sync dai_editor \
       dai_editor_ui dai_meshgen dai_image dai_inflate dai_json dai_gltf dai_gltf_geom \
       dai_gltf_write dai_fracture dai_particles dai_font dai_svg dai_icons dai_ui dai_dock dai_project dai_update \
-      dai_audio physics_jolt physics_null"
+      dai_audio dai_native dai_tr physics_null"
 # dai_script needs the vendored QuickJS headers; the define lets the editor
 # compile its runner only when scripting is actually linked.
 CORE="$CORE dai_script"
@@ -122,6 +125,11 @@ done
 python3 tools/embed_shaders.py shaders "$OUT/dai_shaders_embed.cpp"
 $CXX $FLAGS $ARCH -Iinclude -Isrc -c "$OUT/dai_shaders_embed.cpp" -o "$OUT/dai_shaders_embed.o"
 VKOBJS="$VKOBJS $OUT/dai_shaders_embed.o"
+# The native behaviour header travels in the binary too, for the same reason:
+# the editor writes it out next to whatever .cpp it is about to compile.
+python3 tools/embed_native.py include/dai_native.h "$OUT/dai_native_header.cpp"
+$CXX $FLAGS $ARCH -Iinclude -Isrc -c "$OUT/dai_native_header.cpp" -o "$OUT/dai_native_header.o"
+VKOBJS="$VKOBJS $OUT/dai_native_header.o"
 x86_64-w64-mingw32-ar rcs "$OUT/libdaidalos_vk.a" $VKOBJS
 echo "   ok: $OUT/libdaidalos_vk.a"
 
@@ -143,16 +151,33 @@ fi
 
 # -static so the .exe runs on a machine with no mingw runtime beside it. The
 # whole point is handing over one file.
-LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a $ASSETS \
-      ${TALOS_LINK:-} -L$JOLT_LIB -lJolt -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 \
+# libdaidalos.a is named a second time AFTER the asset library: the asset
+# layer calls back into dai_gltf_*, and a static archive is only scanned
+# once at the position it is written. One extra name, no extra bytes.
+LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a $ASSETS $OUT/libdaidalos.a \
+      ${TALOS_LINK:-} $JOLT_LINK -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 \
       "$QJS_WIN" -static -static-libgcc -static-libstdc++ -lpthread"
 
 echo "-- programs"
+# The editor carries the app icon (resource 1 = assets/daidalos.ico); the
+# window class looks it up by that id. windres resolves the path relative to
+# the .rc, hence the cd.
+if [ -f assets/daidalos.ico ]; then
+    mkdir -p "$OUT/rc" && printf '1 ICON "../../assets/daidalos.ico"\n' > "$OUT/rc/daidalos.rc"
+    ( cd "$OUT/rc" && x86_64-w64-mingw32-windres daidalos.rc -O coff -o daidalos.res )
+    ICON_RES="$OUT/rc/daidalos.res"
+fi
 for src in examples/win_smoke.cpp examples/win_keytest.cpp examples/editor_demo.cpp examples/window_demo.cpp; do
     [ -f "$src" ] || continue
     name=$(basename "$src" .cpp)
+    RES=""
+    GUI=""
+    # -mwindows: the editor is a GUI program. The cmd window that used to sit
+    # behind it was where every diagnostic went to die; stdout is piped into
+    # the editor's own Console panel now.
+    [ "$name" = "editor_demo" ] && { RES="${ICON_RES:-}"; GUI="-mwindows"; }
     $CXX $FLAGS $ARCH -DDAI_WITH_SCRIPT -Iinclude -Isrc -I"$VKINC" ${ASSETS:+-I$MNEMOSYNE/include} \
-        "$src" $LIBS -o "$OUT/$name.exe"
+        "$src" $RES $LIBS $GUI -o "$OUT/$name.exe"
     echo "   ok: $OUT/$name.exe"
 done
 

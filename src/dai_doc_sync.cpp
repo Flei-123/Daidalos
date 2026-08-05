@@ -38,7 +38,8 @@ bool needs_rebuild(const dai_node_desc &a, const dai_node_desc &b) {
     // collision shape does.
     if (std::memcmp(&a.render_extent, &b.render_extent, sizeof(dai_vec3)) != 0) return true;
     if (std::memcmp(&a.collider_center, &b.collider_center, sizeof(dai_vec3)) != 0) return true;
-    return a.shape != b.shape || a.motion != b.motion || a.no_body != b.no_body ||
+    return a.disabled != b.disabled ||
+           a.shape != b.shape || a.motion != b.motion || a.no_body != b.no_body ||
            a.no_collider != b.no_collider || a.no_rigidbody != b.no_rigidbody ||
            a.trigger != b.trigger ||
            a.no_sleeping != b.no_sleeping ||
@@ -130,7 +131,9 @@ namespace {
 //   trigger                     -> a sensor that still has a collider
 //   no_rigidbody                -> static, whatever Motion says
 bool physicsless(const dai_node_desc &r) {
-    return r.no_body || (r.no_collider && r.no_rigidbody);
+    // A disabled object has no physics at all - that is what the
+    // checkbox next to the name means everywhere else.
+    return r.disabled || r.no_body || (r.no_collider && r.no_rigidbody);
 }
 
 bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
@@ -181,7 +184,7 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
     d.roughness = r.roughness;
     d.emissive = r.emissive;
     d.render_flags = r.render_flags;
-    d.invisible = r.hidden;
+    d.invisible = r.hidden || r.disabled;
     d.name = r.name[0] ? r.name : nullptr;
 
     dai_entity e = physicsless(r) ? dai_scene_spawn_render(s->scene, &d)
@@ -333,7 +336,7 @@ uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
             // is what happened on every edit: move a crate, watch it go dark.
             if (r.color.x != 0.0f || r.color.y != 0.0f || r.color.z != 0.0f)
                 dai_scene_set_color(s->scene, l.entity, r.color);
-            dai_scene_set_visible(s->scene, l.entity, !r.hidden);
+            dai_scene_set_visible(s->scene, l.entity, !(r.hidden || r.disabled));
             dai_scene_set_render(s->scene, l.entity, r.mesh, r.roughness, r.emissive, r.render_flags);
             dai_scene_set_name(s->scene, l.entity, r.name);
         }

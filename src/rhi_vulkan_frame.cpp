@@ -56,8 +56,12 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     // Six planes straight out of the view projection (Gribb/Hartmann), tested
     // against each instance's bounding sphere. Cheap, exact enough, and it
     // happens BEFORE sorting so culled instances cost nothing downstream.
-    Mat4 vp_cull = mat_mul(mat_perspective(r->fov, (float)r->width / (float)r->height, r->znear, r->zfar),
-                           mat_look_at(r->eye, r->target, r->up));
+    float cull_aspect = (float)r->width / (float)r->height;
+    Mat4 cull_proj = r->ortho_size > 0.0f
+        ? mat_ortho(-r->ortho_size * cull_aspect, r->ortho_size * cull_aspect,
+                    -r->ortho_size, r->ortho_size, r->znear, r->zfar)
+        : mat_perspective(r->fov, cull_aspect, r->znear, r->zfar);
+    Mat4 vp_cull = mat_mul(cull_proj, mat_look_at(r->eye, r->target, r->up));
     float planes[6][4];
     for (int i = 0; i < 3; ++i) {
         for (int s2 = 0; s2 < 2; ++s2) {
@@ -152,7 +156,10 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     float vh = r->world_clip[3] > 0.0f ? r->world_clip[3] : (float)r->height;
     float aspect = vw / vh;
     Mat4 view = mat_look_at(r->eye, r->target, r->up);
-    Mat4 proj = mat_perspective(r->fov, aspect, r->znear, r->zfar);
+    Mat4 proj = r->ortho_size > 0.0f
+        ? mat_ortho(-r->ortho_size * aspect, r->ortho_size * aspect,
+                    -r->ortho_size, r->ortho_size, r->znear, r->zfar)
+        : mat_perspective(r->fov, aspect, r->znear, r->zfar);
     Mat4 viewproj = mat_mul(proj, view);
 
     // ---- cascaded shadow maps
@@ -260,7 +267,12 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
         float v2w = r->view2_clip[2] > 0.0f ? r->view2_clip[2] : (float)r->width;
         float v2h = r->view2_clip[3] > 0.0f ? r->view2_clip[3] : (float)r->height;
         Mat4 view2 = mat_look_at(r->view2_eye, r->view2_target, r->view2_up);
-        Mat4 viewproj2 = mat_mul(mat_perspective(r->view2_fov, v2w / v2h, r->znear, r->zfar), view2);
+        float a2 = v2w / v2h;
+        Mat4 proj2 = r->view2_ortho > 0.0f
+            ? mat_ortho(-r->view2_ortho * a2, r->view2_ortho * a2,
+                        -r->view2_ortho, r->view2_ortho, r->znear, r->zfar)
+            : mat_perspective(r->view2_fov, a2, r->znear, r->zfar);
+        Mat4 viewproj2 = mat_mul(proj2, view2);
         FrameUBO u2 = u;
         u2.viewproj = viewproj2;
         if (!mat_invert(viewproj2, &u2.invviewproj)) u2.invviewproj = mat_identity();
@@ -407,8 +419,13 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     if (clip[2] > 0.0f && clip[3] > 0.0f) {
         VkViewport vp{ clip[0], clip[1], clip[2], clip[3],
                        0.0f, 1.0f };
-        VkRect2D sc{ { (int32_t)clip[0], (int32_t)clip[1] },
-                     { (uint32_t)clip[2], (uint32_t)clip[3] } };
+        // Truncating a fractional body rect shaved up to 2 px off the bottom
+        // of the scene view: the world ended early and the panel's clear
+        // colour showed through as a dark strip. Floor the origin, ceil the
+        // far edge - the UI pass draws over any overlap anyway.
+        int32_t sx = (int32_t)floorf(clip[0]), sy = (int32_t)floorf(clip[1]);
+        int32_t ex = (int32_t)ceilf(clip[0] + clip[2]), ey = (int32_t)ceilf(clip[1] + clip[3]);
+        VkRect2D sc{ { sx, sy }, { (uint32_t)(ex - sx), (uint32_t)(ey - sy) } };
         vkCmdSetViewport(r->cmd, 0, 1, &vp);
         vkCmdSetScissor(r->cmd, 0, 1, &sc);
     } else {
@@ -438,6 +455,19 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
             const MeshEntry &me = r->meshes[g.mesh];
             vkCmdDrawIndexed(r->cmd, me.index_count, g.count, me.first_index, me.vertex_offset, g.first);
         }
+    }
+    // World lines (editor grid, debug geometry): depth tested against the
+    // scene, no depth write, before the transparent particles.
+    if (r->lines_count && r->pipe_lines && view_idx == 0) {
+        vkCmdBindPipeline(r->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipe_lines);
+        MaterialPush pc{};
+        pc.base_color[0] = r->lines_color[0]; pc.base_color[1] = r->lines_color[1];
+        pc.base_color[2] = r->lines_color[2]; pc.base_color[3] = r->lines_color[3];
+        vkCmdPushConstants(r->cmd, r->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(MaterialPush), &pc);
+        VkDeviceSize loff = 0;
+        vkCmdBindVertexBuffers(r->cmd, 0, 1, &r->lines.buf, &loff);
+        vkCmdDraw(r->cmd, r->lines_count, 1, 0, 0);
     }
     // particles last: they are transparent, depth tested against the opaque
     // scene, and must not write depth

@@ -15,12 +15,18 @@
 //   undo and redo, Ctrl+S saves, Delete removes, Ctrl+D duplicates.
 
 #include "dai_editor_ui.h"
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+#include "dai_tr.h"
 #include "dai_render.h"
 #include "dai_assets.h"
 #include "dai_project.h"
 #include "dai_update.h"
 #ifdef DAI_WITH_SCRIPT
 #include "dai_script.h"
+#include "dai_native.h"
 #endif
 
 #include <atomic>
@@ -32,14 +38,58 @@
 #include <thread>
 #include <vector>
 #include <algorithm>
+#include <new>
+#include <csignal>    // the crash handler's POSIX half
 #include <dirent.h>   // mingw has it too - one directory API for both
+#if !defined(_WIN32) && defined(__GLIBC__)
+#include <execinfo.h>  // backtrace(); glibc only, and only used there
+#endif
 #ifndef _WIN32
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
 #ifdef _WIN32
 #include <windows.h>
+#include <psapi.h>
 #endif
+
+// ---- crash diagnostics ---------------------------------------------------
+// A crash that only happens on someone else's machine is only debuggable if
+// the console says WHERE it was. Three things do that: unbuffered output (a
+// buffered line is lost when the process aborts), a breadcrumb per stage of
+// the first frames, and a stack of return addresses when an allocation fails
+// - std::bad_alloc with no stack is a shrug, addresses map back to lines.
+// Off unless DAIDALOS_DIAG=1 is set in the environment: the breadcrumbs are
+// for debugging a machine that crashes, not for everyone's console.
+static int g_diag_on = 0;
+static int g_diag_frames = 0;
+
+static void diag_stack(const char *why) {
+    std::printf("\n!! DIAG: %s\n", why);
+    std::fflush(stdout);
+#ifdef _WIN32
+    void *frames[26] = { nullptr };
+    USHORT n = CaptureStackBackTrace(0, 26, frames, nullptr);
+    HMODULE base = GetModuleHandleA(nullptr);
+    std::printf("!! module base %p\n", (void *)base);
+    for (USHORT i = 0; i < n; ++i)
+        std::printf("!! #%02u %p  +0x%llx\n", (unsigned)i, frames[i],
+                    (unsigned long long)((char *)frames[i] - (char *)base));
+    std::fflush(stdout);
+#endif
+}
+
+static void diag_step(const char *what) {
+    if (g_diag_frames <= 0) return;
+    std::printf("[step] %s\n", what);
+    std::fflush(stdout);
+}
+
+static void diag_new_failed() {
+    diag_stack("allocation failed (this is the std::bad_alloc)");
+    std::fflush(stdout);
+    std::abort();
+}
 
 // ---- self update: a newer build replaces this one, politely ---------------
 // The check runs on its own thread so a slow or absent server never delays
@@ -91,6 +141,20 @@ static char g_scene_path[512] = { 0 };
 static dai_project *g_project = nullptr;
 static char g_assets_dir[512] = { 0 };
 
+// The console panel, so anything in this file can report into the editor
+// instead of only onto a stdout nobody is looking at.
+static dai_editor_ui *g_panels_for_log = nullptr;
+
+// Defined further down, used by open_project_path right below: where scenes
+// live, how old projects get theirs moved, and the two file questions the
+// migration asks.
+static std::string scene_dir();
+static void        migrate_scenes_into_assets();
+static const char *scene_list(uint32_t index, void *user);
+static int         path_exists(const char *p);
+static int         copy_one_file(const char *src, const char *dst);
+static void        write_editor_support_files();
+
 // The project list, from disk, through the project layer - it knows what a
 // project is (assets/, scenes/, settings/) so this does not have to.
 static const char *project_list(uint32_t index, void *) {
@@ -126,8 +190,28 @@ static int open_project_path(const char *path) {
     if (!np) { std::printf("project: %s\n", err); return 0; }
     if (g_project) dai_project_close(g_project);
     g_project = np;
-    std::snprintf(g_scene_path, sizeof(g_scene_path), "%s", dai_project_scene_path(g_project));
     std::snprintf(g_assets_dir, sizeof(g_assets_dir), "%s", dai_project_asset_dir(g_project));
+    // Scenes are assets now; anything a previous version left in
+    // <project>/scenes comes along, and only then is the startup scene
+    // chosen - otherwise the first open of an old project finds nothing.
+    migrate_scenes_into_assets();
+    // The .d.ts and jsconfig.json that make an external editor understand the
+    // engine. Written every open so they cannot go stale.
+    write_editor_support_files();
+    {
+        std::string sd = scene_dir();
+        std::string want = sd + "/main.daidalos";
+        if (!path_exists(want.c_str())) {
+            // Whatever scene the folder DOES have, alphabetically first, so a
+            // project whose scene is called level1 still opens something.
+            const char *first = scene_list(0, nullptr);
+            if (first) want = sd + "/" + first;
+        }
+        if (path_exists(want.c_str()))
+            std::snprintf(g_scene_path, sizeof(g_scene_path), "%s", want.c_str());
+        else
+            std::snprintf(g_scene_path, sizeof(g_scene_path), "%s", want.c_str());
+    }
     dai_prefs pr = dai_prefs_default();
     dai_prefs_load(&pr);
     std::snprintf(pr.last_project, sizeof(pr.last_project), "%s", dai_project_path(g_project));
@@ -165,18 +249,92 @@ static int folder_create(const char *name, void *) {
 #endif
 }
 
+// ---- named layouts --------------------------------------------------------
+static void layout_save_file(const char *name, const char *text, size_t n, void *) {
+    if (!name || !text) return;
+    char path[640];
+    std::snprintf(path, sizeof(path), "%s/%s.layout", g_projects_root, name);
+    FILE *f = std::fopen(path, "wb");
+    if (!f) return;
+    std::fwrite(text, 1, n, f);
+    std::fclose(f);
+}
+static int layout_load_file(const char *name, char *out, size_t n, void *) {
+    if (!name || !out || !n) return 0;
+    char path[640];
+    std::snprintf(path, sizeof(path), "%s/%s.layout", g_projects_root, name);
+    FILE *f = std::fopen(path, "rb");
+    if (!f) return 0;
+    size_t got = std::fread(out, 1, n - 1, f);
+    out[got] = 0;
+    std::fclose(f);
+    return (int)got;
+}
+
 // ---- scenes as files -----------------------------------------------------
-// Several scenes per project, like Unity: they live in <project>/scenes and
-// opening one is just pointing g_scene_path at it - the main loop notices
-// the change and does the load, the same path a project switch takes.
+// Several scenes per project, like Unity - and, like Unity, a scene is an
+// ASSET. It lives in assets/Scenes, which means the Project window lists it,
+// F2 renames it, it can be dragged into a folder, and it is inside the one
+// directory that gets shipped. <project>/scenes stayed invisible to every one
+// of those, because the browser only ever mounts assets/.
+//
+// Opening one is still just pointing g_scene_path at it; the main loop
+// notices the change and does the load, the same path a project switch takes.
 static dai_doc *g_scene_doc = nullptr;
+// Prefab mode: the scene to come back to. Empty means we are in the world.
+static char g_prefab_return[512] = { 0 };
+// The document revision as of the last successful write. Everything above it
+// is unsaved work - which is the only definition of "dirty" that cannot drift,
+// because it is the same counter the undo system moves.
+static uint64_t g_saved_rev = 0;
+
+// <project>/assets/Scenes, made on demand. Capital S: it is a folder a person
+// reads in a file browser, next to Materials and Models.
+static std::string scene_dir() {
+    if (!g_project) return std::string();
+    std::string d = std::string(dai_project_asset_dir(g_project)) + "/Scenes";
+#ifdef _WIN32
+    CreateDirectoryA(d.c_str(), nullptr);
+#else
+    mkdir(d.c_str(), 0755);
+#endif
+    return d;
+}
+
+// Everything that used to be in <project>/scenes moves into assets/Scenes the
+// first time a project is opened. Copy-then-unlink rather than rename: the two
+// are always on the same filesystem here, but a failed rename would leave the
+// project with no scene at all, and this way the worst case is a duplicate.
+static void migrate_scenes_into_assets() {
+    if (!g_project) return;
+    std::string old_dir = std::string(dai_project_path(g_project)) + "/scenes";
+    DIR *d = opendir(old_dir.c_str());
+    if (!d) return;
+    std::string dst_dir = scene_dir();
+    int moved = 0;
+    while (struct dirent *e = readdir(d)) {
+        std::string n = e->d_name;
+        if (n.size() <= 9 || n.compare(n.size() - 9, 9, ".daidalos") != 0) continue;
+        std::string src = old_dir + "/" + n, dst = dst_dir + "/" + n;
+        if (path_exists(dst.c_str())) continue;      // already there, leave both
+        if (!copy_one_file(src.c_str(), dst.c_str())) continue;
+        std::remove(src.c_str());
+        ++moved;
+    }
+    closedir(d);
+    if (moved && g_panels_for_log) {
+        char msg[128];
+        std::snprintf(msg, sizeof(msg), "moved %d scene(s) into assets/Scenes", moved);
+        dai_editor_ui_log(g_panels_for_log, 0, msg);
+    }
+}
 
 static const char *scene_list(uint32_t index, void *) {
     static std::vector<std::string> names;
     if (index == 0) {
         names.clear();
         if (g_project) {
-            std::string dir = std::string(dai_project_path(g_project)) + "/scenes";
+            std::string dir = scene_dir();
             DIR *d = opendir(dir.c_str());
             if (d) {
                 while (struct dirent *e = readdir(d)) {
@@ -195,23 +353,27 @@ static const char *scene_list(uint32_t index, void *) {
 
 static int scene_open(const char *name, void *) {
     if (!g_project || !name || !*name) return 0;
-    std::snprintf(g_scene_path, sizeof(g_scene_path), "%s/scenes/%s",
-                  dai_project_path(g_project), name);
+    // A bare file name, or the asset-relative "Scenes/x.daidalos" the Project
+    // window hands over - both mean the same file.
+    const char *slash = std::strrchr(name, '/');
+    std::string base = slash ? slash + 1 : name;
+    std::snprintf(g_scene_path, sizeof(g_scene_path), "%s/%s",
+                  scene_dir().c_str(), base.c_str());
     return 1;
 }
 
 static int scene_save_as(const char *name, void *) {
     if (!g_project || !g_scene_doc || !name || !*name) return 0;
-    char path[640];
-    std::snprintf(path, sizeof(path), "%s/scenes/%s", dai_project_path(g_project), name);
-    if (dai_doc_save(g_scene_doc, path) != DAI_OK) return 0;
-    std::snprintf(g_scene_path, sizeof(g_scene_path), "%s", path);
+    const char *slash = std::strrchr(name, '/');
+    std::string base = slash ? slash + 1 : name;
+    std::string path = scene_dir() + "/" + base;
+    if (dai_doc_save(g_scene_doc, path.c_str()) != DAI_OK) return 0;
+    std::snprintf(g_scene_path, sizeof(g_scene_path), "%s", path.c_str());
     return 1;
 }
 
-// The console panel, reachable from the script runner below: a script error
-// belongs where the user is looking, not only on stdout.
-static dai_editor_ui *g_panels_for_log = nullptr;
+// (g_panels_for_log is declared with the other globals at the top - the scene
+// migration reports through it, and that runs before this line.)
 
 #ifdef DAI_WITH_SCRIPT
 // ---- the behaviour runner --------------------------------------------------
@@ -256,7 +418,107 @@ static void sh_set_rot(double id, const double *xyzw, void *) {
 }
 static dai_script_node_host g_node_host = { sh_find, sh_get_pos, sh_set_pos, sh_get_rot, sh_set_rot, nullptr };
 
-// "// @param name" lines declare the drop fields the inspector draws.
+// ---- native (C++) behaviours -------------------------------------------
+//
+// The same play/stop lifetime as the .js ones: a .cpp attached to a node is
+// compiled to a shared library the first time Play is pressed after it
+// changed, loaded, and called every frame. The API it sees is the C struct in
+// dai_native.h - see that file for why it is not a base class.
+static dai_native *g_native = nullptr;
+static float       g_native_time = 0.0f;
+static dai_window *g_win_for_scripts = nullptr;
+
+static void nv_log(const dai_native_api *, const char *text) {
+    if (!text) return;
+    std::printf("cpp: %s\n", text);
+    if (g_panels_for_log) dai_editor_ui_log(g_panels_for_log, 0, text);
+}
+static dai_nvec3 nv_get_pos(const dai_native_api *, dai_nentity e) {
+    dai_vec3 p{};
+    if (g_script_ed) dai_editor_live_transform(g_script_ed, (dai_node)e, &p, nullptr, nullptr);
+    return dai_nvec3{ p.x, p.y, p.z };
+}
+static void nv_set_pos(const dai_native_api *, dai_entity e, dai_nvec3 v) {
+    if (!g_script_ed) return;
+    dai_vec3 p{ v.x, v.y, v.z };
+    dai_editor_live_set_transform(g_script_ed, (dai_node)e, &p, nullptr);
+}
+static dai_nvec3 nv_get_vel(const dai_native_api *, dai_nentity e) {
+    dai_vec3 l{}, a{};
+    if (g_script_ed) dai_editor_live_velocity(g_script_ed, (dai_node)e, &l, &a);
+    return dai_nvec3{ l.x, l.y, l.z };
+}
+static void nv_set_vel(const dai_native_api *, dai_entity e, dai_nvec3 v) {
+    if (g_script_ed) dai_editor_live_set_velocity(g_script_ed, (dai_node)e, dai_vec3{ v.x, v.y, v.z });
+}
+static void nv_impulse(const dai_native_api *, dai_entity e, dai_nvec3 v) {
+    if (g_script_ed) dai_editor_live_impulse(g_script_ed, (dai_node)e, dai_vec3{ v.x, v.y, v.z });
+}
+static dai_nvec3 nv_get_scale(const dai_native_api *, dai_nentity e) {
+    dai_node_desc r{};
+    if (g_scene_doc && dai_doc_get(g_scene_doc, (dai_node)e, &r) == DAI_OK)
+        return dai_nvec3{ r.scale.x, r.scale.y, r.scale.z };
+    return dai_nvec3{ 1, 1, 1 };
+}
+static void nv_set_scale(const dai_native_api *, dai_entity e, dai_nvec3 v) {
+    dai_node_desc r{};
+    if (!g_scene_doc || dai_doc_get(g_scene_doc, (dai_node)e, &r) != DAI_OK) return;
+    r.scale = dai_vec3{ v.x, v.y, v.z };
+    dai_doc_set(g_scene_doc, (dai_node)e, &r);
+}
+static void nv_get_rot(const dai_native_api *, dai_entity e, float *xyzw) {
+    dai_quat q{ 0, 0, 0, 1 };
+    if (g_script_ed) dai_editor_live_transform(g_script_ed, (dai_node)e, nullptr, &q, nullptr);
+    if (xyzw) { xyzw[0] = q.x; xyzw[1] = q.y; xyzw[2] = q.z; xyzw[3] = q.w; }
+}
+static void nv_set_rot(const dai_native_api *, dai_entity e, const float *xyzw) {
+    if (!g_script_ed || !xyzw) return;
+    dai_quat q{ xyzw[0], xyzw[1], xyzw[2], xyzw[3] };
+    dai_editor_live_set_transform(g_script_ed, (dai_node)e, nullptr, &q);
+}
+static dai_nentity nv_find(const dai_native_api *, const char *name) {
+    double id = sh_find(name, nullptr);
+    return id < 0 ? (dai_nentity)0 : (dai_nentity)(uint32_t)id;
+}
+static const char *nv_name_of(const dai_native_api *, dai_nentity e) {
+    static char buf[64];
+    dai_node_desc r{};
+    if (g_scene_doc && dai_doc_get(g_scene_doc, (dai_node)e, &r) == DAI_OK)
+        std::snprintf(buf, sizeof(buf), "%s", r.name);
+    else buf[0] = 0;
+    return buf;
+}
+static float nv_time(const dai_native_api *) { return g_native_time; }
+static int nv_key(const dai_native_api *, uint32_t key) {
+    return g_win_for_scripts ? dai_window_key_down(g_win_for_scripts, key) : 0;
+}
+
+static dai_native_api g_native_api = {
+    DAI_NATIVE_ABI, nullptr,
+    nv_log, nv_get_pos, nv_set_pos, nv_get_vel, nv_set_vel, nv_impulse,
+    nv_get_scale, nv_set_scale, nv_get_rot, nv_set_rot,
+    nv_find, nv_name_of, nv_time, nv_key
+};
+
+struct RunningNative { int id; dai_node node; std::string path; };
+static std::vector<RunningNative> g_natives;
+
+static bool is_cpp_script(const std::string &p) {
+    size_t dot = p.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string e = p.substr(dot + 1);
+    for (char &c : e) c = (char)std::tolower((unsigned char)c);
+    return e == "cpp" || e == "cc" || e == "cxx";
+}
+
+// "// @param [type] name [= default]" lines declare the serialized fields the
+// inspector draws. Reported as "type:name=default", comma separated:
+//
+//     // @param float speed = 6      ->  float:speed=6
+//     // @param target               ->  node:target=
+//
+// The type is optional and defaults to node, so every script written before
+// types existed reports exactly what it used to.
 static void script_params_of(const char *path, char *buf, size_t n, void *) {
     if (!buf || !n) return;
     buf[0] = 0;
@@ -271,23 +533,130 @@ static void script_params_of(const char *path, char *buf, size_t n, void *) {
         const char *p = std::strstr(line, "// @param");
         if (!p) continue;
         p += 9;
-        while (*p == ' ') ++p;
-        char key[64];
-        int ki = 0;
-        while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-               (*p >= '0' && *p <= '9') || *p == '_' || *p == '-') {
-            if (ki < 63) key[ki++] = *p;
-            ++p;
+        auto word = [&p](char *out, int cap) {
+            while (*p == ' ' || *p == '\t') ++p;
+            int i = 0;
+            while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                   (*p >= '0' && *p <= '9') || *p == '_' || *p == '-') {
+                if (i < cap - 1) out[i++] = *p;
+                ++p;
+            }
+            out[i] = 0;
+            return i;
+        };
+        char first[64], second[64];
+        if (!word(first, sizeof(first))) continue;
+        const char *type = "node";
+        char *key = first;
+        // Two words means the first was a type. One word is a node reference,
+        // which is what this line meant before types existed.
+        if (word(second, sizeof(second))) {
+            static const char *TYPES[] = { "float", "number", "int", "bool", "string", "text", "node" };
+            for (const char *t : TYPES)
+                if (std::strcmp(first, t) == 0) { type = first; break; }
+            key = second;
         }
-        key[ki] = 0;
-        if (!ki) continue;
-        size_t kl = std::strlen(key);
+        // "= default", to the end of the line, trimmed. A default is what
+        // makes a field usable without touching it - Unity gets this from the
+        // field initialiser, and a comment is the only place a .js has one.
+        char def[96] = { 0 };
+        {
+            const char *e = std::strchr(p, '=');
+            if (e) {
+                ++e;
+                while (*e == ' ' || *e == '\t') ++e;
+                int i = 0;
+                while (*e && *e != '\n' && *e != '\r' && i < (int)sizeof(def) - 1) {
+                    // The report is comma separated; a default may not carry one.
+                    def[i++] = (*e == ',') ? ' ' : *e;
+                    ++e;
+                }
+                while (i > 0 && (def[i - 1] == ' ' || def[i - 1] == '\t')) --i;
+                def[i] = 0;
+            }
+        }
+        char one[256];
+        int wrote = std::snprintf(one, sizeof(one), "%s:%s=%s", type, key, def);
+        if (wrote <= 0) continue;
+        size_t kl = std::strlen(one);
         if (used + kl + 2 >= n) break;
         if (used) buf[used++] = ',';
-        std::memcpy(buf + used, key, kl); used += kl; buf[used] = 0;
+        std::memcpy(buf + used, one, kl); used += kl; buf[used] = 0;
     }
     std::fclose(f);
 }
+
+// The JS side of what the C++ behaviours already had: a keyboard, a body, and
+// the node the script is attached to. Without these a .js could read the scene
+// and move a transform by hand, which is not a player controller - it is a
+// cutscene.
+static int sp_key(const char *name, void *) {
+    if (!g_win_for_scripts || !name || !*name) return 0;
+    std::string n;
+    for (const char *c = name; *c; ++c) n += (char)std::tolower((unsigned char)*c);
+    uint32_t code = 0;
+    if (n.size() == 1) {
+        char c = n[0];
+        if (c >= 'a' && c <= 'z') code = (uint32_t)c;
+        else if (c >= '0' && c <= '9') code = (uint32_t)c;
+    }
+    if (!code) {
+        if (n == "space")  code = DAI_KEY_SPACE;
+        else if (n == "enter" || n == "return") code = DAI_KEY_RETURN;
+        else if (n == "escape") code = DAI_KEY_ESCAPE;
+        else if (n == "tab")   code = DAI_KEY_TAB;
+        else if (n == "left")  code = DAI_KEY_LEFT;
+        else if (n == "right") code = DAI_KEY_RIGHT;
+        else if (n == "up")    code = DAI_KEY_UP;
+        else if (n == "down")  code = DAI_KEY_DOWN;
+        else if (n == "shift")
+            return dai_window_key_down(g_win_for_scripts, DAI_KEY_SHIFT_L) ||
+                   dai_window_key_down(g_win_for_scripts, DAI_KEY_SHIFT_R);
+        else if (n == "ctrl" || n == "control")
+            return dai_window_key_down(g_win_for_scripts, DAI_KEY_CTRL_L) ||
+                   dai_window_key_down(g_win_for_scripts, DAI_KEY_CTRL_R);
+        else if (n == "alt")
+            return dai_window_key_down(g_win_for_scripts, DAI_KEY_ALT_L) ||
+                   dai_window_key_down(g_win_for_scripts, DAI_KEY_ALT_R);
+    }
+    if (!code) return 0;                    // an unknown name is false, not an error
+    return dai_window_key_down(g_win_for_scripts, code) ? 1 : 0;
+}
+
+static int sp_get_vel(double id, double *xyz, void *) {
+    dai_vec3 l{}, a{};
+    if (!g_script_ed || !xyz) return 0;
+    dai_editor_live_velocity(g_script_ed, (dai_node)(uint32_t)id, &l, &a);
+    xyz[0] = l.x; xyz[1] = l.y; xyz[2] = l.z;
+    return 1;
+}
+
+static void sp_set_vel(double id, const double *xyz, void *) {
+    if (!g_script_ed || !xyz) return;
+    dai_editor_live_set_velocity(g_script_ed, (dai_node)(uint32_t)id,
+                                 dai_vec3{ (float)xyz[0], (float)xyz[1], (float)xyz[2] });
+}
+
+static void sp_impulse(double id, const double *xyz, void *) {
+    if (!g_script_ed || !xyz) return;
+    dai_editor_live_impulse(g_script_ed, (dai_node)(uint32_t)id,
+                            dai_vec3{ (float)xyz[0], (float)xyz[1], (float)xyz[2] });
+}
+
+// "Is there floor under me." Not a raycast: the engine has no query API bound
+// here, and a controller only needs to know whether it is falling. A body that
+// is neither rising nor sinking measurably is standing on something - which is
+// exactly the test a platformer wants, and it costs nothing.
+static int sp_grounded(double id, void *) {
+    dai_vec3 l{}, a{};
+    if (!g_script_ed) return 0;
+    dai_editor_live_velocity(g_script_ed, (dai_node)(uint32_t)id, &l, &a);
+    return (l.y > -0.35f && l.y < 0.35f) ? 1 : 0;
+}
+
+static dai_script_play_host g_play_host = {
+    sp_key, sp_get_vel, sp_set_vel, sp_impulse, sp_grounded, nullptr
+};
 
 struct RunningScript { dai_script *s = nullptr; std::string path; };
 static std::vector<RunningScript> g_running;
@@ -296,6 +665,12 @@ static int g_scripts_live = 0;
 static void scripts_stop() {
     for (RunningScript &r : g_running) dai_script_destroy(r.s);
     g_running.clear();
+    // Unloading the libraries on Stop is what makes editing a .cpp and
+    // pressing Play again pick up the change: Windows will not replace a DLL
+    // that is still mapped.
+    if (g_native) for (const RunningNative &r : g_natives) dai_native_unload(g_native, r.id);
+    g_natives.clear();
+    g_native_time = 0.0f;
 }
 
 static void scripts_start() {
@@ -331,8 +706,34 @@ static void scripts_start() {
                     size_t comma = inner.find(',', pos);
                     std::string kv = inner.substr(pos, comma == std::string::npos ? comma : comma - pos);
                     size_t eq = kv.find('=');
-                    if (eq != std::string::npos && eq > 0)
-                        params_js += """ + kv.substr(0, eq) + "":"" + kv.substr(eq + 1) + "",";
+                    if (eq != std::string::npos && eq > 0) {
+                        std::string k = kv.substr(0, eq), v = kv.substr(eq + 1);
+                        // This line used to have its quote escapes eaten:
+                        //     params_js += """ + kv.substr(0, eq) + ...
+                        // which C++ happily reads as ONE adjacent-literal
+                        // string, so every script got the TEXT
+                        // "+ kv.substr(0, eq) +:..." instead of its values,
+                        // the eval failed, and `params` was undefined in every
+                        // behaviour. Nothing said so - the error from
+                        // dai_script_eval was never looked at.
+                        //
+                        // While it is being written properly: a number stays a
+                        // number and a bool stays a bool. Quoting everything
+                        // makes params.speed * dt string arithmetic, and in JS
+                        // that is a silent NaN.
+                        bool numeric = !v.empty();
+                        int dots = 0;
+                        for (size_t ci = 0; ci < v.size(); ++ci) {
+                            char c = v[ci];
+                            if (c == '.') { if (++dots > 1) { numeric = false; break; } }
+                            else if (c == '-' || c == '+') { if (ci) { numeric = false; break; } }
+                            else if (c < '0' || c > '9') { numeric = false; break; }
+                        }
+                        if (v == "true" || v == "false" || numeric)
+                            params_js += "\"" + k + "\":" + v + ",";
+                        else
+                            params_js += "\"" + k + "\":\"" + v + "\",";
+                    }
                     if (comma == std::string::npos) break;
                     pos = comma + 1;
                 }
@@ -340,6 +741,34 @@ static void scripts_start() {
             }
             char full[640];
             std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, path.c_str());
+
+            // A .cpp goes down the native path: compile, load, init. Errors
+            // are the compiler's own text, in the console, where a user can
+            // read them.
+            if (is_cpp_script(path)) {
+                if (!g_native) {
+                    char cache[700];
+                    std::snprintf(cache, sizeof(cache), "%s/.native", g_assets_dir);
+                    g_native = dai_native_create(cache);
+                }
+                char nerr[1024] = { 0 };
+                char incdir[700];
+                std::snprintf(incdir, sizeof(incdir), "%s/../include", g_assets_dir);
+                int nid = dai_native_load(g_native, full, incdir, nerr, sizeof(nerr));
+                if (nid < 0) {
+                    std::printf("cpp %s: %s\n", path.c_str(), nerr);
+                    if (g_panels_for_log) {
+                        char line[1200];
+                        std::snprintf(line, sizeof(line), "%s: %s", path.c_str(), nerr);
+                        dai_editor_ui_log(g_panels_for_log, 2, line);
+                    }
+                } else {
+                    dai_native_init(g_native, nid, &g_native_api, (dai_nentity)(uint32_t)id);
+                    g_natives.push_back({ nid, id, path });
+                }
+                continue;
+            }
+
             dai_script *s = dai_script_create(err, sizeof(err));
             if (!s) {
                 std::printf("script: %s\n", err);
@@ -347,6 +776,7 @@ static void scripts_start() {
                 continue;
             }
             dai_script_bind_nodes(s, &g_node_host);
+            dai_script_bind_play(s, &g_play_host);
             if (dai_script_load(s, full, err, sizeof(err)) != DAI_OK) {
                 std::printf("script %s: %s\n", path.c_str(), err);
                 if (g_panels_for_log) {
@@ -357,10 +787,25 @@ static void scripts_start() {
                 dai_script_destroy(s);
                 continue;
             }
+            // Which object am I on. Unity calls it gameObject, Godot calls it
+            // self; either way it is the first thing a behaviour needs and the
+            // only one it cannot look up.
+            {
+                char selfjs[64];
+                std::snprintf(selfjs, sizeof(selfjs), "var self = %u;", (unsigned)id);
+                dai_script_eval(s, selfjs, "self", err, sizeof(err));
+            }
             if (!params_js.empty()) dai_script_eval(s, params_js.c_str(), "params", err, sizeof(err));
             dai_script_call(s, "init", err, sizeof(err));
             g_running.push_back({ s, path });
         }
+    }
+    if (!g_natives.empty()) {
+        char line[96];
+        std::snprintf(line, sizeof(line), "play: %u C++ behaviour(s) running",
+                      (unsigned)g_natives.size());
+        std::printf("%s\n", line);
+        if (g_panels_for_log) dai_editor_ui_log(g_panels_for_log, 0, line);
     }
     if (!g_running.empty()) {
         std::printf("scripts: %u running\n", (unsigned)g_running.size());
@@ -378,30 +823,175 @@ static void scripts_start() {
 // instantiate again.
 static dai_doc *g_prefab_doc = nullptr;
 
+// Double click on a file in the Project window: hand it to the machine's
+// editor. VS Code if it is installed - the path is the only argument it
+// needs, and the project folder is already where it looks.
+static int open_asset_cb(const char *, const char *rel_path, void *) {
+    if (!rel_path || !*rel_path || !g_assets_dir[0]) return 0;
+    char full[700];
+    std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, rel_path);
+#ifdef _WIN32
+    // VS Code's installer puts its bin dir on PATH for the user who installed
+    // it; a shipped editor cannot rely on being started from that shell, so
+    // the usual install locations are checked too.
+    // Code.exe, not code.cmd: a .cmd has to go through cmd.exe, and cmd.exe
+    // is a black window that flashes up (and, when the path has a space in it
+    // and the quoting is one level off, prints "C:\\Users\\justi\\AppData\\Local\\
+    // Programs\\Microsoft is not recognised" instead of opening anything).
+    const char *CODE_PATHS[] = {
+        "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe",
+        "%ProgramFiles%\\Microsoft VS Code\\Code.exe",
+        "%ProgramFiles(x86)%\\Microsoft VS Code\\Code.exe",
+        "%LOCALAPPDATA%\\Programs\\Microsoft VS Code Insiders\\Code - Insiders.exe",
+        nullptr
+    };
+    for (int i = 0; CODE_PATHS[i]; ++i) {
+        char path[700];
+        DWORD n = ExpandEnvironmentStringsA(CODE_PATHS[i], path, sizeof(path));
+        if (!n || GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) continue;
+        // The project folder AND the file: VS Code with a folder open is an
+        // editor, VS Code with one loose file is notepad with colours.
+        char cmd2[1600];
+        if (g_assets_dir[0])
+            std::snprintf(cmd2, sizeof(cmd2), "\"%s\" \"%s\" --goto \"%s\"",
+                          path, g_assets_dir, full);
+        else
+            std::snprintf(cmd2, sizeof(cmd2), "\"%s\" --goto \"%s\"", path, full);
+        STARTUPINFOA si{};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_SHOWNORMAL;
+        PROCESS_INFORMATION pi{};
+        if (CreateProcessA(nullptr, cmd2, nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                           nullptr, nullptr, &si, &pi)) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            std::printf("opened in VS Code: %s\n", full);
+            return 1;
+        }
+        std::printf("could not start %s (error %lu)\n", path, (unsigned long)GetLastError());
+    }
+    // No VS Code anywhere: hand it to whatever the extension is registered
+    // to. ShellExecute, not system() - there is no console to borrow.
+    HINSTANCE rc = ShellExecuteA(nullptr, "open", full, nullptr, nullptr, SW_SHOWNORMAL);
+    if ((INT_PTR)rc > 32) return 1;
+    std::printf("no editor could open %s\n", full);
+    return 0;
+#else
+    char cmd[1200];
+    std::snprintf(cmd, sizeof(cmd),
+                  "(command -v code >/dev/null && code --goto '%s') || xdg-open '%s' &", full, full);
+    return std::system(cmd) == 0 ? 1 : 0;
+#endif
+}
+
 static int prefab_save_cb(const char *node_id, const char *rel_path, void *) {
     if (!g_prefab_doc || !node_id || !rel_path || !g_assets_dir[0]) return 0;
     dai_node n = (dai_node)strtoul(node_id, nullptr, 10);
-    char dir[640];
-    std::snprintf(dir, sizeof(dir), "%s/prefabs", g_assets_dir);
-#ifdef _WIN32
-    CreateDirectoryA(dir, nullptr);
-#else
-    mkdir(dir, 0755);
-#endif
     char path[700];
     std::snprintf(path, sizeof(path), "%s/%s", g_assets_dir, rel_path);
-    return dai_doc_prefab_save(g_prefab_doc, n, path) == DAI_OK ? 1 : 0;
+    // Create the folder the prefab is going INTO, not a fixed "prefabs" one.
+    // Dropping an object on a subfolder of the project window wrote to a
+    // directory that did not exist, the save failed, and the editor said
+    // nothing - which is what "I still cannot make prefabs" was.
+    {
+        char dir[700];
+        std::snprintf(dir, sizeof(dir), "%s", path);
+        char *slash = std::strrchr(dir, '/');
+        if (slash) {
+            *slash = 0;
+            // every missing level, not just the last
+            for (char *c = dir + 1; *c; ++c) {
+                if (*c != '/') continue;
+                *c = 0;
+#ifdef _WIN32
+                CreateDirectoryA(dir, nullptr);
+#else
+                mkdir(dir, 0755);
+#endif
+                *c = '/';
+            }
+#ifdef _WIN32
+            CreateDirectoryA(dir, nullptr);
+#else
+            mkdir(dir, 0755);
+#endif
+        }
+    }
+    dai_result rc = dai_doc_prefab_save(g_prefab_doc, n, path);
+    if (rc != DAI_OK) {
+        char msg[800];
+        std::snprintf(msg, sizeof(msg), "prefab save failed: %s", path);
+        if (g_panels_for_log) dai_editor_ui_log(g_panels_for_log, 2, msg);
+        std::printf("%s\n", msg);
+        return 0;
+    }
+    // The object it was made FROM becomes an instance of it. That is what
+    // Unity does and it is the only version that is any use: without it you
+    // get a file nothing points at, editing the prefab leaves the original
+    // untouched, and the scene has a silent duplicate of everything. The link
+    // is a path relative to the assets root - the same string the browser and
+    // dai_doc_prefab_reload use, so a reload finds it.
+    {
+        dai_node_desc rec{};
+        if (dai_doc_get(g_prefab_doc, n, &rec) == DAI_OK) {
+            dai_doc_begin(g_prefab_doc, "Create prefab");
+            std::snprintf(rec.prefab, sizeof(rec.prefab), "%s", rel_path);
+            dai_doc_set(g_prefab_doc, n, &rec);
+            dai_doc_commit(g_prefab_doc);
+        }
+    }
+    return 1;
 }
 
 // The inline rename of the Project window: asset-relative paths, same rules
 // as script creation (never escape the assets folder).
+// Every directory under the assets root, recursively, as '/'-separated
+// relative paths. The Project browser derives its tree from FILE paths, so
+// without this feed an empty folder is invisible - "New Folder" vanished
+// the moment it was made, and a renamed folder went with it.
+static void list_dirs_rec(const std::string &abs, const std::string &rel,
+                          char (*out)[160], uint32_t *n, uint32_t max, int depth) {
+    if (depth > 8 || *n >= max) return;
+#ifdef _WIN32
+    WIN32_FIND_DATAA fd;
+    std::string pat = abs + "/*";
+    HANDLE h = FindFirstFileA(pat.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        if (fd.cFileName[0] == '.') continue;   // . and .. and dotfiles
+        std::string r = rel.empty() ? fd.cFileName : rel + "/" + fd.cFileName;
+        std::snprintf(out[*n], 160, "%s", r.c_str()); ++*n;
+        list_dirs_rec(abs + "/" + fd.cFileName, r, out, n, max, depth + 1);
+    } while (FindNextFileA(h, &fd) && *n < max);
+    FindClose(h);
+#else
+    DIR *dp = opendir(abs.c_str());
+    if (!dp) return;
+    while (dirent *de = readdir(dp)) {
+        if (de->d_name[0] == '.') continue;
+        std::string sub = abs + "/" + de->d_name;
+        struct stat sb{};
+        if (stat(sub.c_str(), &sb) != 0 || !S_ISDIR(sb.st_mode)) continue;
+        std::string r = rel.empty() ? de->d_name : rel + "/" + de->d_name;
+        std::snprintf(out[*n], 160, "%s", r.c_str()); ++*n;
+        list_dirs_rec(sub, r, out, n, max, depth + 1);
+        if (*n >= max) break;
+    }
+    closedir(dp);
+#endif
+}
+
 static int asset_rename(const char *old_rel, const char *new_rel, void *) {
     if (!old_rel || !new_rel || !*old_rel || !*new_rel || !g_assets_dir[0]) return 0;
+    // Reject only what a path genuinely cannot contain (the '/' separator
+    // stays legal: new_rel is relative to the assets root). Spaces are fine -
+    // "New Folder" is the DEFAULT name, blocking spaces blocked every rename.
     for (const char *c = new_rel; *c; ++c) {
-        bool ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
-                  (*c >= '0' && *c <= '9') || *c == '-' || *c == '_' ||
-                  *c == '/' || *c == '.';
-        if (!ok) return 0;
+        bool bad = *c == '\\' || *c == ':' || *c == '*' || *c == '?' ||
+                   *c == '"' || *c == '<' || *c == '>' || *c == '|';
+        if (bad) return 0;
     }
     if (std::strstr(new_rel, "..")) return 0;
     char a[640], b[640];
@@ -412,18 +1002,353 @@ static int asset_rename(const char *old_rel, const char *new_rel, void *) {
 
 // "New Script" writes a template, because the first script anyone writes
 // should not start with guessing what the entry point is called.
+// Creating inside a SUBFOLDER needs the folders to actually exist: fopen
+// will not make them, and "Create: Script" inside models/props silently
+// failed - which is exactly what "scripts cannot be created in folders" was.
+static void make_parent_dirs(const char *abs_path) {
+    char dir[700];
+    std::snprintf(dir, sizeof(dir), "%s", abs_path);
+    char *slash = std::strrchr(dir, '/');
+    if (!slash) return;
+    *slash = 0;
+    for (char *c = dir + 1; *c; ++c) {
+        if (*c != '/') continue;
+        *c = 0;
+#ifdef _WIN32
+        CreateDirectoryA(dir, nullptr);
+#else
+        mkdir(dir, 0755);
+#endif
+        *c = '/';
+    }
+#ifdef _WIN32
+    CreateDirectoryA(dir, nullptr);
+#else
+    mkdir(dir, 0755);
+#endif
+}
+
+// ---- importing what the desktop dropped -----------------------------------
+// The editor decided WHERE (the folder on screen) and WHAT (the paths the
+// window system handed over). This end owns the disk, so it does the copying.
+
+// mingw's <sys/stat.h> declares `struct stat` without the C++ courtesy of
+// keeping the FUNCTION stat() visible under the same name, and leaves S_ISDIR
+// out entirely - so this cannot be written once for both. Asking each platform
+// in its own words is shorter than fighting it, and the Win32 answer is the
+// cheaper call anyway.
+static int is_dir_path(const char *p) {
+    if (!p || !*p) return 0;
+#ifdef _WIN32
+    DWORD a = GetFileAttributesA(p);
+    return (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) ? 1 : 0;
+#else
+    struct stat st;
+    if (::stat(p, &st) != 0) return 0;
+    return S_ISDIR(st.st_mode) ? 1 : 0;
+#endif
+}
+
+static int path_exists(const char *p) {
+    if (!p || !*p) return 0;
+#ifdef _WIN32
+    return GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES ? 1 : 0;
+#else
+    struct stat st;
+    return ::stat(p, &st) == 0 ? 1 : 0;
+#endif
+}
+
+static int copy_one_file(const char *src, const char *dst) {
+    FILE *in = std::fopen(src, "rb");
+    if (!in) return 0;
+    make_parent_dirs(dst);
+    FILE *out = std::fopen(dst, "wb");
+    if (!out) { std::fclose(in); return 0; }
+    char buf[64 * 1024];
+    size_t got;
+    int ok = 1;
+    while ((got = std::fread(buf, 1, sizeof(buf), in)) > 0)
+        if (std::fwrite(buf, 1, got, out) != got) { ok = 0; break; }
+    std::fclose(in);
+    if (std::fclose(out) != 0) ok = 0;
+    if (!ok) std::remove(dst);
+    return ok;
+}
+
+// A dropped FOLDER is a folder of assets - a downloaded texture set is never
+// one file. Recursion is bounded the same way the folder listing is, so a
+// symlink loop cannot take the editor with it.
+static int copy_tree(const std::string &src, const std::string &dst, int depth) {
+    if (depth > 12) return 0;
+    if (!is_dir_path(src.c_str())) return copy_one_file(src.c_str(), dst.c_str());
+#ifdef _WIN32
+    CreateDirectoryA(dst.c_str(), nullptr);
+#else
+    mkdir(dst.c_str(), 0755);
+#endif
+    DIR *dp = opendir(src.c_str());
+    if (!dp) return 0;
+    int n = 0;
+    while (dirent *de = readdir(dp)) {
+        if (!std::strcmp(de->d_name, ".") || !std::strcmp(de->d_name, "..")) continue;
+        n += copy_tree(src + "/" + de->d_name, dst + "/" + de->d_name, depth + 1);
+    }
+    closedir(dp);
+    return n > 0 ? 1 : 1;   // an empty folder still imported
+}
+
+// Deleting an asset - a file, or a folder and everything under it. The editor
+// has already asked; this end only has to be careful about WHERE.
+static int remove_tree(const std::string &abs, int depth) {
+    if (depth > 12) return 0;
+    if (!is_dir_path(abs.c_str())) return std::remove(abs.c_str()) == 0 ? 1 : 0;
+    DIR *dp = opendir(abs.c_str());
+    if (dp) {
+        while (dirent *de = readdir(dp)) {
+            if (!std::strcmp(de->d_name, ".") || !std::strcmp(de->d_name, "..")) continue;
+            remove_tree(abs + "/" + de->d_name, depth + 1);
+        }
+        closedir(dp);
+    }
+#ifdef _WIN32
+    return RemoveDirectoryA(abs.c_str()) ? 1 : 0;
+#else
+    return rmdir(abs.c_str()) == 0 ? 1 : 0;
+#endif
+}
+
+// The built-in script editor's two file operations. Same rules as everything
+// else that touches the assets folder: relative, never upwards, never absolute.
+static uint32_t asset_read_text(const char *rel, char *out, uint32_t max, void *) {
+    if (!rel || !out || max < 2 || !g_assets_dir[0]) return 0;
+    out[0] = 0;
+    if (std::strstr(rel, "..") || rel[0] == '/' || rel[0] == '\\') return 0;
+    char full[700];
+    std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, rel);
+    FILE *f = std::fopen(full, "rb");
+    if (!f) return 0;
+    size_t n = std::fread(out, 1, max - 1, f);
+    std::fclose(f);
+    // Editors work in '\n'. A file written on Windows arrives with '\r\n' and
+    // every one of those carriage returns would otherwise be a visible glyph
+    // at the end of every line.
+    size_t w = 0;
+    for (size_t i = 0; i < n; ++i) if (out[i] != '\r') out[w++] = out[i];
+    out[w] = 0;
+    return (uint32_t)w;
+}
+
+static int asset_write_text(const char *rel, const char *text, void *) {
+    if (!rel || !text || !g_assets_dir[0]) return 0;
+    if (std::strstr(rel, "..") || rel[0] == '/' || rel[0] == '\\') return 0;
+    char full[700];
+    std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, rel);
+    make_parent_dirs(full);
+    FILE *f = std::fopen(full, "wb");
+    if (!f) return 0;
+    size_t n = std::strlen(text);
+    size_t got = std::fwrite(text, 1, n, f);
+    int ok = (std::fclose(f) == 0) && got == n;
+    return ok ? 1 : 0;
+}
+
+static int asset_delete(const char *rel, const char *, void *) {
+    if (!rel || !*rel || !g_assets_dir[0]) return 0;
+    // Never above the assets root, never the root itself. A path containing
+    // ".." or starting with a separator is not a mistake to be corrected, it
+    // is a request to delete something outside the project.
+    if (std::strstr(rel, "..") || rel[0] == '/' || rel[0] == '\\') return 0;
+    std::string abs = std::string(g_assets_dir) + "/" + rel;
+    int ok = remove_tree(abs, 0);
+    if (g_panels_for_log) {
+        char msg[800];
+        std::snprintf(msg, sizeof(msg), ok ? "deleted %s" : "delete FAILED: %s", rel);
+        dai_editor_ui_log(g_panels_for_log, ok ? 0 : 2, msg);
+    }
+    return ok;
+}
+
+static int asset_import(const char *src_abs, const char *dest_rel, void *) {
+    if (!src_abs || !dest_rel || !*src_abs || !*dest_rel || !g_assets_dir[0]) return 0;
+    if (std::strstr(dest_rel, "..")) return 0;
+    std::string dst = std::string(g_assets_dir) + "/" + dest_rel;
+    // Never overwrite. A drop that lands on the folder a file is already in
+    // is a slip, not an instruction to truncate it - so the copy gets a
+    // number, the way every file manager does it.
+    {
+        std::string base = dst, ext;
+        size_t slash = base.find_last_of('/');
+        size_t dot = base.find_last_of('.');
+        if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
+            ext = base.substr(dot);
+            base = base.substr(0, dot);
+        }
+        int tries = 0;
+        while (tries < 200) {
+            if (!path_exists(dst.c_str())) break;
+            char suffix[16];
+            std::snprintf(suffix, sizeof(suffix), " (%d)", tries + 2);
+            dst = base + suffix + ext;
+            ++tries;
+        }
+        if (tries >= 200) return 0;
+    }
+    int ok = copy_tree(src_abs, dst, 0);
+    if (g_panels_for_log) {
+        char msg[900];
+        std::snprintf(msg, sizeof(msg), ok ? "imported %s" : "import FAILED: %s", src_abs);
+        dai_editor_ui_log(g_panels_for_log, ok ? 0 : 2, msg);
+    }
+    return ok;
+}
+
+// ---- what an external editor needs to know about this engine -------------
+//
+// VS Code is not "integrated" by embedding it - it is Electron, a second
+// browser, three hundred megabytes, and it would still not know what
+// body.setVel is. What makes an external editor useful is TYPES: a .d.ts
+// beside the scripts and a jsconfig that points at it, and suddenly
+// completion, hover docs and go-to-definition all work on the engine API,
+// with every extension the user already has.
+//
+// Written on project open, overwritten every time, so the definitions can
+// never drift behind the engine that ships them.
+static const char *DAIDALOS_DTS =
+"// DAIDALOS scripting API - generated by the editor, do not edit.\n"
+"// Every .js in this folder is a behaviour: attach it to an object and the\n"
+"// editor calls init() once and frame() every frame while the game plays.\n"
+"\n"
+"/** The node this script is attached to. */\n"
+"declare const self: number;\n"
+"/** Values the inspector stored for this script's @param fields. */\n"
+"declare const params: { [key: string]: number | string | boolean };\n"
+"/** Host values. state.dt is the length of this frame, in seconds. */\n"
+"declare const state: { dt: number, [key: string]: number | string };\n"
+"declare function print(msg: any): void;\n"
+"\n"
+"declare namespace scene {\n"
+"    /** Node id by name, or -1. */\n"
+"    function find(name: string): number;\n"
+"}\n"
+"\n"
+"declare namespace node {\n"
+"    function getPos(id: number): [number, number, number];\n"
+"    function setPos(id: number, x: number, y: number, z: number): void;\n"
+"    function getRot(id: number): [number, number, number, number];\n"
+"    function setRot(id: number, x: number, y: number, z: number, w: number): void;\n"
+"}\n"
+"\n"
+"declare namespace input {\n"
+"    /** Held? \"w\", \"space\", \"shift\", \"left\", \"a\"... */\n"
+"    function key(name: string): boolean;\n"
+"}\n"
+"\n"
+"declare namespace body {\n"
+"    function getVel(id: number): [number, number, number];\n"
+"    function setVel(id: number, x: number, y: number, z: number): void;\n"
+"    function impulse(id: number, x: number, y: number, z: number): void;\n"
+"    function grounded(id: number): boolean;\n"
+"}\n"
+"\n"
+"declare namespace ui {\n"
+"    function text(x: number, y: number, msg: string): void;\n"
+"    function button(label: string): boolean;\n"
+"}\n";
+
+static const char *DAIDALOS_JSCONFIG =
+"{\n"
+"  \"compilerOptions\": {\n"
+"    \"target\": \"ES2020\",\n"
+"    \"checkJs\": false,\n"
+"    \"module\": \"none\"\n"
+"  },\n"
+"  \"include\": [\"**/*.js\", \"daidalos.d.ts\"]\n"
+"}\n";
+
+static void write_editor_support_files() {
+    if (!g_assets_dir[0]) return;
+    struct { const char *name; const char *body; } FILES[] = {
+        { "daidalos.d.ts", DAIDALOS_DTS },
+        { "jsconfig.json", DAIDALOS_JSCONFIG },
+    };
+    for (const auto &f : FILES) {
+        char path[700];
+        std::snprintf(path, sizeof(path), "%s/%s", g_assets_dir, f.name);
+        FILE *out = std::fopen(path, "wb");
+        if (!out) continue;
+        std::fwrite(f.body, 1, std::strlen(f.body), out);
+        std::fclose(out);
+    }
+}
+
 static int script_create(const char *name, void *) {
     if (!name || !*name || !g_assets_dir[0]) return 0;
     for (const char *c = name; *c; ++c) {
         bool ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
-                  (*c >= '0' && *c <= '9') || *c == '-' || *c == '_' || *c == '/';
+                  (*c >= '0' && *c <= '9') || *c == '-' || *c == '_' || *c == '/' ||
+                  *c == '.' || *c == ' ' || *c == '(' || *c == ')';
         if (!ok) return 0;
     }
     if (std::strstr(name, "..")) return 0;   // never escape the assets folder
+
+    // A name that already carries an extension is taken at its word - that is
+    // how "Create: C++ Behaviour" asks for a .cpp without a second callback.
+    size_t nlen = std::strlen(name);
+    bool is_cpp = nlen > 4 && std::strcmp(name + nlen - 4, ".cpp") == 0;
     char path[640];
+    if (is_cpp) {
+        std::snprintf(path, sizeof(path), "%s/%s", g_assets_dir, name);
+        if (FILE *ex = std::fopen(path, "rb")) { std::fclose(ex); return 0; }
+        make_parent_dirs(path);
+        FILE *cf = std::fopen(path, "wb");
+        if (!cf) {
+            if (g_panels_for_log) {
+                char msg[700];
+                std::snprintf(msg, sizeof(msg), "create failed: %s", path);
+                dai_editor_ui_log(g_panels_for_log, 2, msg);
+            }
+            return 0;
+        }
+        // The template is the documentation. A behaviour that starts as an
+        // empty file means reading a header to find out what to type.
+        std::fputs("// A Daidalos C++ behaviour.\n"
+                   "//\n"
+                   "// It is compiled to a shared library and loaded when you press Play,\n"
+                   "// and rebuilt whenever this file is newer than the last build - so\n"
+                   "// Ctrl+S, Play is the whole edit cycle. You need a C++ compiler on\n"
+                   "// PATH (g++ or clang++); the console says so if there is none.\n"
+                   "//\n"
+                   "// Everything you can do is in dai_native.h, reached through `api`.\n"
+                   "\n"
+                   "#include <dai_native.h>\n"
+                   "\n"
+                   "DAI_BEHAVIOUR_INIT(api, self) {\n"
+                   "    api->log(api, \"hello from C++\");\n"
+                   "}\n"
+                   "\n"
+                   "DAI_BEHAVIOUR_FRAME(api, self, dt) {\n"
+                   "    // spin gently around Y\n"
+                   "    (void)dt; (void)self; (void)api;\n"
+                   "}\n", cf);
+        std::fclose(cf);
+        return 1;
+    }
     std::snprintf(path, sizeof(path), "%s/%s.js", g_assets_dir, name);
+    // Refuse a name that is taken. The editor walks NewScript, NewScript (1),
+    // ... and takes the first one the host accepts; saying yes to a file that
+    // exists meant the new script silently replaced the old one.
+    if (FILE *ex = std::fopen(path, "rb")) { std::fclose(ex); return 0; }
+    make_parent_dirs(path);
     FILE *f = std::fopen(path, "wb");
-    if (!f) return 0;
+    if (!f) {
+        if (g_panels_for_log) {
+            char msg[700];
+            std::snprintf(msg, sizeof(msg), "create failed: %s", path);
+            dai_editor_ui_log(g_panels_for_log, 2, msg);
+        }
+        return 0;
+    }
     std::fputs("// A Daidalos behaviour. The engine calls the globals it finds:\n"
                "//   init()   once when play starts\n"
                "//   frame()  every rendered frame\n"
@@ -447,6 +1372,10 @@ static int script_create(const char *name, void *) {
 // the values that belong to the project and are the same for everyone who
 // opens it. Drawn by the host because the host is what owns dai_project.
 static dai_project_settings *g_psettings = nullptr;
+static dai_world *g_world_for_settings = nullptr;
+// What the running world was actually created with, so the panel can say
+// "restart to switch" instead of pretending the dropdown took effect.
+static int g_active_backend = 0;
 static dai_ui *g_ui_for_settings = nullptr;
 static void draw_project_settings(void *) {
     if (!g_psettings || !g_ui_for_settings || !g_project) return;
@@ -461,10 +1390,37 @@ static void draw_project_settings(void *) {
     float mb = (float)ps.max_bodies;
     if (dai_ui_num_field(ui, "Max bodies", &mb, 16.0f, 16.0f, 100000.0f, "maxbodies"))
         ps.max_bodies = (int)(mb + 0.5f);
-    static const char *const BACKENDS[] = { "Jolt", "Talos", "None" };
-    dai_ui_option(ui, "Physics", &ps.physics_backend, BACKENDS, 3);
-    dai_ui_num_field(ui, "Friction", &ps.default_friction, 0.01f, 0.0f, 10.0f, "psfric");
-    dai_ui_num_field(ui, "Bounce", &ps.default_restitution, 0.01f, 0.0f, 1.0f, "psrest");
+    // Talos is THE physics. Jolt was a second engine you could pick and then
+    // not have - Jolt is not compiled into this build at all, so offering it
+    // was only a way to lie to the user.
+    //
+    // Index mapping: the dropdown is built from backends that EXIST, in
+    // dai_physics_backend order (TALOS=0, NULL=1). A scene file that names
+    // Jolt still loads - it falls back to null, and the label says so.
+    int sel = ps.physics_backend == DAI_PHYSICS_NULL ? 1 : 0;
+    static const char *const BACKENDS[] = { "Talos", "Kein Solver (nur Fall)" };
+    if (dai_ui_option(ui, "Physics", &sel, BACKENDS, 2))
+        ps.physics_backend = sel == 1 ? DAI_PHYSICS_NULL : DAI_PHYSICS_TALOS;
+    dai_ui_help(ui, "Talos: collisions, joints, friction. Kein Solver: gravity and a "
+                    "floor at y=0 only, bodies pass through each other. Jolt is not "
+                    "part of this engine any more.");
+    if (ps.physics_backend != DAI_PHYSICS_TALOS && ps.physics_backend != DAI_PHYSICS_NULL) {
+        dai_ui_label(ui, "!! scene asked for Jolt - not in this build, using 'Kein Solver'");
+    }
+    if (g_world_for_settings) {
+        const char *live = dai_backend_name(g_world_for_settings);
+        dai_ui_label_fmt(ui, "running: %s%s", live ? live : "?",
+                         ps.physics_backend != g_active_backend ? "  (restart to switch)" : "");
+    }
+    dai_ui_separator(ui);
+    dai_ui_label(ui, "Defaults for NEW rigidbodies");
+    dai_ui_num_field(ui, "Def. friction", &ps.default_friction, 0.01f, 0.0f, 10.0f, "psfric");
+    dai_ui_help(ui, "Coefficient mu given to every Rigidbody component added from now on. "
+                    "0 = ice, 0.6 = wood, 1.0 = rubber. Existing objects are not touched.");
+    dai_ui_num_field(ui, "Def. bounce", &ps.default_restitution, 0.01f, 0.0f, 1.0f, "psrest");
+    dai_ui_help(ui, "Restitution 0..1 given to every new Rigidbody component. "
+                    "Existing objects are not touched.");
+    dai_ui_separator(ui);
     dai_ui_input_text(ui, "App name", ps.app_name, sizeof(ps.app_name));
     dai_ui_separator(ui);
     dai_ui_label(ui, "Tags");
@@ -473,21 +1429,131 @@ static void draw_project_settings(void *) {
         std::snprintf(lbl, sizeof(lbl), "Tag %d", i);
         dai_ui_input_text(ui, lbl, ps.tags[i], DAI_PROJECT_TAG_MAX);
     }
-    if (std::memcmp(&before, &ps, sizeof(ps)) != 0)
+    if (std::memcmp(&before, &ps, sizeof(ps)) != 0) {
         dai_project_settings_save(g_project, &ps);
+        // Saved is not applied: the world keeps last tick's gravity until the
+        // host pushes the new one. A settings panel that only takes effect
+        // after an export is indistinguishable from a broken one.
+        if (g_world_for_settings)
+            dai_set_gravity(g_world_for_settings,
+                            dai_vec3{ ps.gravity[0], ps.gravity[1], ps.gravity[2] });
+    }
     dai_ui_label(ui, "Changes are saved immediately.");
 }
+
+// ---- the editor's own console --------------------------------------------
+//
+// The editor used to run with a cmd window behind it, and everything it had
+// to say went there - which means it went nowhere, because nobody reads the
+// window they were told to ignore. stdout and stderr are redirected into a
+// pipe here and drained into the Console panel every frame, so "the shader
+// failed" is a line the user can actually see, copy and send.
+#ifdef _WIN32
+static HANDLE g_log_rd = nullptr, g_log_wr = nullptr;
+static std::string g_log_tail;
+
+static void console_capture_begin() {
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    if (!CreatePipe(&g_log_rd, &g_log_wr, &sa, 1 << 16)) return;
+    SetStdHandle(STD_OUTPUT_HANDLE, g_log_wr);
+    SetStdHandle(STD_ERROR_HANDLE, g_log_wr);
+    int fd = _open_osfhandle((intptr_t)g_log_wr, _O_TEXT);
+    if (fd >= 0) {
+        _dup2(fd, 1);
+        _dup2(fd, 2);
+        std::setvbuf(stdout, nullptr, _IOLBF, 4096);
+        std::setvbuf(stderr, nullptr, _IONBF, 0);
+    }
+}
+
+// One line is one console entry, and the level is read off the words - an
+// editor that colours "failed" red without being told to is doing its job.
+static void console_capture_pump(dai_editor_ui *panels) {
+    if (!g_log_rd || !panels) return;
+    for (;;) {
+        DWORD avail = 0;
+        if (!PeekNamedPipe(g_log_rd, nullptr, 0, nullptr, &avail, nullptr) || !avail) break;
+        char buf[4096];
+        DWORD got = 0;
+        DWORD want = avail < sizeof(buf) ? avail : (DWORD)sizeof(buf);
+        if (!ReadFile(g_log_rd, buf, want, &got, nullptr) || !got) break;
+        g_log_tail.append(buf, got);
+    }
+    for (;;) {
+        size_t nl = g_log_tail.find('\n');
+        if (nl == std::string::npos) {
+            if (g_log_tail.size() > 8192) g_log_tail.clear();   // a line that never ends
+            break;
+        }
+        std::string line = g_log_tail.substr(0, nl);
+        g_log_tail.erase(0, nl + 1);
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (line.empty()) continue;
+        std::string low = line;
+        for (char &c : low) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        int level = 0;
+        if (low.find("error") != std::string::npos || low.find("failed") != std::string::npos ||
+            low.find("cannot") != std::string::npos || low.find("!!") != std::string::npos)
+            level = 2;
+        else if (low.find("warn") != std::string::npos || low.find("no ") == 0)
+            level = 1;
+        dai_editor_ui_log(panels, level, line.c_str());
+    }
+}
+#else
+static void console_capture_begin() {}
+static void console_capture_pump(dai_editor_ui *) {}
+#endif
 
 // The settings window's font swap needs what main() owns, so main() publishes
 // it here. One editor, one font - this is not a place that needs generality.
 static dai_renderer *g_renderer = nullptr;
 static dai_ui       *g_ui = nullptr;
 static dai_font     *g_font = nullptr;
+static float        *g_ui_scale_out = nullptr;   // prefs.ui_scale lives in main()
+// The desktop's scale (1.25 at 125%) times whatever the user chose in
+// Settings. Everything the editor lays out is in logical pixels; this is the
+// only number that turns them into the real ones the window is made of.
+static float         g_dpi = 1.0f;
+static float         g_dpi_auto = 1.0f;    // what the display says
+static float         g_dpi_pref = 0.0f;    // 0 = follow the display
+// The live prefs block, so a setting can be persisted the MOMENT it changes
+// rather than at a clean exit that may never come. Declared after g_dpi_pref
+// because that is the value it copies.
+static dai_prefs    *g_prefs = nullptr;
+static dai_editor_ui *g_panels_for_prefs = nullptr;
+static void save_prefs_now() {
+    if (!g_prefs) return;
+    // NOT ui_scale: that one belongs to apply_font, which writes it through
+    // g_ui_scale_out the moment the size changes. Writing the display
+    // override into it here is what used to erase the interface size.
+    g_prefs->dpi_scale = g_dpi_pref;
+    g_prefs->language = dai_tr_lang_get();
+    if (g_panels_for_prefs)
+        g_prefs->script_editor = dai_editor_ui_script_editor_pref_get(g_panels_for_prefs);
+    dai_prefs_save(g_prefs);
+}
+static dai_window   *g_win_for_scale = nullptr;
+static dai_icons    *g_icons = nullptr;
 
+// A fractional pixel size (13 * 1.5 = 19.5) puts every glyph baseline half
+// a texel off the pixel grid and blurs the whole UI. Snapped here, once, so
+// both the texture and the layout agree on a whole pixel size.
+static void apply_font(float px, void *);
+static float g_font_px = 13.0f;
 static void apply_font(float px, void *) {
+    g_font_px = px < 2.0f ? 13.0f : px;
+    // Whole pixels or not at all: a 19.5 px font's baseline sits on half a
+    // texel, and every glyph in the UI smears. Snap up; the layout uses the
+    // same number, so nothing is scaled.
+    px = px < 2.0f ? 2.0f : (float)((int)(px + 0.9999f));
+    if (g_ui_scale_out) *g_ui_scale_out = px / 13.0f;
+    save_prefs_now();      // the size settles now, not at some clean exit
     if (!g_renderer || !g_ui) return;
     char err[256] = { 0 };
-    dai_font *nf = dai_font_load_ui(px, err, sizeof(err));
+    dai_font *nf = dai_font_load_ui_scaled(px, g_dpi, err, sizeof(err));
     if (!nf) { std::printf("font reload failed: %s\n", err); return; }
     uint32_t aw = 0, ah = 0;
     const uint8_t *atlas = dai_font_atlas(nf, &aw, &ah);
@@ -500,6 +1566,36 @@ static void apply_font(float px, void *) {
     dai_ui_font_set(g_ui, nf, nt);
     if (g_font) dai_font_free(g_font);
     g_font = nf;
+}
+
+// Changing the display scale rebuilds both atlases: the font and the icons
+// are rasterised AT the scale, which is the whole point - a magnified 13 px
+// atlas is exactly the blur this avoids.
+static void apply_ui_scale(float scale, void *) {
+    g_dpi_pref = scale;
+    save_prefs_now();
+    float want = scale > 0.05f ? scale : g_dpi_auto;
+    if (!(want > 0.4f) || want > 4.0f) want = 1.0f;
+    g_dpi = want;
+    if (g_ui) dai_ui_scale_set(g_ui, g_dpi);
+    apply_font(g_font_px, nullptr);                // reloads at the new scale
+    if (g_renderer && g_ui) {
+        dai_icons *ni = dai_icons_create(16.0f * g_dpi);
+        if (ni) {
+            dai_icons_display_size(ni, 16.0f);
+            uint32_t iw = 0, ih = 0;
+            const uint8_t *irgba = dai_icons_atlas_rgba(ni, &iw, &ih);
+            if (irgba && iw && ih) {
+                dai_ui_set_icons(g_ui, ni, dai_render_texture_create(g_renderer, irgba, iw, ih, 0));
+                if (g_icons) dai_icons_free(g_icons);
+                g_icons = ni;
+            } else {
+                dai_icons_free(ni);
+            }
+        }
+    }
+    std::printf("UI scale is now %.0f%% (%s)\n", g_dpi * 100.0f,
+                scale > 0.05f ? "set in Settings" : "from the display");
 }
 
 // The renderer's inventory, so the inspector's mesh picker shows names
@@ -518,7 +1614,194 @@ static const char *mesh_name_of(uint32_t mesh, void *) {
     return buf;
 }
 
+// ---- crash report ---------------------------------------------------------
+//
+// "It crashes sometimes" is not a bug report, and it is not the user's fault
+// that it isn't: a GUI program that dies takes its console with it. So the
+// editor writes one file when it falls over - what signal or exception, where,
+// and the return addresses as OFFSETS INTO THE MODULE, which is the form that
+// can still be turned back into line numbers later with addr2line against the
+// matching build. No symbol server, no dependency, no privacy question.
+//
+// The handler does the least it possibly can: formatting inside a crashed
+// process is how a crash report becomes a second crash. No malloc, no printf
+// into std::string, one open/write/close.
+static char g_crash_path[600] = { 0 };
+
+// The recovery point, armed only around the work we are willing to abandon.
+#include <csetjmp>
+static jmp_buf  g_guard_jmp;
+static int      g_guard_armed = 0;
+static int      g_guard_faults = 0;        // consecutive, reset by a clean frame
+static unsigned long g_guard_last_code = 0;
+static void    *g_guard_last_addr = nullptr;
+
+// Runs fn under the net. 1 = it returned normally, 0 = it faulted and was
+// abandoned. Never call anything from fn that must not be half-done: this is
+// for a UI frame, not for a file write.
+static int guard_run(void (*fn)(void *), void *user) {
+    if (setjmp(g_guard_jmp) != 0) {
+        g_guard_armed = 0;
+        return 0;                          // came back through the handler
+    }
+    g_guard_armed = 1;
+    fn(user);
+    g_guard_armed = 0;
+    return 1;
+}
+
+static void crash_write(const char *what, unsigned long long code,
+                        void *addr, void *const *frames, int nframes) {
+    if (!g_crash_path[0]) return;
+    FILE *f = std::fopen(g_crash_path, "wb");
+    if (!f) return;
+    std::fprintf(f, "DAIDALOS crash report\n");
+    std::fprintf(f, "version : %s\n", dai_version());
+    std::fprintf(f, "reason  : %s\n", what ? what : "?");
+    std::fprintf(f, "code    : 0x%llx\n", code);
+    std::fprintf(f, "address : %p\n", addr);
+    std::fprintf(f, "project : %s\n", g_project ? dai_project_path(g_project) : "(none)");
+    std::fprintf(f, "scene   : %s\n", g_scene_path[0] ? g_scene_path : "(none)");
+    std::fprintf(f, "\nframes (module+offset - resolve with addr2line):\n");
+#ifdef _WIN32
+    HMODULE self_mod = GetModuleHandleA(nullptr);
+    for (int i = 0; i < nframes; ++i) {
+        char modname[MAX_PATH] = { 0 };
+        HMODULE m = nullptr;
+        unsigned long long off = 0;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCSTR)frames[i], &m) && m) {
+            GetModuleFileNameA(m, modname, sizeof(modname) - 1);
+            off = (unsigned long long)((char *)frames[i] - (char *)m);
+        }
+        const char *base = std::strrchr(modname, '\\');
+        std::fprintf(f, "  %2d  %s+0x%llx%s\n", i,
+                     base ? base + 1 : (modname[0] ? modname : "?"), off,
+                     m == self_mod ? "   <- editor" : "");
+    }
+#else
+    for (int i = 0; i < nframes; ++i) std::fprintf(f, "  %2d  %p\n", i, frames[i]);
+#endif
+    // The last thing the console said is usually the last thing that happened.
+    if (g_panels_for_log) {
+        std::fprintf(f, "\nconsole tail:\n");
+        char tail[4096];
+        uint32_t n = dai_editor_ui_log_tail(g_panels_for_log, tail, sizeof(tail));
+        if (n) std::fwrite(tail, 1, n, f);
+    }
+    std::fclose(f);
+}
+
+#ifdef _WIN32
+static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
+    // Armed and not yet hopeless: abandon the frame and carry on. The report
+    // is not written for these - the console line is, every time, and that is
+    // what turns "it crashed again" into something with a number in it.
+    if (g_guard_armed && g_guard_faults < 8) {
+        g_guard_last_code = ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionCode : 0;
+        g_guard_last_addr = ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionAddress : nullptr;
+        ++g_guard_faults;
+        longjmp(g_guard_jmp, 1);
+    }
+    void *frames[40];
+    USHORT n = CaptureStackBackTrace(0, 40, frames, nullptr);
+    crash_write("unhandled exception",
+                ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionCode : 0,
+                ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionAddress : nullptr,
+                frames, (int)n);
+    // A message box, because the window is already gone and a file nobody is
+    // told about is a file nobody reads.
+    char msg[900];
+    std::snprintf(msg, sizeof(msg),
+                  "DAIDALOS stopped unexpectedly.\n\nA report was written to:\n%s\n\n"
+                  "Send that file and it can be traced to the line.", g_crash_path);
+    MessageBoxA(nullptr, msg, "DAIDALOS", MB_OK | MB_ICONERROR);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#else
+static void crash_signal(int sig) {
+    if (g_guard_armed && g_guard_faults < 8) {
+        g_guard_last_code = (unsigned long)sig;
+        g_guard_last_addr = nullptr;
+        ++g_guard_faults;
+        longjmp(g_guard_jmp, 1);
+    }
+    void *frames[40];
+    int n = 0;
+#ifdef __GLIBC__
+    n = backtrace(frames, 40);
+#endif
+    crash_write(sig == SIGSEGV ? "SIGSEGV" : sig == SIGABRT ? "SIGABRT" : "signal",
+                (unsigned long long)sig, nullptr, frames, n);
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+#endif
+
+static void crash_handler_install(const char *dir) {
+    if (dir && *dir) std::snprintf(g_crash_path, sizeof(g_crash_path), "%s/crash-report.txt", dir);
+    else             std::snprintf(g_crash_path, sizeof(g_crash_path), "crash-report.txt");
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(crash_filter);
+#else
+    std::signal(SIGSEGV, crash_signal);
+    std::signal(SIGABRT, crash_signal);
+    std::signal(SIGFPE, crash_signal);
+    std::signal(SIGILL, crash_signal);
+#endif
+}
+
+// Closing with work that is not on disk. Three answers, because there are
+// three things a person can mean by pressing the X with unsaved changes, and
+// picking one for them is how work disappears.
+//
+// Returns 1 when it is all right to leave. On the platforms with no native
+// dialog the honest thing is to say so on stdout and let the close happen -
+// pretending to have asked would be worse than not asking.
+static int quit_is_ok(dai_window *win, dai_doc *doc) {
+    if (!g_prefs) return 1;
+    if (dai_doc_revision(doc) == g_saved_rev) return 1;   // nothing to lose
+#ifdef _WIN32
+    char msg[700];
+    std::snprintf(msg, sizeof(msg),
+                  "The scene has unsaved changes.\n\n%s\n\n"
+                  "Yes - save and close\n"
+                  "No  - close and lose them\n"
+                  "Cancel - keep working",
+                  g_scene_path[0] ? g_scene_path : "(no file yet)");
+    int r = MessageBoxA(nullptr, msg, "DAIDALOS - unsaved changes",
+                        MB_YESNOCANCEL | MB_ICONWARNING | MB_DEFBUTTON1);
+    if (r == IDCANCEL) {
+        dai_window_keep_open(win);
+        return 0;
+    }
+    if (r == IDYES) {
+        if (g_scene_path[0] && dai_doc_save(doc, g_scene_path) == DAI_OK) {
+            g_saved_rev = dai_doc_revision(doc);
+        } else {
+            MessageBoxA(nullptr, "Could not write the scene - nothing was closed.",
+                        "DAIDALOS", MB_OK | MB_ICONERROR);
+            dai_window_keep_open(win);
+            return 0;
+        }
+    }
+    return 1;
+#else
+    (void)win;
+    std::printf("closing with unsaved changes (no dialog on this platform)\n");
+    return 1;
+#endif
+}
+
 int main(int argc, char **argv) {
+    // Unbuffered: a crash must not swallow the last thing the editor said.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::set_new_handler(diag_new_failed);
+    if (const char *dg = std::getenv("DAIDALOS_DIAG")) {
+        g_diag_on = std::atoi(dg);
+        if (g_diag_on > 0) g_diag_frames = g_diag_on;   // trace this many frames
+    }
     const char *scene_path = argc > 1 ? argv[1] : nullptr;
 #ifdef _WIN32
     std::snprintf(g_projects_root, sizeof(g_projects_root), "C:\\daidalos\\projects");
@@ -548,11 +1831,24 @@ int main(int argc, char **argv) {
     if (g_project) dai_project_settings_load(g_project, &psettings);
 
     dai_config cfg{};
+    cfg.backend = psettings.physics_backend;   // the project chooses, not the binary
+    g_active_backend = cfg.backend;
     cfg.tick_hz = psettings.tick_hz > 0 ? (uint32_t)psettings.tick_hz : 60;
     cfg.max_bodies = psettings.max_bodies > 0 ? (uint32_t)psettings.max_bodies : 4096;
     cfg.snapshot_ring = 120; cfg.seed = 1;
     dai_world *w = nullptr;
     if (dai_create(&cfg, &w) != DAI_OK) { std::printf("world failed\n"); return 1; }
+    g_world_for_settings = w;
+    dai_set_gravity(w, dai_vec3{ psettings.gravity[0], psettings.gravity[1], psettings.gravity[2] });
+    if (std::strcmp(dai_backend_name(w), "null") == 0) {
+        // "Nothing collides" is a setting, and a setting nobody can see is a
+        // bug report. Say it where the user is already looking.
+        std::printf("!! PHYSICS: no solver selected (Settings > Project Settings > "
+                    "Physics). Colliders are ignored - the only thing that stops "
+                    "a falling object is an invisible floor at y=0.\n");
+    }
+    std::printf("physics: %s, gravity %.2f %.2f %.2f\n", dai_backend_name(w),
+                (double)psettings.gravity[0], (double)psettings.gravity[1], (double)psettings.gravity[2]);
     dai_scene *sc = dai_scene_create(w);
     dai_doc *doc = dai_doc_create();
     g_scene_doc = doc;   // the scene host callbacks save through it
@@ -586,6 +1882,7 @@ int main(int argc, char **argv) {
     const uint32_t W = 1440, H = 810;
     dai_render_desc rd{};
     rd.width = W; rd.height = H; rd.msaa = 4;
+    console_capture_begin();
     dai_renderer *r = dai_render_create(&rd, err, sizeof(err));
     if (!r) { std::printf("renderer failed: %s\n", err); return 1; }
     dai_window *win = dai_window_open(r, "Daidalos Editor", W, H, err, sizeof(err));
@@ -597,7 +1894,21 @@ int main(int argc, char **argv) {
     // 13 px, not 17: this is an editor, and the panels are full of numeric
     // fields. On Windows the window is DPI aware now, so 13 px is 13 real
     // pixels instead of 13 stretched to 20 by the desktop scaling.
-    dai_font *font = dai_font_load_ui(13.0f, err, sizeof(err));
+    // The desktop's scale factor, asked for ONCE the window exists. 13 px of
+    // interface is 13 px of interface at every zoom level; what changes is how
+    // many real pixels the glyphs are rasterised into.
+    g_dpi_auto = dai_window_dpi_scale(win);
+    if (!(g_dpi_auto > 0.5f) || g_dpi_auto > 4.0f) g_dpi_auto = 1.0f;
+    g_dpi_pref = prefs.dpi_scale;
+    g_dpi = g_dpi_pref > 0.05f ? g_dpi_pref : g_dpi_auto;
+    g_win_for_scale = win;
+    {
+        uint32_t rw = 0, rh = 0;
+        dai_window_size(win, &rw, &rh);
+        std::printf("display scale: %.2f (auto %.2f), window %ux%u real px\n",
+                    g_dpi, g_dpi_auto, rw, rh);
+    }
+    dai_font *font = dai_font_load_ui_scaled(13.0f, g_dpi, err, sizeof(err));
     if (!font) std::printf("no font: %s\n", err);   // the UI would draw blank boxes
     dai_texture font_tex = 0;
     if (font) {
@@ -610,11 +1921,18 @@ int main(int argc, char **argv) {
         font_tex = dai_render_texture_create(r, rgba.data(), aw, ah, 0);
     }
     dai_ui *ui = dai_ui_create(font, font_tex);
+    dai_ui_scale_set(ui, g_dpi);
+    // The editor's strings are data (see dai_tr.h). The engine's own games
+    // are not: translate only what this binary ships.
+    dai_ui_translate(ui, 1);
+    dai_tr_lang(prefs.language);
 
     // Vector icons for the toolbar and the inspector's component headers.
     // Rasterised HERE, at 16 px, because that is the size this interface draws
     // them at - the SVG sources are resolution independent, the atlas is not.
-    dai_icons *icons = dai_icons_create(16.0f);
+    dai_icons *icons = dai_icons_create(16.0f * g_dpi);
+    if (icons) dai_icons_display_size(icons, 16.0f);
+    g_icons = icons;
     if (icons) {
         uint32_t iw = 0, ih = 0;
         const uint8_t *irgba = dai_icons_atlas_rgba(icons, &iw, &ih);
@@ -637,7 +1955,13 @@ int main(int argc, char **argv) {
     dai_editor_ui_mesh_host(panels, mesh_name_of, DAI_MESH_BUILTIN_COUNT, nullptr);
     dai_editor_ui_script_host(panels, script_create, nullptr);
     dai_editor_ui_rename_host(panels, asset_rename, nullptr);
+    dai_editor_ui_import_host(panels, asset_import, nullptr);
+    dai_editor_ui_delete_host(panels, asset_delete, nullptr);
+    dai_editor_ui_file_host(panels, asset_read_text, asset_write_text, nullptr);
+    dai_editor_ui_script_editor_pref(panels, prefs.script_editor);
     dai_editor_ui_prefab_host(panels, prefab_save_cb);
+    dai_editor_ui_open_asset_host(panels, open_asset_cb, nullptr);
+    dai_editor_ui_layout_host(panels, layout_save_file, layout_load_file, nullptr);
     g_prefab_doc = doc;
     g_panels_for_log = panels;
     dai_editor_ui_log(panels, 0, dai_version());
@@ -647,6 +1971,8 @@ int main(int argc, char **argv) {
     g_script_ed = ed;
 #endif
     dai_editor_ui_folder_host(panels, folder_create, nullptr);
+    dai_editor_ui_scale_host(panels, apply_ui_scale, g_dpi_pref, nullptr);
+    g_panels_for_prefs = panels;
     g_psettings = &psettings;
     g_ui_for_settings = ui;
     dai_editor_ui_project_settings_host(panels, draw_project_settings, nullptr);
@@ -664,6 +1990,10 @@ int main(int argc, char **argv) {
             size_t got;
             while ((got = std::fread(chunk, 1, sizeof(chunk), lf)) > 0) txt.append(chunk, got);
             std::fclose(lf);
+            if (g_diag_on > 0) {
+                std::printf("layout.txt (%u bytes):\n%s\n", (unsigned)txt.size(), txt.c_str());
+                std::fflush(stdout);
+            }
             dai_editor_ui_layout_load(panels, txt.c_str());
         }
     }
@@ -674,15 +2004,45 @@ int main(int argc, char **argv) {
 
     // Settings: the UI size is a font reload, and the font is ours.
     g_renderer = r; g_ui = ui; g_font = font;
+    // A 150% desktop asks for 150% interface. The renderer already draws in
+    // real pixels (that is what makes it sharp); without this the whole editor
+    // is 2/3 the size of every other window on the machine, which reads as
+    // "the resolution is halved and it looks blurry".
+    {
+        float dpi = dai_window_dpi_scale(win);
+        if (dpi > 1.02f && prefs.dpi_scale < 0.05f) {
+            prefs.dpi_scale = dpi;
+            std::printf("dpi: display at %.0f%%, ui scaled to match\n", dpi * 100.0f);
+        }
+    }
+    g_ui_scale_out = &prefs.ui_scale;
+    g_prefs = &prefs;
+    crash_handler_install(g_projects_root);
     dai_editor_ui_settings_host(panels, apply_font, 13.0f * prefs.ui_scale, nullptr);
-    if (prefs.ui_scale > 1.02f || prefs.ui_scale < 0.98f) apply_font(13.0f * prefs.ui_scale, nullptr);
+    // The font is rasterised at a REAL pixel size: 13 px laid out but drawn
+    // from a texture made for 13 * 1.5 = 19.5 is sharp at 1.5x zoom, 13 * 1.5
+    // = 19.5 rasterised but 13 laid out is the blurry one. Fractional font
+    // sizes smear on their own, so the raster size is snapped UP to whole
+    // pixels and the layout told to use exactly that - which is why the
+    // toolbar icons (rasterised at a whole 16 px) were the one crisp thing
+    // on screen.
+    {
+        float px = 13.0f * prefs.ui_scale;
+        float snapped = px < 1.0f ? 1.0f : (float)((int)(px + 0.9999f));
+        if (snapped != px && prefs.ui_scale > 0.0f) prefs.ui_scale = snapped / 13.0f;
+        apply_font(snapped, nullptr);
+    }
     dai_editor_cam_speed(ed, prefs.cam_speed > 0.1f ? prefs.cam_speed : 6.0f);
     if (prefs.gizmo_px > 10.0f) dai_editor_gizmo_size(ed, prefs.gizmo_px);
     if (prefs.snap_translate > 0.0f || prefs.snap_rotate_deg > 0.0f)
         dai_editor_snap(ed, prefs.snap_translate, prefs.snap_rotate_deg, 0.1f);
 
     auto last = std::chrono::high_resolution_clock::now();
-    int prev_keys[8] = { 0 };
+    // One slot per entry in keys[] below - this was 8 while keys grew to 10,
+    // and pressed(8)/pressed(9) read past the end of it. That is a heap buffer
+    // overflow: on Windows it manifested as a startup crash (std::bad_alloc),
+    // on Linux it quietly read whatever followed on the stack.
+    int prev_keys[10] = { 0 };
     std::vector<dai_render_instance> inst(4096);
     int prev_f2 = 0, prev_backspace = 0, prev_enter = 0, prev_tab = 0;
     int prev_edit_keys[6] = { 0 };
@@ -690,7 +2050,7 @@ int main(int argc, char **argv) {
     int prev_ctrl_a = 0;
 
     int update_reported = 0;
-    while (dai_window_poll(win)) {
+    while (dai_window_poll(win) || !quit_is_ok(win, doc)) {
         if (!update_reported && g_update.state != 0) {
             update_reported = 1;
             std::printf("%s\n", g_update.note);
@@ -706,7 +2066,10 @@ int main(int argc, char **argv) {
         float wheel = dai_window_wheel(win);
 
         dai_editor_cam_input ci{};
-        ci.mouse_x = (float)mx; ci.mouse_y = (float)my;
+        // Logical pointer: everything downstream of here - the UI, the gizmo,
+        // picking - lays out in logical pixels, and a pointer in real ones
+        // would miss every widget by the scale factor.
+        ci.mouse_x = (float)mx / g_dpi; ci.mouse_y = (float)my / g_dpi;
         ci.mouse_left = (buttons & (1u << 1)) ? 1 : 0;
         ci.mouse_middle = (buttons & (1u << 2)) ? 1 : 0;
         ci.mouse_right = (buttons & (1u << 3)) ? 1 : 0;
@@ -722,6 +2085,7 @@ int main(int argc, char **argv) {
         ci.key_e = !type_lock && dai_window_key_down(win, DAI_KEY_E);
         ci.key_shift = dai_window_key_down(win, DAI_KEY_SHIFT_L) || dai_window_key_down(win, DAI_KEY_SHIFT_R);
         ci.key_alt = dai_window_key_down(win, DAI_KEY_ALT_L) || dai_window_key_down(win, DAI_KEY_ALT_R);
+        ci.key_ctrl = dai_window_key_down(win, DAI_KEY_CTRL_L) || dai_window_key_down(win, DAI_KEY_CTRL_R);
         ci.key_focus = !type_lock && dai_window_key_down(win, DAI_KEY_F);
         ci.dt = dt;
 
@@ -749,11 +2113,76 @@ int main(int argc, char **argv) {
         if (ctrl && pressed(3) && !typing) dai_editor_undo(ed);
         if (ctrl && pressed(4) && !typing) dai_editor_redo(ed);
         if (ctrl && pressed(6) && !typing) dai_editor_duplicate_selection(ed);
+        // Ctrl+C / Ctrl+V: the selection travels as text, so it can leave the
+        // editor (into a chat, another scene, another editor window).
+        static int prev_copy = 0;
+        if (ctrl && dai_window_key_down(win, (uint32_t)0x63 /* c */) && !typing &&
+            dai_editor_selection_count(ed) > 0 && !prev_copy) {
+            prev_copy = 1;
+            dai_node sn = dai_editor_selected(ed, 0);
+            dai_node_desc r{};
+            if (dai_doc_get(doc, sn, &r) == DAI_OK) {
+                std::string line = "node:";
+                line += r.name[0] ? r.name : "node";
+                line += " shape=" + std::to_string(r.shape);
+                line += " pos=" + std::to_string((double)r.position.x) + "," +
+                        std::to_string((double)r.position.y) + "," +
+                        std::to_string((double)r.position.z);
+                if (r.script[0]) { line += " script="; line += r.script; }
+                dai_editor_ui_clipboard_set(panels, 1, line.c_str());
+                dai_editor_ui_toast(panels, "copied node", 1.0f);
+            }
+        }
+        prev_copy = ctrl && dai_window_key_down(win, (uint32_t)0x63);
+        // Ctrl+V: a copied node comes back as a new one, with a unique name.
+        static int prev_paste = 0;
+        if (ctrl && dai_window_key_down(win, (uint32_t)0x76 /* v */) && !typing && !prev_paste) {
+            prev_paste = 1;
+            int kind = -1;
+            const char *text = dai_editor_ui_clipboard_get(panels, &kind);
+            char osbuf[4096];
+            if (dai_window_clipboard_get(win, osbuf, sizeof(osbuf)) > 0 &&
+                std::strncmp(osbuf, "node:", 5) == 0) {
+                text = osbuf;
+                kind = 1;   // a node line from another window or a chat
+            }
+            if (text && kind == 1 && std::strncmp(text, "node:", 5) == 0) {
+                dai_node_desc r = dai_node_desc_default();
+                // Parse the terse line back out: "node:NAME shape=S pos=x,y,z script=P"
+                const char *p2 = text + 5;
+                const char *sp = std::strstr(p2, " shape=");
+                size_t nl = sp ? (size_t)(sp - p2) : std::strlen(p2);
+                if (nl >= sizeof(r.name)) nl = sizeof(r.name) - 1;
+                std::memcpy(r.name, p2, nl);
+                r.name[nl] = 0;
+                if (sp) r.shape = std::atoi(sp + 7);
+                const char *pp = std::strstr(p2, " pos=");
+                if (pp) std::sscanf(pp + 5, "%f,%f,%f", &r.position.x, &r.position.y, &r.position.z);
+                const char *sc2 = std::strstr(p2, " script=");
+                if (sc2) {
+                    std::string spath = sc2 + 8;
+                    if (spath.size() >= sizeof(r.script)) spath.resize(sizeof(r.script) - 1);
+                    std::snprintf(r.script, sizeof(r.script), "%s", spath.c_str());
+                }
+                // Offset a little so the copy does not sit inside the original.
+                r.position.x += 0.5f;
+                dai_node made = dai_doc_add(doc, &r);
+                if (made) { dai_editor_select(ed, made, 0); dai_editor_resync(ed); }
+                dai_editor_ui_toast(panels, "pasted node", 1.0f);
+            }
+        }
+        if (!(ctrl && dai_window_key_down(win, (uint32_t)0x76))) prev_paste = 0;
         // Not while a field is being typed into: Delete belongs to the caret
         // then, not to the scene.
         // Delete, and Backspace for the keyboards that have no Delete key.
         // Never while typing: there the two belong to the caret.
-        if ((pressed(5) || pressed(9)) && !typing) dai_editor_delete_selection(ed);
+        // Delete belongs to whichever window the pointer is over. The Project
+        // window takes it for the file that is selected there; otherwise it is
+        // the scene's, as it always was.
+        if ((pressed(5) || pressed(9)) && !typing) {
+            if (!dai_editor_ui_delete_project_pick(panels))
+                dai_editor_delete_selection(ed);
+        }
         if (pressed(7) && !typing) {
             if (dai_editor_state_get(ed) == DAI_EDITOR_PLAY) dai_editor_pause(ed);
             else dai_editor_play(ed);
@@ -761,10 +2190,16 @@ int main(int argc, char **argv) {
         // Ctrl+S: once per press, never while a field has the keyboard, and
         // it says so. Held down it used to write the file sixty times a second
         // and tell nobody - a save you cannot see is a save you do not trust.
-        if (ctrl && pressed(8) && !typing) {
+        // Ctrl+S while a script is being edited saves the SCRIPT. Anything
+        // else and it is the scene, as it always was. `typing` is false for
+        // the code editor on purpose - Ctrl+S is not a character.
+        if (ctrl && pressed(8) && dai_editor_ui_script_save(panels)) {
+            // handled by the script panel
+        } else if (ctrl && pressed(8) && !typing) {
             const char *sp = scene_path ? scene_path : (g_scene_path[0] ? g_scene_path : nullptr);
             char msg[192];
             if (sp && dai_doc_save(doc, sp) == DAI_OK) {
+                g_saved_rev = dai_doc_revision(doc);
                 const char *base = std::strrchr(sp, '/');
                 const char *bs2 = std::strrchr(sp, '\\');
                 if (bs2 && (!base || bs2 > base)) base = bs2;
@@ -774,6 +2209,27 @@ int main(int argc, char **argv) {
                 std::snprintf(msg, sizeof(msg), "could not save - open a project first");
             }
             dai_editor_ui_toast(panels, msg, 2.0f);
+        }
+        // Watchdog: once a minute, print how much memory the process holds.
+        // A growing count in a crash loop points at the leak; a flat count
+        // means the crash is a bug, not a leak.
+        {
+#ifdef _WIN32
+            // Frames are not seconds: at 150 fps a 60-frame counter printed
+            // two lines a second into Justin's console. Real clock, and only
+            // when DAIDALOS_DIAG asked for it - a healthy editor says nothing.
+            if (g_diag_on > 0) {
+                static ULONGLONG mem_next = 0;
+                ULONGLONG now_ms = GetTickCount64();
+                if (now_ms >= mem_next) {
+                    mem_next = now_ms + 60000;
+                    PROCESS_MEMORY_COUNTERS pmc{};
+                    pmc.cb = sizeof(pmc);
+                    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+                        std::printf("mem: %.1f MB\n", pmc.WorkingSetSize / 1048576.0);
+                }
+            }
+#endif
         }
         std::memcpy(prev_keys, keys, sizeof(keys));
 
@@ -796,14 +2252,16 @@ int main(int argc, char **argv) {
                 dai_doc_add(doc, &g2);
             }
             dai_editor_deselect_all(ed);
+            g_saved_rev = dai_doc_revision(doc);   // freshly loaded IS saved
             dai_doc_sync_reset(sync);
             dai_doc_sync_apply(sync);
-            // <project>/assets is the mounted folder.
-            std::snprintf(g_assets_dir, sizeof(g_assets_dir), "%s", current_scene);
-            char *slash = std::strstr(g_assets_dir, "/scenes/");
-            if (slash) {
-                *slash = 0;
-                std::strncat(g_assets_dir, "/assets", sizeof(g_assets_dir) - std::strlen(g_assets_dir) - 1);
+            // <project>/assets is the mounted folder. Asked of the project,
+            // not carved out of the scene path with strstr("/scenes/") - the
+            // scene lives INSIDE assets now, so that substring is gone and
+            // the old code would have stopped remounting anything at all.
+            if (g_project) {
+                std::snprintf(g_assets_dir, sizeof(g_assets_dir), "%s",
+                              dai_project_asset_dir(g_project));
                 if (assets) {
                     dai_assets_destroy(assets);
                     assets = dai_assets_create(r, 1);
@@ -811,6 +2269,20 @@ int main(int argc, char **argv) {
                         dai_assets_mount_dir(assets, g_assets_dir, 0);
                         dai_assets_bind(assets, sync);
                     }
+                }
+            }
+            // Prefab instances hold a path, not a subtree - expanding them
+            // is what turns the reference back into objects. Nothing did it,
+            // so every prefab in a saved scene came back empty.
+            if (g_assets_dir[0]) {
+                uint32_t nrb = dai_doc_prefab_reload(doc, g_assets_dir);
+                if (nrb) {
+                    dai_doc_sync_reset(sync);
+                    dai_doc_sync_apply(sync);
+                    char pm[96];
+                    std::snprintf(pm, sizeof(pm), "%u prefab instance%s expanded",
+                                  nrb, nrb == 1 ? "" : "s");
+                    dai_editor_ui_log(panels, 0, pm);
                 }
             }
             {   // the hierarchy's root row says which scene is open
@@ -847,11 +2319,96 @@ int main(int argc, char **argv) {
                 if (n2 > 256) n2 = 256;
                 for (uint32_t i = 0; i < n2; ++i) ptrs[i] = paths[i];
                 dai_editor_ui_asset_list(panels, ptrs, n2);
+                // Folders too - the browser cannot see an empty one otherwise.
+                if (g_assets_dir[0]) {
+                    static char dirs[256][160];
+                    static const char *dptrs[256];
+                    uint32_t dn = 0;
+                    list_dirs_rec(g_assets_dir, "", dirs, &dn, 256, 0);
+                    for (uint32_t i = 0; i < dn; ++i) dptrs[i] = dirs[i];
+                    dai_editor_ui_folder_list(panels, dptrs, dn);
+                }
+            }
+            // ---- prefab mode: open a prefab as the scene, and come back --
+            {
+                const char *popen = nullptr;
+                if (dai_editor_ui_take_prefab_open(panels, &popen) && popen && *popen) {
+                    // Save what is open first: leaving a scene without writing
+                    // it is how an afternoon disappears.
+                    if (g_scene_path[0] && dai_doc_save(doc, g_scene_path) == DAI_OK)
+                        g_saved_rev = dai_doc_revision(doc);
+                    if (!g_prefab_return[0])
+                        std::snprintf(g_prefab_return, sizeof(g_prefab_return), "%s", g_scene_path);
+                    char full2[700];
+                    std::snprintf(full2, sizeof(full2), "%s/%s", g_assets_dir, popen);
+                    std::snprintf(g_scene_path, sizeof(g_scene_path), "%s", full2);
+                    dai_editor_ui_prefab_mode(panels, popen);
+                }
+                if (dai_editor_ui_take_prefab_exit(panels)) {
+                    // Back to the world, saving the prefab on the way out -
+                    // which is what makes "edit the prefab" mean anything.
+                    if (g_scene_path[0] && dai_doc_save(doc, g_scene_path) == DAI_OK)
+                        g_saved_rev = dai_doc_revision(doc);
+                    if (g_prefab_return[0]) {
+                        std::snprintf(g_scene_path, sizeof(g_scene_path), "%s", g_prefab_return);
+                        g_prefab_return[0] = 0;
+                    }
+                    dai_editor_ui_prefab_mode(panels, nullptr);
+                    // Instances in the scene are expanded from the file, so
+                    // the edit shows up everywhere the moment it is reloaded.
+                    dai_doc_prefab_reload(doc, g_assets_dir);
+                }
             }
             const char *pick = nullptr;
             int as_tree = 0;
             if (dai_editor_ui_take_asset(panels, &pick, &as_tree) && pick) {
-                if (dai_assets_model_blocking(assets, pick)) {
+                size_t pl = std::strlen(pick);
+                bool in_scenes = std::strncmp(pick, "Scenes/", 7) == 0 ||
+                                 std::strncmp(pick, "scenes/", 7) == 0;
+                if (pl > 9 && std::strcmp(pick + pl - 9, ".daidalos") == 0 && in_scenes) {
+                    // A scene file OPENS. Instantiating it as a prefab would
+                    // paste the whole level into the level you are standing
+                    // in, which is never what a double click on a scene means.
+                    if (scene_open(pick, nullptr))
+                        dai_editor_ui_toast(panels, "opening scene", 1.5f);
+                } else if (pl > 9 && std::strcmp(pick + pl - 9, ".daidalos") == 0) {
+                    // A prefab is a scene file: instantiate it under the
+                    // current selection, select the copy, done. The model
+                    // loader has never heard of one, which is why dropping
+                    // a prefab in used to do nothing at all.
+                    char full[700];
+                    std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, pick);
+                    char perr[256] = { 0 };
+                    // The path is stored AS GIVEN, so it goes in relative to
+                    // the assets folder and the scene stays portable; the
+                    // base dir is how it is found again.
+                    (void)full;
+                    dai_node made = dai_doc_prefab_instantiate(doc, pick, DAI_INVALID_NODE,
+                                                               g_assets_dir, perr, sizeof(perr));
+                    if (made) {
+                        // Dropped into the viewport? Then it goes where it was
+                        // dropped. The prefab file stores its root at its own
+                        // origin, so this is the whole placement.
+                        float dx = 0, dy = 0, dz = 0;
+                        if (dai_editor_ui_take_asset_at(panels, &dx, &dy, &dz)) {
+                            dai_node_desc pr4{};
+                            if (dai_doc_get(doc, made, &pr4) == DAI_OK) {
+                                dai_doc_begin(doc, "Place prefab");
+                                pr4.position = dai_vec3{ dx, dy + pr4.half_extent.y, dz };
+                                dai_doc_set(doc, made, &pr4);
+                                dai_doc_commit(doc);
+                            }
+                        }
+                        dai_doc_sync_apply(sync);
+                        dai_editor_select(ed, made, 0);
+                        dai_editor_ui_toast(panels, "prefab placed", 1.5f);
+                    } else {
+                        char m[400];
+                        std::snprintf(m, sizeof(m), "prefab failed: %s",
+                                      perr[0] ? perr : "unreadable");
+                        dai_editor_ui_log(panels, 2, m);
+                    }
+                } else if (dai_assets_model_blocking(assets, pick)) {
                     dai_node made = dai_assets_instantiate(assets, doc, pick, 0);
                     if (made) {
                         dai_doc_sync_apply(sync);
@@ -861,6 +2418,8 @@ int main(int argc, char **argv) {
             }
         }
 
+        console_capture_pump(panels);
+        diag_step("frame begin");
         uint32_t ww = W, wh = H;
         dai_window_size(win, &ww, &wh);
 
@@ -871,17 +2430,44 @@ int main(int argc, char **argv) {
         // a buffer of a different size. One resolution for the window, the
         // renderer and the interface is the only arrangement where all three
         // agree.
+        // Logical size: the renderer owns real pixels, the interface owns
+        // logical ones, and the scale is the only bridge between them.
+        const float uis = g_dpi;   // Settings can change this between frames
+        const float lw = (float)ww / uis, lh = (float)wh / uis;
         if (ww != dai_render_width(r) || wh != dai_render_height(r)) {
             if (dai_render_resize(r, ww, wh) == DAI_OK)
-                dai_editor_camera_viewport(ed, (float)ww, (float)wh);
+                dai_editor_camera_viewport(ed, lw, lh);
+            // The pointer is reported in RENDER pixels, and that scale just
+            // changed - so the same physical mouse position is a different
+            // number this frame. A resize is done with the button held, so
+            // without re-anchoring the camera spins while the window grows.
+            int amx = 0, amy = 0;
+            dai_window_mouse(win, &amx, &amy, nullptr);
+            dai_editor_cam_anchor(ed, (float)amx / uis, (float)amy / uis);
+        }
+
+        // What the desktop dropped on us since the last frame. The editor
+        // decides whether it landed on the Project window; the pointer comes
+        // back in real pixels and the interface thinks in logical ones, which
+        // is the same division the mouse goes through ten lines below.
+        {
+            char drop[4096];
+            int dx = 0, dy = 0;
+            if (dai_window_dropped_files(win, drop, sizeof(drop), &dx, &dy))
+                dai_editor_ui_drop_files(panels, drop, (float)dx / uis, (float)dy / uis);
         }
 
         // The UI has to run before the viewport, because "is the pointer over a
         // panel" is only known once the panels have been laid out this frame.
         // F2 renames the selection, in the hierarchy where the name lives.
-        if (dai_window_key_down(win, DAI_KEY_F2) && !prev_f2 && !dai_ui_text_active(ui) &&
-            dai_editor_selection_count(ed) > 0)
-            dai_editor_ui_rename(panels, dai_editor_selected(ed, 0));
+        if (dai_window_key_down(win, DAI_KEY_F2) && !prev_f2 && !dai_ui_text_active(ui)) {
+            // The Project window first: if something was clicked there, F2
+            // belongs to it - including a folder, which had no way to be
+            // renamed except through the context menu.
+            if (!dai_editor_ui_rename_project_pick(panels) &&
+                dai_editor_selection_count(ed) > 0)
+                dai_editor_ui_rename(panels, dai_editor_selected(ed, 0));
+        }
         prev_f2 = dai_window_key_down(win, DAI_KEY_F2);
 
         // Real text events. dai_window_key_down answers "is it held", which
@@ -897,7 +2483,7 @@ int main(int argc, char **argv) {
         // the camera's look button - otherwise dismissing a menu with the same
         // button that summoned it also turns the world.
         dai_ui_input in{};
-        in.mouse_x = (float)mx; in.mouse_y = (float)my;
+        in.mouse_x = (float)mx / uis; in.mouse_y = (float)my / uis;
         in.mouse_down = ci.mouse_left;
         in.right_down = dai_editor_ui_menu_open(panels) ? 0 : ci.mouse_right;
         in.wheel = wheel;
@@ -947,14 +2533,59 @@ int main(int argc, char **argv) {
         // the same staleness the menu check above already relies on.
         dai_editor_ui_viewport(panels, &ci);
 
-        dai_ui_begin(ui, (float)ww, (float)wh, &in);
-        dai_editor_ui_frame(panels, (float)ww, (float)wh);
+        diag_step("ui begin");
+        dai_ui_begin(ui, lw, lh, &in);
+        diag_step("ui frame (panels)");
+        // Unsaved? The asterisk in the hierarchy comes from here.
+        dai_editor_ui_scene_dirty(panels, dai_doc_revision(doc) != g_saved_rev);
+
+        // The interface, under the net. A fault here abandons ONE frame and
+        // says what it was; the scene, the undo history and everything you
+        // have not saved are still in memory afterwards.
+        {
+            struct FrameArgs { dai_editor_ui *p; float w, h; } fa{ panels, lw, lh };
+            auto draw = [](void *u) {
+                FrameArgs *a = (FrameArgs *)u;
+                dai_editor_ui_frame(a->p, a->w, a->h);
+            };
+            if (guard_run(draw, &fa)) {
+                g_guard_faults = 0;          // a clean frame clears the count
+            } else {
+                char line[256];
+                std::snprintf(line, sizeof(line),
+                              "interface fault 0x%lx at %p - frame skipped (%d in a row)",
+                              g_guard_last_code, g_guard_last_addr, g_guard_faults);
+                dai_editor_ui_log(panels, 2, line);
+                std::printf("%s\n", line);
+                if (g_guard_faults >= 8) {
+                    dai_editor_ui_log(panels, 2,
+                        "too many faults in a row - saving a report and stopping");
+                    std::printf("giving up after %d consecutive faults\n", g_guard_faults);
+                }
+            }
+        }
+
+        // Copies made anywhere in the UI (console line, component, node)
+        // travel to the OS clipboard here: rev bumped means something new was
+        // copied this frame, and a copy you cannot paste into a chat is not
+        // a copy. Linux returns 0 from the bridge and nothing breaks.
+        {
+            static unsigned last_clip_rev = 0;
+            unsigned crev = dai_editor_ui_clipboard_rev(panels);
+            if (crev != last_clip_rev) {
+                last_clip_rev = crev;
+                const char *ct = dai_editor_ui_clipboard_get(panels, nullptr);
+                if (ct && ct[0]) dai_window_clipboard_set(win, ct);
+            }
+        }
+        diag_step("ui end");
         dai_ui_end(ui);
+        diag_step("ui done");
 
         // The layout, once, a second in: enough frames for the dock to settle,
         // early enough to catch it going wrong.
         static int dump_at = 90;
-        if (dump_at > 0 && --dump_at == 0) {
+        if (g_diag_on > 0 && dump_at > 0 && --dump_at == 0) {
             char lay[640];
             dai_editor_ui_layout_dump(panels, lay, sizeof(lay));
             std::printf("layout: %s\n", lay);
@@ -963,7 +2594,22 @@ int main(int argc, char **argv) {
         // The pointer says what is under it: an I-beam over a field, a resize
         // arrow on a window edge. The UI knows which widget that is; only the
         // window can set the shape.
+        // New rigidbodies inherit the project's friction/bounce defaults.
+        dai_editor_ui_physics_defaults(panels, psettings.default_friction, psettings.default_restitution);
+
         dai_window_cursor(win, dai_ui_cursor(ui));
+
+        // The one strip the engine does not draw: the OS title bar. It follows
+        // the theme's chrome colour, checked here so a theme switch repaints it
+        // on the same frame instead of after a restart.
+        {
+            static uint32_t last_chrome = 0;
+            uint32_t chrome = dai_ui_style_of(ui)->chrome;
+            if (chrome != last_chrome) {
+                last_chrome = chrome;
+                dai_window_caption_color(win, chrome);
+            }
+        }
 
         float alpha = 1.0f;
         dai_editor_advance(ed, dt, &alpha);
@@ -976,9 +2622,18 @@ int main(int argc, char **argv) {
             if (st_now == DAI_EDITOR_PLAY && !g_scripts_live) scripts_start();
             if (st_now != DAI_EDITOR_PLAY && g_scripts_live) scripts_stop();
             g_scripts_live = st_now == DAI_EDITOR_PLAY;
+            if (g_scripts_live && g_native) {
+                g_native_time += 1.0f / 60.0f;
+                for (RunningNative &rn : g_natives)
+                    dai_native_frame(g_native, rn.id, &g_native_api,
+                                     (dai_nentity)(uint32_t)rn.node, 1.0f / 60.0f);
+            }
             if (g_scripts_live)
                 for (RunningScript &rs : g_running) {
                     char serr[192] = { 0 };
+                    // state.dt, so a script can be frame rate independent
+                    // without asking the host for a clock it does not have.
+                    dai_script_set_number(rs.s, "dt", 1.0 / 60.0);
                     if (dai_script_call(rs.s, "frame", serr, sizeof(serr)) != DAI_OK && serr[0]) {
                         char line[400];
                         std::snprintf(line, sizeof(line), "%s: %s", rs.path.c_str(), serr);
@@ -987,6 +2642,21 @@ int main(int argc, char **argv) {
                 }
         }
 #endif
+
+        // The camera preview, in the corner of the scene view. It uses the
+        // renderer's SECOND view, the same one the Game panel uses - and the
+        // editor refuses to offer a preview while that panel is open, so the
+        // two can never want it at the same time.
+        {
+            float cx3, cy3, cw3, ch3, cfov = 60.0f, cortho = 0.0f;
+            dai_vec3 ceye{}, clook{};
+            if (dai_editor_ui_camera_preview(panels, &cx3, &cy3, &cw3, &ch3,
+                                             &ceye, &clook, &cfov, &cortho)) {
+                dai_render_camera2(r, ceye, clook, dai_vec3{ 0, 1, 0 }, cfov);
+                dai_render_ortho2(r, cortho);
+                dai_render_world_clip2(r, cx3 * uis, cy3 * uis, cw3 * uis, ch3 * uis);
+            }
+        }
 
         dai_vec3 eye, look;
         {   // read the camera back out of the editor so both agree exactly
@@ -1004,10 +2674,15 @@ int main(int argc, char **argv) {
         // The viewport is the scene window's body rect: the camera projects
         // into exactly that rectangle, the renderer clips the world to it, and
         // picking reads clicks in the same pixels. Three sides of one truth.
-        float vrx = 0, vry = 0, vrw = (float)ww, vrh = (float)wh;
+        float vrx = 0, vry = 0, vrw = lw, vrh = lh;
         dai_editor_ui_viewport_rect(panels, &vrx, &vry, &vrw, &vrh);
         dai_editor_camera_viewport_rect(ed, vrx, vry, vrw, vrh);
-        dai_render_world_clip(r, vrx, vry, vrw, vrh);
+        dai_render_world_clip(r, vrx * uis, vry * uis, vrw * uis, vrh * uis);
+        {   // The floor grid as world lines: depth tested, so boxes hide it.
+            static float grid_xyz[84 * 2 * 3];
+            uint32_t gn = dai_editor_ui_grid_lines(panels, grid_xyz, 84 * 2);
+            dai_render_lines(r, grid_xyz, gn, 0.35f, 0.38f, 0.42f, 0.75f);
+        }
         dai_editor_camera(ed, eye, look, dai_vec3{ 0, 1, 0 }, 55.0f, 0.1f, 300.0f,
                           vrw, vrh);
 
@@ -1019,6 +2694,9 @@ int main(int argc, char **argv) {
         // editor camera, so selecting the Game tab still drew the scene view
         // and the "no camera" message sat on top of a picture it was denying.
         int no_world = 0;
+        // The Game tab with no camera shows NEUTRAL dark, not the scene's
+        // sky-ish clear - an empty Game view must not look like a scene
+        // someone forgot to fill.
         if (dai_editor_ui_view(panels) == DAI_VIEW_GAME) {
             dai_vec3 ge{}, gl{};
             float gf = 60.0f;
@@ -1026,9 +2704,14 @@ int main(int argc, char **argv) {
                 reye = ge; rlook = gl; rfov = gf;
             } else {
                 no_world = 1;
+                dai_render_clear_color(r, 0.08f, 0.08f, 0.09f);
             }
         }
         dai_render_sky(r, no_world ? 0 : 1);
+        // Orthographic when the game camera says so: that IS the 2D mode.
+        // The Scene view stays perspective so the level is still navigable.
+        float game_ortho = dai_editor_ui_game_ortho(panels);
+        dai_render_ortho(r, dai_editor_ui_view(panels) == DAI_VIEW_GAME ? game_ortho : 0.0f);
         dai_render_camera(r, reye, rlook, dai_vec3{ 0, 1, 0 }, rfov, 0.1f, 300.0f);
 
         // Both panels docked open: the Scene panel keeps the editor camera
@@ -1040,27 +2723,92 @@ int main(int argc, char **argv) {
                 float gf = 60.0f;
                 if (dai_editor_ui_game_camera(panels, &ge, &gl, &gf)) {
                     dai_render_camera2(r, ge, gl, dai_vec3{ 0, 1, 0 }, gf);
-                    dai_render_world_clip2(r, gx, gy, gw, gh);
+                    dai_render_ortho2(r, game_ortho);
+                    (void)0;
+                    dai_render_world_clip2(r, gx * uis, gy * uis, gw * uis, gh * uis);
                 }
             }
         }
 
+        // Light components, straight from the document: the scene layer does
+        // not carry them, so the host collects them each frame. Cheap - there
+        // are never many lights, and it keeps lights editable while playing.
+        {
+            static std::vector<dai_light> lights;
+            lights.clear();
+            uint32_t ln = dai_doc_count(doc);
+            static std::vector<dai_node> lids;
+            lids.resize(ln);
+            if (ln) dai_doc_nodes(doc, lids.data(), ln);
+            for (dai_node id : lids) {
+                dai_node_desc lr{};
+                if (dai_doc_get(doc, id, &lr) != DAI_OK || !lr.light) continue;
+                dai_vec3 wp{}, ws{ 1, 1, 1 };
+                dai_quat wr2{ 0, 0, 0, 1 };
+                if (!dai_editor_live_transform(ed, id, &wp, &wr2, &ws))
+                    dai_doc_world_transform(doc, id, &wp, &wr2, &ws);
+                dai_vec3 col = (lr.light_color.x || lr.light_color.y || lr.light_color.z)
+                             ? lr.light_color : dai_vec3{ 1, 1, 1 };
+                float power = lr.light_intensity > 0.0f ? lr.light_intensity : 1.0f;
+                float range = lr.light_range > 0.0f ? lr.light_range : 10.0f;
+                if (lr.light == 3) {
+                    // A directional light is the sun, not a point in the list.
+                    dai_vec3 fwd{ 0, 0, -1 };
+                    float x = wr2.x, y = wr2.y, z = wr2.z, w2 = wr2.w;
+                    dai_vec3 d2{ 2*(x*z + w2*y), 2*(y*z - w2*x), 1 - 2*(x*x + y*y) };
+                    (void)fwd;
+                    dai_render_sun(r, dai_vec3{ -d2.x, -d2.y, -d2.z }, col, power);
+                    continue;
+                }
+                dai_light L{};
+                L.position = wp; L.color = col; L.intensity = power; L.range = range;
+                if (lr.light == 2) {
+                    float x = wr2.x, y = wr2.y, z = wr2.z, w2 = wr2.w;
+                    L.direction = { 2*(x*z + w2*y), 2*(y*z - w2*x), 1 - 2*(x*x + y*y) };
+                    L.direction = { -L.direction.x, -L.direction.y, -L.direction.z };
+                    L.type = DAI_LIGHT_SPOT;
+                    float cone = lr.light_cone > 0.0f ? lr.light_cone : 30.0f;
+                    L.inner_deg = cone * 0.7f;
+                    L.outer_deg = cone;
+                } else {
+                    L.type = DAI_LIGHT_POINT;
+                }
+                lights.push_back(L);
+            }
+            dai_render_lights(r, lights.empty() ? nullptr : lights.data(), (uint32_t)lights.size());
+        }
+
+        diag_step("scene instances");
         uint32_t n = dai_scene_instances(sc, inst.data(), (uint32_t)inst.size(), alpha);
         if (no_world) n = 0;   // Game tab, no camera: an empty frame, not a lie
 
+        diag_step("ui draw list");
         const dai_ui_draw *draws = nullptr;
         uint32_t nb = dai_ui_draws(ui, &draws);
         std::vector<dai_ui_vertex> verts;
         std::vector<uint32_t> counts;
         std::vector<dai_texture> texes;
+        if (g_diag_frames > 0) std::printf("[step] batches %u\n", (unsigned)nb);
         for (uint32_t i = 0; i < nb; ++i) {
+            // A batch count of millions is corruption, not a busy interface.
+            if (draws[i].count > 400000u || !draws[i].vertices) {
+                std::printf("!! DIAG: batch %u has count %u vertices=%p - refusing it\n",
+                            (unsigned)i, (unsigned)draws[i].count, (const void *)draws[i].vertices);
+                std::fflush(stdout);
+                diag_stack("bad ui batch");
+                continue;
+            }
             verts.insert(verts.end(), draws[i].vertices, draws[i].vertices + draws[i].count);
             counts.push_back(draws[i].count);
             texes.push_back(draws[i].texture);
         }
-        dai_render_ui(r, verts.data(), (uint32_t)verts.size(), counts.data(), texes.data(), nb);
+        diag_step("render ui");
+        dai_render_ui(r, verts.data(), (uint32_t)verts.size(), counts.data(), texes.data(), (uint32_t)counts.size());
+        diag_step("render frame");
         dai_render_frame(r, inst.data(), n);
+        diag_step("present");
         dai_window_present(win);
+        if (g_diag_frames > 0) { --g_diag_frames; std::printf("[step] frame done\n"); }
     }
 
     {
@@ -1074,7 +2822,7 @@ int main(int argc, char **argv) {
     }
     {   // what this human set on this machine, kept for the next start
         prefs.cam_speed = dai_editor_cam_speed_get(ed);
-        dai_prefs_save(&prefs);
+        save_prefs_now();
     }
     if (g_project) dai_project_close(g_project);
     dai_editor_ui_destroy(panels);

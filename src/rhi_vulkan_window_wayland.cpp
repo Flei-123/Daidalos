@@ -303,6 +303,8 @@ void dai_window_close(dai_window *w) {
     delete w;
 }
 
+void dai_window_keep_open(dai_window *w) { if (w) w->open = true; }
+
 int dai_window_poll(dai_window *w) {
     if (!w || !w->open) return 0;
     // non blocking: dispatch what has arrived, never wait for an event
@@ -414,7 +416,28 @@ void dai_window_cursor(dai_window *w, int cursor) {
     (void)w; (void)cursor;
 }
 
+float dai_window_dpi_scale(dai_window *w) {
+    (void)w;
+    return 1.0f;   /* X11/Wayland report scale through other channels */
+}
+
+void dai_window_caption_color(dai_window *w, uint32_t argb) {
+    // X11/Wayland paint their own server-side decorations; there is nothing
+    // here to recolour. The call exists so hosts compile unchanged.
+    (void)w; (void)argb;
+}
+
 int dai_window_double_click(dai_window *w) { (void)w; return 0; }
+
+// Wayland's drag and drop rides on wl_data_device, which needs a data device
+// manager, an offer listener and a pipe read per drop. Not wired yet; saying
+// so with a 0 is the same contract the clipboard bridge has here, and a host
+// that gets 0 simply never sees a drop.
+uint32_t dai_window_dropped_files(dai_window *w, char *out, uint32_t max, int *x, int *y) {
+    (void)w; (void)max; (void)x; (void)y;
+    if (out && max) out[0] = 0;
+    return 0;
+}
 
 void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height) {
     if (!w) return;

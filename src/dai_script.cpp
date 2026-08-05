@@ -20,7 +20,11 @@ struct dai_script {
     JSContext *ctx = nullptr;
     dai_ui *ui = nullptr;
     dai_script_node_host nodes{};
+    dai_script_play_host play{};
+    int has_play = 0;
     int has_nodes = 0;
+    dai_script_anim_host anim{};
+    int has_anim = 0;
     std::string last_path;
     uint32_t errors = 0;
 };
@@ -323,7 +327,64 @@ JSValue js_node_set_rot(JSContext *ctx, JSValueConst, int argc, JSValueConst *ar
     return JS_UNDEFINED;
 }
 
+JSValue js_input_key(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_play || !s->play.key || argc < 1) return JS_FALSE;
+    return s->play.key(str(ctx, argv[0]).c_str(), s->play.user) ? JS_TRUE : JS_FALSE;
+}
+
+JSValue js_body_get_vel(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    double v[3] = { 0, 0, 0 };
+    if (s->has_play && s->play.get_vel && argc >= 1)
+        s->play.get_vel(arg_num(ctx, argv[0]), v, s->play.user);
+    JSValue arr = JS_NewArray(ctx);
+    for (int i = 0; i < 3; ++i) JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewFloat64(ctx, v[i]));
+    return arr;
+}
+
+JSValue js_body_set_vel(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_play && s->play.set_vel && argc >= 4) {
+        double v[3] = { arg_num(ctx, argv[1]), arg_num(ctx, argv[2]), arg_num(ctx, argv[3]) };
+        s->play.set_vel(arg_num(ctx, argv[0]), v, s->play.user);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue js_body_impulse(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_play && s->play.impulse && argc >= 4) {
+        double v[3] = { arg_num(ctx, argv[1]), arg_num(ctx, argv[2]), arg_num(ctx, argv[3]) };
+        s->play.impulse(arg_num(ctx, argv[0]), v, s->play.user);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue js_body_grounded(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_play || !s->play.grounded || argc < 1) return JS_FALSE;
+    return s->play.grounded(arg_num(ctx, argv[0]), s->play.user) ? JS_TRUE : JS_FALSE;
+}
+
 } // namespace
+
+void dai_script_bind_play(dai_script *s, const dai_script_play_host *host) {
+    if (!s || !host) return;
+    s->play = *host;
+    s->has_play = 1;
+    JSValue global = JS_GetGlobalObject(s->ctx);
+    JSValue input = JS_NewObject(s->ctx);
+    JS_SetPropertyStr(s->ctx, input, "key", JS_NewCFunction(s->ctx, js_input_key, "key", 1));
+    JS_SetPropertyStr(s->ctx, global, "input", input);
+    JSValue body = JS_NewObject(s->ctx);
+    JS_SetPropertyStr(s->ctx, body, "getVel", JS_NewCFunction(s->ctx, js_body_get_vel, "getVel", 1));
+    JS_SetPropertyStr(s->ctx, body, "setVel", JS_NewCFunction(s->ctx, js_body_set_vel, "setVel", 4));
+    JS_SetPropertyStr(s->ctx, body, "impulse", JS_NewCFunction(s->ctx, js_body_impulse, "impulse", 4));
+    JS_SetPropertyStr(s->ctx, body, "grounded", JS_NewCFunction(s->ctx, js_body_grounded, "grounded", 1));
+    JS_SetPropertyStr(s->ctx, global, "body", body);
+    JS_FreeValue(s->ctx, global);
+}
 
 void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host) {
     if (!s || !host) return;
@@ -339,5 +400,209 @@ void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host) {
     JS_SetPropertyStr(s->ctx, node, "getRot", JS_NewCFunction(s->ctx, js_node_get_rot, "getRot", 1));
     JS_SetPropertyStr(s->ctx, node, "setRot", JS_NewCFunction(s->ctx, js_node_set_rot, "setRot", 5));
     JS_SetPropertyStr(s->ctx, global, "node", node);
+    JS_FreeValue(s->ctx, global);
+}
+
+
+// ------------------------------------------------------------ animation
+// The `anim` global, bound by the host through dai_script_bind_anim. Same
+// shape as the node block above: nothing here talks to the engine, only to the
+// host's callbacks, so it sits at the end of the file and touches nothing else.
+//
+// Two things are not function calls on purpose. `anim.speed = 1.5` and
+// `anim.time = 0` are PROPERTIES, because that is how the API reads in the
+// header and a scripting layer that renames things is a scripting layer you
+// have to keep translating in your head.
+namespace {
+
+std::string arg_str(JSContext *ctx, JSValueConst v) {
+    const char *c = JS_ToCString(ctx, v);
+    std::string out = c ? c : "";
+    if (c) JS_FreeCString(ctx, c);
+    return out;
+}
+
+double arg_f(JSContext *ctx, JSValueConst v, double def) {
+    if (JS_IsUndefined(v) || JS_IsNull(v)) return def;
+    double d = def;
+    if (JS_ToFloat64(ctx, &d, v) < 0) return def;
+    return d;
+}
+
+JSValue js_anim_play(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_anim || !s->anim.play || argc < 1) return JS_FALSE;
+    return s->anim.play(arg_str(ctx, argv[0]).c_str(), argc > 1 ? arg_f(ctx, argv[1], 0.0) : 0.0,
+                        s->anim.user) ? JS_TRUE : JS_FALSE;
+}
+
+JSValue js_anim_restart(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_anim || !s->anim.restart || argc < 1) return JS_FALSE;
+    return s->anim.restart(arg_str(ctx, argv[0]).c_str(),
+                           argc > 1 ? arg_f(ctx, argv[1], 0.0) : 0.0,
+                           argc > 2 ? arg_f(ctx, argv[2], 0.0) : 0.0,
+                           s->anim.user) ? JS_TRUE : JS_FALSE;
+}
+
+JSValue js_anim_stop(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_anim && s->anim.stop) s->anim.stop(argc > 0 ? arg_f(ctx, argv[0], 0.0) : 0.0, s->anim.user);
+    return JS_UNDEFINED;
+}
+
+JSValue js_anim_is_playing(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_anim || !s->anim.is_playing || argc < 1) return JS_FALSE;
+    return s->anim.is_playing(arg_str(ctx, argv[0]).c_str(), s->anim.user) ? JS_TRUE : JS_FALSE;
+}
+
+JSValue js_anim_current(JSContext *ctx, JSValueConst, int, JSValueConst *) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    const char *n = (s->has_anim && s->anim.current) ? s->anim.current(s->anim.user) : "";
+    return JS_NewString(ctx, n ? n : "");
+}
+
+JSValue js_anim_weight(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_anim || !s->anim.weight || argc < 1) return JS_NewFloat64(ctx, 0.0);
+    return JS_NewFloat64(ctx, s->anim.weight(arg_str(ctx, argv[0]).c_str(), s->anim.user));
+}
+
+JSValue js_anim_finished(JSContext *ctx, JSValueConst, int, JSValueConst *) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_anim || !s->anim.finished) return JS_FALSE;
+    return s->anim.finished(s->anim.user) ? JS_TRUE : JS_FALSE;
+}
+
+// anim.onEvent("footstep", fn) and anim.onEvent(fn) for all of them. The
+// handlers live in a plain object hanging off `anim`, so the garbage collector
+// owns them and this file does not have to track JSValue lifetimes by hand.
+JSValue js_anim_on_event(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    std::string key = "*";
+    JSValueConst fn = argv[0];
+    if (argc >= 2) { key = arg_str(ctx, argv[0]); fn = argv[1]; }
+    if (!JS_IsFunction(ctx, fn)) return JS_UNDEFINED;
+
+    JSValue handlers = JS_GetPropertyStr(ctx, this_val, "_handlers");
+    if (!JS_IsObject(handlers)) {
+        JS_FreeValue(ctx, handlers);
+        handlers = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, this_val, "_handlers", JS_DupValue(ctx, handlers));
+    }
+    JSValue list = JS_GetPropertyStr(ctx, handlers, key.c_str());
+    if (!JS_IsArray(list)) {
+        JS_FreeValue(ctx, list);
+        list = JS_NewArray(ctx);
+        JS_SetPropertyStr(ctx, handlers, key.c_str(), JS_DupValue(ctx, list));
+    }
+    JSValue len = JS_GetPropertyStr(ctx, list, "length");
+    uint32_t n = 0; JS_ToUint32(ctx, &n, len); JS_FreeValue(ctx, len);
+    JS_SetPropertyUint32(ctx, list, n, JS_DupValue(ctx, fn));
+    JS_FreeValue(ctx, list);
+    JS_FreeValue(ctx, handlers);
+    return JS_UNDEFINED;
+}
+
+JSValue js_anim_get_speed(JSContext *ctx, JSValueConst) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    return JS_NewFloat64(ctx, (s->has_anim && s->anim.get_speed) ? s->anim.get_speed(s->anim.user) : 0.0);
+}
+JSValue js_anim_set_speed(JSContext *ctx, JSValueConst, JSValueConst v) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_anim && s->anim.set_speed) s->anim.set_speed(arg_f(ctx, v, 1.0), s->anim.user);
+    return JS_UNDEFINED;
+}
+JSValue js_anim_get_time(JSContext *ctx, JSValueConst) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    return JS_NewFloat64(ctx, (s->has_anim && s->anim.get_time) ? s->anim.get_time(s->anim.user) : 0.0);
+}
+JSValue js_anim_set_time(JSContext *ctx, JSValueConst, JSValueConst v) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_anim && s->anim.set_time) s->anim.set_time(arg_f(ctx, v, 0.0), s->anim.user);
+    return JS_UNDEFINED;
+}
+JSValue js_anim_get_norm(JSContext *ctx, JSValueConst) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    return JS_NewFloat64(ctx, (s->has_anim && s->anim.get_normalized) ? s->anim.get_normalized(s->anim.user) : 0.0);
+}
+JSValue js_anim_get_param(JSContext *ctx, JSValueConst) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    return JS_NewFloat64(ctx, (s->has_anim && s->anim.get_parameter) ? s->anim.get_parameter(s->anim.user) : 0.0);
+}
+JSValue js_anim_set_param(JSContext *ctx, JSValueConst, JSValueConst v) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_anim && s->anim.set_parameter) s->anim.set_parameter(arg_f(ctx, v, 0.0), s->anim.user);
+    return JS_UNDEFINED;
+}
+
+const JSCFunctionListEntry kAnimFuncs[] = {
+    JS_CFUNC_DEF("play", 2, js_anim_play),
+    JS_CFUNC_DEF("crossfade", 2, js_anim_play),      // the same call, the other word for it
+    JS_CFUNC_DEF("restart", 3, js_anim_restart),
+    JS_CFUNC_DEF("stop", 1, js_anim_stop),
+    JS_CFUNC_DEF("isPlaying", 1, js_anim_is_playing),
+    JS_CFUNC_DEF("current", 0, js_anim_current),
+    JS_CFUNC_DEF("weight", 1, js_anim_weight),
+    JS_CFUNC_DEF("finished", 0, js_anim_finished),
+    JS_CFUNC_DEF("onEvent", 2, js_anim_on_event),
+    JS_CGETSET_DEF("speed", js_anim_get_speed, js_anim_set_speed),
+    JS_CGETSET_DEF("time", js_anim_get_time, js_anim_set_time),
+    JS_CGETSET_DEF("normalizedTime", js_anim_get_norm, nullptr),
+    JS_CGETSET_DEF("parameter", js_anim_get_param, js_anim_set_param),
+};
+
+// Calls every handler in one list. A handler that throws is counted and the
+// rest still run: one broken footstep sound must not silence the others.
+void call_list(dai_script *s, JSValue list, JSValue ev, JSValue cl, JSValue tm) {
+    if (!JS_IsArray(list)) return;
+    JSValue len = JS_GetPropertyStr(s->ctx, list, "length");
+    uint32_t n = 0; JS_ToUint32(s->ctx, &n, len); JS_FreeValue(s->ctx, len);
+    for (uint32_t i = 0; i < n; ++i) {
+        JSValue fn = JS_GetPropertyUint32(s->ctx, list, i);
+        if (JS_IsFunction(s->ctx, fn)) {
+            JSValue args[3] = { ev, cl, tm };
+            JSValue r = JS_Call(s->ctx, fn, JS_UNDEFINED, 3, args);
+            if (JS_IsException(r)) record_error(s, nullptr, 0);
+            JS_FreeValue(s->ctx, r);
+        }
+        JS_FreeValue(s->ctx, fn);
+    }
+}
+
+} // namespace
+
+void dai_script_bind_anim(dai_script *s, const dai_script_anim_host *host) {
+    if (!s || !host) return;
+    s->anim = *host;
+    s->has_anim = 1;
+    JSValue global = JS_GetGlobalObject(s->ctx);
+    JSValue anim = JS_NewObject(s->ctx);
+    JS_SetPropertyFunctionList(s->ctx, anim, kAnimFuncs, (int)(sizeof(kAnimFuncs) / sizeof(kAnimFuncs[0])));
+    JS_SetPropertyStr(s->ctx, anim, "_handlers", JS_NewObject(s->ctx));
+    JS_SetPropertyStr(s->ctx, global, "anim", anim);
+    JS_FreeValue(s->ctx, global);
+}
+
+void dai_script_anim_event(dai_script *s, const char *event, const char *clip, double time) {
+    if (!s || !s->ctx || !event) return;
+    JSValue global = JS_GetGlobalObject(s->ctx);
+    JSValue anim = JS_GetPropertyStr(s->ctx, global, "anim");
+    JSValue handlers = JS_IsObject(anim) ? JS_GetPropertyStr(s->ctx, anim, "_handlers") : JS_UNDEFINED;
+    if (JS_IsObject(handlers)) {
+        JSValue ev = JS_NewString(s->ctx, event);
+        JSValue cl = JS_NewString(s->ctx, clip ? clip : "");
+        JSValue tm = JS_NewFloat64(s->ctx, time);
+        JSValue by_name = JS_GetPropertyStr(s->ctx, handlers, event);
+        call_list(s, by_name, ev, cl, tm);
+        JS_FreeValue(s->ctx, by_name);
+        JSValue any = JS_GetPropertyStr(s->ctx, handlers, "*");
+        call_list(s, any, ev, cl, tm);
+        JS_FreeValue(s->ctx, any);
+        JS_FreeValue(s->ctx, ev); JS_FreeValue(s->ctx, cl); JS_FreeValue(s->ctx, tm);
+    }
+    JS_FreeValue(s->ctx, handlers);
+    JS_FreeValue(s->ctx, anim);
     JS_FreeValue(s->ctx, global);
 }

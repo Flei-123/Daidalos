@@ -236,6 +236,14 @@ DAI_API void dai_render_particle_atlas(dai_renderer *r, dai_texture tex, uint32_
  * pointer is copied, not retained. Pass count 0 to clear. */
 DAI_API void dai_render_particles(dai_renderer *r, const dai_particle *particles, uint32_t count);
 
+/* World-space line list for the NEXT frame: `xyz_pairs` is vertex_count
+ * positions (x,y,z interleaved), drawn as GL-style lines between consecutive
+ * pairs. Depth tested against the scene but not writing depth - editor grids
+ * and debug geometry belong here, NOT in the UI overlay, or they shine
+ * through every object. Drawn in view 0 only. */
+DAI_API void dai_render_lines(dai_renderer *r, const float *xyz_pairs, uint32_t vertex_count,
+                              float red, float green, float blue, float alpha);
+
 /* ---- lights ------------------------------------------------------------ */
 
 typedef enum dai_light_type {
@@ -318,6 +326,11 @@ DAI_API void        dai_window_close(dai_window *w);
 
 /* Pumps events. Returns 0 once the window has been closed. */
 DAI_API int  dai_window_poll(dai_window *w);
+/* Undo a close request. The window is not destroyed when the user presses the
+ * X - the backend only records that it was asked to go - so a host that has an
+ * unsaved document can ask the question and then decide to stay open.
+ * Meaningless (and harmless) at any other time. */
+DAI_API void dai_window_keep_open(dai_window *w);
 /* Blits the last rendered frame to the screen. */
 DAI_API dai_result dai_window_present(dai_window *w);
 
@@ -398,6 +411,13 @@ DAI_API int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons);
 DAI_API float dai_window_wheel(dai_window *w);
 DAI_API void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height);
 
+/* The OS clipboard, UTF-8 both ways. _set returns 0 when the clipboard could
+ * not be opened; _get returns the number of bytes written (0 when empty or
+ * unavailable). Platforms without a bridge yet keep returning 0 and the
+ * caller's internal clipboard keeps working, so this never breaks a build. */
+DAI_API int  dai_window_clipboard_set(dai_window *w, const char *utf8);
+DAI_API uint32_t dai_window_clipboard_get(dai_window *w, char *out, uint32_t max);
+
 /* The pointer shape. The values ARE dai_ui_cursor_kind's, so a host can pass
  * dai_ui_cursor(ui) straight through without a translation table - the UI is
  * the only thing that knows which widget is under the pointer, and the window
@@ -416,12 +436,41 @@ typedef enum dai_cursor {
 } dai_cursor;
 DAI_API void dai_window_cursor(dai_window *w, int cursor);
 
+/* Paints the OS title bar in a colour (0xAABBGGRR, the UI's packing). The one
+ * strip of the window the engine does not draw itself is the caption, so a
+ * theme that stops at the client area always looks half applied. Only Win32
+ * can do this (Windows 11, DWM); every other backend ignores the call. */
+DAI_API void dai_window_caption_color(dai_window *w, uint32_t argb);
+/* The display's scale factor: 1.0 at 96 dpi, 1.5 at 150%, 2.0 at 200%.
+ *
+ * A DPI aware program renders in REAL pixels, which is what makes it sharp -
+ * and also what makes a 13 px font 13 real pixels tall on a 150% display,
+ * i.e. two thirds the size of every other program's text. Sharp and unreadably
+ * small is not the goal; sharp at the size the user asked their desktop for
+ * is. The host multiplies its interface metrics by this. */
+DAI_API float dai_window_dpi_scale(dai_window *w);
+
 /* Was the most recent press a double click? Reads and clears, like the wheel:
  * a double click is two presses and a gap, and the only place that knows the
  * gap was short enough is the window system's own timer. Text fields need it
  * (double click selects the whole value) and polling button state cannot tell
  * you. */
 DAI_API int dai_window_double_click(dai_window *w);
+
+/* Files dropped onto the window from the desktop's file manager.
+ *
+ * Reads and clears, exactly like the wheel and the double click: a drop is one
+ * event, and the frame that misses it is the frame the user is looking at.
+ * `out` receives the absolute paths, one per line, UTF-8, NUL terminated; the
+ * pointer position the drop landed on comes back in *x / *y in CLIENT pixels,
+ * because the only thing that can decide which panel was dropped on is the
+ * caller. Returns how many paths were written.
+ *
+ * Win32 (WM_DROPFILES) and X11 (XDND) implement it. Wayland does not yet, and
+ * says so by returning 0 - a host that gets 0 simply never sees a drop, which
+ * is the same contract the clipboard bridge has. */
+DAI_API uint32_t dai_window_dropped_files(dai_window *w, char *out, uint32_t max,
+                                          int *x, int *y);
 
 /* ---- frame ------------------------------------------------------------- */
 
@@ -439,6 +488,13 @@ DAI_API void dai_render_world_clip(dai_renderer *r, float x, float y, float w, f
 DAI_API void dai_render_world_clip2(dai_renderer *r, float x, float y, float w, float h);
 DAI_API void dai_render_camera2(dai_renderer *r, dai_vec3 eye, dai_vec3 target, dai_vec3 up,
                                 float fov_deg);
+
+/* Orthographic projection: `half_height` is half the visible height in world
+ * units, 0 goes back to perspective. That is the entire 2D mode - the world,
+ * the physics and the scene graph stay exactly as they are, only the
+ * projection changes. _ortho2 does the same for the second view. */
+DAI_API void dai_render_ortho(dai_renderer *r, float half_height);
+DAI_API void dai_render_ortho2(dai_renderer *r, float half_height);
 
 DAI_API dai_result dai_render_frame(dai_renderer *r, const dai_render_instance *inst, uint32_t count);
 

@@ -412,6 +412,16 @@ DAI_API uint32_t dai_poll_contacts(dai_world *w, dai_contact *out, uint32_t max)
 
 DAI_API const char *dai_backend_name(dai_world *w);
 
+/* Is this backend actually IN this build? Jolt is opt in on Windows and absent
+ * from the WebAssembly build, and a world asked for a backend that was not
+ * linked silently gets a different one - which is how an editor ends up
+ * offering "Jolt" in a dropdown, saying it selected it, and running null.
+ *
+ * A picker that cannot ask this question can only lie. Pass a
+ * dai_physics_backend; returns 1 when dai_world_create would really give you
+ * that one. */
+DAI_API int dai_physics_available(int backend);
+
 /* ---- presentation ------------------------------------------------------ */
 
 /* Interpolated transforms for rendering. alpha comes from dai_advance. */

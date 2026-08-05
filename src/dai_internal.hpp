@@ -5,6 +5,7 @@
 #pragma once
 
 #include "daidalos.h"
+#include "dai_audio.h"
 #include "dai_physics.hpp"
 
 #include <string>
@@ -103,7 +104,8 @@ struct PendingAudio {
 } // namespace dai
 
 // Audio backend (dai_audio.cpp) - the only file that knows Aulos exists.
-struct dai_audio_backend;
+// The control API (mixer buses, editor binding, play-with-handle) is public
+// and lives in include/dai_audio.h, included above.
 extern "C" {
 dai_audio_backend *dai_audio_open(const char *bank, const char *asset_root, int enable_device, char *err, size_t err_len);
 void               dai_audio_close(dai_audio_backend *);

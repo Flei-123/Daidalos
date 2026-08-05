@@ -581,6 +581,77 @@ dai_animation_info dai_model_animation_at(const dai_model *m, uint32_t index) {
     return info;
 }
 
+// ---- raw clip data, for dai_anim.h -------------------------------------
+//
+// Handed out as pointers into the model's own vectors. No copy, no ownership,
+// and no dai_anim type in sight: the importer must keep linking into tools
+// that have no animation system compiled in.
+
+uint32_t dai_model_animation_channel_count(const dai_model *m, uint32_t animation) {
+    if (!m || animation >= m->anims.size()) return 0;
+    return (uint32_t)m->anims[animation].channels.size();
+}
+
+int dai_model_animation_channel_at(const dai_model *m, uint32_t animation,
+                                   uint32_t channel, dai_animation_channel *out) {
+    if (!m || !out || animation >= m->anims.size()) return 0;
+    const Animation &a = m->anims[animation];
+    if (channel >= a.channels.size()) return 0;
+    const Channel &c = a.channels[channel];
+    out->node          = c.node;
+    out->path          = (uint32_t)c.path;
+    out->interpolation = (uint32_t)c.interpolation;
+    out->keys          = (uint32_t)c.times.size();
+    out->times         = c.times.empty() ? nullptr : c.times.data();
+    out->values        = c.values.empty() ? nullptr : c.values.data();
+    return 1;
+}
+
+uint32_t dai_model_hierarchy_count(const dai_model *m) { return m ? (uint32_t)m->raw.size() : 0; }
+
+uint32_t dai_model_rest_pose(const dai_model *m, float *trs, uint32_t max_nodes) {
+    if (!m) return 0;
+    const uint32_t n = (uint32_t)m->raw.size();
+    if (!trs) return n;
+    for (uint32_t i = 0; i < n && i < max_nodes; ++i) {
+        const RawNode &rn = m->raw[i];
+        float *o = trs + (size_t)i * 10;
+        if (rn.has_matrix) {
+            // A node written as a matrix still has to become TRS: that is the
+            // only form a pose can be blended in.
+            dai_vec3 t{}, s{}; dai_quat q{};
+            m4_decompose(rn.matrix, &t, &q, &s);
+            o[0] = t.x; o[1] = t.y; o[2] = t.z;
+            o[3] = q.x; o[4] = q.y; o[5] = q.z; o[6] = q.w;
+            o[7] = s.x; o[8] = s.y; o[9] = s.z;
+        } else {
+            o[0] = rn.t[0]; o[1] = rn.t[1]; o[2] = rn.t[2];
+            o[3] = rn.r[0]; o[4] = rn.r[1]; o[5] = rn.r[2]; o[6] = rn.r[3];
+            o[7] = rn.s[0]; o[8] = rn.s[1]; o[9] = rn.s[2];
+        }
+    }
+    return n;
+}
+
+namespace {
+uint32_t finish_pose_fwd(dai_model *m, std::vector<RawNode> &posed, float *joints, uint32_t max_joints);
+}
+
+uint32_t dai_model_pose_local(dai_model *m, const float *trs, uint32_t node_count,
+                              float *joints, uint32_t max_joints) {
+    if (!m || !trs) return 0;
+    std::vector<RawNode> posed = m->raw;
+    for (size_t i = 0; i < posed.size() && i < node_count; ++i) {
+        const float *v = trs + i * 10;
+        RawNode &n = posed[i];
+        n.has_matrix = false;                 // the caller handed us TRS, so TRS it is
+        n.t[0] = v[0]; n.t[1] = v[1]; n.t[2] = v[2];
+        n.r[0] = v[3]; n.r[1] = v[4]; n.r[2] = v[5]; n.r[3] = v[6];
+        n.s[0] = v[7]; n.s[1] = v[8]; n.s[2] = v[9];
+    }
+    return finish_pose_fwd(m, posed, joints, max_joints);
+}
+
 namespace {
 
 // Sampling one channel. glTF guarantees the times are sorted, so a binary
@@ -731,6 +802,10 @@ void apply_clip(dai_model *m, std::vector<RawNode> &posed, int animation, float 
         else if (c.path == 1) sample_channel(c, t, n.r, 4);
         else sample_channel(c, t, n.s, 3);
     }
+}
+
+uint32_t finish_pose_fwd(dai_model *m, std::vector<RawNode> &posed, float *joints, uint32_t max_joints) {
+    return finish_pose(m, posed, joints, max_joints);
 }
 
 uint32_t finish_pose(dai_model *m, std::vector<RawNode> &posed, float *joints, uint32_t max_joints) {

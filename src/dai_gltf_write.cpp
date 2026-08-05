@@ -9,6 +9,9 @@
 // at the identity transform. No materials, no textures, no hierarchy. A baker
 // splits a mesh; it does not invent a scene.
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "dai_gltf.h"
 
 #include <cstdio>
@@ -168,7 +171,11 @@ dai_result dai_gltf_write(const char *path, const dai_mesh_write *meshes, uint32
     ok = (std::fflush(f) == 0) && ok;
     std::fclose(f);
     if (!ok) { std::remove(tmp.c_str()); return fail("write failed"); }
+#ifdef _WIN32
+    if (!MoveFileExA(tmp.c_str(), path, MOVEFILE_REPLACE_EXISTING)) { std::remove(tmp.c_str()); return fail("rename failed"); }
+#else
     if (std::rename(tmp.c_str(), path) != 0) { std::remove(tmp.c_str()); return fail("rename failed"); }
+#endif
     return DAI_OK;
 }
 

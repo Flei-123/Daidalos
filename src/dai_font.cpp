@@ -462,6 +462,32 @@ dai_font *dai_font_load(const char *path, float pixel_height,
 
 void dai_font_free(dai_font *f) { delete f; }
 
+/* Divide every reported metric by `div`, leaving the ATLAS alone: the glyphs
+ * keep their real pixels, the layout gets logical ones. f->scale is only read
+ * by line_height/ascent after this point, so scaling it here is enough. */
+static void font_to_logical(dai_font *f, float div) {
+    if (!f || div <= 1.0001f) return;
+    float inv = 1.0f / div;
+    for (auto &kv : f->glyphs) {
+        dai_glyph &g = kv.second;
+        g.x0 *= inv; g.y0 *= inv; g.x1 *= inv; g.y1 *= inv; g.advance *= inv;
+    }
+    f->scale *= inv;
+}
+
+dai_font *dai_font_load_ui_scaled(float pixel_height, float scale,
+                                  char *err, size_t err_len) {
+    if (!(scale > 0.0f)) scale = 1.0f;
+    /* Whole real pixels: a 16.25 px raster puts every baseline half a texel
+     * off the grid, which is the blur this whole change exists to remove. */
+    float real = (float)(int)(pixel_height * scale + 0.5f);
+    if (real < 2.0f) real = 2.0f;
+    dai_font *f = dai_font_load_ui(real, err, err_len);
+    if (!f) return nullptr;
+    font_to_logical(f, real / pixel_height);
+    return f;
+}
+
 dai_font *dai_font_load_ui(float pixel_height, char *err, size_t err_len) {
     // Every one of these is a font that ships with the operating system, so a
     // program using this needs nothing installed and nothing bundled.
@@ -543,9 +569,17 @@ const dai_glyph *dai_font_glyph(const dai_font *f, uint32_t cp) {
 }
 
 float dai_font_line_height(const dai_font *f) {
-    return f ? (f->ascent - f->descent + f->line_gap) * f->scale : 0.0f;
+    if (!f) return 0.0f;
+    // Whole pixels. A 19.5 px font's line height is 21.7 - a baseline that
+    // sits half a texel off the grid, which is exactly the smear the user
+    // calls "blurry". The texture is already snapped to whole pixels, so the
+    // layout follows it.
+    return (float)(int)((f->ascent - f->descent + f->line_gap) * f->scale + 0.9999f);
 }
-float dai_font_ascent(const dai_font *f) { return f ? f->ascent * f->scale : 0.0f; }
+float dai_font_ascent(const dai_font *f) {
+    if (!f) return 0.0f;
+    return (float)(int)(f->ascent * f->scale + 0.9999f);
+}
 
 float dai_font_measure(const dai_font *f, const char *utf8, uint32_t *count) {
     if (!f || !utf8) return 0.0f;

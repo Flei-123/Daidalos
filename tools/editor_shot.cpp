@@ -131,6 +131,16 @@ int main(int argc, char **argv) {
             texes.push_back(draws[i].texture);
         }
         dai_render_ui(r, verts.data(), (uint32_t)verts.size(), counts.data(), texes.data(), nb);
+        // Mirror the real host: clip the world to the Scene panel's body rect.
+        float vrx = 0, vry = 0, vrw = (float)W, vrh = (float)H;
+        dai_editor_ui_viewport_rect(panels, &vrx, &vry, &vrw, &vrh);
+        std::printf("   viewport rect: %.1f %.1f %.1fx%.1f (frame %dx%d)\n",
+                    (double)vrx, (double)vry, (double)vrw, (double)vrh, W, H);
+        dai_render_world_clip(r, vrx, vry, vrw, vrh);
+        {   static float grid_xyz[84 * 2 * 3];
+            uint32_t gn = dai_editor_ui_grid_lines(panels, grid_xyz, 84 * 2);
+            dai_render_lines(r, grid_xyz, gn, 0.35f, 0.38f, 0.42f, 0.75f);
+        }
         dai_render_frame(r, inst.data(), n);
         std::string path = outdir + "/editor_" + name + ".png";
         dai_render_write_png(r, path.c_str());

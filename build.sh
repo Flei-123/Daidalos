@@ -165,6 +165,13 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_ui.cpp            -o build/dai_ui.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_update.cpp       -o build/dai_update.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor_ui.cpp     -o build/dai_editor_ui.o
+    # Native (C++) behaviours: compiles a .cpp in the project to a shared
+    # library and dlopen()s it. Lives with the editor because only the editor
+    # has a compiler on hand and a reason to rebuild while running.
+    python3 tools/embed_native.py include/dai_native.h build/dai_native_header.cpp
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_native.cpp        -o build/dai_native.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_tr.cpp            -o build/dai_tr.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c build/dai_native_header.cpp -o build/dai_native_header.o
     # The shaders are also linked IN - the editor runs as one file anywhere,
     # and a shaders/ dir (or DAI_SHADER_DIR) still overrides when present.
     python3 tools/embed_shaders.py shaders build/dai_shaders_embed.cpp
@@ -173,7 +180,7 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
            build/dai_shaders_embed.o \
            $WINDOW_OBJ build/dai_dock.o build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
            build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_svg.o build/dai_icons.o build/dai_ui.o build/dai_update.o \
-           build/dai_editor_ui.o
+           build/dai_editor_ui.o build/dai_native.o build/dai_native_header.o build/dai_tr.o
     VK_OK=1
 else
     echo "-- renderer: skipped (no vulkan headers)"
@@ -201,7 +208,7 @@ else
 fi
 
 LIBS="build/libdaidalos.a $AUDIO_LIB ${TALOS_LIB:-} -L$JOLT_LIB -lJolt -lpthread -lm"
-VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB ${TALOS_LIB:-} -L$JOLT_LIB -lJolt -lvulkan ${X11_LIB:-} -lpthread -lm"
+VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB ${TALOS_LIB:-} -L$JOLT_LIB -lJolt -lvulkan ${X11_LIB:-} -lpthread -lm -ldl"
 
 # --- backend leak tests -------------------------------------------------
 # Same idea as the Jolt one, for the renderer: the RHI must be swappable for
@@ -299,15 +306,15 @@ if [ "$VK_OK" = "1" ]; then
     # Windows and the solid texel every rectangle in the interface is drawn
     # with. Needs no renderer: it reads the atlas and the vertices.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_window.cpp src/dai_ui.cpp src/dai_font.cpp \
-        src/dai_svg.cpp src/dai_icons.cpp -o build/test_ui_window
+        src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp -o build/test_ui_window
     # Text fields: selection, caret, Home/End, Escape - and the resize edges.
     # No renderer: input in, vertices out.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_field.cpp src/dai_ui.cpp src/dai_font.cpp \
-        src/dai_svg.cpp src/dai_icons.cpp -o build/test_ui_field && ./build/test_ui_field
+        src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp -o build/test_ui_field && ./build/test_ui_field
     # Docked panels tile and never overlap - the property the whole layout
     # rewrite exists for.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_dock.cpp src/dai_dock.cpp src/dai_ui.cpp \
-        src/dai_font.cpp src/dai_svg.cpp src/dai_icons.cpp -o build/test_dock && ./build/test_dock
+        src/dai_font.cpp src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp -o build/test_dock && ./build/test_dock
     # A folder is a project: creation, validation, settings round trip.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_project.cpp src/dai_project.cpp \
         -o build/test_project && ./build/test_project

@@ -26,7 +26,10 @@
 extern "C" {
 #endif
 
+#ifndef DAI_MODEL_FWD
+#define DAI_MODEL_FWD
 typedef struct dai_model dai_model;
+#endif
 
 /* One drawable piece: a mesh, its material, and where it sits.
  *
@@ -176,6 +179,56 @@ DAI_API uint32_t dai_model_pose(dai_model *m, int animation, float time,
  * else (state machines, layers, additive) is built out of repeated calls. */
 DAI_API uint32_t dai_model_pose_blend(dai_model *m, int anim_a, float time_a,
                                       int anim_b, float time_b, float weight,
+                                      float *joints, uint32_t max_joints);
+
+/* ---- the raw clip data, for the animation layer -------------------------
+ *
+ * dai_model_pose above is the whole player in one call: one clip, looping, at
+ * a time. That is enough for a turntable and not enough for a game, where the
+ * question is "fade this into that, and tell me when the foot lands". The
+ * layer that answers it is dai_anim.h, and what it needs from the importer is
+ * the data, not another opinion about how to play it.
+ *
+ * So: the channels come out as plain arrays, and the pose goes back in as
+ * plain arrays. The importer keeps knowing nothing about the player - which is
+ * why dai_gltf.o still links into a tool that has no animation system. */
+
+typedef struct dai_animation_channel {
+    int32_t      node;           /* target NODE index in this model's hierarchy */
+    uint32_t     path;           /* 0 translation, 1 rotation (xyzw), 2 scale   */
+    uint32_t     interpolation;  /* 0 LINEAR, 1 STEP, 2 CUBICSPLINE             */
+    uint32_t     keys;
+    const float *times;          /* `keys` timestamps, ascending                */
+    const float *values;         /* keys * comps, and keys * comps * 3 when     */
+                                 /* interpolation is CUBICSPLINE (in, v, out)   */
+} dai_animation_channel;
+
+DAI_API uint32_t dai_model_animation_channel_count(const dai_model *m, uint32_t animation);
+/* Points `out` at the model's own arrays - valid until the model is freed.
+ * Returns 1, or 0 if the animation or channel does not exist. */
+DAI_API int      dai_model_animation_channel_at(const dai_model *m, uint32_t animation,
+                                                uint32_t channel, dai_animation_channel *out);
+
+/* How many nodes the transform hierarchy has. This is the size of a pose
+ * array: channel targets are node indices, so there is no mapping table
+ * anywhere between the importer and the player. */
+DAI_API uint32_t dai_model_hierarchy_count(const dai_model *m);
+
+/* The rest pose: every node's local transform as the file has it, 10 floats
+ * per node (tx ty tz | rx ry rz rw | sx sy sz - the layout of dai_anim_trs).
+ * Nodes stored as a matrix are decomposed, which loses shear; glTF allows it,
+ * Blender does not write it, and an animated node is TRS by definition.
+ * Returns the node count and fills up to `max_nodes`. */
+DAI_API uint32_t dai_model_rest_pose(const dai_model *m, float *trs, uint32_t max_nodes);
+
+/* Poses the model from local transforms the caller computed - the same 10
+ * floats per node - and writes the joint matrices, column major, exactly like
+ * dai_model_pose(). Rigid pieces follow their node too, so a prop parented to
+ * a hand moves with it.
+ *
+ * This is the seam between the animation system and the skinning pipeline:
+ * everything above it is blending, everything below it is matrices. */
+DAI_API uint32_t dai_model_pose_local(dai_model *m, const float *trs, uint32_t node_count,
                                       float *joints, uint32_t max_joints);
 
 /* Fills render instances for the whole model, transformed by an offset,

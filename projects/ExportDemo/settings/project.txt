@@ -1,0 +1,5 @@
+daidalos-project-settings 1
+# project settings - shared, belongs in version control
+app-name Export Demo
+default-scene scenes/main.daidalos
+tick-hz 60

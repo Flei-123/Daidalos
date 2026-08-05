@@ -77,10 +77,43 @@ typedef struct dai_node_desc {
                                    the rigidbody's volume, as a sensor).        */
     int      no_rigidbody;      /* 1 = a collider with nothing driving it: the
                                    body is static whatever `motion` says.       */
-    char     script[96];        /* path of the JS behaviour, e.g. "spin.js"     */
+    char     script[512];       /* JS behaviours, ';' separated - several stack
+                                   the way Unity stacks script components. Was
+                                   96 bytes, which two scripts plus their
+                                   assigned references already overflowed.     */
+
+    /* ---- optional components ------------------------------------------
+     * Each is off at its zero value, so an old scene file that never heard
+     * of them loads unchanged - the text format only writes what differs
+     * from the default. */
+    int      camera;            /* 0 = none, 1 = perspective, 2 = orthographic.
+                                   THIS is the 2D/3D switch: an orthographic
+                                   camera with the world laid out on XY is a
+                                   2D game, and nothing else about the engine
+                                   has to change.                              */
+    float    camera_fov;        /* perspective: degrees, 0 -> 60                */
+    float    camera_size;       /* orthographic: half the visible height in
+                                   world units, 0 -> 5                         */
+    int      light;             /* 0 = none, 1 = point, 2 = spot, 3 = sun       */
+    dai_vec3 light_color;       /* 0,0,0 -> white                               */
+    float    light_range;       /* metres, 0 -> 10                              */
+    float    light_intensity;   /* 0 -> 1                                       */
+    float    light_cone;        /* spot: half angle in degrees, 0 -> 30         */
+    int      sprite;            /* 1 = draw as a flat quad facing +Z (2D), the
+                                   texture comes from `asset`                   */
+    dai_vec3 sprite_size;       /* world units, 0 -> 1x1                        */
+    char     audio_event[64];   /* AudioSource: event name in the sound bank    */
+    int      audio_bus;         /* 0 master, 1 music, 2 sfx, 3 ui               */
+    float    audio_volume;      /* 0 -> 1                                       */
+    int      audio_loop;
+    int      audio_autoplay;    /* 1 = starts with the scene                    */
 
     /* graphics */
     uint32_t mesh;              /* 0xFFFFFFFF -> derive from shape              */
+    /* The material STACK, Unity's "Materials" array on a MeshRenderer: one
+     * row per slot, first slot is the object's base colour + texture. Stored
+     * ';'-separated like the scripts. */
+    char     materials[256];
     /* Asset reference BY PATH - "models/crate.glb". The path is the identity
      * (see Mnemosyne), a bare index would point somewhere else on the next
      * run. When set it wins over `mesh`; how a path becomes a mesh is the
@@ -106,7 +139,15 @@ typedef struct dai_node_desc {
     float    roughness;         /* 0 -> 1 (matte)                               */
     float    emissive;
     uint32_t render_flags;      /* dai_render_flags                             */
-    int      hidden;
+    int      hidden;            /* the RENDERER is off: the object still
+                                   exists, still collides, still runs its
+                                   scripts. This is Unity's MeshRenderer
+                                   checkbox, not the object's.                */
+    int      disabled;          /* the OBJECT is off: nothing is drawn, no
+                                   body, no scripts. Unity's checkbox next to
+                                   the name. Sharing one flag with `hidden` is
+                                   what made "activate the camera" switch the
+                                   mesh renderer on.                          */
 
     uint32_t user_data;
 } dai_node_desc;

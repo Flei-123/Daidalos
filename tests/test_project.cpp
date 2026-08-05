@@ -175,6 +175,9 @@ int main() {
     s.gravity[2] = 1.17549435e-38f;      // smallest normal float
     s.tick_hz = 128;
     s.max_bodies = 65535;
+    // 2 was Jolt. The backend is gone, and loading a project written back
+    // then must not select a solver nothing answers to - it comes back as
+    // Talos on purpose. Every other field still round trips byte for byte.
     s.physics_backend = 2;
     s.default_friction = 0.123456789f;
     s.default_restitution = 3.4028235e38f;   // FLT_MAX
@@ -195,7 +198,7 @@ int main() {
               "gravity[%d] %.9g != %.9g", i, back.gravity[i], s.gravity[i]);
     CHECK(back.tick_hz == s.tick_hz, "tick_hz %d", back.tick_hz);
     CHECK(back.max_bodies == s.max_bodies, "max_bodies %d", back.max_bodies);
-    CHECK(back.physics_backend == s.physics_backend, "physics_backend %d", back.physics_backend);
+    CHECK(back.physics_backend == DAI_PHYSICS_TALOS, "legacy Jolt did not fall back to Talos: %d", back.physics_backend);
     CHECK(same_bits(back.default_friction, s.default_friction),
           "friction %.9g != %.9g", back.default_friction, s.default_friction);
     CHECK(same_bits(back.default_restitution, s.default_restitution),
@@ -206,7 +209,13 @@ int main() {
     CHECK(std::strcmp(back.tags[7], "Pickup Item") == 0, "tag 7 with a space: '%s'", back.tags[7]);
     CHECK(back.tags[2][0] == 0, "a cleared tag came back as '%s'", back.tags[2]);
     CHECK(std::strcmp(back.layers[9], "Water Surface") == 0, "layer 9 '%s'", back.layers[9]);
-    CHECK(std::memcmp(&back, &s, sizeof(s)) == 0, "the struct did not survive the round trip byte for byte");
+    {   // ...and everything else byte for byte. The backend is compared above:
+        // it is the one field that is deliberately not preserved.
+        dai_project_settings expect = s;
+        expect.physics_backend = DAI_PHYSICS_TALOS;
+        CHECK(std::memcmp(&back, &expect, sizeof(expect)) == 0,
+              "the struct did not survive the round trip byte for byte");
+    }
     std::printf("  settings round trip: byte identical, floats included\n");
 
     // Changing default_scene must move what the editor opens at startup.
@@ -239,6 +248,7 @@ int main() {
         dai_project_settings fwd{};
         CHECK(dai_project_settings_load(p, &fwd) == DAI_OK,
               "an unknown key must not fail the load");
+        s.physics_backend = DAI_PHYSICS_TALOS;   // see above: never round trips
         CHECK(std::memcmp(&fwd, &s, sizeof(s)) == 0, "an unknown key disturbed the known values");
 
         CHECK(dai_project_settings_save(p, &fwd) == DAI_OK, "save after an unknown key failed");
