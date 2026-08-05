@@ -537,6 +537,8 @@ typedef struct dai_ui_code_state {
     float blink;
     float prefer_x;     /* remembered column, so up/down do not drift left   */
     int   dragging;
+    int   last_caret;   /* what the caret was last frame - see the widget    */
+    int   have_last;
 } dai_ui_code_state;
 
 enum {

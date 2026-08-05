@@ -2287,7 +2287,13 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
     }
 
     // ---- keep the caret in view --------------------------------------------
-    {
+    // Only when it MOVED, or when the text under it changed. Doing this
+    // unconditionally is why the wheel did nothing: scroll away, and the very
+    // next frame pulled the view back onto the caret.
+    bool caret_moved = !st->have_last || st->last_caret != st->caret || changed;
+    st->last_caret = st->caret;
+    st->have_last = 1;
+    if (caret_moved) {
         float cx, cy;
         caret_xy(st->caret, &cx, &cy);
         float rel_y = cy - (y + 4.0f);
