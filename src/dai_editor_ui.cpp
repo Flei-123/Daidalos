@@ -329,6 +329,7 @@ struct dai_editor_ui {
     // The object picker behind a reference field's target button.
     dai_ui_searchlist obj_list{};
     dai_node    obj_pick_node = DAI_INVALID_NODE;
+    char obj_pick_type[32] = { 0 };   // the field's declared type, "" = any
     int         obj_pick_entry = -1;
     char        obj_pick_key[64] = { 0 };
 
@@ -371,6 +372,13 @@ struct dai_editor_ui {
     int  log_show[3] = { 1, 1, 1 };   // info / warning / error
     int  log_collapse = 1;
     float log_scroll = 0.0f;
+    // Unity's console is two panels: the list, and the full text of the ONE
+    // line you clicked. Messages are longer than a row - a script error
+    // carries a file, a line and a reason - and a list that clips them is a
+    // list you have to copy out of to read.
+    int   log_sel = -1;            // index into `log`, -1 = nothing picked
+    float log_detail = 0.0f;       // height of the detail pane, 0 = closed
+    float log_detail_scroll = 0.0f;
     // Audio mixer: four busses, the set every game ends up with.
     float bus_gain[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
     int   bus_mute[4] = { 0, 0, 0, 0 };
@@ -474,8 +482,12 @@ static const char *icon_for_asset(const std::string &path) {
     if (dot == std::string::npos) return DAI_ICON_FILE;
     std::string e = path.substr(dot + 1);
     for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-    if (e == "js" || e == "ts")                       return DAI_ICON_SCRIPT;
-    if (e == "cpp" || e == "cc" || e == "cxx" || e == "h" || e == "hpp") return DAI_ICON_SCRIPT;
+    // The SAME glyph the component header uses (dai_ui_header_icon_col with
+    // DAI_ICON_C_SCRIPT). A file in the Project window and the component it
+    // becomes when you drop it on an object are one thing; showing them as two
+    // different pictures makes the reader do a translation that has no content.
+    if (e == "js" || e == "ts")                       return DAI_ICON_C_SCRIPT;
+    if (e == "cpp" || e == "cc" || e == "cxx" || e == "h" || e == "hpp") return DAI_ICON_C_SCRIPT;
     if (e == "glb" || e == "gltf" || e == "obj")      return DAI_ICON_MODEL;
     if (e == "wav" || e == "ogg" || e == "mp3" || e == "flac") return DAI_ICON_AUDIO;
     if (e == "png" || e == "jpg" || e == "jpeg" || e == "tga" || e == "svg") return DAI_ICON_IMAGE;
@@ -646,7 +658,45 @@ enum ParamType { PARAM_NODE = 0, PARAM_FLOAT, PARAM_INT, PARAM_BOOL, PARAM_STRIN
 // `tip` is the description shown while the pointer rests on the row - Unity's
 // [Tooltip]. A header is not a field: it is the [Header("...")] line above one,
 // and it carries its text in `name`.
-struct ParamDecl { std::string name, def, tip; int type = PARAM_NODE; };
+// `ntype` is the DECLARED TYPE of a node reference - Unity's rule, where a
+// field spelled `Rigidbody target` offers only rigidbodies in its picker and
+// refuses everything else on a drag. Empty means "any object", which is what
+// every reference meant before types existed.
+struct ParamDecl { std::string name, def, tip, ntype; int type = PARAM_NODE; };
+
+// Which component a typed reference asks for, and what to call it on screen.
+// Kept as one table so the label, the icon and the test can never drift apart.
+struct NodeTypeInfo { const char *key, *label, *icon; };
+static const NodeTypeInfo NODE_TYPES[] = {
+    { "transform", "Transform", DAI_ICON_C_TRANSFORM },
+    { "camera",    "Camera",    DAI_ICON_C_CAMERA },
+    { "light",     "Light",     DAI_ICON_C_LIGHT },
+    { "rigidbody", "Rigidbody", DAI_ICON_C_BODY },
+    { "body",      "Rigidbody", DAI_ICON_C_BODY },
+    { "collider",  "Collider",  DAI_ICON_C_COLLIDER },
+    { "sprite",    "Sprite",    DAI_ICON_C_SPRITE },
+    { "audio",     "Audio",     DAI_ICON_C_AUDIO },
+    { "mesh",      "Mesh",      DAI_ICON_C_MESH },
+};
+static const NodeTypeInfo *node_type_of(const std::string &k) {
+    if (k.empty()) return nullptr;
+    for (const NodeTypeInfo &t : NODE_TYPES)
+        if (k == t.key) return &t;
+    return nullptr;
+}
+// Does this node carry what the field asks for? A Transform is every node -
+// in Unity too, which is why `Transform` fields accept anything.
+static bool node_has_type(const dai_node_desc &r, const std::string &k) {
+    if (k.empty() || k == "object" || k == "node" || k == "transform") return true;
+    if (k == "camera")    return r.camera != 0;
+    if (k == "light")     return r.light != 0;
+    if (k == "rigidbody" || k == "body") return !r.no_rigidbody && !r.no_body;
+    if (k == "collider")  return !r.no_collider && !r.no_body;
+    if (k == "sprite")    return r.sprite != 0;
+    if (k == "audio")     return r.audio_event[0] != 0 || r.audio_autoplay || r.audio_bus;
+    if (k == "mesh")      return 1;   /* every node draws something */
+    return true;
+}
 
 static std::vector<ParamDecl> parse_params(const char *csv) {
     std::vector<ParamDecl> out;
@@ -665,7 +715,13 @@ static std::vector<ParamDecl> parse_params(const char *csv) {
                     else if (t == "bool")              d.type = PARAM_BOOL;
                     else if (t == "string" || t == "text") d.type = PARAM_STRING;
                     else if (t == "header")            d.type = PARAM_HEADER;
-                    else                               d.type = PARAM_NODE;
+                    else {
+                        d.type = PARAM_NODE;
+                        // Anything else IS the reference's type. An unknown
+                        // word behaves as "any object" rather than dropping
+                        // the field: a typo must not make a slot disappear.
+                        if (t != "node" && t != "object") d.ntype = t;
+                    }
                 }
                 // "|" ends the declaration and begins its description.
                 size_t bar = rest.find('|');
@@ -2163,10 +2219,27 @@ static void inspector_body(dai_editor_ui *p) {
                         // scene. Dragging one in still works - that gesture is
                         // faster when you can see both windows, and the picker
                         // is what you reach for when you cannot.
+                        const NodeTypeInfo *nt = node_type_of(pd.ntype);
+                        const char *tname = nt ? nt->label : "Object";
+                        // Unity writes the value and its type: "Main Camera
+                        // (Transform)". The type is not decoration - it is the
+                        // contract the picker and the drop both answer to.
                         std::string disp = (val.empty() ? std::string("None") : val)
-                                         + " (Object)";
+                                         + " (" + tname + ")";
+                        // An assignment that no longer fits - the camera lost
+                        // its Camera component, the file was hand edited - is
+                        // said out loud instead of being quietly wrong.
+                        int bad = 0;
+                        if (!val.empty() && nt) {
+                            dai_node vn = dai_doc_find(d, val.c_str());
+                            dai_node_desc vr{};
+                            if (vn == DAI_INVALID_NODE) bad = 1;
+                            else if (dai_doc_get(d, vn, &vr) == DAI_OK && !node_has_type(vr, pd.ntype))
+                                bad = 1;
+                            if (bad) disp = val + "  (not a " + tname + ")";
+                        }
                         int orc = dai_ui_object_field(p->ui, pd.name.c_str(), disp.c_str(),
-                                                      DAI_ICON_C_TRANSFORM);
+                                                      nt ? nt->icon : DAI_ICON_C_TRANSFORM);
                         if (!pd.tip.empty()) dai_ui_help(p->ui, pd.tip.c_str());
                         if (orc == 2) {
                             float mx3 = 0, my3 = 0;
@@ -2179,6 +2252,8 @@ static void inspector_body(dai_editor_ui *p) {
                             p->obj_pick_entry = (int)si;
                             std::snprintf(p->obj_pick_key, sizeof(p->obj_pick_key),
                                           "%s", pd.name.c_str());
+                            std::snprintf(p->obj_pick_type, sizeof(p->obj_pick_type),
+                                          "%s", pd.ntype.c_str());
                         } else if (orc == 1 && !val.empty()) {
                             // Clicking the field shows what it points at.
                             p->ping_node = dai_doc_find(d, val.c_str());
@@ -2323,7 +2398,7 @@ static void inspector_body(dai_editor_ui *p) {
     // gives it sane values, removing one switches it off. The mesh is never
     // touched by either, which is the bug this replaced.
     dai_ui_separator(p->ui);
-    if (dai_ui_button(p->ui, "Add Component...")) {
+    if (dai_ui_button_fit(p->ui, "Add Component...")) {
         float mx2 = 0, my2 = 0;
         dai_ui_mouse(p->ui, &mx2, &my2, nullptr, nullptr);
         dai_ui_searchlist_open(&p->addcomp_list, mx2, my2);
@@ -3262,8 +3337,8 @@ static void settings_body(dai_editor_ui *p) {
     dai_ui_label_fmt(ui, "Projects  %s", p->about_projects[0] ? p->about_projects : "(unset)");
     dai_ui_label_fmt(ui, "Assets    %s", p->about_assets[0] ? p->about_assets : "(no project open)");
     if (p->about_status[0]) dai_ui_label_fmt(ui, "Update    %s", p->about_status);
-    if (dai_ui_button(ui, "Check for updates")) p->want_update_check = 1;
-    if (dai_ui_button(ui, "Copy this to the clipboard")) {
+    if (dai_ui_button_fit(ui, "Check for updates")) p->want_update_check = 1;
+    if (dai_ui_button_fit(ui, "Copy this to the clipboard")) {
         char all[900];
         std::snprintf(all, sizeof(all),
                       "DAIDALOS %s\nprojects: %s\nassets: %s\nupdate: %s",
@@ -3491,7 +3566,7 @@ static int assets_body(dai_editor_ui *p, float h, const char **out_path, int *ou
     // name into the Script block, which is the only place it can mean
     // anything.
     if (pick && is_behaviour_file(pick)) {
-        if (dai_ui_button(p->ui, "Assign to selection") &&
+        if (dai_ui_button_fit(p->ui, "Assign to selection") &&
             dai_editor_selection_count(p->ed) > 0) {
             dai_node n = dai_editor_selected(p->ed, 0);
             dai_node_desc r{};
@@ -3508,12 +3583,12 @@ static int assets_body(dai_editor_ui *p, float h, const char **out_path, int *ou
     dai_ui_row(p->ui, 22.0f);
     // Two buttons because the difference is physical, not cosmetic: one body
     // for the whole model, or one body per piece.
-    if (dai_ui_button(p->ui, "Place")) {
+    if (dai_ui_button_fit(p->ui, "Place")) {
         if (out_path) *out_path = pick;
         if (out_as_tree) *out_as_tree = 0;
         placed = 1;
     }
-    if (dai_ui_button(p->ui, "As tree")) {
+    if (dai_ui_button_fit(p->ui, "As tree")) {
         if (out_path) *out_path = pick;
         if (out_as_tree) *out_as_tree = 1;
         placed = 1;
@@ -4012,16 +4087,23 @@ static void run_context_menus(dai_editor_ui *p) {
         dai_doc *od = dai_editor_doc(p->ed);
         std::vector<dai_node> all(dai_doc_count(od));
         uint32_t na = all.empty() ? 0 : dai_doc_nodes(od, all.data(), (uint32_t)all.size());
+        // Only what the field's type accepts. A list that offers a light to a
+        // Camera slot is a list that has to be read twice, and the second read
+        // is the one that goes wrong.
+        std::string want = p->obj_pick_type;
+        const NodeTypeInfo *pnt = node_type_of(want);
         std::vector<std::string> names;
         names.push_back("None");
         for (uint32_t i = 0; i < na; ++i) {
             dai_node_desc od2{};
-            if (dai_doc_get(od, all[i], &od2) == DAI_OK && od2.name[0])
-                names.push_back(od2.name);
+            if (dai_doc_get(od, all[i], &od2) != DAI_OK || !od2.name[0]) continue;
+            if (!node_has_type(od2, want)) continue;
+            names.push_back(od2.name);
         }
         std::vector<dai_ui_menu_item> items(names.size());
         for (size_t i = 0; i < names.size(); ++i)
-            items[i] = { i == 0 ? nullptr : DAI_ICON_C_TRANSFORM, names[i].c_str(), nullptr, 0 };
+            items[i] = { i == 0 ? nullptr : (pnt ? pnt->icon : DAI_ICON_C_TRANSFORM),
+                         names[i].c_str(), nullptr, 0 };
         int pick = dai_ui_searchlist_draw(p->ui, &p->obj_list, items.data(),
                                           (uint32_t)items.size());
         if (pick >= 0 && pick < (int)names.size()) {
@@ -4767,7 +4849,10 @@ static void console_body(dai_editor_ui *p, float px, float py, float pw, float p
     for (const auto &l : p->log) counts[l.level] += l.count;
 
     float bx = px + 4.0f;
-    if (browser_button(p, bx, py + 4.0f, 56.0f, BTN_H, "Clear")) dai_editor_ui_log_clear(p);
+    if (browser_button(p, bx, py + 4.0f, 56.0f, BTN_H, "Clear")) {
+        dai_editor_ui_log_clear(p);
+        p->log_sel = -1;              // or the detail pane outlives its message
+    }
     bx += 60.0f;
     // Copy: every visible line, one per row - for pasting an error into a
     // chat or a search. One line copies by clicking it, this is the batch.
@@ -4809,43 +4894,155 @@ static void console_body(dai_editor_ui *p, float px, float py, float pw, float p
     }
     dai_ui_rect(ui, px, py + BAR, pw, 1.0f, st->panel_border);
 
-    const float ROW = 17.0f;
-    float ly = py + BAR + 3.0f;
+    // ---- the list, Unity's shape ------------------------------------------
+    // A row is two text lines tall with the level's icon on the left and the
+    // repeat count on the right: the first line is the message, the second is
+    // where it came from. One click SELECTS (it used to copy, which meant the
+    // clipboard changed every time you tried to read something), and the
+    // selected message is written out in full underneath.
+    const float TH = dai_ui_text_height(ui);
+    const float ROW = TH * 2.0f + 9.0f;
     float mx = 0, my = 0;
-    dai_ui_mouse(ui, &mx, &my, nullptr, nullptr);
-    if (mx >= px && mx < px + pw && my >= py && my < py + ph)
-        p->log_scroll -= dai_ui_wheel(ui) * 32.0f;
+    int ddown = 0, dpressed = 0;
+    dai_ui_mouse(ui, &mx, &my, &ddown, &dpressed);
+    bool inside = mx >= px && mx < px + pw && my >= py && my < py + ph;
+
+    // The detail pane takes the bottom third, but never more than half and
+    // never so much that fewer than two rows are left to pick from.
+    float detail_h = 0.0f;
+    if (p->log_sel >= 0 && p->log_sel < (int)p->log.size()) {
+        detail_h = (ph - BAR) * 0.34f;
+        float max_h = ph - BAR - ROW * 2.0f - 6.0f;
+        if (detail_h > max_h) detail_h = max_h;
+        if (detail_h < TH * 3.0f) detail_h = 0.0f;    // no room: list wins
+    }
+    p->log_detail = detail_h;
+    const float LIST_H = ph - BAR - detail_h;
+
+    if (inside && my < py + BAR + LIST_H) p->log_scroll -= dai_ui_wheel(ui) * 40.0f;
     float total = 0.0f;
     for (const auto &l : p->log) if (p->log_show[l.level]) total += ROW;
-    float maxs = total - (ph - BAR - 6.0f);
+    float maxs = total - (LIST_H - 6.0f);
     if (maxs < 0.0f) maxs = 0.0f;
     if (p->log_scroll > maxs) p->log_scroll = maxs;
     if (p->log_scroll < 0.0f) p->log_scroll = 0.0f;
 
-    dai_ui_clip_begin(ui, px, py + BAR + 1.0f, pw, ph - BAR - 1.0f);
-    float ry = ly - p->log_scroll + 6.0f;   // air under the buttons - it read as stuck-on
+    dai_ui_clip_begin(ui, px, py + BAR + 1.0f, pw, LIST_H - 1.0f);
+    float ry = py + BAR + 4.0f - p->log_scroll;
     if (p->log.empty())
-        dai_ui_text(ui, px + 8.0f, ry, "no messages - script print() and engine warnings land here", st->text_dim);
-    int ddown = 0, dpressed = 0;
-    float dmx = 0, dmy = 0;
-    dai_ui_mouse(ui, &dmx, &dmy, &ddown, &dpressed);
-    for (const auto &l : p->log) {
+        dai_ui_text(ui, px + 8.0f, ry + 2.0f,
+                    "no messages - script print() and engine warnings land here", st->text_dim);
+    static const char *ROW_ICON[3] = { DAI_ICON_INFO, DAI_ICON_WARNING, DAI_ICON_ERROR };
+    int click_at = -1;
+    for (size_t li = 0; li < p->log.size(); ++li) {
+        const auto &l = p->log[li];
         if (!p->log_show[l.level]) continue;
-        if (ry + ROW > py + BAR && ry < py + ph) {
-            char line[400];
-            if (l.count > 1) std::snprintf(line, sizeof(line), "(%u) %s", l.count, l.text.c_str());
-            else             std::snprintf(line, sizeof(line), "%s", l.text.c_str());
-            // A click copies the line - an error message you cannot copy is a
-            // search you have to type by hand.
-            if (dpressed && dmx >= px && dmx < px + pw && dmy >= ry && dmy < ry + ROW) {
-                dai_editor_ui_clipboard_set(p, 0, line);
-                dai_editor_ui_toast(p, "copied", 1.0f);
+        if (ry + ROW > py + BAR && ry < py + BAR + LIST_H) {
+            bool sel = (int)li == p->log_sel;
+            bool over = inside && mx < px + pw && my >= ry && my < ry + ROW &&
+                        my < py + BAR + LIST_H;
+            // Alternating bands, the way every console does it: the eye needs
+            // something to follow across a wide panel.
+            if (sel)        dai_ui_rect(ui, px, ry, pw, ROW, st->button_active);
+            else if (over)  dai_ui_rect(ui, px, ry, pw, ROW, st->button);
+            else if (li & 1) dai_ui_rect(ui, px, ry, pw, ROW, st->track);
+
+            if (dai_ui_has_icon(ui, ROW_ICON[l.level]))
+                dai_ui_icon_at(ui, ROW_ICON[l.level], px + 7.0f,
+                               ry + (ROW - 16.0f) * 0.5f, 16.0f, 0xFFFFFFFFu);
+
+            // The message is one line here however long it is; the rest of it
+            // is what the pane below is for. Split on the first newline, so a
+            // two part message shows its second part as the context line.
+            std::string first = l.text, secondl;
+            size_t nl = first.find('\n');
+            if (nl != std::string::npos) { secondl = first.substr(nl + 1); first = first.substr(0, nl); }
+            size_t nl2 = secondl.find('\n');
+            if (nl2 != std::string::npos) secondl = secondl.substr(0, nl2);
+
+            float tx = px + 29.0f;
+            float tw_avail = pw - 29.0f - 44.0f;
+            dai_ui_clip_begin(ui, tx, ry, tw_avail, ROW);
+            dai_ui_text(ui, tx, ry + 4.0f, first.c_str(),
+                        sel ? 0xFFFFFFFFu : LEVEL_COL[l.level]);
+            if (!secondl.empty())
+                dai_ui_text(ui, tx, ry + 4.0f + TH + 1.0f, secondl.c_str(), st->text_dim);
+            dai_ui_clip_end(ui);
+
+            // The repeat badge, right hand end - "this happened 47 times" is
+            // the difference between a bug and a loop.
+            if (l.count > 1) {
+                char cb[24];
+                std::snprintf(cb, sizeof(cb), "%u", l.count);
+                float cw = dai_ui_text_width(ui, cb) + 14.0f;
+                float cx = px + pw - cw - 8.0f;
+                dai_ui_rrect(ui, cx, ry + (ROW - TH - 6.0f) * 0.5f, cw, TH + 6.0f, 7.0f, st->titlebar);
+                dai_ui_text(ui, cx + 7.0f, ry + (ROW - TH) * 0.5f, cb, st->text_dim);
             }
-            dai_ui_text(ui, px + 8.0f, ry, line, LEVEL_COL[l.level]);
+            if (dpressed && over && !dai_ui_popup_active(ui)) click_at = (int)li;
         }
         ry += ROW;
     }
     dai_ui_clip_end(ui);
+    if (click_at >= 0) {
+        // Clicking the selected row again closes the pane: the same key opens
+        // and shuts, which is the only arrangement nobody has to be told.
+        p->log_sel = (p->log_sel == click_at) ? -1 : click_at;
+        p->log_detail_scroll = 0.0f;
+    }
+
+    // ---- the detail pane ---------------------------------------------------
+    if (detail_h > 0.0f && p->log_sel >= 0 && p->log_sel < (int)p->log.size()) {
+        float dy = py + BAR + LIST_H;
+        dai_ui_rect(ui, px, dy, pw, 1.0f, st->panel_border);
+        dai_ui_rect(ui, px, dy + 1.0f, pw, detail_h - 1.0f, st->track);
+        const auto &l = p->log[(size_t)p->log_sel];
+
+        // Copy sits in the pane, not the toolbar: what you want is THIS
+        // message, and you want it right where you are reading it.
+        float bw = dai_ui_text_width(ui, "Copy") + 18.0f;
+        if (browser_button(p, px + pw - bw - 8.0f, dy + 5.0f, bw, TH + 8.0f, "Copy")) {
+            dai_editor_ui_clipboard_set(p, 0, l.text.c_str());
+            dai_editor_ui_toast(p, "copied", 1.0f);
+        }
+
+        if (inside && my >= dy) p->log_detail_scroll -= dai_ui_wheel(ui) * 40.0f;
+        // Wrap the text to the pane, so a long line is readable instead of
+        // running off the right edge into nothing.
+        dai_ui_clip_begin(ui, px, dy + 1.0f, pw - bw - 14.0f, detail_h - 2.0f);
+        float wrap_w = pw - bw - 26.0f;
+        float ty = dy + 6.0f - p->log_detail_scroll;
+        float used = 0.0f;
+        std::string rest = l.text;
+        while (!rest.empty()) {
+            std::string lineone;
+            size_t nl = rest.find('\n');
+            if (nl == std::string::npos) { lineone = rest; rest.clear(); }
+            else { lineone = rest.substr(0, nl); rest = rest.substr(nl + 1); }
+            // hard wrap on width, at a space where there is one
+            for (;;) {
+                if (dai_ui_text_width(ui, lineone.c_str()) <= wrap_w) {
+                    dai_ui_text(ui, px + 8.0f, ty, lineone.c_str(), st->text);
+                    ty += TH + 2.0f; used += TH + 2.0f;
+                    break;
+                }
+                size_t cut = lineone.size();
+                while (cut > 1 && dai_ui_text_width(ui, lineone.substr(0, cut).c_str()) > wrap_w) --cut;
+                size_t sp = lineone.rfind(' ', cut);
+                if (sp != std::string::npos && sp > cut / 2) cut = sp;
+                dai_ui_text(ui, px + 8.0f, ty, lineone.substr(0, cut).c_str(), st->text);
+                ty += TH + 2.0f; used += TH + 2.0f;
+                lineone = lineone.substr(cut);
+                while (!lineone.empty() && lineone[0] == ' ') lineone.erase(0, 1);
+                if (lineone.empty()) break;
+            }
+        }
+        dai_ui_clip_end(ui);
+        float dmax = used - (detail_h - 12.0f);
+        if (dmax < 0.0f) dmax = 0.0f;
+        if (p->log_detail_scroll > dmax) p->log_detail_scroll = dmax;
+        if (p->log_detail_scroll < 0.0f) p->log_detail_scroll = 0.0f;
+    }
 }
 
 // The Script panel: the files you are editing, as tabs, with the code editor

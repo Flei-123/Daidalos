@@ -512,6 +512,9 @@ DAI_API int  dai_ui_text_active(const dai_ui *ui);
  * it to decide whether THEY lost focus - and a code editor two panels away is
  * not a reason for a rename to give up. */
 DAI_API int  dai_ui_typing(const dai_ui *ui);
+/* Only the code editor, not text fields. Ctrl+S asks this: it means the
+ * SCRIPT when the caret is in a script, and the scene in every other case. */
+DAI_API int  dai_ui_code_focused(const dai_ui *ui);
 
 /* The clipboard, as a hand-off rather than an ownership.
  *   _feed  - the host pushes the OS clipboard in, once a frame. Copied.

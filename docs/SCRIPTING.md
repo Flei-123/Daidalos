@@ -55,8 +55,16 @@ A reference to another object has no literal to declare it with, so it keeps
 the explicit form:
 
 ```js
-// @param node followCam
+// @param node   followCam    // any object
+// @param camera mainCam      // only objects that HAVE a Camera
 ```
+
+The type is the contract, exactly as in Unity, where a field declared
+`Rigidbody target` offers only rigidbodies in its picker. The types are
+`node`/`object` (anything), `transform`, `camera`, `light`, `rigidbody`,
+`collider`, `sprite`, `audio` and `mesh`. The field shows what it points at
+with its type in brackets - `Main Camera (Camera)` - and says so when an
+assignment no longer fits.
 
 It draws as Unity's object field: the name of what it points at, and a target
 button that opens a searchable list of every object in the scene. Dragging a

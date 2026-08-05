@@ -82,6 +82,15 @@ g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc.cpp -o build/dai_doc.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_text.cpp -o build/dai_doc_text.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_sync.cpp -o build/dai_doc_sync.o
 
+# rm FIRST. `ar rcs` REPLACES the members it is given and leaves every other
+# member of an existing archive exactly where it was - so an object that was
+# once listed here and later moved to libdaidalos_vk.a stayed in this archive
+# forever, never recompiled, and whatever linked libdaidalos.a first got that
+# fossil. Measured today: eleven ghosts, among them dai_font.o, dai_ui.o and
+# dai_script.o - a font fix landed in the .o, the archive kept the old one,
+# and the difference was invisible because the editor happens to link the vk
+# archive first. Same failure as the stale .spv two blocks down, same fix.
+rm -f build/libdaidalos.a build/libdaidalos_vk.a build/libdaidalos_assets.a
 ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o ${TALOS_OBJ} \
        build/dai_material.o \
        build/dai_audio.o build/dai_scene.o build/dai_input.o build/dai_editor.o \

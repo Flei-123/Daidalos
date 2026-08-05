@@ -12,6 +12,9 @@
 //   bool         -> a tick box
 //   string       -> a text field
 //   node         -> a slot you drag an object from the Hierarchy onto
+//   camera/light/rigidbody/collider/sprite/audio -> the same slot, but it
+//                   only accepts objects that HAVE that component - Unity's
+//                   rule, where the declared type is the contract
 //
 // Since 0.2.2 a plain top level declaration is a field too - `let speed = 6`
 // needs no comment at all, exactly like a public member in Unity. The
@@ -35,7 +38,7 @@
 // @param bool   faceMovement = true
 // @param string playerName   = Player One
 // @tooltip The camera that follows this player.
-// @param node   followCam
+// @param camera followCam
 
 // ---------------------------------------------------------------- globals
 // `self`  - the node this script is attached to (the editor sets it).

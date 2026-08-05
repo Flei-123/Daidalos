@@ -596,6 +596,7 @@ const char *dai_ui_clipboard_taken(dai_ui *ui) {
     return ui->clip_out.c_str();
 }
 
+int  dai_ui_code_focused(const dai_ui *ui) { return ui && ui->code_focus ? 1 : 0; }
 int  dai_ui_typing(const dai_ui *ui) {
     return ui && (ui->edit.editing || ui->code_focus) ? 1 : 0;
 }
@@ -1285,7 +1286,20 @@ void dai_ui_advance(dai_ui *ui, float w, float h) {
 
 void dai_ui_clip_begin(dai_ui *ui, float x, float y, float w, float h) {
     if (!ui) return;
-    ui->clips.push_back(dai_ui::Clip{ x, y, x + w, y + h });
+    dai_ui::Clip c{ x, y, x + w, y + h };
+    // Nesting INTERSECTS. Drawing only tests clips.back(), so an inner clip
+    // that is taller than the outer one used to let its contents escape the
+    // outer box entirely - a console row half scrolled out of the list drew
+    // its text over the pane below it. A clip that can widen the visible area
+    // is not a clip.
+    if (!ui->clips.empty()) {
+        const dai_ui::Clip &o = ui->clips.back();
+        if (c.x0 < o.x0) c.x0 = o.x0;
+        if (c.y0 < o.y0) c.y0 = o.y0;
+        if (c.x1 > o.x1) c.x1 = o.x1;
+        if (c.y1 > o.y1) c.y1 = o.y1;
+    }
+    ui->clips.push_back(c);
 }
 
 void dai_ui_clip_end(dai_ui *ui) {

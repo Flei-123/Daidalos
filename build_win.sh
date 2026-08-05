@@ -110,6 +110,9 @@ for f in $CORE; do
     $CXX $FLAGS $ARCH $JOLT_DEFS $TALOS_DEFS -Iinclude -Isrc -I"$JOLT_SRC" -I"$VKINC" -c "src/$f.cpp" -o "$OUT/$f.o"
     OBJS="$OBJS $OUT/$f.o"
 done
+# See build.sh: ar rcs never REMOVES, so an archive that is not deleted first
+# keeps objects nobody lists any more and hands them to the linker.
+rm -f "$OUT/libdaidalos.a" "$OUT/libdaidalos_vk.a" "$OUT/libdaidalos_assets.a"
 x86_64-w64-mingw32-ar rcs "$OUT/libdaidalos.a" $OBJS $EXTRA_OBJS
 echo "   ok: $OUT/libdaidalos.a"
 
