@@ -420,6 +420,9 @@ void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in)
     ui->win_depth = 0;
     ui->tooltip_on = false;
     ui->cursor_want = DAI_CURSOR_ARROW;
+    // Raised by whichever code editor draws itself focused THIS frame. A flag
+    // that is only ever set is not a flag, it is a fuse.
+    ui->code_focus = 0;
     // An open popup swallows every hit test below its own layer. The flag
     // comes from the END of the previous frame, so the click that closes the
     // menu cannot also press the button it lands on.
@@ -2267,7 +2270,12 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
             // they are read from - Ctrl+C sends no printable character, but
             // the host forwards the code point.
             for (int i = 0; i < 8 && in.text[i]; ++i) {
-                uint32_t cp = in.text[i] | 0x20u;      // fold case
+                uint32_t cp = in.text[i];
+                // A control code IS the letter, minus 0x60. That is what a
+                // terminal has meant by Ctrl+C since before windows existed,
+                // and it is what WM_CHAR delivers.
+                if (cp < 0x20u) cp += 0x60u;
+                cp |= 0x20u;                            // fold case
                 if (cp == 'c' && has_sel) {
                     ui->clip_out.assign(buf + lo, (size_t)(hi - lo));
                     ui->clip_out_set = true;

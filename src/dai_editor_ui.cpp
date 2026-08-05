@@ -1030,6 +1030,42 @@ int dai_editor_ui_script_open(dai_editor_ui *p, const char *rel_path) {
     return 1;
 }
 
+size_t dai_editor_ui_scripts_open_save(const dai_editor_ui *p, char *buf, size_t n) {
+    if (!p) return 0;
+    std::string t;
+    // The active tab first, so restoring it needs no index to go stale.
+    if (p->script_tab >= 0 && p->script_tab < (int)p->scripts_open.size())
+        t += p->scripts_open[(size_t)p->script_tab].path + "\n";
+    for (size_t i = 0; i < p->scripts_open.size(); ++i) {
+        if ((int)i == p->script_tab) continue;
+        t += p->scripts_open[i].path + "\n";
+    }
+    if (buf && n) {
+        size_t c = t.size() < n - 1 ? t.size() : n - 1;
+        std::memcpy(buf, t.data(), c);
+        buf[c] = 0;
+    }
+    return t.size();
+}
+
+void dai_editor_ui_scripts_open_load(dai_editor_ui *p, const char *text) {
+    if (!p || !text) return;
+    std::string one;
+    for (const char *c = text; ; ++c) {
+        if (*c && *c != '\n') { if (*c != '\r') one += *c; continue; }
+        if (!one.empty()) {
+            // A file that has since been deleted simply does not come back;
+            // an editor that refuses to start because of it would be worse.
+            dai_editor_ui_script_open(p, one.c_str());
+            one.clear();
+        }
+        if (!*c) break;
+    }
+    // The first line was the active one, and opening pushes to the end - so
+    // after the load the active tab is index 0 again.
+    if (!p->scripts_open.empty()) p->script_tab = 0;
+}
+
 int dai_editor_ui_script_save(dai_editor_ui *p) {
     if (!p || p->scripts_open.empty()) return 0;
     if (p->script_tab < 0 || p->script_tab >= (int)p->scripts_open.size()) return 0;
@@ -1299,6 +1335,7 @@ void dai_editor_ui_mesh_host(dai_editor_ui *p,
 // window version both call this - two copies of a tree walk is how the two
 // slowly stop agreeing.
 static dai_vec3 spawn_point(dai_editor_ui *p, dai_doc *d, float half_y);
+
 
 static void hierarchy_body(dai_editor_ui *p, float h) {
     dai_doc *d = dai_editor_doc(p->ed);

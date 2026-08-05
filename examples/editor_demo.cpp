@@ -2041,6 +2041,19 @@ int main(int argc, char **argv) {
     dai_editor_ui_import_host(panels, asset_import, nullptr);
     dai_editor_ui_delete_host(panels, asset_delete, nullptr);
     dai_editor_ui_file_host(panels, asset_read_text, asset_write_text, nullptr);
+    {   // The scripts that were open when the editor was last closed. After
+        // the file host is wired, because opening one reads it.
+        char spath[512];
+        std::snprintf(spath, sizeof(spath), "%s/scripts_open.txt", g_projects_root);
+        FILE *sf = std::fopen(spath, "rb");
+        if (sf) {
+            char stxt[4096];
+            size_t sn = std::fread(stxt, 1, sizeof(stxt) - 1, sf);
+            stxt[sn] = 0;
+            std::fclose(sf);
+            dai_editor_ui_scripts_open_load(panels, stxt);
+        }
+    }
     dai_editor_ui_script_editor_pref(panels, prefs.script_editor);
     dai_editor_ui_prefab_host(panels, prefab_save_cb);
     dai_editor_ui_open_asset_host(panels, open_asset_cb, nullptr);
@@ -2943,6 +2956,18 @@ int main(int argc, char **argv) {
         dai_editor_ui_layout_save(panels, &txt[0], txt.size());
         FILE *lf = std::fopen(lpath, "wb");
         if (lf) { std::fwrite(txt.c_str(), 1, need, lf); std::fclose(lf); }
+    }
+    {   // ...and which scripts were open in it.
+        char spath[512];
+        std::snprintf(spath, sizeof(spath), "%s/scripts_open.txt", g_projects_root);
+        char stxt[4096];
+        size_t sn = dai_editor_ui_scripts_open_save(panels, stxt, sizeof(stxt));
+        if (sn) {
+            FILE *sf = std::fopen(spath, "wb");
+            if (sf) { std::fwrite(stxt, 1, std::strlen(stxt), sf); std::fclose(sf); }
+        } else {
+            std::remove(spath);          // nothing open is a state worth keeping
+        }
     }
     {   // what this human set on this machine, kept for the next start
         prefs.cam_speed = dai_editor_cam_speed_get(ed);

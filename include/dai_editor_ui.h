@@ -238,6 +238,11 @@ DAI_API int  dai_editor_ui_script_open(dai_editor_ui *p, const char *rel_path);
  * script editor has the keyboard - the host asks this FIRST and only saves the
  * scene when the answer is 0. */
 DAI_API int  dai_editor_ui_script_save(dai_editor_ui *p);
+/* The list of files the Script panel has open, as text - one asset-relative
+ * path per line, the active one first. Saved next to the layout, because that
+ * is what it is: part of how the editor was left, not part of the project. */
+DAI_API size_t dai_editor_ui_scripts_open_save(const dai_editor_ui *p, char *buf, size_t n);
+DAI_API void   dai_editor_ui_scripts_open_load(dai_editor_ui *p, const char *text);
 /* 0 = open scripts in the built-in editor, 1 = hand them to the external one.
  * The host stores it with the other preferences. */
 DAI_API void dai_editor_ui_script_editor_pref(dai_editor_ui *p, int external);

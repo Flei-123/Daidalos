@@ -165,6 +165,20 @@ dai_node_desc dai_node_desc_default(void) {
     d.half_extent = { 0.5f, 0.5f, 0.5f };
     d.mesh = 0xFFFFFFFFu;
     d.roughness = 1.0f;
+    // A new object is light grey, and 0,0,0 is black.
+    //
+    // It used to be the other way round: zero meant "nobody chose a colour"
+    // and the scene invented one from the node's id, which made a scene of
+    // twenty untouched boxes readable. The cost only showed up once materials
+    // became files - a black material asks for exactly the value that means
+    // "surprise me", so black was the one colour that could not be set.
+    //
+    // Old scenes are unaffected in the way that matters: the text format only
+    // writes a field when it DIFFERS from this default, so an object that
+    // never had a colour chosen has no colour line at all and now loads as
+    // this grey instead of a palette pick. It is a different picture, but a
+    // predictable one, and nothing in it is black by accident.
+    d.color = { 0.82f, 0.82f, 0.82f };
     d.shape = DAI_SHAPE_BOX;
     d.motion = DAI_STATIC;
     return d;
