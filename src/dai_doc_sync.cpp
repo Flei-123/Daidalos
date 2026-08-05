@@ -330,12 +330,17 @@ uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
             dai_body_set_transform(s->world, l.body, wp, wr);
             if (s->zero_velocities && l.body != DAI_INVALID_BODY)
                 dai_body_set_velocity(s->world, l.body, dai_vec3{ 0,0,0 }, dai_vec3{ 0,0,0 });
-            // The colour is the colour, including black. It used to be that
-            // 0,0,0 meant "nobody chose one" and the scene kept whatever it
-            // had picked from a palette - which made a black MATERIAL
-            // impossible to express, because asking for black and asking for
-            // "surprise me" were the same request.
-            dai_scene_set_color(s->scene, l.entity, r.color);
+            // A zero colour means "no colour was chosen": the object wears
+            // the DEFAULT material, and the scene already picked a shade for
+            // it from the palette when the entity was spawned. Pushing the
+            // zero back would paint it black - and would also write a change
+            // for every object on every sync, which is a full re-upload per
+            // frame and reads as the whole editor going slow.
+            //
+            // Black as a deliberate colour is still expressible: a material
+            // file holding 0,0,0 is applied as one 255th above it.
+            if (r.color.x != 0.0f || r.color.y != 0.0f || r.color.z != 0.0f)
+                dai_scene_set_color(s->scene, l.entity, r.color);
             dai_scene_set_visible(s->scene, l.entity, !(r.hidden || r.disabled));
             dai_scene_set_render(s->scene, l.entity, r.mesh, r.roughness, r.emissive, r.render_flags);
             dai_scene_set_name(s->scene, l.entity, r.name);

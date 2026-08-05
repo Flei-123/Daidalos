@@ -65,6 +65,10 @@ typedef struct dai_ui_input {
     int      key_up_arrow, key_down_arrow;   /* dropdown / list navigation */
     int      key_shift, key_ctrl;    /* held */
     int      key_select_all;         /* Ctrl+A, edge triggered */
+    /* Ctrl+C / X / V, edge triggered. Flags rather than characters because a
+     * control code is not a character: the window backend filters those out
+     * of the text stream before anything can read them, and it is right to. */
+    int      key_copy, key_cut, key_paste;
     int      double_click;           /* the press this frame was a double click */
 } dai_ui_input;
 

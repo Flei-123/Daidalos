@@ -2262,36 +2262,22 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
         // Ctrl+C / Ctrl+X / Ctrl+V. The characters arrive as text events too
         // when Ctrl is held on some layouts, which is why the insert loop
         // above skips anything below 0x20 and these are checked on the KEY.
-        if (in.key_ctrl) {
+        {
             int lo = sel_lo(), hi = sel_hi();
             bool has_sel = hi > lo;
-            // 'c' == 0x63, 'x' == 0x78, 'v' == 0x76 as text events; the input
-            // struct has no per-letter key flags, so the text stream is where
-            // they are read from - Ctrl+C sends no printable character, but
-            // the host forwards the code point.
-            for (int i = 0; i < 8 && in.text[i]; ++i) {
-                uint32_t cp = in.text[i];
-                // A control code IS the letter, minus 0x60. That is what a
-                // terminal has meant by Ctrl+C since before windows existed,
-                // and it is what WM_CHAR delivers.
-                if (cp < 0x20u) cp += 0x60u;
-                cp |= 0x20u;                            // fold case
-                if (cp == 'c' && has_sel) {
-                    ui->clip_out.assign(buf + lo, (size_t)(hi - lo));
-                    ui->clip_out_set = true;
-                } else if (cp == 'x' && has_sel) {
-                    ui->clip_out.assign(buf + lo, (size_t)(hi - lo));
-                    ui->clip_out_set = true;
-                    erase(lo, hi);
-                } else if (cp == 'v' && !ui->clip_in.empty()) {
-                    // Line endings normalised on the way in: a paste from a
-                    // Windows editor otherwise carries a carriage return into
-                    // every line, and every one of them draws as a glyph.
-                    std::string t;
-                    t.reserve(ui->clip_in.size());
-                    for (char ch : ui->clip_in) if (ch != '\r') t += ch;
-                    insert(t.c_str(), (int)t.size());
-                }
+            if ((in.key_copy || in.key_cut) && has_sel) {
+                ui->clip_out.assign(buf + lo, (size_t)(hi - lo));
+                ui->clip_out_set = true;
+                if (in.key_cut) erase(lo, hi);
+            }
+            if (in.key_paste && !ui->clip_in.empty()) {
+                // Line endings normalised on the way in: a paste from a
+                // Windows editor otherwise carries a carriage return into
+                // every line, and every one of them draws as a glyph.
+                std::string t;
+                t.reserve(ui->clip_in.size());
+                for (char ch : ui->clip_in) if (ch != '\r') t += ch;
+                insert(t.c_str(), (int)t.size());
             }
         }
         if (in.key_select_all) { st->anchor = 0; st->caret = len; }

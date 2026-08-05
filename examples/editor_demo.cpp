@@ -2630,6 +2630,18 @@ int main(int argc, char **argv) {
             in.key_select_all = a_now && !prev_ctrl_a;
             prev_ctrl_a = a_now;
         }
+        {
+            // The clipboard three, the same way: read off the KEY, edge
+            // triggered. The text stream never carries them - see dai_ui.h.
+            static int prev_c = 0, prev_x = 0, prev_v = 0;
+            int c_now = ctrl && dai_window_key_down(win, (uint32_t)'c');
+            int x_now = ctrl && dai_window_key_down(win, (uint32_t)'x');
+            int v_now = ctrl && dai_window_key_down(win, (uint32_t)'v');
+            in.key_copy  = c_now && !prev_c;
+            in.key_cut   = x_now && !prev_x;
+            in.key_paste = v_now && !prev_v;
+            prev_c = c_now; prev_x = x_now; prev_v = v_now;
+        }
         in.double_click = dai_window_double_click(win);
         // The camera step runs BEFORE the UI frame on purpose: the gizmo and
         // the collider lines are generated inside dai_editor_ui_frame, and
