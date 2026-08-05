@@ -5682,14 +5682,21 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
                     }
                 } else if (is_material_file(p->drag_script) &&
                            (p->hover_node != DAI_INVALID_NODE ||
-                            dai_ui_root_hovered(ui, "Inspector"))) {
+                            dai_ui_root_hovered(ui, "Inspector") ||
+                            dai_ui_root_hovered(ui, "Scene"))) {
                     // Dropped on an object: that object wears it. This is the
                     // gesture people try first, and it is the only one that
                     // does not require finding the slot in the inspector.
-                    dai_node target = p->hover_node != DAI_INVALID_NODE
-                                    ? p->hover_node
-                                    : (dai_editor_selection_count(p->ed) > 0
-                                       ? dai_editor_selected(p->ed, 0) : DAI_INVALID_NODE);
+                    // In the viewport it is whatever is UNDER the pointer -
+                    // the same pick a click makes. Falling back to "whatever
+                    // was selected" there would paint an object you cannot
+                    // see because the dragged pill is over it.
+                    dai_node target = DAI_INVALID_NODE;
+                    if (p->hover_node != DAI_INVALID_NODE) target = p->hover_node;
+                    else if (dai_ui_root_hovered(ui, "Scene"))
+                        target = dai_editor_pick(p->ed, dmx, dmy);
+                    else if (dai_editor_selection_count(p->ed) > 0)
+                        target = dai_editor_selected(p->ed, 0);
                     dai_doc *md2 = dai_editor_doc(p->ed);
                     dai_node_desc mr2{};
                     if (target != DAI_INVALID_NODE &&
@@ -5731,7 +5738,9 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
                      (dai_ui_root_hovered(ui, "Scene") || dai_ui_root_hovered(ui, "Hierarchy")))
                 lbl += "  ->  place in scene";
             else if (is_material_file(p->drag_script) &&
-                     (p->hover_node != DAI_INVALID_NODE || dai_ui_root_hovered(ui, "Inspector")))
+                     (p->hover_node != DAI_INVALID_NODE ||
+                      dai_ui_root_hovered(ui, "Inspector") ||
+                      dai_ui_root_hovered(ui, "Scene")))
                 lbl += "  ->  apply material";
             // A ghost where it would land: a footprint on the ground plus a
             // box standing on it, drawn in the accent colour. It is not the

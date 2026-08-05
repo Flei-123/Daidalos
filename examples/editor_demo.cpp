@@ -1348,6 +1348,9 @@ static void apply_materials(dai_doc *doc) {
         if (!material_of(first, &m)) continue;
         dai_node_desc before = r;
         r.color = m.color;
+        // Never exactly 0,0,0 - see above. Nudged, not clamped to grey.
+        if (r.color.x == 0.0f && r.color.y == 0.0f && r.color.z == 0.0f)
+            r.color = dai_vec3{ 1.0f / 255.0f, 1.0f / 255.0f, 1.0f / 255.0f };
         r.roughness = m.roughness;
         r.emissive = m.emissive;
         if (std::memcmp(&before, &r, sizeof(r)) != 0) {
@@ -2185,7 +2188,7 @@ int main(int argc, char **argv) {
         // While a field is being typed into, the keyboard belongs to the field.
         // Otherwise renaming an object to "Wide Crate" switches the gizmo to
         // rotate, duplicates the selection and starts play mode on the way.
-        int typing = dai_ui_text_active(ui);
+        int typing = dai_ui_typing(ui);
         if (!ci.mouse_right && !ctrl && !typing) {
             if (pressed(0)) dai_editor_gizmo_mode(ed, DAI_GIZMO_TRANSLATE);
             if (pressed(1)) dai_editor_gizmo_mode(ed, DAI_GIZMO_ROTATE);
@@ -2550,7 +2553,7 @@ int main(int argc, char **argv) {
         // The UI has to run before the viewport, because "is the pointer over a
         // panel" is only known once the panels have been laid out this frame.
         // F2 renames the selection, in the hierarchy where the name lives.
-        if (dai_window_key_down(win, DAI_KEY_F2) && !prev_f2 && !dai_ui_text_active(ui)) {
+        if (dai_window_key_down(win, DAI_KEY_F2) && !prev_f2 && !dai_ui_typing(ui)) {
             // The Project window first: if something was clicked there, F2
             // belongs to it - including a folder, which had no way to be
             // renamed except through the context menu.
@@ -2624,6 +2627,14 @@ int main(int argc, char **argv) {
         dai_editor_ui_viewport(panels, &ci);
 
         diag_step("ui begin");
+        // The OS clipboard, in - and whatever a widget copied, out. One
+        // frame's round trip, so Ctrl+C in the script editor lands in the
+        // same clipboard everything else on the machine uses.
+        {
+            char cb[64 * 1024];
+            uint32_t cn = dai_window_clipboard_get(win, cb, sizeof(cb));
+            dai_ui_clipboard_feed(ui, cn ? cb : "");
+        }
         dai_ui_begin(ui, lw, lh, &in);
         diag_step("ui frame (panels)");
         // The frame rate, smoothed over about half a second. Averaged HERE
@@ -2638,6 +2649,9 @@ int main(int argc, char **argv) {
             }
             dai_editor_ui_fps(panels, fps_avg);
         }
+
+        if (const char *taken = dai_ui_clipboard_taken(ui))
+            dai_window_clipboard_set(win, taken);
 
         // Unsaved? The asterisk in the hierarchy comes from here.
         dai_editor_ui_scene_dirty(panels, dai_doc_revision(doc) != g_saved_rev);

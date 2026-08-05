@@ -494,6 +494,19 @@ DAI_API void dai_ui_text_focus_next(dai_ui *ui);
  * Lets host code turn any button into a drop target. */
 DAI_API const char *dai_ui_hot_label(const dai_ui *ui);
 DAI_API int  dai_ui_text_active(const dai_ui *ui);
+/* "Is the keyboard somebody's?" - a text field OR the code editor. What a host
+ * asks before treating a key as a shortcut. dai_ui_text_active is the narrower
+ * question (a FIELD is being edited) and stays that way, because widgets use
+ * it to decide whether THEY lost focus - and a code editor two panels away is
+ * not a reason for a rename to give up. */
+DAI_API int  dai_ui_typing(const dai_ui *ui);
+
+/* The clipboard, as a hand-off rather than an ownership.
+ *   _feed  - the host pushes the OS clipboard in, once a frame. Copied.
+ *   _taken - what a widget cut or copied this frame, or NULL. Read once; the
+ *            host puts it on the OS clipboard and the UI forgets it. */
+DAI_API void        dai_ui_clipboard_feed(dai_ui *ui, const char *utf8);
+DAI_API const char *dai_ui_clipboard_taken(dai_ui *ui);
 
 /* ---- the code editor ----------------------------------------------------
  *

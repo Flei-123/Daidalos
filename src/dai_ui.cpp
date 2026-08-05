@@ -49,6 +49,10 @@ struct dai_ui {
     // The code editor has the keyboard. Kept next to edit.editing because the
     // host asks one question - "is the user typing" - and must get one answer.
     int code_focus = 0;
+    // The clipboard, handed in and handed back. See dai_ui.h.
+    std::string clip_in;
+    std::string clip_out;
+    bool        clip_out_set = false;
 
     // layout cursor
     float cursor_x = 0, cursor_y = 0;
@@ -561,7 +565,20 @@ int dai_ui_popup_active(const dai_ui *ui) {
 }
 int  dai_ui_cursor(const dai_ui *ui) { return ui ? ui->cursor_want : DAI_CURSOR_ARROW; }
 void dai_ui_cursor_set(dai_ui *ui, int cursor) { if (ui) ui->cursor_want = cursor; }
-int  dai_ui_text_active(const dai_ui *ui) {
+int  dai_ui_text_active(const dai_ui *ui) { return ui && ui->edit.editing ? 1 : 0; }
+
+void dai_ui_clipboard_feed(dai_ui *ui, const char *utf8) {
+    if (!ui) return;
+    ui->clip_in = utf8 ? utf8 : "";
+}
+
+const char *dai_ui_clipboard_taken(dai_ui *ui) {
+    if (!ui || !ui->clip_out_set) return nullptr;
+    ui->clip_out_set = false;
+    return ui->clip_out.c_str();
+}
+
+int  dai_ui_typing(const dai_ui *ui) {
     return ui && (ui->edit.editing || ui->code_focus) ? 1 : 0;
 }
 // Give the keyboard back. A field keeps focus until something takes it, and
@@ -2238,6 +2255,36 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
                 best = i + 1;
             }
             st->caret = best;
+        }
+        // Ctrl+C / Ctrl+X / Ctrl+V. The characters arrive as text events too
+        // when Ctrl is held on some layouts, which is why the insert loop
+        // above skips anything below 0x20 and these are checked on the KEY.
+        if (in.key_ctrl) {
+            int lo = sel_lo(), hi = sel_hi();
+            bool has_sel = hi > lo;
+            // 'c' == 0x63, 'x' == 0x78, 'v' == 0x76 as text events; the input
+            // struct has no per-letter key flags, so the text stream is where
+            // they are read from - Ctrl+C sends no printable character, but
+            // the host forwards the code point.
+            for (int i = 0; i < 8 && in.text[i]; ++i) {
+                uint32_t cp = in.text[i] | 0x20u;      // fold case
+                if (cp == 'c' && has_sel) {
+                    ui->clip_out.assign(buf + lo, (size_t)(hi - lo));
+                    ui->clip_out_set = true;
+                } else if (cp == 'x' && has_sel) {
+                    ui->clip_out.assign(buf + lo, (size_t)(hi - lo));
+                    ui->clip_out_set = true;
+                    erase(lo, hi);
+                } else if (cp == 'v' && !ui->clip_in.empty()) {
+                    // Line endings normalised on the way in: a paste from a
+                    // Windows editor otherwise carries a carriage return into
+                    // every line, and every one of them draws as a glyph.
+                    std::string t;
+                    t.reserve(ui->clip_in.size());
+                    for (char ch : ui->clip_in) if (ch != '\r') t += ch;
+                    insert(t.c_str(), (int)t.size());
+                }
+            }
         }
         if (in.key_select_all) { st->anchor = 0; st->caret = len; }
         else if (st->caret != before && !shift) st->anchor = st->caret;
