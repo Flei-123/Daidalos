@@ -28,5 +28,9 @@ int main(){ int bad=0, good=0;
   EQ(DAI_KEY_SHIFT_L, XK_Shift_L); EQ(DAI_KEY_SHIFT_R, XK_Shift_R);
   EQ(DAI_KEY_CTRL_L, XK_Control_L); EQ(DAI_KEY_CTRL_R, XK_Control_R);
   EQ(DAI_KEY_ALT_L, XK_Alt_L); EQ(DAI_KEY_ALT_R, XK_Alt_R);
+  // The trailing "N passed, M failed" is the shape tools/run_tests.sh counts.
+  // Without it this suite contributed 0/0 to the total - a suite that reports
+  // nothing looks exactly like a suite that checks nothing.
   std::printf("%s: %d key codes match X11 exactly, %d wrong\n", bad?"FAILED":"ok", good, bad);
+  std::printf("%d passed, %d failed\n", good, bad);
   return bad?1:0; }

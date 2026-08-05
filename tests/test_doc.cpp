@@ -514,8 +514,12 @@ int main() {
         CHECK(inst_a != 0, "instantiating the prefab failed: %s", perr);
         dai_node inst_b = dai_doc_prefab_instantiate(scene, pf, 0, ".", perr, sizeof(perr));
         CHECK(inst_b != 0 && inst_b != inst_a, "the second instance did not get its own nodes");
-        // root + 2 pieces per instance, plus the ground
-        CHECK(dai_doc_count(scene) == 1 + 2 * 3, "the scene has %u nodes, expected 7",
+        // Two pieces per instance, plus the ground. There is no third node:
+        // the prefab's ROOT is the instance now. The empty wrapper this test
+        // used to count was the "parent inside a parent" every instantiate
+        // left behind, and the click that was supposed to select the crate
+        // kept landing on it.
+        CHECK(dai_doc_count(scene) == 1 + 2 * 2, "the scene has %u nodes, expected 5",
               dai_doc_count(scene));
         CHECK(dai_doc_undo_depth(scene) >= 2, "each instantiate should be one undo step");
 
@@ -556,7 +560,7 @@ int main() {
         CHECK(dai_doc_find(back, "CrateHatch") != 0,
               "the edited prefab did not reach the instances");
         CHECK(dai_doc_find(back, "CrateLid") == 0, "the old piece is still there after a reload");
-        CHECK(dai_doc_count(back) == 7, "reload changed the node count to %u", dai_doc_count(back));
+        CHECK(dai_doc_count(back) == 5, "reload changed the node count to %u", dai_doc_count(back));
 
         // A prefab that contains itself must be refused, not recursed into.
         dai_doc *evil = dai_doc_create();

@@ -124,6 +124,13 @@ struct dai_ui {
         float    text_x = 0;      // where buf is drawn, for caret hit testing
         float    scroll = 0;      // horizontal scroll when the text is too long
     } edit;
+    // The id of the field that actually DREW itself this frame. A panel that
+    // stops being drawn while one of its fields has the keyboard used to leave
+    // edit.editing true for the rest of the session - and "does a text field
+    // have the keyboard" is the question F2 asks before it renames anything,
+    // and the one a search box asks before it takes focus. A flag only ever
+    // set by the thing that is gone is not a flag, it is a fuse.
+    uint64_t edit_seen = 0;
     int focus_next_field = 0;   // the next text field takes focus on its own (create flows)
     const char *hot_label = nullptr;   // label of the hovered widget, for drop targets
 
@@ -464,6 +471,14 @@ void dai_ui_end(dai_ui *ui) {
         ui->cur_layer = save_layer;
         ui->clips.swap(save_clips);
     }
+    // Nobody drew the field that had the keyboard: its panel was closed, its
+    // tab switched away or its row scrolled out of the world. It is over.
+    if (ui->edit.editing && ui->edit_seen != ui->edit.id) {
+        ui->edit.editing = false;
+        ui->edit.dragging = false;
+        ui->edit.id = 0;
+    }
+    ui->edit_seen = 0;
     if (!ui->input.mouse_down) {
         ui->active = 0; ui->drag_win = 0; ui->size_win = 0; ui->size_edge = 0;
         ui->edit.dragging = false;
@@ -1795,19 +1810,28 @@ int dai_ui_object_field(dai_ui *ui, const char *label, const char *value, const 
     float fw = w - bw - 2.0f;
     if (fw < 20.0f) fw = w;
     bool over_f = inside_chk(ui, x, y, fw, h);
-    bool over_b = inside_chk(ui, x + fw + 2.0f, y, bw, h);
+    bool over_b = fw < w && inside_chk(ui, x + fw + 2.0f, y, bw, h);
     uint64_t oid = hash_id(label ? label : "objfield", x, y);
-    if (over_f || over_b) { ui->mouse_over_ui = true; ui->cursor_want = DAI_CURSOR_HAND; }
+    if (over_f || over_b) {
+        ui->mouse_over_ui = true;
+        ui->cursor_want = DAI_CURSOR_HAND;
+        // What a dragged hierarchy node asks: which field am I over?
+        if (label) ui->hot_label = label;
+    }
     if ((over_f || over_b) && ui->input.mouse_down && !ui->prev.mouse_down) ui->active = oid;
-    bool pressed = false;
+    int result = 0;
     if (ui->active == oid && !ui->input.mouse_down) {
-        pressed = over_f || over_b;
+        // The target button and the plate are two different questions: one
+        // opens the list of everything, the other means "show me this one".
+        if (over_b)      result = 2;
+        else if (over_f) result = 1;
         ui->active = 0;
     }
 
     dai_ui_rrect(ui, x, y + 1.0f, fw, h - 2.0f, ui->style.rounding,
                  over_f ? ui->style.button_hover : ui->style.track);
-    dai_ui_rect_outline(ui, x, y + 1.0f, fw, h - 2.0f, 1.0f, ui->style.panel_border);
+    dai_ui_rect_outline(ui, x, y + 1.0f, fw, h - 2.0f, 1.0f,
+                        over_f ? ui->style.accent : ui->style.panel_border);
     float tx = x + 5.0f;
     float isz = dai_icons_size(ui->icons);
     if (isz <= 0.0f || isz > h - 4.0f) isz = h - 6.0f;
@@ -1828,7 +1852,7 @@ int dai_ui_object_field(dai_ui *ui, const char *label, const char *value, const 
         else
             dai_ui_text(ui, bx + 4.0f, y + 2.0f, "...", ui->style.text);
     }
-    return pressed ? 1 : 0;
+    return result;
 }
 
 void dai_ui_searchlist_open(dai_ui_searchlist *s, float x, float y) {
@@ -1884,7 +1908,14 @@ int dai_ui_searchlist_draw(dai_ui *ui, dai_ui_searchlist *s,
 
     float rows_h = (nshown < (uint32_t)max_rows ? (float)nshown : max_rows) * ROW_H;
     float H = SEARCH_H + rows_h + 6.0f;
-    if (y + H > ui->height - 4.0f) y = ui->height - 4.0f - H;
+    // Clamped against the height the list COULD have, never the height it has
+    // right now. Typing filters rows away, and a clamp that follows the
+    // shrinking panel walks it up the screen letter by letter - which moves
+    // the search box, and a text field is identified by where it is. The
+    // field changed identity under the caret, so the second character of
+    // every query went nowhere: that is what "the search does not work" was.
+    float H_max = SEARCH_H + max_rows * ROW_H + 6.0f;
+    if (y + H_max > ui->height - 4.0f) y = ui->height - 4.0f - H_max;
     if (y < 4.0f) y = 4.0f;
     s->w = W; s->h = H;
 
@@ -1911,7 +1942,7 @@ int dai_ui_searchlist_draw(dai_ui *ui, dai_ui_searchlist *s,
                       s->query, sizeof(s->query), &commit);
     if (!s->query[0] && !dai_ui_text_active(ui))
         dai_ui_text(ui, x + 12.0f, y + 4.0f + (SEARCH_H - 4.0f - dai_font_line_height(ui->font)) * 0.5f,
-                    "Search components...", ui->style.text_dim);
+                    s->hint[0] ? s->hint : "Search...", ui->style.text_dim);
 
     // ---- keyboard navigation ----------------------------------------------
     auto is_header = [&](int row) {
@@ -2848,6 +2879,10 @@ int text_field_impl(dai_ui *ui, uint64_t id, float x, float y, float w, float h,
         edit_draw(ui, x, y, w, h, text_col ? text_col : ui->style.text, pad);
     }
     if (editing) ui->edit.opened_now = false;
+    // Taken here, not on the way in: a click OPENS the edit in the middle of
+    // this function, and a field that is opened and closed again in the same
+    // frame (Enter, Escape, a click on the way out) must not be marked at all.
+    if (ui->edit.editing && ui->edit.id == id) ui->edit_seen = id;
     return changed;
 }
 
@@ -2887,6 +2922,10 @@ int dai_ui_text_field(dai_ui *ui, const char *id_str, float x, float y, float w,
     // text selected - "new file, type the name right there", like Unity.
     if (ui->focus_next_field) {
         ui->focus_next_field = 0;
+        // Whatever had the keyboard gives it up: a picker that opens with a
+        // search box and does not GET the keys is a picker where typing does
+        // nothing, which is exactly how "the search does not work" looks.
+        if (ui->edit.editing && ui->edit.id != id) edit_close(ui);
         if (!ui->edit.editing) { edit_open(ui, id, buf, false, true); ui->edit.opened_now = false; }
     }
     bool editing = ui->edit.editing && ui->edit.id == id;
@@ -3609,6 +3648,30 @@ int dai_ui_array_object_row(dai_ui *ui, int index, const char *value,
             dai_ui_icon_at(ui, "target", bx + (bw - isz) * 0.5f, y + (h - isz) * 0.5f,
                            isz, ui->style.text);
     }
+    return pressed ? 1 : 0;
+}
+
+int dai_ui_button_fit(dai_ui *ui, const char *utf8) {
+    if (!ui || !utf8) return 0;
+    float h = widget_height(ui);
+    float w = dai_ui_text_width(ui, utf8) + ui->style.padding * 3.0f;
+    float avail = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    if (w > avail) w = avail;
+    float x, y;
+    next_rect(ui, w, h, &x, &y);
+    uint64_t id = hash_id(utf8, x, y);
+    bool over = inside_chk(ui, x, y, w, h);
+    if (over) { ui->hot = id; ui->hot_label = utf8; ui->mouse_over_ui = true;
+                ui->cursor_want = DAI_CURSOR_HAND; }
+    bool pressed = false;
+    if (over && ui->input.mouse_down && !ui->prev.mouse_down) ui->active = id;
+    if (ui->active == id && !ui->input.mouse_down) { pressed = over; ui->active = 0; }
+    uint32_t col = ui->style.button;
+    if (ui->active == id) col = ui->style.button_active;
+    else if (over) col = ui->style.button_hover;
+    dai_ui_rrect(ui, x, y, w, h, ui->style.rounding, col);
+    float tw = dai_ui_text_width(ui, utf8);
+    dai_ui_text(ui, x + (w - tw) * 0.5f, y + ui->style.row_pad * 0.5f, utf8, ui->style.text);
     return pressed ? 1 : 0;
 }
 

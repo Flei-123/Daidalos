@@ -13,13 +13,28 @@
 //   string       -> a text field
 //   node         -> a slot you drag an object from the Hierarchy onto
 //
+// Since 0.2.2 a plain top level declaration is a field too - `let speed = 6`
+// needs no comment at all, exactly like a public member in Unity. The
+// "@param" form stays for what a declaration cannot say: a node reference has
+// no literal to read a type from.
+//
+// "@header" groups the fields under it, "@tooltip" (or just a comment line
+// directly above a field) is the description shown on hover - Unity's
+// [Header] and [Tooltip], spelled the way a comment can be.
+//
+// @header Movement
+// @tooltip Metres per second on the ground.
 // @param float  speed        = 6
+// @tooltip Multiplied onto speed while Shift is held.
 // @param float  sprintMul    = 1.7
 // @param float  jumpForce    = 5.5
+// @tooltip How much of the ground speed still steers while airborne, 0 to 1.
 // @param float  airControl   = 0.35
 // @param int    maxJumps     = 2
+// @header Look
 // @param bool   faceMovement = true
 // @param string playerName   = Player One
+// @tooltip The camera that follows this player.
 // @param node   followCam
 
 // ---------------------------------------------------------------- globals

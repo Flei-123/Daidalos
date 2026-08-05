@@ -317,6 +317,9 @@ DAI_API void dai_ui_label(dai_ui *ui, const char *utf8);
 DAI_API void dai_ui_translate(dai_ui *ui, int on);
 DAI_API void dai_ui_label_fmt(dai_ui *ui, const char *fmt, ...);
 DAI_API int  dai_ui_button(dai_ui *ui, const char *utf8);
+/* The same button, only as wide as its own label. A column of full width
+ * buttons reads as a stack of banners; "Edit" is a word, not a banner. */
+DAI_API int  dai_ui_button_fit(dai_ui *ui, const char *utf8);
 DAI_API int  dai_ui_checkbox(dai_ui *ui, const char *utf8, int *value);
 /* A full width button that can stay ON - "Edit Collider", "Wireframe". The
  * icon button next to a label did not read as a button at all, and a checkbox
@@ -455,6 +458,11 @@ DAI_API int  dai_ui_image_button(dai_ui *ui, dai_texture tex, float w, float h,
  *
  * Two arrows that cycle a value are not a picker: they hide the list, and
  * choosing the fifth of six is five clicks and a memory test. */
+/* Unity's object field. Returns 0 for nothing, 1 when the plate was clicked
+ * (show what it points at) and 2 for the target button on the right, which is
+ * where a picker belongs. While the pointer is over it the field's label is
+ * reported by dai_ui_hot_label - that is how a dragged hierarchy node knows
+ * which field it would land in. */
 DAI_API int  dai_ui_object_field(dai_ui *ui, const char *label, const char *value,
                                  const char *icon);
 
@@ -663,6 +671,7 @@ typedef struct dai_ui_searchlist {
     float scroll;
     char  query[64];
     float w, h;            /* read by the host: where the panel ended up     */
+    char  hint[40];        /* placeholder in the search box; empty = generic */
 } dai_ui_searchlist;
 
 DAI_API void dai_ui_searchlist_open(dai_ui_searchlist *s, float x, float y);

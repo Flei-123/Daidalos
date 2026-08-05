@@ -471,36 +471,6 @@ std::string join_path(const std::string &base, const std::string &rel) {
     return base + "/" + rel;
 }
 
-// Copies every node of `src` under `parent` in `dst`, keeping the shape of the
-// tree. Ids are NOT preserved: they belong to the document they live in, and
-// two instances of the same prefab must not collide.
-uint32_t graft(dai_doc *dst, const dai_doc *src, dai_node parent) {
-    std::vector<dai_node> ids((size_t)dai_doc_count(src));
-    if (ids.empty()) return 0;
-    dai_doc_nodes(src, ids.data(), (uint32_t)ids.size());
-
-    std::unordered_map<dai_node, dai_node> map;
-    uint32_t made = 0;
-    for (dai_node id : ids) {                     // parents come first
-        dai_node_desc rec{};
-        if (dai_doc_get(src, id, &rec) != DAI_OK) continue;
-        // The instance root carries the reference; the copies must not, or a
-        // reload would expand them again and again.
-        rec.prefab[0] = 0;
-        dai_node p = parent;
-        if (rec.parent) {
-            auto it = map.find(rec.parent);
-            if (it != map.end()) p = it->second;
-        }
-        rec.parent = p;
-        dai_node made_id = dai_doc_add(dst, &rec);
-        if (!made_id) continue;
-        map[id] = made_id;
-        ++made;
-    }
-    return made;
-}
-
 // The chain of prefab files currently being expanded. It has to be file
 // scoped, not a parameter: expanding an instance calls dai_doc_load, which
 // expands ITS instances, and a per call vector would start empty every time -
@@ -540,7 +510,18 @@ bool expand_one(dai_doc *d, dai_node n, const std::string &base_dir,
         if (err && err_size) snprintf(err, err_size, "%s", lerr);
         return true;
     }
-    graft(d, sub, n);
+    // The node that carries the reference IS the instance root - exactly the
+    // rule dai_doc_prefab_instantiate follows. Grafting the WHOLE file under
+    // it put the empty wrapper back on every load: place a prefab, save,
+    // reopen, and the crate has grown a parent it did not have a second ago,
+    // and every click selects that parent instead of the crate.
+    //
+    // The instance's own record is complete in the scene file - the save
+    // skips the CHILDREN of an instance, not the instance - so only the
+    // children have to come back.
+    std::vector<dai_node> sids((size_t)dai_doc_count(sub));
+    if (!sids.empty()) dai_doc_nodes(sub, sids.data(), (uint32_t)sids.size());
+    graft_children(d, sub, sids.empty() ? 0 : sids[0], n);
     dai_doc_destroy(sub);
     return true;
 }
