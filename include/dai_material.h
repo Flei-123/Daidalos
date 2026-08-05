@@ -55,6 +55,9 @@ DAI_API dai_result dai_matfile_save(const dai_matfile *m, const char *path);
  * the number of bytes the text needs, excluding the terminator. */
 DAI_API dai_result dai_matfile_from_text(dai_matfile *out, const char *text, size_t len);
 DAI_API size_t     dai_matfile_to_text(const dai_matfile *m, char *buf, size_t buf_size);
+/* The same, with every field written out even when it matches the default.
+ * What a NEW material file should contain: something to edit. */
+DAI_API size_t     dai_matfile_to_text_full(const dai_matfile *m, char *buf, size_t buf_size);
 
 /* Is this path a material file? One place to ask, so the answer cannot drift
  * between the browser, the inspector and the loader. */

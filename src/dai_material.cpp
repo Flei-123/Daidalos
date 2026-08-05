@@ -154,6 +154,34 @@ dai_result dai_matfile_load(dai_matfile *out, const char *path, char *err, size_
     return r;
 }
 
+// Every field, whether it differs from the default or not. Used when CREATING
+// a material: a new file that is one header line long is technically correct
+// and completely unhelpful - you open it to change the colour and there is no
+// colour line to change. Saving an EDITED material still writes the short form.
+size_t dai_matfile_to_text_full(const dai_matfile *m, char *buf, size_t buf_size) {
+    if (!m) return 0;
+    std::string t;
+    char line[160];
+    std::snprintf(line, sizeof(line), "%s %d\n", MAGIC, FORMAT_VERSION);
+    t += line;
+    std::snprintf(line, sizeof(line), "color %s %s %s\n",
+                  fstr(m->color.x).c_str(), fstr(m->color.y).c_str(),
+                  fstr(m->color.z).c_str());
+    t += line;
+    std::snprintf(line, sizeof(line), "roughness %s\n", fstr(m->roughness).c_str());
+    t += line;
+    std::snprintf(line, sizeof(line), "metallic %s\n", fstr(m->metallic).c_str());
+    t += line;
+    std::snprintf(line, sizeof(line), "emissive %s\n", fstr(m->emissive).c_str());
+    t += line;
+    if (buf && buf_size) {
+        size_t n = t.size() < buf_size - 1 ? t.size() : buf_size - 1;
+        std::memcpy(buf, t.data(), n);
+        buf[n] = 0;
+    }
+    return t.size();
+}
+
 dai_result dai_matfile_save(const dai_matfile *m, const char *path) {
     if (!m || !path || !*path) return DAI_ERR_INVALID_ARG;
     char buf[1024];

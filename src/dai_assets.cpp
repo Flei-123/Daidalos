@@ -369,10 +369,13 @@ uint32_t dai_assets_list(dai_assets *a, char *out, uint32_t max, uint32_t stride
             // Placeable (models), attachable (scripts), instantiable
             // (prefabs) and openable (text, images, sound). A browser that
             // hides a file the editor just wrote is a browser that lies.
-            return e == "glb" || e == "gltf" || e == "js" || e == "cpp" ||
-                   e == "daidalos" || e == "hpp" || e == "h" || e == "json" ||
+            return e == "glb" || e == "gltf" || e == "js" || e == "ts" ||
+                   e == "cpp" || e == "cc" || e == "cxx" ||
+                   e == "daidalos" || e == "daimat" ||
+                   e == "hpp" || e == "h" || e == "json" ||
                    e == "txt" || e == "md" || e == "png" || e == "jpg" ||
-                   e == "jpeg" || e == "wav" || e == "ogg" || e == "glsl";
+                   e == "jpeg" || e == "wav" || e == "ogg" ||
+                   e == "glsl" || e == "vert" || e == "frag";
         }
         static void go(const std::string &root, const std::string &rel,
                        std::vector<std::string> &out, int depth) {

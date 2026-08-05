@@ -1293,7 +1293,14 @@ static int material_create(const char *rel, void *) {
     if (path_exists(path)) return 0;              // the caller walks the number up
     make_parent_dirs(path);
     dai_matfile m = dai_matfile_default();
-    return dai_matfile_save(&m, path) == DAI_OK ? 1 : 0;
+    // Written in full: a new material is something you open and change, and
+    // the short form has nothing in it to change.
+    char text[1024];
+    size_t need = dai_matfile_to_text_full(&m, text, sizeof(text));
+    FILE *f = std::fopen(path, "wb");
+    if (!f) return 0;
+    size_t wrote = std::fwrite(text, 1, need, f);
+    return (std::fclose(f) == 0 && wrote == need) ? 1 : 0;
 }
 
 // Every node that points at a .daimat gets that file's numbers. Called when a
