@@ -374,6 +374,12 @@ DAI_API void dai_editor_ui_layout_dump(const dai_editor_ui *p, char *out, size_t
 /* Number of rows the hierarchy currently shows - folded subtrees excluded. */
 DAI_API uint32_t dai_editor_ui_visible_rows(const dai_editor_ui *p);
 
+/* The frame rate, for the readout in the corner of the views. The host owns
+ * the clock - it is the only thing that knows when a frame began and ended -
+ * and should hand over an already smoothed value; the editor draws digits, it
+ * does not average. Switched off in the view options. */
+DAI_API void dai_editor_ui_fps(dai_editor_ui *p, float fps);
+
 /* ---- asset browser ------------------------------------------------------ */
 
 /*

@@ -373,6 +373,8 @@ struct dai_editor_ui {
     dai_ui_popup menu_scecam{};       // scene view toolbar: camera settings
     char layout_name_buf[64] = { 0 };
     int  gizmo_grid = 1;            // the floor grid in the scene view
+    int  gizmo_fps = 1;             // the frame counter in the corner
+    float fps_now = 0.0f;           // pushed by the host, already smoothed
     int  gizmo_colliders = 1;
     int  gizmo_cameras = 1;
     int  floating_outside = 1;      // floating panels may leave the main window
@@ -2332,6 +2334,10 @@ void face_handles(const ColliderBox &c, dai_vec3 *out, int *axis, int *sign) {
 int dai_editor_ui_collider_edit(const dai_editor_ui *p) { return p ? p->collider_edit : 0; }
 void dai_editor_ui_collider_edit_set(dai_editor_ui *p, int on) { if (p) p->collider_edit = on ? 1 : 0; }
 
+void dai_editor_ui_fps(dai_editor_ui *p, float fps) {
+    if (p) p->fps_now = fps;
+}
+
 uint32_t dai_editor_ui_grid_lines(const dai_editor_ui *p, float *out, uint32_t max_points) {
     if (!p || !p->gizmo_grid || !out) return 0;
     uint32_t n = 0;
@@ -2340,13 +2346,53 @@ uint32_t dai_editor_ui_grid_lines(const dai_editor_ui *p, float *out, uint32_t m
         out[n*3+0] = a.x; out[n*3+1] = a.y; out[n*3+2] = a.z; ++n;
         out[n*3+0] = b.x; out[n*3+1] = b.y; out[n*3+2] = b.z; ++n;
     };
-    for (int g = -20; g <= 20; ++g) {
-        if (g == 0) continue;
-        put(dai_vec3{ (float)g, 0, -20 }, dai_vec3{ (float)g, 0, 20 });
-        put(dai_vec3{ -20, 0, (float)g }, dai_vec3{ 20, 0, (float)g });
+
+    // Where the camera is. dai_editor_ray hands back the eye as the origin of
+    // any ray, which is the only getter this layer needs.
+    dai_vec3 eye{ 0, 6, 0 }, dir{ 0, -1, 0 };
+    if (p->ed) dai_editor_ray(p->ed, 0.0f, 0.0f, &eye, &dir);
+
+    // Spacing by height: 1 m near the floor, then ten times that per decade.
+    // Height, not distance to the origin - what matters is how much floor one
+    // metre covers on screen.
+    float h = std::fabs(eye.y);
+    if (h < 1.0f) h = 1.0f;
+    float cell = 1.0f;
+    while (cell * 12.0f < h) cell *= 10.0f;      // 1 -> 10 -> 100
+    if (cell > 1000.0f) cell = 1000.0f;
+
+    const int HALF = 40;                          // cells each way from the eye
+    float ext = (float)HALF * cell;
+    // Snapped to the grid, so the lines stay still while the camera moves and
+    // only the far edge is ever added or dropped.
+    float cx = std::floor(eye.x / cell + 0.5f) * cell;
+    float cz = std::floor(eye.z / cell + 0.5f) * cell;
+
+    for (int g = -HALF; g <= HALF; ++g) {
+        float x = cx + (float)g * cell;
+        float z = cz + (float)g * cell;
+        // The world axes are drawn last, in their own colour, so skip the
+        // cell line that would sit exactly on top of one.
+        if (std::fabs(x) > 0.001f * cell)
+            put(dai_vec3{ x, 0, cz - ext }, dai_vec3{ x, 0, cz + ext });
+        if (std::fabs(z) > 0.001f * cell)
+            put(dai_vec3{ cx - ext, 0, z }, dai_vec3{ cx + ext, 0, z });
     }
-    put(dai_vec3{ -20, 0, 0 }, dai_vec3{ 20, 0, 0 });
-    put(dai_vec3{ 0, 0, -20 }, dai_vec3{ 0, 0, 20 });
+    // The coarse set, ten cells apart, reaching ten times as far: this is the
+    // half that makes it read as endless rather than as a mat you are standing
+    // on the edge of.
+    float big = cell * 10.0f, bext = ext * 6.0f;
+    float bx = std::floor(eye.x / big + 0.5f) * big;
+    float bz = std::floor(eye.z / big + 0.5f) * big;
+    for (int g = -HALF / 2; g <= HALF / 2; ++g) {
+        float x = bx + (float)g * big;
+        float z = bz + (float)g * big;
+        put(dai_vec3{ x, 0, bz - bext }, dai_vec3{ x, 0, bz + bext });
+        put(dai_vec3{ bx - bext, 0, z }, dai_vec3{ bx + bext, 0, z });
+    }
+    // The two world axes, through the origin, however far away it is.
+    put(dai_vec3{ cx - ext * 8.0f, 0, 0 }, dai_vec3{ cx + ext * 8.0f, 0, 0 });
+    put(dai_vec3{ 0, 0, cz - ext * 8.0f }, dai_vec3{ 0, 0, cz + ext * 8.0f });
     return n;
 }
 
@@ -2733,6 +2779,7 @@ static void settings_body(dai_editor_ui *p) {
     if (p->settings_tab == 2) {
         dai_ui_label(ui, "Shown in the scene view:");
         { int g = p->gizmo_grid;      if (dai_ui_checkbox(p->ui, "Floor grid", &g))      p->gizmo_grid = g; }
+        { int g = p->gizmo_fps;       if (dai_ui_checkbox(p->ui, "FPS", &g))             p->gizmo_fps = g; }
         { int g = p->gizmo_colliders; if (dai_ui_checkbox(p->ui, "Collider frames", &g)) p->gizmo_colliders = g; }
         { int g = p->gizmo_cameras;   if (dai_ui_checkbox(p->ui, "Camera frustums", &g)) p->gizmo_cameras = g; }
         dai_ui_separator(ui);
@@ -5182,6 +5229,42 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         }
         dai_dock_panel_end(p->dock);
     }
+    if (p->gizmo_fps) {
+        // Top left of each view. A frame counter belongs where nothing else
+        // is, and it belongs in BOTH views: the scene view's number is what
+        // the editor costs, the game view's is what the game costs, and with
+        // both docked they are not the same number.
+        const dai_ui_style *fs = dai_ui_style_of(ui);
+        char fb[64];
+        std::snprintf(fb, sizeof(fb), "%.0f fps   %.1f ms",
+                      (double)p->fps_now,
+                      p->fps_now > 0.01f ? (double)(1000.0f / p->fps_now) : 0.0);
+        // Green while it is comfortable, amber when it is not, red when the
+        // frame is longer than a 30 Hz budget - the number you read at a
+        // glance is the colour, not the digits.
+        uint32_t col = p->fps_now >= 55.0f ? rgba(0x8A, 0xD6, 0x8A, 255)
+                     : p->fps_now >= 28.0f ? rgba(0xE6, 0xC0, 0x6A, 255)
+                                           : rgba(0xE8, 0x7A, 0x70, 255);
+        float tw2 = dai_ui_text_width(ui, fb) + 14.0f;
+        float th2 = dai_ui_text_height(ui) + 8.0f;
+        struct Corner { float x, y, w, h; int on; };
+        Corner views[2] = {
+            { p->view_x, p->view_y, p->view_w, p->view_h, p->view_w > 0.0f },
+            { p->game_x, p->game_y, p->game_w, p->game_h, p->has_game != 0 },
+        };
+        dai_ui_layer_push(ui, DAI_LAYER_WINDOW + 3);
+        for (const Corner &c : views) {
+            if (!c.on || c.w < tw2 + 16.0f) continue;
+            float fx = c.x + 8.0f, fy = c.y + 8.0f;
+            dai_ui_rrect(ui, fx, fy, tw2, th2, 4.0f, 0xB4000000u);
+            dai_ui_text(ui, fx + 7.0f, fy + 4.0f, fb, col);
+            if (views[1].on && c.x == views[1].x && c.y == views[1].y) {
+                // Two counters on screen at once need to say which is which.
+                dai_ui_text(ui, fx + tw2 + 6.0f, fy + 4.0f, "game", fs->text_dim);
+            }
+        }
+        dai_ui_layer_pop(ui);
+    }
     {
         // The preview's chrome. Drawn AFTER the scene panel has reported its
         // rectangle and before the host renders into it - the world lands on
@@ -5191,8 +5274,14 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
                                          nullptr, nullptr, nullptr, nullptr)) {
             const dai_ui_style *cs2 = dai_ui_style_of(ui);
             dai_ui_layer_push(ui, DAI_LAYER_WINDOW + 4);
-            dai_ui_rect(ui, cx2 - 1.0f, cy2 - 1.0f, cw2 + 2.0f, ch2 + 2.0f, cs2->panel_border);
-            dai_ui_rect(ui, cx2, cy2, cw2, ch2, rgba(0x0A, 0x0A, 0x0C, 255));
+            // A BORDER, drawn as four thin bars - not a filled rectangle with
+            // a smaller one inside it. The interface is composited over the
+            // world, so anything filled here is simply opaque.
+            const float B2 = 1.0f;
+            dai_ui_rect(ui, cx2 - B2, cy2 - B2, cw2 + B2 * 2, B2, cs2->panel_border);
+            dai_ui_rect(ui, cx2 - B2, cy2 + ch2, cw2 + B2 * 2, B2, cs2->panel_border);
+            dai_ui_rect(ui, cx2 - B2, cy2, B2, ch2, cs2->panel_border);
+            dai_ui_rect(ui, cx2 + cw2, cy2, B2, ch2, cs2->panel_border);
             float lh2 = dai_ui_text_height(ui) + 6.0f;
             dai_ui_rect(ui, cx2, cy2 - lh2, cw2, lh2, (cs2->chrome & 0x00FFFFFFu) | 0xE6000000u);
             dai_ui_text(ui, cx2 + 6.0f, cy2 - lh2 + 3.0f, "Camera Preview", cs2->text_dim);
@@ -5255,6 +5344,7 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             if (p->menu_gizmos.open) {
                 dai_ui_popup_panel_begin(ui, &p->menu_gizmos, 180.0f, 0.0f);
                 int g = p->gizmo_grid;      if (dai_ui_checkbox(ui, "Floor grid", &g))      p->gizmo_grid = g;
+                int q = p->gizmo_fps;       if (dai_ui_checkbox(ui, "FPS", &q))             p->gizmo_fps = q;
                 int c = p->gizmo_colliders; if (dai_ui_checkbox(ui, "Collider frames", &c)) p->gizmo_colliders = c;
                 int f = p->gizmo_cameras;   if (dai_ui_checkbox(ui, "Camera frustums", &f)) p->gizmo_cameras = f;
                 float gpx = p->settings_gizmo_px;

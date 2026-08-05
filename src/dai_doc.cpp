@@ -275,15 +275,33 @@ uint64_t dai_doc_revision(const dai_doc *d) { return d ? d->revision : 0; }
 // Unity never lets two siblings share a name, and neither do we: a second
 // "Box" becomes "Box (1)" the moment it is created, and a script that looks
 // up by name always finds exactly one.
+// Strips one trailing " (N)" - the suffix THIS function adds. "Cylinder (3)"
+// gives "Cylinder"; "Mark (2019)" gives "Mark" too, and that is the right
+// trade: the alternative is that duplicating a copy appends a second suffix,
+// and then a third, until the hierarchy reads "Cylinder (1) (1) (1) (1)".
+// Copying a copy means "another one of those", not "a copy of the copy".
+static void strip_copy_suffix(char *name) {
+    size_t n = std::strlen(name);
+    if (n < 4 || name[n - 1] != ')') return;
+    size_t i = n - 2;
+    if (name[i] < '0' || name[i] > '9') return;          // "(  )" or "(a)" is a name
+    while (i > 0 && name[i] >= '0' && name[i] <= '9') --i;
+    if (name[i] != '(') return;
+    if (i == 0 || name[i - 1] != ' ') return;            // "Box(2)" is somebody's name
+    name[i - 1] = 0;
+}
+
 static void make_unique_name(dai_doc *d, dai_node_desc *desc, dai_node parent) {
     if (!desc->name[0]) return;
     char base[DAI_NODE_NAME_MAX];
     std::snprintf(base, sizeof(base), "%s", desc->name);
+    strip_copy_suffix(base);
+    if (!base[0]) std::snprintf(base, sizeof(base), "%s", desc->name);   // "(2)" alone
     // The loop must NOT run to a thousand silently: a load that mis-parses a
     // name would spin here forever and the editor would look "dead" on start
     // with a white window, which is exactly the bug it just had. Give up after
     // a sane count and keep the base name - a duplicate is a warning, not a hang.
-    for (int suffix = 0; suffix < 100; ++suffix) {
+    for (int suffix = 0; suffix < 1000; ++suffix) {
         char want[DAI_NODE_NAME_MAX];
         if (suffix == 0) std::snprintf(want, sizeof(want), "%s", base);
         else             std::snprintf(want, sizeof(want), "%s (%d)", base, suffix);

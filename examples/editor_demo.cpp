@@ -2536,6 +2536,19 @@ int main(int argc, char **argv) {
         diag_step("ui begin");
         dai_ui_begin(ui, lw, lh, &in);
         diag_step("ui frame (panels)");
+        // The frame rate, smoothed over about half a second. Averaged HERE
+        // rather than in the editor because this is where the clock is - and
+        // an unsmoothed counter is a number nobody can read.
+        {
+            static float fps_avg = 0.0f;
+            if (dt > 0.0001f) {
+                float inst = 1.0f / dt;
+                float k = dt / (0.5f + dt);        // ~0.5 s time constant
+                fps_avg = fps_avg <= 0.0f ? inst : fps_avg + (inst - fps_avg) * k;
+            }
+            dai_editor_ui_fps(panels, fps_avg);
+        }
+
         // Unsaved? The asterisk in the hierarchy comes from here.
         dai_editor_ui_scene_dirty(panels, dai_doc_revision(doc) != g_saved_rev);
 
@@ -2643,6 +2656,11 @@ int main(int argc, char **argv) {
         }
 #endif
 
+        // Nobody has asked for the second view yet this frame. Without this
+        // the last rectangle any of them set keeps rendering, so closing the
+        // Game panel or deselecting the camera leaves a picture behind.
+        dai_render_world_clip2(r, 0.0f, 0.0f, 0.0f, 0.0f);
+
         // The camera preview, in the corner of the scene view. It uses the
         // renderer's SECOND view, the same one the Game panel uses - and the
         // editor refuses to offer a preview while that panel is open, so the
@@ -2679,8 +2697,10 @@ int main(int argc, char **argv) {
         dai_editor_camera_viewport_rect(ed, vrx, vry, vrw, vrh);
         dai_render_world_clip(r, vrx * uis, vry * uis, vrw * uis, vrh * uis);
         {   // The floor grid as world lines: depth tested, so boxes hide it.
-            static float grid_xyz[84 * 2 * 3];
-            uint32_t gn = dai_editor_ui_grid_lines(panels, grid_xyz, 84 * 2);
+            // Bigger buffer than the old fixed 20 m mat needed: the grid now
+            // follows the camera and carries a coarse set as well.
+            static float grid_xyz[420 * 2 * 3];
+            uint32_t gn = dai_editor_ui_grid_lines(panels, grid_xyz, 420 * 2);
             dai_render_lines(r, grid_xyz, gn, 0.35f, 0.38f, 0.42f, 0.75f);
         }
         dai_editor_camera(ed, eye, look, dai_vec3{ 0, 1, 0 }, 55.0f, 0.1f, 300.0f,
