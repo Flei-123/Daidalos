@@ -2678,6 +2678,30 @@ int main(int argc, char **argv) {
         if (const char *taken = dai_ui_clipboard_taken(ui))
             dai_window_clipboard_set(win, taken);
 
+        // The About block in Settings: three strings, pushed every frame
+        // because they cost nothing and can never then be stale.
+        {
+            static char upd_status[160] = { 0 };
+            if (dai_editor_ui_take_update_check(panels)) {
+                // The editor updates itself against the download page's
+                // manifest on start-up - that machinery lives in dai_update
+                // and needs a URL and an install dir this build does not
+                // carry. So this button is honest about what it can do: it
+                // opens the page, where the version on offer is written down.
+                std::snprintf(upd_status, sizeof(upd_status),
+                              "opened the download page - it updates itself on restart");
+                dai_editor_ui_log(panels, 0, "opening https://daidalos.fleitec.com");
+#ifdef _WIN32
+                ShellExecuteA(nullptr, "open", "https://daidalos.fleitec.com",
+                              nullptr, nullptr, SW_SHOWNORMAL);
+#else
+                (void)std::system("xdg-open https://daidalos.fleitec.com >/dev/null 2>&1 &");
+#endif
+            }
+            dai_editor_ui_about(panels, g_projects_root,
+                                g_assets_dir[0] ? g_assets_dir : "", upd_status);
+        }
+
         // Unsaved? The asterisk in the hierarchy comes from here.
         dai_editor_ui_scene_dirty(panels, dai_doc_revision(doc) != g_saved_rev);
 

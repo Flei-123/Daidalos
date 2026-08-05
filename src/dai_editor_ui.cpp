@@ -220,6 +220,12 @@ struct dai_editor_ui {
     char   script_name_buf[64] = { 0 };
     int    script_focus = 0;
     int    want_save = 0, want_refresh = 0;
+    // What the About block shows. The editor knows none of it - the host owns
+    // the disk and the updater - so it is pushed in and simply displayed.
+    char about_projects[320] = { 0 };
+    char about_assets[320] = { 0 };
+    char about_status[160] = { 0 };
+    int  want_update_check = 0;
     // Set when a material was assigned or the browser was refreshed: the host
     // re-reads the .daimat files and pushes their numbers onto the nodes that
     // point at them. Read and cleared like the other one-shots.
@@ -1265,6 +1271,20 @@ int dai_editor_ui_take_save(dai_editor_ui *p) {
 int dai_editor_ui_take_material_apply(dai_editor_ui *p) {
     if (!p || !p->want_material_apply) return 0;
     p->want_material_apply = 0;
+    return 1;
+}
+
+void dai_editor_ui_about(dai_editor_ui *p, const char *projects_dir,
+                         const char *assets_dir, const char *update_status) {
+    if (!p) return;
+    if (projects_dir) std::snprintf(p->about_projects, sizeof(p->about_projects), "%s", projects_dir);
+    if (assets_dir)   std::snprintf(p->about_assets, sizeof(p->about_assets), "%s", assets_dir);
+    if (update_status) std::snprintf(p->about_status, sizeof(p->about_status), "%s", update_status);
+}
+
+int dai_editor_ui_take_update_check(dai_editor_ui *p) {
+    if (!p || !p->want_update_check) return 0;
+    p->want_update_check = 0;
     return 1;
 }
 
@@ -3157,7 +3177,27 @@ static void settings_body(dai_editor_ui *p) {
     }
 
     dai_ui_separator(ui);
-    dai_ui_label(ui, "Values apply immediately.");
+    dai_ui_label(p->ui, "Values apply immediately.");
+    // ---- About ------------------------------------------------------------
+    // Version, where things are, and whether there is a newer one. Everything
+    // a bug report needs, in the one place people already open when something
+    // is wrong - and none of it is worth a panel of its own.
+    dai_ui_separator(ui);
+    dai_ui_label(ui, "About");
+    dai_ui_label_fmt(ui, "Version   %s", dai_version());
+    dai_ui_label_fmt(ui, "Projects  %s", p->about_projects[0] ? p->about_projects : "(unset)");
+    dai_ui_label_fmt(ui, "Assets    %s", p->about_assets[0] ? p->about_assets : "(no project open)");
+    if (p->about_status[0]) dai_ui_label_fmt(ui, "Update    %s", p->about_status);
+    if (dai_ui_button(ui, "Check for updates")) p->want_update_check = 1;
+    if (dai_ui_button(ui, "Copy this to the clipboard")) {
+        char all[900];
+        std::snprintf(all, sizeof(all),
+                      "DAIDALOS %s\nprojects: %s\nassets: %s\nupdate: %s",
+                      dai_version(), p->about_projects, p->about_assets,
+                      p->about_status[0] ? p->about_status : "not checked");
+        dai_editor_ui_clipboard_set(p, 0, all);
+        dai_editor_ui_toast(p, "copied - paste it into a bug report", 2.0f);
+    }
     dai_ui_label(ui, "UI size needs a restart of the text it already drew");
     dai_ui_label(ui, "to reshape - the host reloads the font.");
 }

@@ -334,6 +334,15 @@ DAI_API void dai_editor_ui_project_settings_host(dai_editor_ui *p,
                                                  void (*draw)(void *user), void *user);
 DAI_API int  dai_editor_ui_take_save(dai_editor_ui *p);
 DAI_API int  dai_editor_ui_take_refresh(dai_editor_ui *p);
+
+/* What the About block in Settings shows. Pushed by the host each frame (it is
+ * three strings) because the editor knows neither where the projects live nor
+ * whether an update exists. `update_status` is free text - "up to date",
+ * "2026.08.05-9 available", "could not reach the server". */
+DAI_API void dai_editor_ui_about(dai_editor_ui *p, const char *projects_dir,
+                                 const char *assets_dir, const char *update_status);
+/* 1 once, when the user pressed "Check for updates". */
+DAI_API int  dai_editor_ui_take_update_check(dai_editor_ui *p);
 /* 1 once when a material was assigned (or the assets were refreshed): the host
  * should re-read every .daimat a node points at and copy its numbers onto that
  * node. The editor does not open files; the host does. */

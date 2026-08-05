@@ -539,6 +539,7 @@ typedef struct dai_ui_code_state {
     int   dragging;
     int   last_caret;   /* what the caret was last frame - see the widget    */
     int   have_last;
+    int   follow_caret; /* one shot: bring the caret into view on this draw  */
 } dai_ui_code_state;
 
 enum {

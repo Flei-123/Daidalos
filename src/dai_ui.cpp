@@ -2139,6 +2139,7 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
     if (pressed && over && mx > x + GUT) {
         st->caret = st->anchor = offset_at(mx, my);
         st->dragging = 1;
+        st->follow_caret = 1;          // a click is a place you asked to be
         st->focused = 1;
         dai_ui_claim_mouse(ui);
         ui->active = wid;
@@ -2158,13 +2159,20 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
             dai_ui_claim_mouse(ui);
         } else st->dragging = 0;
     }
+    bool user_scrolled = false;
     if (over) {
         ui->cursor_want = DAI_CURSOR_TEXT;
-        st->scroll_y -= ui->input.wheel * LH * 3.0f;
+        if (ui->input.wheel != 0.0f) {
+            st->scroll_y -= ui->input.wheel * LH * 3.0f;
+            user_scrolled = true;
+        }
     }
 
     // ---- keyboard -----------------------------------------------------------
     int changed = 0;
+    // Set by the handlers below when they move the caret on purpose. This is
+    // the only thing that makes the view follow it.
+    bool caret_input = false;
     auto sel_lo = [&]() { return st->caret < st->anchor ? st->caret : st->anchor; };
     auto sel_hi = [&]() { return st->caret > st->anchor ? st->caret : st->anchor; };
     auto erase = [&](int a, int b) {
@@ -2190,6 +2198,11 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
         const dai_ui_input &in = ui->input;
         bool shift = in.key_shift != 0;
         int before = st->caret;
+        if (in.text[0] || in.key_enter || in.key_tab || in.key_backspace ||
+            in.key_delete || in.key_left || in.key_right || in.key_home ||
+            in.key_end || in.key_up_arrow || in.key_down_arrow ||
+            in.key_paste || in.key_cut)
+            caret_input = true;
 
         for (int i = 0; i < 8 && in.text[i]; ++i) {
             uint32_t cp = in.text[i];
@@ -2290,10 +2303,12 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
     // Only when it MOVED, or when the text under it changed. Doing this
     // unconditionally is why the wheel did nothing: scroll away, and the very
     // next frame pulled the view back onto the caret.
-    bool caret_moved = !st->have_last || st->last_caret != st->caret || changed;
+    if (caret_input || changed) st->follow_caret = 1;
+    if (user_scrolled) st->follow_caret = 0;   // the wheel has the last word
     st->last_caret = st->caret;
     st->have_last = 1;
-    if (caret_moved) {
+    if (st->follow_caret) {
+        st->follow_caret = 0;
         float cx, cy;
         caret_xy(st->caret, &cx, &cy);
         float rel_y = cy - (y + 4.0f);
