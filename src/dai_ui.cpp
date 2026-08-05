@@ -1378,8 +1378,13 @@ int dai_ui_button(dai_ui *ui, const char *utf8) {
 int dai_ui_toggle_button(dai_ui *ui, const char *utf8, int active) {
     if (!ui || !utf8) return 0;
     float h = widget_height(ui), x, y;
-    next_rect(ui, 0, h, &x, &y);
-    float w = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    // As wide as its label, like every other button here. Full width is what
+    // a SECTION looks like: "Edit Collider" stretched across the inspector
+    // read as a heading with a box drawn round it, not as something to press.
+    float w = dai_ui_text_width(ui, utf8) + ui->style.padding * 3.0f;
+    float avail = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    if (w > avail) w = avail;
+    next_rect(ui, w, h, &x, &y);
     uint64_t id = hash_id(utf8, x, y);
     bool over = inside_chk(ui, x, y, w, h);
     if (over) { ui->hot = id; ui->mouse_over_ui = true; }

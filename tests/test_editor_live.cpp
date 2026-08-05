@@ -526,6 +526,78 @@ static void test_cylinder_roundtrip() {
     dai_doc_destroy(d); dai_doc_destroy(d2); dai_doc_destroy(d3);
 }
 
+// A node with no rigidbody must still be movable while the game runs.
+//
+// This is the bug behind "the camera does not follow the player". A camera has
+// no body - nothing simulates it - and both live_transform and
+// live_set_transform used to give up the moment dai_scene_body came back
+// empty. So a script calling node.setPos on its camera did nothing at all,
+// silently, every frame, and the only symptom was a camera that sat still.
+static void test_bodiless_node_moves_during_play() {
+    std::printf("a node without a body still moves while playing\n");
+    Rig r; r.make();
+
+    dai_node_desc pd = dai_node_desc_default();
+    pd.motion = DAI_DYNAMIC;
+    pd.position = { 0, 2, 0 };
+    std::snprintf(pd.name, sizeof(pd.name), "Player");
+    dai_node player = dai_doc_add(r.doc, &pd);
+
+    // The camera: no collider, no rigidbody - exactly what New Camera makes.
+    dai_node_desc cd = dai_node_desc_default();
+    cd.camera = 1;
+    cd.no_rigidbody = 1;
+    cd.no_collider = 1;
+    cd.no_body = 1;
+    cd.position = { 0, 5, 10 };
+    std::snprintf(cd.name, sizeof(cd.name), "Main Camera");
+    dai_node cam = dai_doc_add(r.doc, &cd);
+    dai_doc_sync_apply(r.sync);
+
+    CHECK(r.body_of(cam) == DAI_INVALID_BODY,
+          "the camera got a physics body - this test then proves nothing");
+
+    dai_editor_play(r.ed);
+    for (int i = 0; i < 3; ++i) dai_step(r.w);
+
+    // What a following camera does every frame.
+    dai_vec3 want{ 3.5f, 6.5f, 12.0f };
+    dai_editor_live_set_transform(r.ed, cam, &want, nullptr);
+
+    dai_vec3 got{};
+    int have = dai_editor_live_transform(r.ed, cam, &got, nullptr, nullptr);
+    CHECK(have, "the camera has no live position after one was written to it");
+    CHECK(std::fabs(got.x - want.x) < 1e-3f && std::fabs(got.y - want.y) < 1e-3f &&
+          std::fabs(got.z - want.z) < 1e-3f,
+          "wrote (%.2f %.2f %.2f), read back (%.2f %.2f %.2f)",
+          want.x, want.y, want.z, got.x, got.y, got.z);
+
+    // Writing only the rotation must not lose the position that was just set.
+    dai_quat q{ 0, 0.3827f, 0, 0.9239f };
+    dai_editor_live_set_transform(r.ed, cam, nullptr, &q);
+    dai_vec3 got2{};
+    dai_quat gq{};
+    dai_editor_live_transform(r.ed, cam, &got2, &gq, nullptr);
+    CHECK(std::fabs(got2.x - want.x) < 1e-3f,
+          "setting the rotation moved the camera back to x %.2f", got2.x);
+    CHECK(quat_angle(gq, q) < 0.5f, "the rotation did not stick");
+
+    // The document is NOT touched by any of this - Stop has to be exact.
+    dai_node_desc after{};
+    dai_doc_get(r.doc, cam, &after);
+    CHECK(std::fabs(after.position.z - 10.0f) < 1e-3f,
+          "playing wrote into the document: z is %.2f, was 10", after.position.z);
+
+    // And after Stop the camera is back where the scene put it.
+    dai_editor_stop(r.ed);
+    dai_vec3 back{};
+    dai_editor_live_transform(r.ed, cam, &back, nullptr, nullptr);
+    CHECK(std::fabs(back.z - 10.0f) < 1e-3f,
+          "Stop left the camera at z %.2f instead of 10", back.z);
+    (void)player;
+    r.kill();
+}
+
 int main() {
     test_live_rotation();
     test_live_collider_center();
@@ -535,6 +607,7 @@ int main() {
     test_freeze_keeps_size();
     test_cylinder();
     test_cylinder_roundtrip();
+    test_bodiless_node_moves_during_play();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

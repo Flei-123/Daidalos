@@ -115,6 +115,22 @@ struct dai_editor {
     float cam_pivot_dist = 10.0f;      // where orbit and dolly aim
     float cam_speed = 6.0f;
     bool  cam_angles_valid = false;
+    // Where a node WITHOUT a physics body sits while the game runs.
+    //
+    // During play the truth about a moving object is its body - that is why
+    // Stop can restore the scene exactly. But a camera, an empty, a marker:
+    // nothing simulates them, so both live_transform and live_set_transform
+    // simply gave up on them. A script calling node.setPos on the camera it
+    // was handed did nothing at all, silently, and "the camera does not
+    // follow the player" had no error to go with it.
+    //
+    // They get a pose of their own, held here for the length of one play
+    // session: written through to the scene so the frame draws it, read back
+    // so the script sees what it just set, and dropped on Play and Stop so
+    // nothing leaks into the next run.
+    struct LivePose { dai_vec3 pos; dai_quat rot; };
+    std::unordered_map<uint32_t, LivePose> live_pose;
+
     int   cam_mode = 0;                // 0 none, 1 look, 2 pan, 3 orbit, 4 dolly
     int   cam_frozen = 0;              // the mode is locked while its button is held
     int   cam_btn = 0;                 // 1 left, 2 right, 4 middle: what started it
@@ -228,7 +244,13 @@ void set_live_transform(dai_editor *e, dai_node n, dai_vec3 pos, dai_quat rot) {
     dai_entity ent = dai_doc_sync_entity(e->sync, n);
     if (!sc || !ent) return;
     dai_body b = dai_scene_body(sc, ent);
-    if (b == DAI_INVALID_BODY) return;      // render-only node: nothing to move
+    if (b == DAI_INVALID_BODY) {
+        // No body: the scene entity carries the pose, and we remember it so
+        // the next read gives back what was just written.
+        dai_scene_set_transform(sc, ent, pos, rot);
+        e->live_pose[(uint32_t)n] = dai_editor::LivePose{ pos, rot };
+        return;
+    }
     dai_node_desc rec{};
     if (dai_doc_get(e->doc, n, &rec) == DAI_OK &&
         (rec.collider_center.x || rec.collider_center.y || rec.collider_center.z)) {
@@ -1248,6 +1270,7 @@ void dai_editor_play(dai_editor *e) {
         // created belong to the current tick. Seeking to it would therefore
         // land before they existed and wipe the scene.
         e->play_start_tick = dai_current_tick(w) + 1;
+        e->live_pose.clear();          // a new run starts where the doc says
     }
     e->state = DAI_EDITOR_PLAY;
 }
@@ -1259,6 +1282,7 @@ void dai_editor_pause(dai_editor *e) {
 void dai_editor_stop(dai_editor *e) {
     if (!e || e->state == DAI_EDITOR_EDIT) return;
     e->state = DAI_EDITOR_EDIT;
+    e->live_pose.clear();              // Stop puts everything back, this too
     if (e->dragging) dai_editor_drag_cancel(e);
     // Undo everything that was done WHILE playing. Unity does exactly this,
     // and for the same reason: you move things around during play to see what
@@ -1309,7 +1333,15 @@ int dai_editor_live_transform(const dai_editor *e, dai_node n,
     dai_scene *sc = dai_doc_sync_scene(e->sync);
     if (!ent || !sc) return 0;
     dai_body b = dai_scene_body(sc, ent);
-    if (!b) return 0;       // render-only node: nothing simulates it, the doc pose stands
+    if (!b) {
+        // Render-only node. If something moved it during this run, that is
+        // where it is; otherwise the document pose still stands.
+        auto it = e->live_pose.find((uint32_t)n);
+        if (it == e->live_pose.end()) return 0;
+        if (pos) *pos = it->second.pos;
+        if (rot) *rot = it->second.rot;
+        return 1;
+    }
     dai_transform t{};
     if (dai_body_get(editor_world(e), b, &t) != DAI_OK) return 0;
 
@@ -1389,7 +1421,20 @@ void dai_editor_live_set_transform(dai_editor *e, dai_node n,
     dai_scene *sc = dai_doc_sync_scene(e->sync);
     if (!ent || !sc) return;
     dai_body b = dai_scene_body(sc, ent);
-    if (!b) return;
+    if (!b) {
+        // Same rule as set_live_transform: a bodiless node still moves.
+        // Partial writes have to keep the other half of the pose, so start
+        // from where the node currently is.
+        dai_vec3 cp{}; dai_quat cr{ 0, 0, 0, 1 };
+        auto it = e->live_pose.find((uint32_t)n);
+        if (it != e->live_pose.end()) { cp = it->second.pos; cr = it->second.rot; }
+        else dai_doc_world_transform(e->doc, n, &cp, &cr, nullptr);
+        if (pos) cp = *pos;
+        if (rot) cr = *rot;
+        dai_scene_set_transform(sc, ent, cp, cr);
+        e->live_pose[(uint32_t)n] = dai_editor::LivePose{ cp, cr };
+        return;
+    }
     dai_transform t{};
     if (dai_body_get(editor_world(e), b, &t) != DAI_OK) return;
     if (rot) t.rotation = *rot;

@@ -496,6 +496,28 @@ static const char *icon_for_asset(const std::string &path) {
     return DAI_ICON_FILE;
 }
 
+// The colour that goes with the icon above. The component headers in the
+// inspector are colour coded already - a script header is gold, a camera is
+// pale blue - and a file in the Project window is the same thing before it is
+// attached to anything. Grey-on-grey rows make you read every name; colour
+// lets the eye find the material among forty textures without reading at all.
+static uint32_t icon_color_for_asset(const std::string &path, uint32_t fallback) {
+    size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return fallback;
+    std::string e = path.substr(dot + 1);
+    for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if (e == "js" || e == "ts" || e == "cpp" || e == "cc" || e == "cxx" ||
+        e == "h" || e == "hpp")                       return rgba(0xF2, 0xC1, 0x4E, 255);  // script gold
+    if (e == "daimat")                                return rgba(0xC8, 0x8A, 0xE0, 255);  // material violet
+    if (e == "daidalos" || e == "prefab")             return rgba(0x6C, 0xB2, 0xF0, 255);  // prefab blue
+    if (e == "png" || e == "jpg" || e == "jpeg" || e == "tga" || e == "svg")
+                                                      return rgba(0x6F, 0xCB, 0x9F, 255);  // texture green
+    if (e == "glb" || e == "gltf" || e == "obj")      return rgba(0xE0, 0x93, 0x6C, 255);  // model amber
+    if (e == "wav" || e == "ogg" || e == "mp3" || e == "flac")
+                                                      return rgba(0xE8, 0x84, 0x9B, 255);  // audio rose
+    return fallback;
+}
+
 // A file the engine can run on an object: QuickJS, or a native C++ behaviour
 // (see dai_native.h). Both attach the same way and both are components.
 // Anything an external editor can open, as opposed to something the scene
@@ -1586,7 +1608,9 @@ static void asset_inspector_body(dai_editor_ui *p) {
         const char *ic = is_folder ? DAI_ICON_FOLDER : icon_for_asset(path);
         dai_ui_rrect(ui, hx + 6.0f, hy + 5.0f, 24.0f, 24.0f, 4.0f, st->track);
         if (ic && dai_ui_has_icon(ui, ic))
-            dai_ui_icon_at(ui, ic, hx + 10.0f, hy + 9.0f, 16.0f, st->accent);
+            dai_ui_icon_at(ui, ic, hx + 10.0f, hy + 9.0f, 16.0f,
+                           is_folder ? rgba(0xD8, 0xB4, 0x6A, 255)
+                                     : icon_color_for_asset(path, st->accent));
         dai_ui_text(ui, hx + 38.0f, hy + 5.0f, base.c_str(), st->text);
         const char *kind = is_folder ? "Folder"
                          : is_material_file(path) ? "Material"
@@ -4582,7 +4606,8 @@ static dai_vec3 spawn_point(dai_editor_ui *p, dai_doc *d, float half_y) {
 // One clickable row of the browser: hover, selection, icon, label. Returns 1
 // the frame it is left-clicked. An open popup menu eats every click.
 static int browser_row(dai_editor_ui *p, float x, float y, float w, float h,
-                       const char *icon, const char *label, int selected) {
+                       const char *icon, const char *label, int selected,
+                       uint32_t icon_col) {
     dai_ui *ui = p->ui;
     const dai_ui_style *st = dai_ui_style_of(ui);
     float mx = 0, my = 0;
@@ -4593,8 +4618,11 @@ static int browser_row(dai_editor_ui *p, float x, float y, float w, float h,
     else if (over) dai_ui_rect(ui, x, y, w, h, st->button_hover);
     float tx = x + 4.0f;
     if (icon && dai_ui_has_icon(ui, icon)) {
+        // On a selected row the fill is already the accent colour; a hue on
+        // top of it fights the fill instead of naming the file, so the icon
+        // goes plain white there and keeps its colour everywhere else.
         dai_ui_icon_at(ui, icon, tx, y + (h - 13.0f) * 0.5f, 13.0f,
-                       selected ? st->text : st->text_dim);
+                       selected ? 0xFFFFFFFFu : (icon_col ? icon_col : st->text_dim));
         tx += 19.0f;
     }
     dai_ui_text(ui, tx, y + (h - dai_ui_text_height(ui)) * 0.5f, label, st->text);
@@ -5222,7 +5250,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
             const char *label = i == 0 ? "Assets" : segs[i].c_str();
             float tw = dai_ui_text_width(ui, label) + 14.0f;
             if (browser_row(p, bx, by, tw, BAR - 4.0f, nullptr, label,
-                            (int)i == (int)segs.size() - 1) && clicks_ok) {
+                            (int)i == (int)segs.size() - 1, 0) && clicks_ok) {
                 p->proj_dir = target;
                 p->proj_list_scroll = 0.0f;
             }
@@ -5236,7 +5264,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
         // both views of the same window belong together. Search keeps right.
         float pw_btn = dai_ui_text_width(ui, "Projects") + 16.0f;
         if (browser_row(p, bx + 6.0f, by, pw_btn, BAR - 4.0f, nullptr,
-                        "Projects", 0) && clicks_ok) {
+                        "Projects", 0, 0) && clicks_ok) {
             p->proj_tab = 1;
             dai_editor_ui_projects_refresh(p);
         }
@@ -5248,7 +5276,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                               p->proj_search, sizeof(p->proj_search), nullptr);
     } else {
         float bw = dai_ui_text_width(ui, "< Files") + 16.0f;
-        if (browser_row(p, px + 4.0f, by, bw, BAR - 4.0f, nullptr, "< Files", 0) &&
+        if (browser_row(p, px + 4.0f, by, bw, BAR - 4.0f, nullptr, "< Files", 0, 0) &&
             clicks_ok)
             p->proj_tab = 0;
         dai_ui_text(ui, px + 4.0f + bw + 10.0f, by + 3.0f, "Projects", st->text);
@@ -5278,7 +5306,8 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
         for (const std::string &name : p->projects) {
             int is_open = name == p->proj_current;
             if (browser_row(p, px + 2.0f, pry, ptree_w - 4.0f, PROW,
-                            DAI_ICON_FOLDER, name.c_str(), is_open) && clicks_ok &&
+                            DAI_ICON_FOLDER, name.c_str(), is_open,
+                            rgba(0xD8, 0xB4, 0x6A, 255)) && clicks_ok &&
                 p->proj_open) {
                 if (p->proj_open(name.c_str(), p->proj_user)) {
                     p->proj_current = name;
@@ -5304,7 +5333,8 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
             for (uint32_t i = 0; ; ++i) {
                 const char *nm = p->scene_list(i, p->scene_user);
                 if (!nm) break;
-                if (browser_row(p, pright_x + 6.0f, ry2, 220.0f, PROW, DAI_ICON_FILE, nm, 0) &&
+                if (browser_row(p, pright_x + 6.0f, ry2, 220.0f, PROW, DAI_ICON_FILE, nm, 0,
+                                rgba(0x6C, 0xB2, 0xF0, 255)) &&
                     clicks_ok && p->scene_open)
                     p->scene_open(nm, p->scene_user);
                 ry2 += PROW;
@@ -5503,7 +5533,8 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                     if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
                                     fic2, name.c_str(),
                                     ffull == p->proj_sel_folder ||
-                                    (p->click_kind == 1 && p->click_path == ffull)) && clicks_ok) {
+                                    (p->click_kind == 1 && p->click_path == ffull),
+                                    rgba(0xD8, 0xB4, 0x6A, 255)) && clicks_ok) {
                         // One click SELECTS it. Two go in. Both wait for the
                         // button to come up: a press that dragged the folder
                         // somewhere else was never a click on it.
@@ -5575,7 +5606,8 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                 } else {
                     if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
                                     icon_for_asset(full), label.c_str(),
-                                    selected || (p->click_kind == 2 && p->click_path == full))
+                                    selected || (p->click_kind == 2 && p->click_path == full),
+                                    icon_color_for_asset(full, 0))
                             && clicks_ok) {
                         // Armed only. What it means - select, open, place -
                         // is decided when the button comes up, because until
