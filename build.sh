@@ -75,6 +75,7 @@ g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_input.cpp -o build/dai_input.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor.cpp -o build/dai_editor.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_dock.cpp -o build/dai_dock.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_project.cpp -o build/dai_project.o
+g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_material.cpp -o build/dai_material.o
 
 echo "-- scene document (editor truth: stable ids, generic undo)"
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc.cpp -o build/dai_doc.o
@@ -82,6 +83,7 @@ g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_text.cpp -o build/dai_doc_text.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_sync.cpp -o build/dai_doc_sync.o
 
 ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o ${TALOS_OBJ} \
+       build/dai_material.o \
        build/dai_audio.o build/dai_scene.o build/dai_input.o build/dai_editor.o \
        build/dai_doc.o build/dai_doc_text.o build/dai_doc_sync.o build/dai_project.o
 

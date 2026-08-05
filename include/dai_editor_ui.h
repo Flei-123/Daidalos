@@ -316,6 +316,12 @@ DAI_API void dai_editor_ui_script_host(dai_editor_ui *p,
 DAI_API void dai_editor_ui_folder_host(dai_editor_ui *p,
                                        int (*create)(const char *name, void *user),
                                        void *user);
+/* "Create: Material" - the host writes a default .daimat at that
+ * asset-relative path. Same split as every other create: the editor knows
+ * which folder is open, the host owns the disk and the format. */
+DAI_API void dai_editor_ui_material_host(dai_editor_ui *p,
+                                         int (*create)(const char *name, void *user),
+                                         void *user);
 /* The Project Settings half of the Settings panel. The editor does not know
  * what a project setting IS - gravity and tick rate belong to the host's
  * project layer - so the host draws that half with plain dai_ui widgets. */
@@ -323,6 +329,10 @@ DAI_API void dai_editor_ui_project_settings_host(dai_editor_ui *p,
                                                  void (*draw)(void *user), void *user);
 DAI_API int  dai_editor_ui_take_save(dai_editor_ui *p);
 DAI_API int  dai_editor_ui_take_refresh(dai_editor_ui *p);
+/* 1 once when a material was assigned (or the assets were refreshed): the host
+ * should re-read every .daimat a node points at and copy its numbers onto that
+ * node. The editor does not open files; the host does. */
+DAI_API int  dai_editor_ui_take_material_apply(dai_editor_ui *p);
 
 /* ---- the dock layout ----------------------------------------------------
  * Panels tile in a tree (see dai_dock.h). The host needs these two to keep a

@@ -22,6 +22,7 @@
 #include "dai_tr.h"
 #include "dai_render.h"
 #include "dai_assets.h"
+#include "dai_material.h"
 #include "dai_project.h"
 #include "dai_update.h"
 #ifdef DAI_WITH_SCRIPT
@@ -1282,6 +1283,78 @@ static void write_editor_support_files() {
     }
 }
 
+// A new material file, with the defaults in it - not an empty file. Something
+// you can immediately drag onto an object and then edit.
+static int material_create(const char *rel, void *) {
+    if (!rel || !*rel || !g_assets_dir[0]) return 0;
+    if (std::strstr(rel, "..")) return 0;
+    char path[700];
+    std::snprintf(path, sizeof(path), "%s/%s", g_assets_dir, rel);
+    if (path_exists(path)) return 0;              // the caller walks the number up
+    make_parent_dirs(path);
+    dai_matfile m = dai_matfile_default();
+    return dai_matfile_save(&m, path) == DAI_OK ? 1 : 0;
+}
+
+// Every node that points at a .daimat gets that file's numbers. Called when a
+// material is assigned and whenever the browser refreshes, which is also what
+// happens after the built-in editor saves one - so editing the file and
+// pressing Ctrl+S recolours every object using it.
+//
+// The cache is by PATH: a scene with two hundred crates on one material reads
+// the file once. It is dropped wholesale on each pass rather than watched,
+// because the pass only runs when something already told us the disk moved.
+static void apply_materials(dai_doc *doc) {
+    if (!doc || !g_assets_dir[0]) return;
+    std::vector<dai_node> ids(dai_doc_count(doc));
+    if (ids.empty()) return;
+    dai_doc_nodes(doc, ids.data(), (uint32_t)ids.size());
+
+    std::vector<std::pair<std::string, dai_matfile>> cache;
+    auto material_of = [&](const std::string &rel, dai_matfile *out) {
+        for (const auto &kv : cache)
+            if (kv.first == rel) { *out = kv.second; return true; }
+        char full[700];
+        std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, rel.c_str());
+        dai_matfile m = dai_matfile_default();
+        char merr[256] = { 0 };
+        if (dai_matfile_load(&m, full, merr, sizeof(merr)) != DAI_OK) {
+            if (g_panels_for_log && merr[0]) dai_editor_ui_log(g_panels_for_log, 1, merr);
+            return false;
+        }
+        cache.push_back({ rel, m });
+        *out = m;
+        return true;
+    };
+
+    int changed = 0;
+    for (dai_node n : ids) {
+        dai_node_desc r{};
+        if (dai_doc_get(doc, n, &r) != DAI_OK || !r.materials[0]) continue;
+        // Slot 0 is the surface of the whole object; the array is there for
+        // meshes with several, which the renderer does not split yet.
+        std::string first = r.materials;
+        size_t semi = first.find(';');
+        if (semi != std::string::npos) first = first.substr(0, semi);
+        if (!dai_matfile_is_file(first.c_str())) continue;
+        dai_matfile m{};
+        if (!material_of(first, &m)) continue;
+        dai_node_desc before = r;
+        r.color = m.color;
+        r.roughness = m.roughness;
+        r.emissive = m.emissive;
+        if (std::memcmp(&before, &r, sizeof(r)) != 0) {
+            dai_doc_set(doc, n, &r);
+            ++changed;
+        }
+    }
+    if (changed && g_panels_for_log) {
+        char msg[96];
+        std::snprintf(msg, sizeof(msg), "materials applied to %d object(s)", changed);
+        dai_editor_ui_log(g_panels_for_log, 0, msg);
+    }
+}
+
 static int script_create(const char *name, void *) {
     if (!name || !*name || !g_assets_dir[0]) return 0;
     for (const char *c = name; *c; ++c) {
@@ -1971,6 +2044,7 @@ int main(int argc, char **argv) {
     g_script_ed = ed;
 #endif
     dai_editor_ui_folder_host(panels, folder_create, nullptr);
+    dai_editor_ui_material_host(panels, material_create, nullptr);
     dai_editor_ui_scale_host(panels, apply_ui_scale, g_dpi_pref, nullptr);
     g_panels_for_prefs = panels;
     g_psettings = &psettings;
@@ -2305,7 +2379,16 @@ int main(int argc, char **argv) {
         // The list below only re-feeds on a revision change and a new file
         // does not move the revision - so force the re-feed here.
         static uint32_t fed_rev = 0xFFFFFFFFu;
-        if (dai_editor_ui_take_refresh(panels) && assets) { dai_assets_poll(assets); fed_rev = 0xFFFFFFFFu; }
+        if (dai_editor_ui_take_refresh(panels) && assets) {
+            dai_assets_poll(assets);
+            fed_rev = 0xFFFFFFFFu;
+            apply_materials(doc);       // a refresh is also "the files moved"
+            dai_doc_sync_apply(sync);
+        }
+        if (dai_editor_ui_take_material_apply(panels)) {
+            apply_materials(doc);
+            dai_doc_sync_apply(sync);
+        }
 
         // ---- assets: hot reload, list, and what the Project window clicked
         if (assets) {

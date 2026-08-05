@@ -203,10 +203,16 @@ struct dai_editor_ui {
     // ---- scripts -----------------------------------------------------------
     int (*script_create)(const char *name, void *user) = nullptr;
     int (*folder_create)(const char *name, void *user) = nullptr;
+    int (*material_create)(const char *name, void *user) = nullptr;
+    void *material_user = nullptr;
     void *script_user = nullptr;
     char   script_name_buf[64] = { 0 };
     int    script_focus = 0;
     int    want_save = 0, want_refresh = 0;
+    // Set when a material was assigned or the browser was refreshed: the host
+    // re-reads the .daimat files and pushes their numbers onto the nodes that
+    // point at them. Read and cleared like the other one-shots.
+    int want_material_apply = 0;
     // Drag & drop of a .js from the Project list onto a node (Unity: dropping
     // a script on an object ADDS a script component to it).
     std::string drag_pending;           // row the press started on
@@ -430,6 +436,7 @@ static const char *icon_for_asset(const std::string &path) {
     if (e == "wav" || e == "ogg" || e == "mp3" || e == "flac") return DAI_ICON_AUDIO;
     if (e == "png" || e == "jpg" || e == "jpeg" || e == "tga" || e == "svg") return DAI_ICON_IMAGE;
     if (e == "daidalos" || e == "prefab")             return DAI_ICON_C_PREFAB;
+    if (e == "daimat")                                return DAI_ICON_MATERIAL;
     return DAI_ICON_FILE;
 }
 
@@ -437,6 +444,17 @@ static const char *icon_for_asset(const std::string &path) {
 // (see dai_native.h). Both attach the same way and both are components.
 // Anything an external editor can open, as opposed to something the scene
 // places. A .cpp is both a behaviour and text; the check above wins.
+// A .daimat. Asked here rather than through dai_material_is_file so this file
+// keeps compiling without the material header - the editor UI has no business
+// knowing what is IN a material, only which files are ones.
+static bool is_material_file(const std::string &path) {
+    const std::string ext = ".daimat";
+    if (path.size() <= ext.size()) return false;
+    std::string tail = path.substr(path.size() - ext.size());
+    for (char &c : tail) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return tail == ext;
+}
+
 static bool is_text_file(const std::string &path) {
     size_t dot = path.find_last_of('.');
     if (dot == std::string::npos) return false;
@@ -1077,6 +1095,14 @@ int dai_editor_ui_drop_files(dai_editor_ui *p, const char *paths_nl, float x, fl
     return n > 0;
 }
 
+void dai_editor_ui_material_host(dai_editor_ui *p,
+                                 int (*create)(const char *name, void *user),
+                                 void *user) {
+    if (!p) return;
+    p->material_create = create;
+    p->material_user = user;
+}
+
 void dai_editor_ui_prefab_host(dai_editor_ui *p, dai_editor_ui_rename_fn fn) {
     if (p) p->prefab_save = fn;
 }
@@ -1164,6 +1190,12 @@ void dai_editor_ui_folder_host(dai_editor_ui *p,
 int dai_editor_ui_take_save(dai_editor_ui *p) {
     if (!p || !p->want_save) return 0;
     p->want_save = 0;
+    return 1;
+}
+
+int dai_editor_ui_take_material_apply(dai_editor_ui *p) {
+    if (!p || !p->want_material_apply) return 0;
+    p->want_material_apply = 0;
     return 1;
 }
 
@@ -3587,22 +3619,36 @@ static void run_context_menus(dai_editor_ui *p) {
     // has no material files yet), so the list offers the ones the palette
     // already knows; typing in the search field filters them.
     if (p->mat_list.open && p->mat_menu_node != DAI_INVALID_NODE) {
-        static const char *MATS[] = { "Default", "Plastic", "Metal", "Glass", "Rubber", "Emissive" };
-        dai_ui_menu_item items[6];
-        for (int i = 0; i < 6; ++i) items[i] = { DAI_ICON_MATERIAL, MATS[i], nullptr };
-        int pick = dai_ui_searchlist_draw(p->ui, &p->mat_list, items, 6);
-        if (pick >= 0 && pick < 6) {
+        // Every .daimat in the project, and "Default" for none. The six
+        // hard-coded names that used to be here were not materials - nothing
+        // read them, and two objects called "Metal" shared a word, not a
+        // surface.
+        std::vector<std::string> paths;
+        paths.push_back("Default");
+        for (const char *a : p->assets)
+            if (a && is_material_file(a)) paths.push_back(a);
+        std::vector<std::string> labels;
+        labels.reserve(paths.size());
+        for (const std::string &pp : paths)
+            labels.push_back(pp == "Default" ? pp : base_of(pp));
+        std::vector<dai_ui_menu_item> items(paths.size());
+        for (size_t i = 0; i < paths.size(); ++i)
+            items[i] = { DAI_ICON_MATERIAL, labels[i].c_str(), nullptr, 0 };
+        int pick = dai_ui_searchlist_draw(p->ui, &p->mat_list, items.data(),
+                                          (uint32_t)items.size());
+        if (pick >= 0 && pick < (int)paths.size()) {
             dai_doc *md = dai_editor_doc(p->ed);
             dai_node_desc mr{};
             if (dai_doc_get(md, p->mat_menu_node, &mr) == DAI_OK) {
                 std::vector<std::string> mats = script_list(mr.materials);
                 while ((int)mats.size() <= p->mat_menu_slot) mats.push_back("Default");
-                mats[(size_t)p->mat_menu_slot] = MATS[pick];
+                mats[(size_t)p->mat_menu_slot] = paths[(size_t)pick];
                 dai_doc_begin(md, "Material");
                 script_join(mr.materials, sizeof(mr.materials), mats);
                 dai_doc_set(md, p->mat_menu_node, &mr);
                 dai_doc_commit(md);
                 dai_editor_resync(p->ed);
+                p->want_material_apply = 1;
             }
             p->mat_menu_node = DAI_INVALID_NODE;
         }
@@ -3771,14 +3817,15 @@ static void run_context_menus(dai_editor_ui *p) {
         { DAI_ICON_SEARCH, "Refresh", nullptr },
         { DAI_ICON_SCRIPT, "Create: C++ Behaviour", nullptr },
         { DAI_ICON_TRASH, "Delete", "Del" },
+        { DAI_ICON_MATERIAL, "Create: Material", nullptr },
     };
     // The two row-only entries sit at 2 and 6; without a row the menu is the
     // other five, and the indices below are mapped back so nothing else moves.
-    static const int WITH_ROW[7]    = { 0, 1, 2, 3, 4, 5, 6 };
-    static const int WITHOUT_ROW[5] = { 0, 1, 3, 4, 5 };
-    dai_ui_menu_item shown_items[7];
+    static const int WITH_ROW[8]    = { 0, 1, 7, 2, 3, 4, 5, 6 };
+    static const int WITHOUT_ROW[6] = { 0, 1, 7, 3, 4, 5 };
+    dai_ui_menu_item shown_items[8];
     const int *map = on_row ? WITH_ROW : WITHOUT_ROW;
-    uint32_t shown_n = on_row ? 7u : 5u;
+    uint32_t shown_n = on_row ? 8u : 6u;
     for (uint32_t i = 0; i < shown_n; ++i) shown_items[i] = PROJ_ITEMS[map[i]];
     int raw = dai_ui_popup_menu(p->ui, &p->menu_project, shown_items, shown_n);
     int ppick = (raw >= 0 && raw < (int)shown_n) ? map[raw] : raw;
@@ -3889,6 +3936,26 @@ static void run_context_menus(dai_editor_ui *p) {
                 p->last_pick = name;
                 p->asset_sel = -1;
                 p->want_refresh = 1;
+                break;
+            }
+        }
+    }
+    else if (ppick == 7 && p->material_create) {
+        // NewMaterial, NewMaterial 2, ... in the folder that is open - the
+        // same walk "Create: Folder" does, and for the same reason.
+        std::string base7 = p->proj_dir.empty() ? std::string() : p->proj_dir + "/";
+        for (int i = 0; i < 30; ++i) {
+            char rel7[224];
+            if (i == 0) std::snprintf(rel7, sizeof(rel7), "%sNewMaterial.daimat", base7.c_str());
+            else        std::snprintf(rel7, sizeof(rel7), "%sNewMaterial %d.daimat", base7.c_str(), i);
+            if (p->material_create(rel7, p->material_user)) {
+                p->proj_tab = 0;
+                p->want_refresh = 1;
+                p->rename_asset = rel7;          // straight into the rename
+                std::string b7 = base_of(rel7);
+                if (b7.size() > 7) b7.resize(b7.size() - 7);   // drop ".daimat"
+                std::snprintf(p->rename_asset_buf, sizeof(p->rename_asset_buf), "%s", b7.c_str());
+                p->rename_seen_active = 0;
                 break;
             }
         }
@@ -5421,6 +5488,34 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
                             p->pending_at_valid = 1;
                         }
                     }
+                } else if (is_material_file(p->drag_script) &&
+                           (p->hover_node != DAI_INVALID_NODE ||
+                            dai_ui_root_hovered(ui, "Inspector"))) {
+                    // Dropped on an object: that object wears it. This is the
+                    // gesture people try first, and it is the only one that
+                    // does not require finding the slot in the inspector.
+                    dai_node target = p->hover_node != DAI_INVALID_NODE
+                                    ? p->hover_node
+                                    : (dai_editor_selection_count(p->ed) > 0
+                                       ? dai_editor_selected(p->ed, 0) : DAI_INVALID_NODE);
+                    dai_doc *md2 = dai_editor_doc(p->ed);
+                    dai_node_desc mr2{};
+                    if (target != DAI_INVALID_NODE &&
+                        dai_doc_get(md2, target, &mr2) == DAI_OK) {
+                        std::vector<std::string> mats = script_list(mr2.materials);
+                        if (mats.empty()) mats.push_back("Default");
+                        mats[0] = p->drag_script;
+                        dai_doc_begin(md2, "Material");
+                        script_join(mr2.materials, sizeof(mr2.materials), mats);
+                        dai_doc_set(md2, target, &mr2);
+                        dai_doc_commit(md2);
+                        dai_editor_resync(p->ed);
+                        p->want_material_apply = 1;
+                        char mm[160];
+                        std::snprintf(mm, sizeof(mm), "%s applied",
+                                      base_of(p->drag_script).c_str());
+                        dai_editor_ui_toast(p, mm, 1.5f);
+                    }
                 } else if (is_behaviour_file(p->drag_script)) {
                     dai_node target = DAI_INVALID_NODE;
                     if (p->hover_node != DAI_INVALID_NODE) target = p->hover_node;
@@ -5443,6 +5538,9 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             else if (is_scene_file(p->drag_script) &&
                      (dai_ui_root_hovered(ui, "Scene") || dai_ui_root_hovered(ui, "Hierarchy")))
                 lbl += "  ->  place in scene";
+            else if (is_material_file(p->drag_script) &&
+                     (p->hover_node != DAI_INVALID_NODE || dai_ui_root_hovered(ui, "Inspector")))
+                lbl += "  ->  apply material";
             // A ghost where it would land: a footprint on the ground plus a
             // box standing on it, drawn in the accent colour. It is not the
             // mesh - the editor has no renderer of its own and will not gain
