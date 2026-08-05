@@ -106,3 +106,53 @@ following at all.
 **Ctrl+P** starts and pauses the game, Unity's binding. Space does it too,
 but **only while editing** - once the game runs, the keyboard belongs to the
 game, and the first jump must not pause the editor.
+
+## The game's own UI
+
+**Add Component > Text (UI)** puts a label on the screen. Not in the world: it
+is anchored to a corner of the picture, because a score pinned to x=1720 is
+off screen the moment the window is 1280 wide.
+
+- **Anchor** is a 3x3 grid, **Offset** nudges it in pixels from there.
+- **Size** is in pixels, **Color** is the usual vector.
+- A node with a Text component is normally `hidden` as well - every node here
+  draws a box unless it is, and a label with a grey box behind it is not a
+  label. `hidden` is the MESH renderer's checkbox and does not touch the
+  label; `disabled` turns the whole object off, label included.
+
+From a script:
+
+```js
+node.setText(self, "Score: " + score);
+```
+
+## Localisation
+
+The Text field holds either the words or a **key**:
+
+```
+Score          <- the text, used as written
+@hud.score     <- looked up in the project's string table
+```
+
+Tables live in `Assets/Strings/<code>.daistr`, one per language:
+
+```
+daidalos-strings 1
+lang de
+name Deutsch
+
+hud.score   Punkte
+hud.hint    Leertaste zum Springen\nZweite Zeile
+```
+
+Key, whitespace, then **the rest of the line** - so a value may contain
+spaces, colons and quotes. `\n` is a line break.
+
+**A missing key shows the key.** Never blank: a half translated build has to
+stay usable and has to make its gaps obvious. And text that does not start
+with `@` is not a key at all, so a label works before any table exists -
+localisation is opt-in per string, which is the only way it gets adopted.
+
+The language is a **project setting** (Settings > Project > Language), so
+everyone on a team sees the same labels, and the exported game starts in it.

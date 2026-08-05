@@ -1,0 +1,7 @@
+daidalos-strings 1
+lang de
+name Deutsch
+
+hud.score   Punkte
+hud.lives   Leben
+hud.hint    Leertaste zum Springen\nShift zum Sprinten

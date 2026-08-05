@@ -97,6 +97,7 @@ typedef struct dai_icons dai_icons;
 #define DAI_ICON_C_AUDIO     "speaker"
 #define DAI_ICON_C_MATERIAL  "surface"
 #define DAI_ICON_C_SPRITE    "quad"
+#define DAI_ICON_C_TEXT      "type"
 #define DAI_ICON_C_PREFAB    "package"
 
 /* Rasterises the built-in set at `pixel_size` and packs it. */

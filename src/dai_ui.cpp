@@ -740,6 +740,37 @@ void dai_ui_text(dai_ui *ui, float x, float y, const char *utf8, uint32_t color)
     }
 }
 
+// Text at a size the atlas was not rasterised at.
+//
+// The glyphs are magnified, so a 48 px title is a stretched 13 px atlas and
+// looks it. That is a deliberate trade: a HUD label is a handful of words at
+// a size the author picked, and rasterising a second atlas per size would
+// mean a texture upload every time somebody drags the Size field. Small
+// factors (a 24 px label from a 13 px atlas) are visually fine; the fix for
+// the day someone wants a 96 px title is a second atlas, not a different
+// magnification filter.
+void dai_ui_text_scaled(dai_ui *ui, float x, float y, const char *utf8,
+                        uint32_t color, float scale) {
+    if (!ui || !ui->font || !utf8) return;
+    if (!(scale > 0.0f)) scale = 1.0f;
+    if (scale > 0.999f && scale < 1.001f) { dai_ui_text(ui, x, y, utf8, color); return; }
+    float pen_x = x, pen_y = y + dai_font_ascent(ui->font) * scale;
+    uint32_t off = 0;
+    for (;;) {
+        uint32_t cp = dai_utf8_next(utf8, &off);
+        if (!cp) break;
+        if (cp == '\n') { pen_x = x; pen_y += dai_font_line_height(ui->font) * scale; continue; }
+        const dai_glyph *g = dai_font_glyph(ui->font, cp);
+        if (!g) continue;
+        if (g->x1 > g->x0)
+            ui->quad(ui->font_tex,
+                     pen_x + g->x0 * scale, pen_y + g->y0 * scale,
+                     pen_x + g->x1 * scale, pen_y + g->y1 * scale,
+                     g->u0, g->v0, g->u1, g->v1, color);
+        pen_x += g->advance * scale;
+    }
+}
+
 namespace dai {
 float ui_detail_row_x();
 float ui_detail_row_y();

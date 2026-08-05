@@ -22,6 +22,24 @@ extern "C" {
 
 typedef struct dai_editor_ui dai_editor_ui;
 
+/* Draws every Text component of `doc` into the rectangle given, through `ui`.
+ *
+ * It lives here rather than in the host because BOTH hosts need it and they
+ * must agree: what the Game view shows and what the exported game shows have
+ * to be the same picture, or the editor is a rehearsal for a different play.
+ * The exported runtime calls exactly this function with its whole window.
+ *
+ * `resolve` turns what the component holds into what the player reads - see
+ * dai_strings_resolve. Null means "the text is the text", which is right for
+ * a project with no string tables.
+ *
+ * `scale` is the UI scale, so a HUD authored at 24 px is 24 px on a 4K
+ * display too rather than a sixth of the size. */
+typedef const char *(*dai_hud_resolve_fn)(const char *text, void *user);
+DAI_API void dai_hud_draw(struct dai_ui *ui, struct dai_doc *doc,
+                          float x, float y, float w, float h, float scale,
+                          dai_hud_resolve_fn resolve, void *user);
+
 /* Starts renaming a node in the hierarchy: the row turns into a text field,
  * focused, with the current name selected. What the toolbar's F2 and the
  * context menu's Rename both call. */

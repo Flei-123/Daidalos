@@ -66,6 +66,9 @@ void defaults_from_project(const char *dir, dai_boot_config *cfg) {
     cfg->gravity[0] = s.gravity[0];
     cfg->gravity[1] = s.gravity[1];
     cfg->gravity[2] = s.gravity[2];
+    // The language the project previews in is the one the game starts in.
+    // Anything else and the editor is showing a build nobody will play.
+    std::snprintf(cfg->language, sizeof(cfg->language), "%s", s.language);
     dai_project_close(p);
     for (size_t i = 0; cfg->scene[i]; ++i) if (cfg->scene[i] == '\\') cfg->scene[i] = '/';
 }
@@ -166,6 +169,7 @@ int main(int argc, char **argv) {
         else if (a == "--tick")       cfg.tick_hz = std::atoi(next());
         else if (a == "--max-bodies") cfg.max_bodies = std::atoi(next());
         else if (a == "--physics")    cfg.physics_backend = std::atoi(next());
+        else if (a == "--language")   std::snprintf(cfg.language, sizeof(cfg.language), "%s", next());
         else if (a == "--gravity") {
             cfg.gravity[0] = (float)std::atof(next());
             cfg.gravity[1] = (float)std::atof(next());
@@ -184,6 +188,7 @@ int main(int argc, char **argv) {
     std::printf("%s: %u entries, archive %s at offset %llu, file %s\n",
                 out, n, human(info.archive_bytes, b1, sizeof(b1)),
                 (unsigned long long)info.base, human(info.file_bytes, b2, sizeof(b2)));
+    if (cfg.language[0]) std::printf("  language: %s\n", cfg.language);
     std::printf("  startup scene: %s\n  title: %s\n  %dx%d%s, tick %d Hz\n",
                 cfg.scene, cfg.title, cfg.width, cfg.height,
                 cfg.fullscreen ? ", fullscreen" : "", cfg.tick_hz);

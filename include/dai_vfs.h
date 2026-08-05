@@ -172,6 +172,10 @@ typedef struct dai_boot_config {
     int   max_bodies;
     int   physics_backend;          /* dai_physics_backend                  */
     float gravity[3];
+    /* Which Strings/<code>.daistr the game starts in. "" = no table, and
+     * then a Text component shows whatever it holds - which is exactly what
+     * a project with no translations wants. */
+    char  language[16];
 } dai_boot_config;
 
 DAI_API dai_boot_config dai_boot_config_default(void);

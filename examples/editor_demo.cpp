@@ -141,6 +141,12 @@ static char g_scene_path[512] = { 0 };
 
 static dai_project *g_project = nullptr;
 static char g_assets_dir[512] = { 0 };
+// The project's string tables live further down, next to the settings panel
+// that picks between them - but the project OPENS up here, which is the one
+// moment the answer to "which languages exist" can change.
+static void strings_scan();
+static void strings_use(const char *code);
+static std::vector<std::string> &strings_langs();
 
 // The console panel, so anything in this file can report into the editor
 // instead of only onto a stdout nobody is looking at.
@@ -192,6 +198,17 @@ static int open_project_path(const char *path) {
     if (g_project) dai_project_close(g_project);
     g_project = np;
     std::snprintf(g_assets_dir, sizeof(g_assets_dir), "%s", dai_project_asset_dir(g_project));
+    // Which languages this project has, and which one to preview in. Done
+    // here because it is the one moment the answer can change.
+    strings_scan();
+    {
+        dai_project_settings ps = dai_project_settings_default();
+        dai_project_settings_load(g_project, &ps);
+        std::vector<std::string> &ls = strings_langs();
+        const char *want = ps.language[0] ? ps.language
+                         : (ls.empty() ? "" : ls[0].c_str());
+        strings_use(want);
+    }
     // Scenes are assets now; anything a previous version left in
     // <project>/scenes comes along, and only then is the startup scene
     // chosen - otherwise the first open of an old project finds nothing.
@@ -417,7 +434,26 @@ static void sh_set_rot(double id, const double *xyzw, void *) {
     dai_quat q{ (float)xyzw[0], (float)xyzw[1], (float)xyzw[2], (float)xyzw[3] };
     dai_editor_live_set_transform(g_script_ed, (dai_node)(uint32_t)id, nullptr, &q);
 }
-static dai_script_node_host g_node_host = { sh_find, sh_get_pos, sh_set_pos, sh_get_rot, sh_set_rot, nullptr };
+// The label on a node, from a script. THE reason a HUD exists: a score that
+// cannot change is a decoration.
+//
+// It writes the DOCUMENT, not a live copy, because a Text component has no
+// body and nothing simulates it - and dai_hud_draw reads the document. Play
+// still restores it, because Stop restores the whole document snapshot.
+static void sh_set_text(double id, const char *str, void *) {
+    if (!g_scene_doc) return;
+    dai_node_desc r{};
+    if (dai_doc_get(g_scene_doc, (dai_node)(uint32_t)id, &r) != DAI_OK) return;
+    std::snprintf(r.text, sizeof(r.text), "%s", str ? str : "");
+    if (!r.text_on) r.text_on = 1;      // setting text on a node means show it
+    // No dai_doc_begin/commit: a score changing sixty times a second must not
+    // put sixty entries on the undo stack. dai_doc_set without a transaction
+    // is the "this is not an edit" path.
+    dai_doc_set(g_scene_doc, (dai_node)(uint32_t)id, &r);
+}
+
+static dai_script_node_host g_node_host = { sh_find, sh_get_pos, sh_set_pos, sh_get_rot, sh_set_rot,
+                                            sh_set_text, nullptr };
 
 // ---- native (C++) behaviours -------------------------------------------
 //
@@ -1147,6 +1183,36 @@ static int prefab_save_cb(const char *node_id, const char *rel_path, void *) {
 // relative paths. The Project browser derives its tree from FILE paths, so
 // without this feed an empty folder is invisible - "New Folder" vanished
 // the moment it was made, and a renamed folder went with it.
+// Plain files in one directory, names only. The recursive folder walk next to
+// this one answers a different question and answering both with one function
+// would mean a flag argument that every caller has to look up.
+static void list_dir_files(const std::string &abs, std::vector<std::string> &out) {
+#ifdef _WIN32
+    std::string pat = abs + "\\*";
+    WIN32_FIND_DATAA fd{};
+    HANDLE h = FindFirstFileA(pat.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (fd.cFileName[0] == '.') continue;
+        out.push_back(fd.cFileName);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR *dp = opendir(abs.c_str());
+    if (!dp) return;
+    while (dirent *de = readdir(dp)) {
+        if (de->d_name[0] == '.') continue;
+        std::string sub = abs + "/" + de->d_name;
+        struct stat sb{};
+        if (stat(sub.c_str(), &sb) != 0 || !S_ISREG(sb.st_mode)) continue;
+        out.push_back(de->d_name);
+    }
+    closedir(dp);
+#endif
+    std::sort(out.begin(), out.end());
+}
+
 static void list_dirs_rec(const std::string &abs, const std::string &rel,
                           char (*out)[160], uint32_t *n, uint32_t max, int depth) {
     if (depth > 8 || *n >= max) return;
@@ -1653,6 +1719,72 @@ static int script_create(const char *name, void *) {
 // The Project Settings half of the settings panel: gravity, tick rate, tags -
 // the values that belong to the project and are the same for everyone who
 // opens it. Drawn by the host because the host is what owns dai_project.
+// ---- the project's own string tables ------------------------------------
+//
+// Assets/Strings/*.daistr, one file per language. The editor previews in the
+// one picked here, so a German label can be checked without exporting - and
+// a missing entry shows up as the key, in the Game view, at the size it will
+// really be.
+#include "dai_strings.h"
+static dai_strings *g_strings = nullptr;
+static char g_lang[16] = { 0 };                 // "de", "" = no table loaded
+static std::vector<std::string> g_langs;        // codes found in the project
+static std::vector<std::string> g_lang_names;   // what each calls itself
+
+// Reads Assets/Strings and remembers which languages exist. Cheap, and only
+// run when a project opens or the folder is refreshed.
+static void strings_scan() {
+    g_langs.clear();
+    g_lang_names.clear();
+    if (!g_assets_dir[0]) return;
+    char dir[700];
+    std::snprintf(dir, sizeof(dir), "%s/Strings", g_assets_dir);
+    std::vector<std::string> files;
+    list_dir_files(dir, files);            // defined next to the other helpers
+    for (const std::string &f : files) {
+        if (f.size() < 8 || f.compare(f.size() - 7, 7, ".daistr") != 0) continue;
+        char full[900];
+        std::snprintf(full, sizeof(full), "%s/%s", dir, f.c_str());
+        dai_strings *t = dai_strings_create();
+        char err[256] = { 0 };
+        if (dai_strings_load(t, full, err, sizeof(err)) == DAI_OK) {
+            const char *code = dai_strings_lang(t);
+            const char *nm = dai_strings_name(t);
+            std::string c = code && code[0] ? code : f.substr(0, f.size() - 7);
+            g_langs.push_back(c);
+            g_lang_names.push_back(nm && nm[0] ? nm : c);
+        } else if (g_panels_for_log) {
+            char line[400];
+            std::snprintf(line, sizeof(line), "Strings/%s: %s", f.c_str(), err);
+            dai_editor_ui_log(g_panels_for_log, 1, line);
+        }
+        dai_strings_destroy(t);
+    }
+}
+
+static std::vector<std::string> &strings_langs() { return g_langs; }
+
+static void strings_use(const char *code) {
+    if (!g_strings) g_strings = dai_strings_create();
+    std::snprintf(g_lang, sizeof(g_lang), "%s", code ? code : "");
+    if (!g_lang[0] || !g_assets_dir[0]) return;
+    char full[900];
+    std::snprintf(full, sizeof(full), "%s/Strings/%s.daistr", g_assets_dir, g_lang);
+    char err[256] = { 0 };
+    if (dai_strings_load(g_strings, full, err, sizeof(err)) != DAI_OK && g_panels_for_log) {
+        char line[400];
+        std::snprintf(line, sizeof(line), "language %s: %s", g_lang, err);
+        dai_editor_ui_log(g_panels_for_log, 1, line);
+    }
+}
+
+// What a Text component's contents mean to a player. Static buffer: the
+// caller uses it immediately, and this is called once per label per frame.
+static const char *hud_resolve(const char *text, void *) {
+    static char buf[256];
+    return dai_strings_resolve(g_strings, text, buf, sizeof(buf));
+}
+
 static dai_project_settings *g_psettings = nullptr;
 static dai_world *g_world_for_settings = nullptr;
 // What the running world was actually created with, so the panel can say
@@ -1702,6 +1834,32 @@ static void draw_project_settings(void *) {
     dai_ui_num_field(ui, "Def. bounce", &ps.default_restitution, 0.01f, 0.0f, 1.0f, "psrest");
     dai_ui_help(ui, "Restitution 0..1 given to every new Rigidbody component. "
                     "Existing objects are not touched.");
+    dai_ui_separator(ui);
+    // Language. The list is what the project HAS, not a list of languages the
+    // world contains: an option that resolves to no file is an option that
+    // makes every label fall back to its key.
+    {
+        dai_ui_label(ui, "Language (Assets/Strings/*.daistr)");
+        if (g_langs.empty()) {
+            dai_ui_label(ui, "no tables yet - a label shows its own words until there are");
+        } else {
+            std::vector<const char *> names;
+            int sel = 0;
+            for (size_t i = 0; i < g_langs.size(); ++i) {
+                names.push_back(g_lang_names[i].c_str());
+                if (g_langs[i] == g_lang) sel = (int)i;
+            }
+            if (dai_ui_option(ui, "Preview", &sel, names.data(), (int)names.size()) &&
+                sel >= 0 && sel < (int)g_langs.size()) {
+                strings_use(g_langs[(size_t)sel].c_str());
+                std::snprintf(ps.language, sizeof(ps.language), "%s", g_lang);
+            }
+            dai_ui_help(ui, "What the Game view shows, and what the exported game starts in. "
+                            "A key with no entry shows the key.");
+        }
+        char rescan[32] = "Rescan";
+        if (dai_ui_button_fit(ui, rescan)) { strings_scan(); strings_use(g_lang); }
+    }
     dai_ui_separator(ui);
     dai_ui_input_text(ui, "App name", ps.app_name, sizeof(ps.app_name));
     dai_ui_separator(ui);
@@ -2982,6 +3140,18 @@ int main(int argc, char **argv) {
                 const char *ct = dai_editor_ui_clipboard_get(panels, nullptr);
                 if (ct && ct[0]) dai_window_clipboard_set(win, ct);
             }
+        }
+        // ---- the game's own UI ------------------------------------------
+        // Drawn into the Game view, clipped to it, in the same draw list as
+        // everything else - a HUD in a second pass would sit on top of the
+        // panels the Game view is docked next to.
+        //
+        // Shown while EDITING too, not only during play. A label you cannot
+        // see until you press play is a label you place by trial and error.
+        {
+            float hx, hy, hw, hh;
+            if (dai_editor_ui_game_view_rect(panels, &hx, &hy, &hw, &hh))
+                dai_hud_draw(ui, doc, hx, hy, hw, hh, 1.0f, hud_resolve, nullptr);
         }
         diag_step("ui end");
         dai_ui_end(ui);

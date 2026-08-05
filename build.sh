@@ -182,6 +182,8 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     python3 tools/embed_native.py include/dai_native.h build/dai_native_header.cpp
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_native.cpp        -o build/dai_native.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_tr.cpp            -o build/dai_tr.o
+    # The GAME's string tables (dai_strings) - not the editor's own (dai_tr).
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_strings.cpp       -o build/dai_strings.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c build/dai_native_header.cpp -o build/dai_native_header.o
     # The shaders are also linked IN - the editor runs as one file anywhere,
     # and a shaders/ dir (or DAI_SHADER_DIR) still overrides when present.
@@ -191,7 +193,8 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
            build/dai_shaders_embed.o \
            $WINDOW_OBJ build/dai_dock.o build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
            build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_svg.o build/dai_icons.o build/dai_ui.o build/dai_update.o \
-           build/dai_editor_ui.o build/dai_native.o build/dai_native_header.o build/dai_tr.o
+           build/dai_editor_ui.o build/dai_native.o build/dai_native_header.o build/dai_tr.o \
+           build/dai_strings.o
     VK_OK=1
 else
     echo "-- renderer: skipped (no vulkan headers)"
@@ -298,6 +301,11 @@ if [ "$VK_OK" = "1" ]; then
     # Cheap and load bearing: dai_key must stay bit identical to the X11
     # keysyms it is defined as, or the X11 backend silently stops matching.
     g++ $FLAGS $ARCH -Iinclude tests/test_keys.cpp -o build/test_keys && ./build/test_keys
+g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_strings.cpp src/dai_strings.cpp -o build/test_strings
+# The HUD, measured through the draw list: no GPU, no window, real coordinates.
+g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_hud.cpp src/dai_ui.cpp src/dai_font.cpp \
+    src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp src/dai_strings.cpp \
+    src/dai_editor_ui.cpp src/dai_dock.cpp $LIBS -o build/test_hud
     # Looks at the pixels: text that covers ~100%% of its own box is boxes, not
     # glyphs, which is how a broken font binding hid for so long.
     g++ $FLAGS $ARCH -Iinclude tests/test_ui_text.cpp $VKLIBS -o build/test_ui_text

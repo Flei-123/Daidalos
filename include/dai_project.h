@@ -151,6 +151,11 @@ typedef struct dai_project_settings {
     float default_restitution;
     char  app_name[DAI_PROJECT_NAME_MAX];        /* Unity's "Product Name"    */
     char  default_scene[128];                    /* relative to the project   */
+    /* The GAME's language: which Assets/Strings/<code>.daistr the editor
+     * previews and the exported game starts in. Belongs to the project, not
+     * to prefs - everyone on a team should see the same labels. "" = none,
+     * and then a Text component shows whatever it holds. */
+    char  language[16];
     char  tags[DAI_PROJECT_TAGS][DAI_PROJECT_TAG_MAX];
     char  layers[DAI_PROJECT_TAGS][DAI_PROJECT_TAG_MAX];
 } dai_project_settings;

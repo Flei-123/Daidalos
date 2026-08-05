@@ -697,6 +697,10 @@ DAI_API void dai_ui_rect_outline(dai_ui *ui, float x, float y, float w, float h,
 DAI_API void dai_ui_line(dai_ui *ui, float x0, float y0, float x1, float y1,
                          float thickness, uint32_t color);
 DAI_API void dai_ui_text(dai_ui *ui, float x, float y, const char *utf8, uint32_t color);
+/* The same, magnified. For game HUD text, whose size the author picks and the
+ * atlas cannot know. See the note at the definition for what it costs. */
+DAI_API void dai_ui_text_scaled(dai_ui *ui, float x, float y, const char *utf8,
+                                uint32_t color, float scale);
 DAI_API float dai_ui_text_width(dai_ui *ui, const char *utf8);
 /* Line height of the current font. Host chrome that lays itself out (the dock
  * tab bar, the console button row) needs it to centre a label - a hardcoded

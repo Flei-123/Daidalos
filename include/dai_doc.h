@@ -102,6 +102,28 @@ typedef struct dai_node_desc {
     int      sprite;            /* 1 = draw as a flat quad facing +Z (2D), the
                                    texture comes from `asset`                   */
     dai_vec3 sprite_size;       /* world units, 0 -> 1x1                        */
+    /* ---- Text: the game's own UI ---------------------------------------
+     * On screen, not in the world. A node with one draws a label in the Game
+     * view and in the exported game, anchored to a corner of the picture
+     * rather than to a place in the scene - which is what a score, a timer or
+     * a "press any key" is.
+     *
+     * `text` holds either the words or a KEY: a leading '@' means look it up
+     * in the project's string table (see dai_strings.h). Both spellings work
+     * everywhere, so a label starts as "Score" and becomes "@hud.score" the
+     * day a second language exists, without anything else changing. */
+    int      text_on;           /* 1 = this node draws a label                  */
+    char     text[192];         /* the words, or "@key"                         */
+    float    text_size;         /* pixels, 0 -> 24                              */
+    dai_vec3 text_color;        /* 0,0,0 -> white, the same "unset" rule as the
+                                   light colour                                */
+    int      text_anchor;       /* 0..8, reading order: 0 top left, 4 centre,
+                                   8 bottom right. An anchor rather than a
+                                   position because the picture changes size
+                                   and a score pinned to 1920 is off screen on
+                                   a 1280 window.                              */
+    float    text_x, text_y;    /* pixels from the anchor, + is right and down  */
+
     char     audio_event[64];   /* AudioSource: event name in the sound bank    */
     int      audio_bus;         /* 0 master, 1 music, 2 sfx, 3 ui               */
     float    audio_volume;      /* 0 -> 1                                       */

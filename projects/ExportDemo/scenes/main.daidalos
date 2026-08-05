@@ -64,3 +64,35 @@ node 13
   color 0.80 0.50 0.35
   restitution 0.35
 end
+
+node 900
+  name Score HUD
+  nobody 1
+  hidden 1
+  text 1
+  textstr @hud.score
+  textsize 30
+  textcol 1 0.92 0.4
+  textanchor 0
+  textpos 4 2
+end
+
+node 901
+  name Hint HUD
+  nobody 1
+  hidden 1
+  text 1
+  textstr @hud.hint
+  textsize 20
+  textanchor 7
+end
+
+node 902
+  name Plain HUD
+  nobody 1
+  hidden 1
+  text 1
+  textstr Kein Schluessel, nur Worte
+  textsize 18
+  textanchor 2
+end

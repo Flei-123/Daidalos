@@ -214,6 +214,18 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
             !feq(r.sprite_size.z, def.sprite_size.z))
             put(s, "  spsize %s %s %s\n", fstr(r.sprite_size.x).c_str(),
                 fstr(r.sprite_size.y).c_str(), fstr(r.sprite_size.z).c_str());
+        // Text. The words go last on their line, so they may contain spaces -
+        // and they must, because "Press any key" is one string, not three.
+        if (r.text_on != def.text_on)     put(s, "  text %d\n", r.text_on);
+        if (r.text[0])                    put(s, "  textstr %s\n", r.text);
+        if (!feq(r.text_size, def.text_size)) put(s, "  textsize %s\n", fstr(r.text_size).c_str());
+        if (!feq(r.text_color.x, def.text_color.x) || !feq(r.text_color.y, def.text_color.y) ||
+            !feq(r.text_color.z, def.text_color.z))
+            put(s, "  textcol %s %s %s\n", fstr(r.text_color.x).c_str(),
+                fstr(r.text_color.y).c_str(), fstr(r.text_color.z).c_str());
+        if (r.text_anchor != def.text_anchor) put(s, "  textanchor %d\n", r.text_anchor);
+        if (!feq(r.text_x, def.text_x) || !feq(r.text_y, def.text_y))
+            put(s, "  textpos %s %s\n", fstr(r.text_x).c_str(), fstr(r.text_y).c_str());
         if (r.audio_event[0])            put(s, "  audio %s\n", r.audio_event);
         if (r.audio_bus != def.audio_bus) put(s, "  abus %d\n", r.audio_bus);
         if (!feq(r.audio_volume, def.audio_volume)) put(s, "  avol %s\n", fstr(r.audio_volume).c_str());
@@ -351,6 +363,20 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "lrange")  { ok = parse_floats(after, &rec.light_range, 1); }
         else if (key == "lpower")  { ok = parse_floats(after, &rec.light_intensity, 1); }
         else if (key == "lcone")   { ok = parse_floats(after, &rec.light_cone, 1); }
+        else if (key == "text")    { ok = parse_i32(after, &rec.text_on); }
+        else if (key == "textstr") {
+            // Everything after the keyword, spaces included, trailing
+            // whitespace off. A label is one value, not a word list.
+            const char *b = after;
+            while (*b == ' ' || *b == '\t') ++b;      // token() leaves the separator
+            std::string v = b;
+            while (!v.empty() && (v.back() == ' ' || v.back() == '\t' || v.back() == '\r')) v.pop_back();
+            if (v.size() >= sizeof(rec.text)) ok = false;
+            else std::snprintf(rec.text, sizeof(rec.text), "%s", v.c_str()); }
+        else if (key == "textsize")   { ok = parse_floats(after, &rec.text_size, 1); }
+        else if (key == "textcol")    { ok = parse_floats(after, &rec.text_color.x, 3); }
+        else if (key == "textanchor") { ok = parse_i32(after, &rec.text_anchor); }
+        else if (key == "textpos")    { ok = parse_floats(after, &rec.text_x, 2); }
         else if (key == "sprite")  { ok = parse_i32(after, &rec.sprite); }
         else if (key == "spsize")  { ok = parse_floats(after, &rec.sprite_size.x, 3); }
         else if (key == "audio")   { std::string v = rest_of_line(after);

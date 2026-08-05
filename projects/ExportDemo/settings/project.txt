@@ -3,3 +3,4 @@ daidalos-project-settings 1
 app-name Export Demo
 default-scene scenes/main.daidalos
 tick-hz 60
+language de

@@ -35,12 +35,17 @@ DAI_API void dai_script_bind_ui(dai_script *s, dai_ui *ui);
  *   node.getPos(id)              -> [x, y, z]
  *   node.setPos(id, x, y, z)     / node.getRot(id) -> [x,y,z,w] / node.setRot(id, x,y,z,w)
  * Ids travel as doubles - JS has one number type and a dai_node fits easily. */
+/* `set_text` writes a node's Text component - the whole point of having one,
+ * since a score that cannot change is a decoration. */
 typedef struct dai_script_node_host {
     double   (*find)(const char *name, void *user);
     int      (*get_pos)(double id, double *xyz, void *user);
     void     (*set_pos)(double id, const double *xyz, void *user);
     int      (*get_rot)(double id, double *xyzw, void *user);
     void     (*set_rot)(double id, const double *xyzw, void *user);
+    /* The node's Text component - the whole point of having one, since a
+     * score that cannot change is a decoration. */
+    void     (*set_text)(double id, const char *str, void *user);
     void    *user;
 } dai_script_node_host;
 DAI_API void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host);

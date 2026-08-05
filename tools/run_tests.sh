@@ -43,6 +43,8 @@ test_ui_field
 test_dock
 test_project
 test_script
+test_strings
+test_hud
 "
 # Deliberately NOT here (each needs a GPU or a display):
 #   test_render_visual test_ui_text test_gltf test_particles test_skinning

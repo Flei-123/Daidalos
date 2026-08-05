@@ -764,6 +764,7 @@ dai_result dai_project_settings_load(dai_project *p, dai_project_settings *out) 
         else if (key == "friction")    ok = parse_floats(after, &out->default_friction, 1);
         else if (key == "restitution") ok = parse_floats(after, &out->default_restitution, 1);
         else if (key == "app-name")    copy_str(out->app_name, sizeof(out->app_name), rest_of_line(after));
+        else if (key == "language")    copy_str(out->language, sizeof(out->language), rest_of_line(after));
         else if (key == "default-scene") copy_str(out->default_scene, sizeof(out->default_scene), rest_of_line(after));
         else if (key == "tag" || key == "layer") {
             int idx = 0;
@@ -821,6 +822,8 @@ dai_result dai_project_settings_save(dai_project *p, const dai_project_settings 
         put(t, "restitution %s\n", fstr(s->default_restitution).c_str());
     if (std::strncmp(s->app_name, d.app_name, sizeof(d.app_name)) != 0)
         put(t, "app-name %s\n", sanitise(s->app_name).c_str());
+    if (s->language[0])
+        put(t, "language %s\n", sanitise(s->language).c_str());
     if (std::strncmp(s->default_scene, d.default_scene, sizeof(d.default_scene)) != 0)
         put(t, "default-scene %s\n", sanitise(s->default_scene).c_str());
 

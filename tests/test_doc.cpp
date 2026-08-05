@@ -31,6 +31,67 @@ static dai_node add_named(dai_doc *d, const char *name, dai_vec3 pos, dai_node p
     return dai_doc_add(d, &r);
 }
 
+// The Text component survives a save and a load - including the part that is
+// easiest to get wrong, a label with SPACES in it. A format that splits on
+// whitespace turns "Press any key" into "Press" and loses the rest, and it
+// does so quietly: the scene still loads, the label is just shorter.
+static void test_text_component() {
+    std::printf("text component: round trip, spaces and all\n");
+    dai_doc *d = dai_doc_create();
+    dai_node_desc r = dai_node_desc_default();
+    std::snprintf(r.name, sizeof(r.name), "Score");
+    r.text_on = 1;
+    std::snprintf(r.text, sizeof(r.text), "Press any key to start");
+    r.text_size = 32.0f;
+    r.text_color = { 0.9f, 0.3f, 0.2f };
+    r.text_anchor = 7;
+    r.text_x = -12.0f;
+    r.text_y = 20.0f;
+    dai_node n = dai_doc_add(d, &r);
+
+    // A second one that uses a KEY instead of words.
+    dai_node_desc k = dai_node_desc_default();
+    std::snprintf(k.name, sizeof(k.name), "Lives");
+    k.text_on = 1;
+    std::snprintf(k.text, sizeof(k.text), "@hud.lives");
+    dai_node n2 = dai_doc_add(d, &k);
+
+    std::vector<char> buf(dai_doc_to_text(d, nullptr, 0) + 1);
+    dai_doc_to_text(d, buf.data(), buf.size());
+
+    dai_doc *e = dai_doc_create();
+    char err[256] = { 0 };
+    CHECK(dai_doc_from_text(e, buf.data(), std::strlen(buf.data()), err, sizeof(err)) == DAI_OK,
+          "the scene with a Text component did not load: %s", err);
+
+    dai_node_desc got{};
+    CHECK(dai_doc_get(e, n, &got) == DAI_OK, "the text node is gone");
+    CHECK(got.text_on == 1, "text_on did not survive");
+    CHECK(std::strcmp(got.text, "Press any key to start") == 0,
+          "the label came back as '%s' - a space split it", got.text);
+    CHECK(got.text_size == 32.0f, "size is %.1f", got.text_size);
+    CHECK(got.text_anchor == 7, "anchor is %d", got.text_anchor);
+    CHECK(got.text_x == -12.0f && got.text_y == 20.0f, "offset is %.1f %.1f", got.text_x, got.text_y);
+    CHECK(got.text_color.x > 0.89f && got.text_color.z < 0.21f, "colour did not survive");
+
+    dai_node_desc got2{};
+    CHECK(dai_doc_get(e, n2, &got2) == DAI_OK, "the key node is gone");
+    CHECK(std::strcmp(got2.text, "@hud.lives") == 0, "the key came back as '%s'", got2.text);
+
+    // A node with no Text component writes no text lines at all - the format
+    // only stores what differs, and a scene full of "text 0" would be noise.
+    dai_doc *f = dai_doc_create();
+    dai_node_desc plain = dai_node_desc_default();
+    std::snprintf(plain.name, sizeof(plain.name), "Crate");
+    dai_doc_add(f, &plain);
+    std::vector<char> b2(dai_doc_to_text(f, nullptr, 0) + 1);
+    dai_doc_to_text(f, b2.data(), b2.size());
+    CHECK(std::strstr(b2.data(), "text") == nullptr,
+          "a node without a label still wrote text lines");
+
+    dai_doc_destroy(d); dai_doc_destroy(e); dai_doc_destroy(f);
+}
+
 int main() {
     std::printf("scene document\n");
     dai_doc *d = dai_doc_create();
@@ -659,6 +720,8 @@ int main() {
     dai_doc_destroy(d);
     dai_scene_destroy(sc);
     dai_destroy(w);
+
+    test_text_component();
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

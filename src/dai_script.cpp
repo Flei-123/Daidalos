@@ -327,6 +327,13 @@ JSValue js_node_set_rot(JSContext *ctx, JSValueConst, int argc, JSValueConst *ar
     return JS_UNDEFINED;
 }
 
+JSValue js_node_set_text(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_nodes && s->nodes.set_text && argc >= 2)
+        s->nodes.set_text(arg_num(ctx, argv[0]), str(ctx, argv[1]).c_str(), s->nodes.user);
+    return JS_UNDEFINED;
+}
+
 JSValue js_input_key(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
     dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
     if (!s->has_play || !s->play.key || argc < 1) return JS_FALSE;
@@ -421,6 +428,7 @@ void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host) {
     JS_SetPropertyStr(s->ctx, scene, "find", JS_NewCFunction(s->ctx, js_scene_find, "find", 1));
     JS_SetPropertyStr(s->ctx, global, "scene", scene);
     JSValue node = JS_NewObject(s->ctx);
+    JS_SetPropertyStr(s->ctx, node, "setText", JS_NewCFunction(s->ctx, js_node_set_text, "setText", 2));
     JS_SetPropertyStr(s->ctx, node, "getPos", JS_NewCFunction(s->ctx, js_node_get_pos, "getPos", 1));
     JS_SetPropertyStr(s->ctx, node, "setPos", JS_NewCFunction(s->ctx, js_node_set_pos, "setPos", 4));
     JS_SetPropertyStr(s->ctx, node, "getRot", JS_NewCFunction(s->ctx, js_node_get_rot, "getRot", 1));

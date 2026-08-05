@@ -540,10 +540,12 @@ size_t dai_boot_config_write(const dai_boot_config *c, char *buf, size_t buf_siz
         "tick_hz %d\n"
         "max_bodies %d\n"
         "physics %d\n"
-        "gravity %g %g %g\n",
+        "gravity %g %g %g\n"
+        "language %s\n",
         c->scene, c->title, c->width, c->height, c->fullscreen, c->msaa,
         c->tick_hz, c->max_bodies, c->physics_backend,
-        (double)c->gravity[0], (double)c->gravity[1], (double)c->gravity[2]);
+        (double)c->gravity[0], (double)c->gravity[1], (double)c->gravity[2],
+        c->language);
     if (n < 0) return 0;
     if (buf && buf_size) std::snprintf(buf, buf_size, "%s", t);
     return (size_t)n;
@@ -578,6 +580,7 @@ dai_result dai_boot_config_parse(const char *text, size_t len, dai_boot_config *
         else if (key == "msaa")       out->msaa = std::atoi(val.c_str());
         else if (key == "tick_hz")    out->tick_hz = std::atoi(val.c_str());
         else if (key == "max_bodies") out->max_bodies = std::atoi(val.c_str());
+        else if (key == "language")   std::snprintf(out->language, sizeof(out->language), "%s", val.c_str());
         else if (key == "physics")    out->physics_backend = std::atoi(val.c_str());
         else if (key == "gravity") {
             float g[3] = { 0, -9.81f, 0 };

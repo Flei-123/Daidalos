@@ -1,0 +1,7 @@
+daidalos-strings 1
+lang en
+name English
+
+hud.score   Score
+hud.lives   Lives
+hud.hint    Space to jump\nShift to sprint
