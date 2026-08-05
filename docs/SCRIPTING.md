@@ -80,3 +80,29 @@ into a node id.
 a declaration of the same name. Types: `float`, `int`, `bool`, `string`,
 `node`. It is the only way to declare a field in a `.cpp` behaviour, whose
 members the editor cannot see.
+
+## Input
+
+```js
+input.key("w")        // held? letters, digits, space, enter, escape, tab,
+                      // arrows, shift, ctrl, alt
+input.mouseDX()       // pixels the pointer moved THIS frame
+input.mouseDY()
+input.mouseButton(0)  // 0 left, 1 right, 2 middle - held?
+```
+
+The mouse is a **delta**, not a position, because that is what a look control
+wants and because a position would make every script do the same subtraction.
+Every script in a frame sees the same movement: the host takes it once.
+
+`examples/scripts/player_controller.js` is the worked example - camera
+relative WASD, right mouse to orbit, and a camera that sets its own rotation
+as well as its position. A camera that only takes a position keeps pointing
+wherever the scene left it, which looks exactly like a camera that is not
+following at all.
+
+## Playing
+
+**Ctrl+P** starts and pauses the game, Unity's binding. Space does it too,
+but **only while editing** - once the game runs, the keyboard belongs to the
+game, and the first jump must not pause the editor.

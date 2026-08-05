@@ -112,6 +112,11 @@ typedef struct dai_script_play_host {
     void   (*set_vel)(double id, const double *xyz, void *user);
     void   (*impulse)(double id, const double *xyz, void *user);
     int    (*grounded)(double id, void *user);
+    /* How far the pointer moved THIS frame, in pixels, and which buttons are
+     * down as a mask: 1 left, 2 right, 4 middle. A delta rather than a
+     * position because that is what a look control wants, and because a
+     * position would make every script do the same subtraction. */
+    void   (*mouse)(double *dx, double *dy, int *buttons, void *user);
     void  *user;
 } dai_script_play_host;
 DAI_API void dai_script_bind_play(dai_script *s, const dai_script_play_host *host);

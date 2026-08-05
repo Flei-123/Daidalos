@@ -333,6 +333,29 @@ JSValue js_input_key(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
     return s->play.key(str(ctx, argv[0]).c_str(), s->play.user) ? JS_TRUE : JS_FALSE;
 }
 
+// input.mouseDX() / input.mouseDY() / input.mouseButton(n)
+JSValue js_input_mouse_axis(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv, int axis) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    double dx = 0, dy = 0; int b = 0;
+    if (s->has_play && s->play.mouse) s->play.mouse(&dx, &dy, &b, s->play.user);
+    (void)argc; (void)argv;
+    return JS_NewFloat64(ctx, axis ? dy : dx);
+}
+JSValue js_input_mouse_dx(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+    return js_input_mouse_axis(ctx, t, argc, argv, 0);
+}
+JSValue js_input_mouse_dy(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+    return js_input_mouse_axis(ctx, t, argc, argv, 1);
+}
+JSValue js_input_mouse_button(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    double dx = 0, dy = 0; int b = 0;
+    if (s->has_play && s->play.mouse) s->play.mouse(&dx, &dy, &b, s->play.user);
+    int which = argc >= 1 ? (int)arg_num(ctx, argv[0]) : 0;
+    int bit = which == 1 ? 2 : (which == 2 ? 4 : 1);   // 0 left, 1 right, 2 middle
+    return (b & bit) ? JS_TRUE : JS_FALSE;
+}
+
 JSValue js_body_get_vel(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
     dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
     double v[3] = { 0, 0, 0 };
@@ -376,6 +399,9 @@ void dai_script_bind_play(dai_script *s, const dai_script_play_host *host) {
     JSValue global = JS_GetGlobalObject(s->ctx);
     JSValue input = JS_NewObject(s->ctx);
     JS_SetPropertyStr(s->ctx, input, "key", JS_NewCFunction(s->ctx, js_input_key, "key", 1));
+    JS_SetPropertyStr(s->ctx, input, "mouseDX", JS_NewCFunction(s->ctx, js_input_mouse_dx, "mouseDX", 0));
+    JS_SetPropertyStr(s->ctx, input, "mouseDY", JS_NewCFunction(s->ctx, js_input_mouse_dy, "mouseDY", 0));
+    JS_SetPropertyStr(s->ctx, input, "mouseButton", JS_NewCFunction(s->ctx, js_input_mouse_button, "mouseButton", 1));
     JS_SetPropertyStr(s->ctx, global, "input", input);
     JSValue body = JS_NewObject(s->ctx);
     JS_SetPropertyStr(s->ctx, body, "getVel", JS_NewCFunction(s->ctx, js_body_get_vel, "getVel", 1));

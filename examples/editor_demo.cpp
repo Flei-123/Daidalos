@@ -829,8 +829,18 @@ static int sp_grounded(double id, void *) {
     return (l.y > -0.35f && l.y < 0.35f) ? 1 : 0;
 }
 
+// Mouse movement since the last frame, in pixels, plus the button mask. The
+// editor loop fills these in; a script asks for them through input.mouseDX().
+static double g_mouse_dx = 0.0, g_mouse_dy = 0.0;
+static int    g_mouse_buttons = 0;
+static void sp_mouse(double *dx, double *dy, int *buttons, void *) {
+    if (dx) *dx = g_mouse_dx;
+    if (dy) *dy = g_mouse_dy;
+    if (buttons) *buttons = g_mouse_buttons;
+}
+
 static dai_script_play_host g_play_host = {
-    sp_key, sp_get_vel, sp_set_vel, sp_impulse, sp_grounded, nullptr
+    sp_key, sp_get_vel, sp_set_vel, sp_impulse, sp_grounded, sp_mouse, nullptr
 };
 
 struct RunningScript { dai_script *s = nullptr; std::string path; };
@@ -2340,6 +2350,8 @@ int main(int argc, char **argv) {
     int prev_edit_keys[6] = { 0 };
     int prev_nav_keys[2] = { 0 };
     int prev_ctrl_a = 0;
+    int prev_ctrl_p = 0;
+    int prev_mouse_x = 0, prev_mouse_y = 0, mouse_seen = 0;
 
     int update_reported = 0;
     while (dai_window_poll(win) || !quit_is_ok(win, doc)) {
@@ -2383,6 +2395,20 @@ int main(int argc, char **argv) {
 
         // W/E/R switch gizmo mode, but only when the camera is not flying -
         // otherwise pressing W to walk forward would also change the tool.
+        // Pointer delta for scripts. Taken here, once, so every script in the
+        // frame sees the SAME movement - asking the window per call would give
+        // the second caller a delta of zero.
+        {
+            int mxr = 0, myr = 0; uint32_t mb = 0;
+            if (dai_window_mouse(win, &mxr, &myr, &mb)) {
+                g_mouse_dx = mouse_seen ? (double)(mxr - prev_mouse_x) : 0.0;
+                g_mouse_dy = mouse_seen ? (double)(myr - prev_mouse_y) : 0.0;
+                prev_mouse_x = mxr; prev_mouse_y = myr; mouse_seen = 1;
+                g_mouse_buttons = (int)mb;
+            } else {
+                g_mouse_dx = g_mouse_dy = 0.0;
+            }
+        }
         int ctrl = dai_window_key_down(win, DAI_KEY_CTRL_L) || dai_window_key_down(win, DAI_KEY_CTRL_R);
         int keys[10] = {
             ci.key_w, ci.key_e, dai_window_key_down(win, DAI_KEY_R),
@@ -2475,8 +2501,19 @@ int main(int argc, char **argv) {
             if (!dai_editor_ui_delete_project_pick(panels))
                 dai_editor_delete_selection(ed);
         }
-        if (pressed(7) && !typing) {
-            if (dai_editor_state_get(ed) == DAI_EDITOR_PLAY) dai_editor_pause(ed);
+        // Play/pause. Ctrl+P always, Space only while EDITING.
+        //
+        // Space used to toggle play in both states, so the first jump in any
+        // game paused the editor: the same key was the game's and the
+        // editor's at the same moment, and the editor won. Unity's binding is
+        // Ctrl+P for exactly this reason, and while the game is running the
+        // keyboard belongs to the game.
+        int p_key = dai_window_key_down(win, 'p');
+        int ctrl_p = ctrl && p_key && !prev_ctrl_p;
+        prev_ctrl_p = p_key;
+        int playing_now = dai_editor_state_get(ed) == DAI_EDITOR_PLAY;
+        if ((ctrl_p || (pressed(7) && !playing_now)) && !typing) {
+            if (playing_now) dai_editor_pause(ed);
             else dai_editor_play(ed);
         }
         // Ctrl+S: once per press, never while a field has the keyboard, and
