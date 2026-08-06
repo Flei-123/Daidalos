@@ -1190,7 +1190,11 @@ int dai_editor_ui_clipboard_has(const dai_editor_ui *p) { return p && p->clipboa
 // What the last draw laid out, so the editor can put a handle on it. A frame
 // of latency by construction - the rectangle is from the frame before the one
 // being built - and that is fine: it moves when the thing moves.
-struct HudRect { dai_node n; float x, y, w, h; };
+// `kind` because a node can have BOTH an Image and a Text, and they are two
+// rectangles in two places. Without it the editor found whichever came first
+// and the other one could not be selected or resized at all.
+enum { HUD_KIND_IMAGE = 0, HUD_KIND_TEXT = 1 };
+struct HudRect { dai_node n; int kind; float x, y, w, h; };
 static std::vector<HudRect> g_hud_rects;
 static std::vector<HudRect> g_hud_rects_prev;
 // The HUD is drawn more than once per frame now - once over the Scene view so
@@ -1212,6 +1216,25 @@ int dai_hud_pick(float mx, float my, dai_node *out) {
         if (mx < r.x - 2.0f || mx >= r.x + r.w + 2.0f) continue;
         if (my < r.y - 2.0f || my >= r.y + r.h + 2.0f) continue;
         if (out) *out = r.n;
+        return 1;
+    }
+    return 0;
+}
+
+// Every rectangle a node has, oldest first. `index` 0 is its Image, 1 its
+// Text - or 0 is the Text when there is no Image. Returns 0 past the end, so
+// a caller loops until it stops.
+int dai_hud_rect_nth(dai_node n, int index, int *kind,
+                     float *x, float *y, float *w, float *h) {
+    int seen = 0;
+    for (const HudRect &r : g_hud_rects_prev) {
+        if (r.n != n) continue;
+        if (seen++ != index) continue;
+        if (kind) *kind = r.kind;
+        if (x) *x = r.x;
+        if (y) *y = r.y;
+        if (w) *w = r.w;
+        if (h) *h = r.h;
         return 1;
     }
     return 0;
@@ -1542,12 +1565,13 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
                     for (const char *q = r.image; *q; ++q)
                         if (*q == '/' || *q == '\\') bn = q + 1;
                     dai_ui_text(ui, ix + 4.0f, iy + 3.0f, "image not loaded", 0xFFFFFFFFu);
+                    (void)bn;
                     dai_ui_text(ui, ix + 4.0f, iy + 3.0f + dai_ui_text_height(ui) + 2.0f,
                                 bn, 0xFFC8C8C8u);
                 }
                 // Registered either way: an element you cannot select is an
                 // element you cannot fix.
-                g_hud_rects.push_back(HudRect{ ids[i], ix, iy, dw, dh });
+                g_hud_rects.push_back(HudRect{ ids[i], HUD_KIND_IMAGE, ix, iy, dw, dh });
             }
         }
 
@@ -1643,7 +1667,7 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
             col32 = 0xFF000000u | (ch(r.text_color.z) << 16) | (ch(r.text_color.y) << 8) | ch(r.text_color.x);
         }
 
-        g_hud_rects.push_back(HudRect{ ids[i], bx, by, widest, block_h });
+        g_hud_rects.push_back(HudRect{ ids[i], HUD_KIND_TEXT, bx, by, widest, block_h });
         // A label with no background is still a button; the words ARE the
         // rectangle. Only worked out here when the Image did not already do it.
         if (r.button_on && !r.disabled) {
@@ -2238,6 +2262,10 @@ static void hierarchy_body(dai_editor_ui *p, float h) {
         }
     }
     p->reveal_selection = 0;
+    // Room to scroll past the last row. The same reason as the inspector:
+    // the bottom row sat ON the edge, and its right click menu opened
+    // downwards into a panel border.
+    dai_ui_spacing(p->ui, 120.0f);
     dai_ui_scroll_end(p->ui);
 }
 
@@ -2960,8 +2988,10 @@ static void inspector_body(dai_editor_ui *p) {
     // in the hierarchy or anywhere in this panel.
     {
         std::vector<std::string> slist = script_list(r.script);
-        if (slist.empty())
-            dai_ui_label(p->ui, "no scripts - drag a .js or .cpp from Project onto this object");
+        // Only while something IS being dragged. As a permanent line it sat
+        // under every object in the project saying the same thing forever,
+        // which is not a hint, it is furniture.
+        if (slist.empty()) { }
         if (p->fold_scripts.size() != slist.size())
             p->fold_scripts.assign(slist.size(), 1);
         int remove_at = -1;

@@ -48,6 +48,12 @@ DAI_API void dai_hud_images(dai_hud_image_fn fn, void *user);
  * when that node drew nothing this frame. */
 DAI_API int dai_hud_rect_of(dai_node n, float *x, float *y, float *w, float *h);
 
+/* Every rectangle a node draws, oldest first: `kind` 0 is its Image, 1 its
+ * Text. Returns 0 past the end. A node with both has two, in two places, and
+ * both have to be selectable - which is why dai_hud_rect_of is not enough. */
+DAI_API int dai_hud_rect_nth(dai_node n, int index, int *kind,
+                             float *x, float *y, float *w, float *h);
+
 /* Once per frame, BEFORE the first dai_hud_draw of that frame. Tells the HUD
  * that a new frame started, so several draws (Scene view and Game view) add to
  * one list of rectangles instead of each throwing away the last one's. */

@@ -779,6 +779,11 @@ float ui_detail_row_x();
 float ui_detail_row_y();
 float ui_detail_row_w();
 float ui_detail_row_h();
+// Forget the last field's rectangle. A label is not a field: it never set one,
+// so dai_ui_help() after a label attached its tooltip to whatever field came
+// BEFORE the label - which is how the localisation hint ended up floating
+// across the rows above it, following the pointer over the Text box.
+void ui_detail_row_clear();
 }
 
 // The same, for a widget that was drawn by hand and therefore has no "row"
@@ -1650,6 +1655,7 @@ float widget_height(dai_ui *ui) { return dai_font_line_height(ui->font) + ui->st
 void dai_ui_translate(dai_ui *ui, int on) { if (ui) ui->tr_on = on ? 1 : 0; }
 
 void dai_ui_label(dai_ui *ui, const char *utf8) {
+    dai::ui_detail_row_clear();
     if (!ui) return;
     float x, y;
     next_rect(ui, 0, dai_font_line_height(ui->font), &x, &y);
@@ -1657,6 +1663,7 @@ void dai_ui_label(dai_ui *ui, const char *utf8) {
 }
 
 void dai_ui_label_fmt(dai_ui *ui, const char *fmt, ...) {
+    dai::ui_detail_row_clear();
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
@@ -2186,6 +2193,7 @@ float ui_detail_row_x() { return g_row_x; }
 float ui_detail_row_y() { return g_row_y; }
 float ui_detail_row_w() { return g_row_w; }
 float ui_detail_row_h() { return g_row_h; }
+void ui_detail_row_clear() { g_row_w = 0.0f; g_row_h = 0.0f; }
 }
 
 int dai_ui_drag_float(dai_ui *ui, const char *label, float *value, float step) {
@@ -2817,7 +2825,11 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
         // escape mean something else while a list is open - and a completion
         // list that you cannot dismiss with escape is a trap.
         if (st->ac_open > 0) {
-            if (in.key_escape) { st->ac_open = 0; caret_input = true; }
+            // Escape means "not now". It set ac_open to 0 and the list was
+            // rebuilt from scratch at the end of the same frame, so it came
+            // straight back - the key did nothing you could see. The refusal
+            // has to be REMEMBERED until the word being typed changes.
+            if (in.key_escape) { st->ac_open = 0; st->ac_off = 1; caret_input = true; }
             else if (in.key_up_arrow)   { if (--st->ac_sel < 0) st->ac_sel = st->ac_open - 1; }
             else if (in.key_down_arrow) { if (++st->ac_sel >= st->ac_open) st->ac_sel = 0; }
             else if (in.key_tab || in.key_enter) {
@@ -3104,7 +3116,10 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
         // ONE character is enough. Two meant the list never appeared for the
         // thing you were most likely to want it for - `a`, `s`, `me.` - and a
         // completion you have to earn is one people stop waiting for.
-        if (st->focused && prefix.size() >= 1 && lang != DAI_CODE_LANG_NONE) {
+        // Typing anything new is a new question, so the refusal expires.
+        if (st->ac_off && (int)prefix.size() != st->ac_off_len) st->ac_off = 0;
+        st->ac_off_len = (int)prefix.size();
+        if (st->focused && !st->ac_off && prefix.size() >= 1 && lang != DAI_CODE_LANG_NONE) {
             const AcEntry *table = lang == DAI_CODE_LANG_CPP ? AC_CPP : AC_JS;
             size_t count = lang == DAI_CODE_LANG_CPP
                          ? sizeof(AC_CPP) / sizeof(AC_CPP[0])

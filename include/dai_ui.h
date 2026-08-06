@@ -574,6 +574,9 @@ typedef struct dai_ui_code_state {
     /* 1 = a plain multi-line field, not code: no gutter, no line numbers and
      * no completion. Set by dai_ui_input_multiline; leave it 0 for scripts. */
     int   plain;
+    /* Escape was pressed: no list until the word being typed changes. */
+    int   ac_off;
+    int   ac_off_len;
 } dai_ui_code_state;
 
 enum {

@@ -2551,6 +2551,15 @@ static uint32_t hud_image_cb(const char *path, float *out_w, float *out_h, void 
     std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, path);
     Entry e{ 0, 0, 0 };
     e.tex = dai_render_texture_load(g_renderer, full, 1);
+    // "image not loaded" on its own is not a bug report. Say WHICH file was
+    // tried, once per path - the answer is almost always that it is not under
+    // the project's asset folder, or that the PNG is a flavour the decoder
+    // does not read.
+    if (!e.tex && g_panels_for_log) {
+        char line[800];
+        std::snprintf(line, sizeof(line), "image not loaded: %s", full);
+        dai_editor_ui_log(g_panels_for_log, 2, line);
+    }
     // The renderer does not hand back the pixel size, and the honest answer
     // to "how big is this by default" is the file's own size. Read the PNG
     // header - eight bytes at a fixed offset - rather than decode the whole
@@ -3865,17 +3874,27 @@ int main(int argc, char **argv) {
         static int   ui_drag_ex = 0, ui_drag_ey = 0;   // -1 left/top, +1 right/bottom
         static float ui_drag_x0 = 0, ui_drag_y0 = 0;
         static float ui_drag_ox = 0, ui_drag_oy = 0, ui_drag_w0 = 0, ui_drag_h0 = 0;
+        static int   ui_drag_img = 0;      // 1 = the Image's rectangle, 0 = the Text's
         if (dai_editor_selection_count(ed) > 0) {
             dai_node sel_n = dai_editor_selected(ed, 0);
             float rx, ry, rw, rh;
-            if (dai_hud_rect_of(sel_n, &rx, &ry, &rw, &rh)) {
+            int rkind = 0;
+            // A node can have BOTH an Image and a Text, and they are two
+            // rectangles in two places. Every one of them gets a frame and
+            // grips; before this only the first was findable, so the other
+            // one could not be selected, moved or resized at all.
+            for (int ri = 0; dai_hud_rect_nth(sel_n, ri, &rkind, &rx, &ry, &rw, &rh); ++ri) {
                 dai_node_desc sr{};
                 int have = dai_doc_get(doc, sel_n, &sr) == DAI_OK;
                 float mx2 = 0, my2 = 0;
                 int mdown = 0, mpress = 0;
                 dai_ui_mouse(ui, &mx2, &my2, &mdown, &mpress);
 
-                bool img = have && sr.image_on && sr.image[0];
+                // Which of the two this rectangle IS - not "does the node
+                // have an image", which is what it used to ask and why a
+                // node with both wrote the image's numbers when you dragged
+                // its label.
+                bool img = have && rkind == 0;
                 // A label that is as wide as its words has nothing to resize;
                 // giving it a box IS the resize, so the grips are offered and
                 // the first drag writes the box the words are in now.
@@ -3916,6 +3935,7 @@ int main(int argc, char **argv) {
 
                 if (mpress && have && (hit >= 0 || over_body)) {
                     ui_drag_node = sel_n;
+                    ui_drag_img = img ? 1 : 0;
                     ui_drag_x0 = mx2; ui_drag_y0 = my2;
                     ui_drag_ox = img ? sr.image_x : sr.text_x;
                     ui_drag_oy = img ? sr.image_y : sr.text_y;
@@ -3934,6 +3954,7 @@ int main(int argc, char **argv) {
                     } else {
                         ui_drag_kind = 1;
                     }
+                    break;      // this rectangle took the press; the other one must not
                 }
                 if (hit >= 0) {
                     int ex = grips[hit].ex, ey = grips[hit].ey;
@@ -3952,7 +3973,7 @@ int main(int argc, char **argv) {
             dai_node_desc sr{};
             if (dai_doc_get(doc, ui_drag_node, &sr) == DAI_OK) {
                 float dx2 = mx2 - ui_drag_x0, dy2 = my2 - ui_drag_y0;
-                bool img = sr.image_on && sr.image[0];
+                bool img = ui_drag_img != 0;
                 if (ui_drag_kind == 1) {
                     if (img) { sr.image_x = ui_drag_ox + dx2; sr.image_y = ui_drag_oy + dy2; }
                     else     { sr.text_x  = ui_drag_ox + dx2; sr.text_y  = ui_drag_oy + dy2; }
