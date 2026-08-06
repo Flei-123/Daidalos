@@ -4149,6 +4149,8 @@ void dai_ui_popup_panel_end(dai_ui *ui) {
 void dai_ui_popup_open(dai_ui_popup *m, float x, float y) {
     if (!m) return;
     m->x = x; m->y = y; m->open = 1; m->placed = 0;
+    // Not armed yet: the press that is opening it must not also pick a row.
+    m->armed = 0;
 }
 
 void dai_ui_popup_close(dai_ui_popup *m) { if (m) m->open = 0; }
@@ -4216,7 +4218,8 @@ int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
     // said transform copied": the right press did not close the open menu, it
     // just moved on, and the next left click landed on whatever row happened
     // to be under the cursor.
-    if (((ui->input.mouse_down && !ui->prev.mouse_down) ||
+    if (m->armed &&
+        ((ui->input.mouse_down && !ui->prev.mouse_down) ||
          (ui->input.right_down && !ui->prev.right_down)) && !over) {
         m->open = 0;
         result = -1;                    // dismissed
@@ -4259,7 +4262,9 @@ int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
         }
     }
 
-    if ((int)hovered >= 0 && ui->input.mouse_down && !ui->prev.mouse_down) {
+    // Not until the button that opened this thing has been let go.
+    if (!ui->input.mouse_down && !ui->input.right_down) m->armed = 1;
+    if (m->armed && (int)hovered >= 0 && ui->input.mouse_down && !ui->prev.mouse_down) {
         result = hovered;
         m->open = 0;
     }

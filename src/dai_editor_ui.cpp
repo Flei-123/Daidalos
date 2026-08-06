@@ -4641,7 +4641,13 @@ int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in) {
     // opens it; only the look around is deferred.
     int right_tap = in->mouse_right && !p->prev_right_down;
     p->prev_right_down = in->mouse_right != 0;
-    if (right_tap && !over_ui && !p->menu_canvas.open && !p->menu_node.open) {
+    // A second right click replaces the first menu instead of being swallowed
+    // by it: the old one closes, the new one opens where the pointer is now.
+    if (right_tap && !over_ui) {
+        p->menu_canvas.open = 0;
+        p->menu_node.open = 0;
+    }
+    if (right_tap && !over_ui) {
         dai_node hit = dai_editor_pick(p->ed, in->mouse_x, in->mouse_y);
         if (hit != DAI_INVALID_NODE) {
             dai_editor_select(p->ed, hit, 0);

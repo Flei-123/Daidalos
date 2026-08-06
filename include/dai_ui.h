@@ -414,6 +414,11 @@ typedef struct dai_ui_popup {
     int      placed;     /* 0 until the first draw has put it on screen */
     float x, y;
     int   open;
+    /* 0 until the mouse has been seen UP once since it opened. A menu opened
+     * by a left click - the three dot button - was picking its first row with
+     * the very press that summoned it: the button went down, the menu drew,
+     * and the same press was still down over row zero. */
+    int   armed;
 } dai_ui_popup;
 
 typedef struct dai_ui_menu_item {
