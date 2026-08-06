@@ -1910,9 +1910,17 @@ int dai_ui_header_icon_col(dai_ui *ui, const char *icon, uint32_t tint,
     if (over) { ui->hot = id; ui->mouse_over_ui = true; }
     int result = 0;
     float box = h - 6.0f;
+    // A three dot button, always there, left of the tick box. Right clicking
+    // a header opens the same menu - but nothing on screen said so, so the
+    // only way to find Remove Component was to be told about it.
+    float dots_w = 16.0f;
+    float dots_x = x + w - dots_w - 4.0f - (enabled ? box + 6.0f : 0.0f);
+    bool on_dots = over && ui->input.mouse_x >= dots_x &&
+                   ui->input.mouse_x < dots_x + dots_w;
     bool on_box = enabled && over && ui->input.mouse_x > x + w - box - 6.0f;
     if (over && ui->input.mouse_down && !ui->prev.mouse_down) {
         if (on_box) { *enabled = !*enabled; result = 2; }
+        else if (on_dots) { result = 3; }
         else if (open) { *open = !*open; result = 1; }
     }
     // Right click on the header (not its enable box) reports 3: the caller's
@@ -1953,6 +1961,14 @@ int dai_ui_header_icon_col(dai_ui *ui, const char *icon, uint32_t tint,
         tx += isz + 5.0f;
     }
     dai_ui_text(ui, tx, y + 2.0f, title, ui->style.text);
+    {
+        // Drawn as three squares rather than an icon, so it looks the same in
+        // a headless test with nothing but a font.
+        uint32_t dc = on_dots ? ui->style.text : ui->style.text_dim;
+        float dcx = dots_x + dots_w * 0.5f - 1.0f, dcy = y + h * 0.5f - 1.0f;
+        for (int di = -1; di <= 1; ++di)
+            dai_ui_rect(ui, dcx, dcy + (float)di * 5.0f, 2.0f, 2.0f, dc);
+    }
     if (enabled) {
         float bx = x + w - box - 4.0f, by = y + 3.0f;
         dai_ui_rect(ui, bx, by, box, box, on_box ? ui->style.button_hover : ui->style.track);
@@ -4144,8 +4160,11 @@ int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
     // "nothing happened" and a button that stays stuck open for ever.
     if (!items || !count) { m->open = 0; return -1; }
 
-    float row_h = dai_font_line_height(ui->font) + 8.0f;
-    float pad = 4.0f;
+    // Tight rows. A context menu is read at a glance and dismissed; the eight
+    // pixels of air per row were eight pixels of nothing, and a menu of ten
+    // entries was taller than the panel it belonged to.
+    float row_h = dai_font_line_height(ui->font) + 4.0f;
+    float pad = 3.0f;
     float w = 0.0f;
     for (uint32_t i = 0; i < count; ++i) {
         float tw = dai_ui_text_width(ui, items[i].label ? items[i].label : "");

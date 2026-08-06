@@ -119,6 +119,10 @@ struct dai_editor_ui {
     dai_ui     *ui = nullptr;
 
     std::unordered_set<dai_node> folded;   // default is open, so this stays small
+    // The hierarchy's filter. A scene of four hundred objects is a scene you
+    // scroll, and scrolling is not finding.
+    char hier_filter[64] = { 0 };
+    int  hier_flat = 0;      // filtering: draw the row, not the subtree
     uint32_t visible_rows = 0;
 
     // A drag on a numeric field changes the value every frame. Without this the
@@ -972,6 +976,17 @@ bool has_children(dai_doc *d, dai_node n) {
     return dai_doc_children(d, n, nullptr, 0) > 0;
 }
 
+void draw_subtree(dai_editor_ui *p, dai_doc *d, dai_node n, int depth);
+
+// One row, no children. What the filter shows: a match three levels down is a
+// match, and opening its two parents to reach it is exactly what the search
+// box exists to avoid.
+void draw_subtree_row_only(dai_editor_ui *p, dai_doc *d, dai_node n) {
+    p->hier_flat = 1;
+    draw_subtree(p, d, n, 0);
+    p->hier_flat = 0;
+}
+
 void draw_subtree(dai_editor_ui *p, dai_doc *d, dai_node n, int depth) {
     dai_node_desc r{};
     if (dai_doc_get(d, n, &r) != DAI_OK) return;
@@ -1078,7 +1093,8 @@ void draw_subtree(dai_editor_ui *p, dai_doc *d, dai_node n, int depth) {
     uint32_t cn = dai_doc_children(d, n, nullptr, 0);
     std::vector<dai_node> kid_ids(cn);
     if (cn) dai_doc_children(d, n, kid_ids.data(), cn);
-    for (dai_node k : kid_ids) draw_subtree(p, d, k, depth + 1);
+    if (!p->hier_flat)
+        for (dai_node k : kid_ids) draw_subtree(p, d, k, depth + 1);
 }
 
 } // namespace
@@ -2233,6 +2249,14 @@ static void hierarchy_body(dai_editor_ui *p, float h) {
     // "the last row you touched" - and every drop into nothing re-parented
     // onto the bottom object.
     p->hover_node = DAI_INVALID_NODE;
+    // The filter, above the tree and outside the scroll: a search box that
+    // scrolls away with its results is a search box you lose.
+    {
+        char fbuf[64];
+        std::snprintf(fbuf, sizeof(fbuf), "%s", p->hier_filter);
+        if (dai_ui_input_text(p->ui, "Search", fbuf, sizeof(fbuf)))
+            std::snprintf(p->hier_filter, sizeof(p->hier_filter), "%s", fbuf);
+    }
     dai_ui_scroll_begin(p->ui, "hierarchy", h);
     p->reveal_row_wanted = p->reveal_selection;
 
@@ -2267,11 +2291,33 @@ static void hierarchy_body(dai_editor_ui *p, float h) {
         uint32_t n = dai_doc_count(d);
         std::vector<dai_node> all(n);
         if (n) dai_doc_nodes(d, all.data(), n);
-        for (dai_node id : all) {
-            dai_node_desc r{};
-            if (dai_doc_get(d, id, &r) != DAI_OK) continue;
-            if (r.parent != DAI_INVALID_NODE) continue;      // roots drive the recursion
-            draw_subtree(p, d, id, have_root ? 1 : 0);
+        if (p->hier_filter[0]) {
+            // While filtering the tree is FLAT. A match three levels down is
+            // a match; making you open its two parents to see it is the thing
+            // you opened the search box to avoid. Case insensitive, because
+            // nobody remembers whether they called it Player or player.
+            std::string needle;
+            for (const char *q = p->hier_filter; *q; ++q)
+                needle += (char)((*q >= 'A' && *q <= 'Z') ? *q + 32 : *q);
+            int shown = 0;
+            for (dai_node id : all) {
+                dai_node_desc r{};
+                if (dai_doc_get(d, id, &r) != DAI_OK) continue;
+                std::string hay;
+                for (const char *q = r.name; *q; ++q)
+                    hay += (char)((*q >= 'A' && *q <= 'Z') ? *q + 32 : *q);
+                if (hay.find(needle) == std::string::npos) continue;
+                draw_subtree_row_only(p, d, id);
+                ++shown;
+            }
+            if (!shown) dai_ui_label(p->ui, "nothing matches");
+        } else {
+            for (dai_node id : all) {
+                dai_node_desc r{};
+                if (dai_doc_get(d, id, &r) != DAI_OK) continue;
+                if (r.parent != DAI_INVALID_NODE) continue;  // roots drive the recursion
+                draw_subtree(p, d, id, have_root ? 1 : 0);
+            }
         }
     }
     p->reveal_selection = 0;
