@@ -68,6 +68,11 @@ DAI_API int dai_hud_pick(float mx, float my, dai_node *out);
  * would go off every time you tried to move it. */
 DAI_API void dai_hud_interactive(int on);
 
+/* Marks the draw whose rectangles may be EDITED - the Scene view's copy. The
+ * Game view is what the player sees; grips there would let you resize the
+ * picture the game is showing. */
+DAI_API void dai_hud_editable(int on);
+
 /* Resolves {name} inside a HUD label against the script on node `n`. Write
  * the value into `out` and return 1; return 0 for a name you do not know and
  * the placeholder is left on screen, which is what the editor wants. */

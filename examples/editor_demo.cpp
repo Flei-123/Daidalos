@@ -4035,8 +4035,11 @@ int main(int argc, char **argv) {
             // you place by trial and error - which is what it was. Drawn
             // FIRST, so dai_hud_rect_of finds the scene copy and the move and
             // resize grips appear where the editing happens.
-            if (dai_editor_ui_view(panels) == DAI_VIEW_SCENE && vw2 > 0.0f && vh2 > 0.0f)
+            if (dai_editor_ui_view(panels) == DAI_VIEW_SCENE && vw2 > 0.0f && vh2 > 0.0f) {
+                dai_hud_editable(1);
                 dai_hud_draw(ui, doc, vx2, vy2, vw2, vh2, 1.0f, hud_resolve, nullptr);
+                dai_hud_editable(0);
+            }
 
             if (has_game) {
                 // Buttons answer the pointer HERE and only here: this is the

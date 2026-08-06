@@ -203,7 +203,9 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
               uint32_t *out_w, uint32_t *out_h, char *err, size_t err_len) {
     auto fail = [&](const char *m) { if (err && err_len) std::snprintf(err, err_len, "%s", m); return false; };
     static const uint8_t SIG[8] = { 0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A };
-    if (size < 8 || std::memcmp(file, SIG, 8) != 0) return fail("not a PNG");
+    if (size >= 3 && file[0] == 0xFF && file[1] == 0xD8 && file[2] == 0xFF)
+        return fail("this is a JPEG and only PNG is decoded - save it as .png");
+    if (size < 8 || std::memcmp(file, SIG, 8) != 0) return fail("not a PNG file");
 
     uint32_t w = 0, h = 0;
     int depth = 0, color = 0, interlace = 0;

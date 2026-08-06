@@ -1194,7 +1194,10 @@ int dai_editor_ui_clipboard_has(const dai_editor_ui *p) { return p && p->clipboa
 // rectangles in two places. Without it the editor found whichever came first
 // and the other one could not be selected or resized at all.
 enum { HUD_KIND_IMAGE = 0, HUD_KIND_TEXT = 1 };
-struct HudRect { dai_node n; int kind; float x, y, w, h; };
+// `editable` marks the copy drawn over the SCENE view. The Game view is what
+// the player sees - resize grips have no business there, and they showed up
+// because both draws land in the same list and nothing told them apart.
+struct HudRect { dai_node n; int kind; int editable; float x, y, w, h; };
 static std::vector<HudRect> g_hud_rects;
 static std::vector<HudRect> g_hud_rects_prev;
 // The HUD is drawn more than once per frame now - once over the Scene view so
@@ -1203,6 +1206,9 @@ static std::vector<HudRect> g_hud_rects_prev;
 // list, or the second call throws the first one's rectangles away and half the
 // UI stops being clickable depending on which panel is open.
 static bool g_hud_frame_open = false;
+// Set by the host around the draw that is being EDITED (the Scene view's).
+static int g_hud_editable = 0;
+void dai_hud_editable(int on) { g_hud_editable = on ? 1 : 0; }
 
 void dai_hud_frame(void) { g_hud_frame_open = false; }
 
@@ -1212,6 +1218,7 @@ void dai_hud_frame(void) { g_hud_frame_open = false; }
 int dai_hud_pick(float mx, float my, dai_node *out) {
     for (size_t i = g_hud_rects_prev.size(); i-- > 0; ) {
         const HudRect &r = g_hud_rects_prev[i];
+        if (!r.editable) continue;
         if (r.w <= 0.0f || r.h <= 0.0f) continue;
         if (mx < r.x - 2.0f || mx >= r.x + r.w + 2.0f) continue;
         if (my < r.y - 2.0f || my >= r.y + r.h + 2.0f) continue;
@@ -1228,7 +1235,7 @@ int dai_hud_rect_nth(dai_node n, int index, int *kind,
                      float *x, float *y, float *w, float *h) {
     int seen = 0;
     for (const HudRect &r : g_hud_rects_prev) {
-        if (r.n != n) continue;
+        if (r.n != n || !r.editable) continue;
         if (seen++ != index) continue;
         if (kind) *kind = r.kind;
         if (x) *x = r.x;
@@ -1242,7 +1249,7 @@ int dai_hud_rect_nth(dai_node n, int index, int *kind,
 
 int dai_hud_rect_of(dai_node n, float *x, float *y, float *w, float *h) {
     for (const HudRect &r : g_hud_rects_prev) {
-        if (r.n != n) continue;
+        if (r.n != n || !r.editable) continue;
         if (x) *x = r.x;
         if (y) *y = r.y;
         if (w) *w = r.w;
@@ -1571,7 +1578,7 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
                 }
                 // Registered either way: an element you cannot select is an
                 // element you cannot fix.
-                g_hud_rects.push_back(HudRect{ ids[i], HUD_KIND_IMAGE, ix, iy, dw, dh });
+                g_hud_rects.push_back(HudRect{ ids[i], HUD_KIND_IMAGE, g_hud_editable, ix, iy, dw, dh });
             }
         }
 
@@ -1667,7 +1674,7 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
             col32 = 0xFF000000u | (ch(r.text_color.z) << 16) | (ch(r.text_color.y) << 8) | ch(r.text_color.x);
         }
 
-        g_hud_rects.push_back(HudRect{ ids[i], HUD_KIND_TEXT, bx, by, widest, block_h });
+        g_hud_rects.push_back(HudRect{ ids[i], HUD_KIND_TEXT, g_hud_editable, bx, by, widest, block_h });
         // A label with no background is still a button; the words ARE the
         // rectangle. Only worked out here when the Image did not already do it.
         if (r.button_on && !r.disabled) {
