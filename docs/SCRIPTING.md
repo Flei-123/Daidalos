@@ -250,3 +250,46 @@ behaviour built with one compiler cannot crash an editor built with another.
 
 **A C++ behaviour needs a C++ compiler on PATH** (g++ or clang++). The Console
 says so if there is none. The `.js` behaviours need nothing.
+
+## UI buttons
+
+A Button is not a fourth way to draw a rectangle. It is the **Image** (its
+background) and the **Text** (its label) on the same node, plus the one thing
+neither has: a reaction. Add *Button (UI)* to a node that has either.
+
+It brightens under the pointer, darkens while held, and fires when the button
+is let go **inside** it - let go somewhere else and nothing happens, which is
+the only way out of a click you did not mean.
+
+```js
+// on the button's own script
+function onClick() {
+    print("start pressed");
+}
+```
+
+`On click` in the inspector names a different function if `onClick` is taken.
+The call goes to the script **on that node** - a button press is a message to
+an object, not an announcement to the whole game.
+
+Buttons only answer the pointer in the **Game** view and only while playing.
+The copy drawn over the Scene view is for placing them; one that fired there
+would go off every time you dragged it.
+
+## Rich text
+
+The Text component takes HTML-style tags, Unity's spelling:
+
+```
+<b>bold</b>  <u>underlined</u>  <s>struck out</s>
+<color=#ff3355>red</color>  <color=orange>named</color>
+two<br>lines
+```
+
+Anything that is not a known tag stays exactly as typed: `<3` is a heart and
+`a < b` is a comparison.
+
+There is no `<i>`. Slanting a glyph needs a slanted glyph and the atlas holds
+one shape per character - put an italic `.ttf` in the Text component's **Font**
+field instead. Bold is drawn out of the one face by striking it twice, a hair
+apart; it is not a real bold cut and does not pretend to be one.

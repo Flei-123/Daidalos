@@ -2446,6 +2446,11 @@ const AcEntry AC_JS[] = {
     { "print(",            "one line into the Console" },
     { "state.dt",          "seconds this frame" },
     { "self",              "the node this script is on" },
+    { "self.transform.position", "[x, y, z] of this node" },
+    { "self.transform.yaw", "degrees around Y" },
+    { "self.velocity",     "[x, y, z] - read and write" },
+    { "self.grounded",     "standing on something?" },
+    { "self.text",         "write: the Text component" },
     { "params",            "what the inspector stored" },
     { "function init() {", "runs once at Play" },
     { "function frame() {","runs every frame" },
@@ -2478,6 +2483,45 @@ const AcEntry AC_CPP[] = {
     { "DAI_KEY_UP",     nullptr },
     { "DAI_KEY_DOWN",   nullptr },
 };
+
+// What a NODE has, spelled the way the object model spells it (see the
+// prelude in editor_demo.cpp). Offered after any dotted root that is not one
+// of the API globals: `self.` is the common case, `player.transform.` is the
+// same thing one level in, and both are the same kind of thing.
+//
+// This is why "self" completed and "self.transform" did not: the table only
+// ever held whole names, and nothing in it began with "self.".
+const AcEntry AC_NODE[] = {
+    { "transform.position",   "[x, y, z] - and .x .y .z" },
+    { "transform.position.x", "one axis; y and z stay" },
+    { "transform.position.y", "one axis; x and z stay" },
+    { "transform.position.z", "one axis; x and y stay" },
+    { "transform.rotation",   "quaternion [x, y, z, w]" },
+    { "transform.yaw",        "degrees around Y" },
+    { "position",             "short for transform.position" },
+    { "velocity",             "[x, y, z] - read and write" },
+    { "grounded",             "standing on something?" },
+    { "text",                 "write: the Text component" },
+    { "impulse(",             "x, y, z - one push" },
+    { "setVelocity(",         "x, y, z" },
+    { "isValid()",            "does this node still exist?" },
+    { "id",                   "the node's number" },
+};
+
+// The globals that are NOT nodes. Offering `Math.transform.position` would be
+// noise, and noise in a completion list is what makes people turn it off.
+bool ac_root_is_api(const std::string &r) {
+    static const char *const API[] = { "input", "body", "node", "scene", "gui",
+                                       "state", "params", "Math", "JSON",
+                                       "console", "ui", "Object", "Array" };
+    for (const char *a : API) if (r == a) return true;
+    return false;
+}
+
+// One offered completion: the text that gets inserted plus its hint. A string
+// and not a table pointer, because a member completion is BUILT ("self" + "."
+// + "transform.position") and does not exist in any table.
+struct AcHit { std::string text; const char *hint; };
 
 // Every identifier already in the file, so a variable you declared three
 // lines up can be completed too. Cheap enough at every keystroke: a behaviour
@@ -2898,20 +2942,34 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
         std::string prefix(buf + a, buf + st->caret);
         // A dotted call is one word for this purpose: typing "input.k" should
         // offer input.key, and the dot is not a word character.
-        int dotted = a;
-        if (dotted > 0 && buf[dotted - 1] == '.') {
-            int b = dotted - 1;
-            while (b > 0 && code_is_word(buf[b - 1])) --b;
-            prefix = std::string(buf + b, buf + st->caret);
-            a = b;
-        } else if (dotted > 1 && buf[dotted - 1] == '>' && buf[dotted - 2] == '-') {
-            int b = dotted - 2;
-            while (b > 0 && code_is_word(buf[b - 1])) --b;
-            prefix = std::string(buf + b, buf + st->caret);
-            a = b;
+        // Walk back over EVERY `word.` in front of the caret, not just one:
+        // `self.transform.pos` has to be matched whole. Stopping after the
+        // first dot is why typing `self.` offered nothing - the prefix became
+        // "self." and no entry in the table ever started with that, and
+        // `self.transform.` became "transform." which matched nothing either.
+        while (true) {
+            if (a > 0 && buf[a - 1] == '.') {
+                int b = a - 1;
+                while (b > 0 && code_is_word(buf[b - 1])) --b;
+                if (b == a - 1) break;                  // a lone dot, not a chain
+                a = b;
+            } else if (a > 1 && buf[a - 1] == '>' && buf[a - 2] == '-') {
+                int b = a - 2;
+                while (b > 0 && code_is_word(buf[b - 1])) --b;
+                if (b == a - 2) break;
+                a = b;
+            } else {
+                break;
+            }
+        }
+        prefix = std::string(buf + a, buf + st->caret);
+        // 1.5 is a number, not a chain, and must not complete to anything.
+        if (!prefix.empty() && prefix[0] >= '0' && prefix[0] <= '9') {
+            a = st->caret;
+            prefix.clear();
         }
 
-        std::vector<const AcEntry *> hits;
+        std::vector<AcHit> hits;
         std::vector<std::string> words;
         if (st->focused && prefix.size() >= 2) {
             const AcEntry *table = lang == DAI_CODE_LANG_CPP ? AC_CPP : AC_JS;
@@ -2920,7 +2978,24 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
                          : sizeof(AC_JS) / sizeof(AC_JS[0]);
             for (size_t i = 0; i < count; ++i)
                 if (std::strncmp(table[i].text, prefix.c_str(), prefix.size()) == 0)
-                    hits.push_back(&table[i]);
+                    hits.push_back(AcHit{ table[i].text, table[i].hint });
+            // Members of whatever is left of the first dot. No types are
+            // known here and none are guessed: it is a list of names, and a
+            // name that does not apply is one Escape away.
+            size_t dot = prefix.find('.');
+            if (lang != DAI_CODE_LANG_CPP && dot != std::string::npos) {
+                std::string root = prefix.substr(0, dot);
+                std::string rest = prefix.substr(dot + 1);
+                if (!root.empty() && !ac_root_is_api(root)) {
+                    for (const AcEntry &e : AC_NODE) {
+                        if (std::strncmp(e.text, rest.c_str(), rest.size()) != 0) continue;
+                        std::string full = root + "." + e.text;
+                        bool dup = false;
+                        for (const AcHit &h : hits) if (h.text == full) { dup = true; break; }
+                        if (!dup) hits.push_back(AcHit{ full, e.hint });
+                    }
+                }
+            }
             ac_identifiers(buf, prefix, a, words);
         }
         int total = (int)hits.size() + (int)words.size();
@@ -2932,7 +3007,7 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
 
         if (total > 0 && ac_take) {
             const char *pick = st->ac_sel < (int)hits.size()
-                             ? hits[(size_t)st->ac_sel]->text
+                             ? hits[(size_t)st->ac_sel].text.c_str()
                              : words[(size_t)(st->ac_sel - (int)hits.size())].c_str();
             // Replace the typed prefix, do not append to it.
             int plen = st->caret - a;
@@ -2965,9 +3040,9 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
             }
             const float RH = dai_font_line_height(ui->font) + 4.0f;
             float lw = 180.0f;
-            for (const AcEntry *e : hits) {
-                float tw2 = dai_ui_text_width(ui, e->text) +
-                            (e->hint ? dai_ui_text_width(ui, e->hint) + 24.0f : 0.0f) + 24.0f;
+            for (const AcHit &e : hits) {
+                float tw2 = dai_ui_text_width(ui, e.text.c_str()) +
+                            (e.hint ? dai_ui_text_width(ui, e.hint) + 24.0f : 0.0f) + 24.0f;
                 if (tw2 > lw) lw = tw2;
             }
             if (lw > w - 20.0f) lw = w - 20.0f;
@@ -2986,9 +3061,9 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
                 float ry = ly + 2.0f + RH * (float)i;
                 bool on = i == st->ac_sel;
                 if (on) dai_ui_rect(ui, lx + 1.0f, ry, lw - 2.0f, RH, sty->button_active);
-                const char *label = i < (int)hits.size() ? hits[(size_t)i]->text
+                const char *label = i < (int)hits.size() ? hits[(size_t)i].text.c_str()
                                                          : words[(size_t)(i - (int)hits.size())].c_str();
-                const char *hint = i < (int)hits.size() ? hits[(size_t)i]->hint : "in this file";
+                const char *hint = i < (int)hits.size() ? hits[(size_t)i].hint : "in this file";
                 dai_ui_text(ui, lx + 8.0f, ry + 2.0f, label, on ? 0xFFFFFFFFu : sty->text);
                 if (hint) {
                     float hw2 = dai_ui_text_width(ui, hint);

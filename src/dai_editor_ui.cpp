@@ -130,6 +130,7 @@ struct dai_editor_ui {
     // cannot be derived from the document - the same reason the hierarchy's
     // folds live here.
     int fold_transform = 1, fold_body = 1, fold_collider = 1, fold_render = 1;
+    int fold_button = 1;
     std::vector<int> fold_scripts;   // one fold per attached script (Unity: each is its own component)
     char     script_buf[512] = { 0 };   // a full script list fits, not one path
     dai_node script_buf_node = DAI_INVALID_NODE;
@@ -388,7 +389,7 @@ struct dai_editor_ui {
     dai_node    mat_menu_node = DAI_INVALID_NODE;
     int         mat_menu_slot = 0;
     dai_ui_popup menu_comp{};         // right click on a component header
-    int  comp_menu_target = -1;       // 0 transform 1 rigidbody 2 collider 3 camera 4 light 5 sprite 6 audio 7 text
+    int  comp_menu_target = -1;       // 0 transform 1 rigidbody 2 collider 3 camera 4 light 5 sprite 6 audio 7 text 8 image 9 button
     dai_ui_popup menu_window{};       // the Window menu: bring a panel back
     char clipboard[4096] = { 0 };     // objects, fields, console lines, free text
     unsigned clip_rev = 0;            // bumped on every set - the host mirrors
@@ -1192,6 +1193,29 @@ int dai_editor_ui_clipboard_has(const dai_editor_ui *p) { return p && p->clipboa
 struct HudRect { dai_node n; float x, y, w, h; };
 static std::vector<HudRect> g_hud_rects;
 static std::vector<HudRect> g_hud_rects_prev;
+// The HUD is drawn more than once per frame now - once over the Scene view so
+// it can be edited where the rest of the scene is edited, once into the Game
+// view because that is what the player sees. Both have to end up in the SAME
+// list, or the second call throws the first one's rectangles away and half the
+// UI stops being clickable depending on which panel is open.
+static bool g_hud_frame_open = false;
+
+void dai_hud_frame(void) { g_hud_frame_open = false; }
+
+// What is under the pointer, topmost first: a later node draws over an earlier
+// one, so the search runs backwards. Uses the PREVIOUS frame's rectangles -
+// the current frame's are still being built when input is read.
+int dai_hud_pick(float mx, float my, dai_node *out) {
+    for (size_t i = g_hud_rects_prev.size(); i-- > 0; ) {
+        const HudRect &r = g_hud_rects_prev[i];
+        if (r.w <= 0.0f || r.h <= 0.0f) continue;
+        if (mx < r.x - 2.0f || mx >= r.x + r.w + 2.0f) continue;
+        if (my < r.y - 2.0f || my >= r.y + r.h + 2.0f) continue;
+        if (out) *out = r.n;
+        return 1;
+    }
+    return 0;
+}
 
 int dai_hud_rect_of(dai_node n, float *x, float *y, float *w, float *h) {
     for (const HudRect &r : g_hud_rects_prev) {
@@ -1205,10 +1229,185 @@ int dai_hud_rect_of(dai_node n, float *x, float *y, float *w, float *h) {
     return 0;
 }
 
+// ---- buttons ---------------------------------------------------------
+// Only ON while the game view is being drawn during Play. The same HUD is
+// drawn a second time over the Scene view for editing, and a button that
+// answered the pointer there would fire every time you tried to move it.
+static int   g_hud_interactive = 0;
+static dai_node g_hud_held = DAI_INVALID_NODE;
+static std::vector<dai_node> g_hud_clicks;
+
+void dai_hud_interactive(int on) { g_hud_interactive = on ? 1 : 0; }
+
+uint32_t dai_hud_take_clicks(dai_node *out, uint32_t max) {
+    uint32_t n = (uint32_t)g_hud_clicks.size();
+    if (n > max) n = max;
+    if (out) for (uint32_t i = 0; i < n; ++i) out[i] = g_hud_clicks[i];
+    g_hud_clicks.clear();
+    return n;
+}
+
+static uint32_t hud_rgb_of(const dai_vec3 &v) {
+    auto ch = [](float x) -> uint32_t {
+        float c = x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x);
+        return (uint32_t)(c * 255.0f + 0.5f);
+    };
+    return 0xFF000000u | (ch(v.z) << 16) | (ch(v.y) << 8) | ch(v.x);
+}
+static uint32_t hud_tint_mul(uint32_t c, float f) {
+    auto ch = [&](int sh) -> uint32_t {
+        float v = (float)((c >> sh) & 0xFFu) * f;
+        if (v > 255.0f) v = 255.0f;
+        if (v < 0.0f) v = 0.0f;
+        return (uint32_t)(v + 0.5f) << sh;
+    };
+    return (c & 0xFF000000u) | ch(0) | ch(8) | ch(16);
+}
+// 0 idle, 1 hovered, 2 held. Registers the click on RELEASE INSIDE - letting
+// go somewhere else is a cancelled click, and that is not a detail: it is the
+// only way out once a button has been pressed by accident.
+static int hud_button_state(dai_ui *ui, dai_node id,
+                            float bx, float by, float bw, float bh) {
+    if (!g_hud_interactive) return 0;
+    float mx = 0.0f, my = 0.0f;
+    int down = 0, press = 0;
+    dai_ui_mouse(ui, &mx, &my, &down, &press);
+    bool over = mx >= bx && mx < bx + bw && my >= by && my < by + bh;
+    if (press && over) g_hud_held = id;
+    if (!down && g_hud_held == id) {
+        if (over) g_hud_clicks.push_back(id);
+        g_hud_held = DAI_INVALID_NODE;
+    }
+    if (!over) return 0;
+    return (down && g_hud_held == id) ? 2 : 1;
+}
+// The tint a button wants, given the one it would have had. Without colours of
+// its own it brightens under the pointer and darkens while held - what every
+// toolkit does, and what nobody has to be told.
+static uint32_t hud_button_tint(const dai_node_desc &r, int state, uint32_t base) {
+    if (state == 1) {
+        if (r.button_hover.x || r.button_hover.y || r.button_hover.z)
+            return hud_rgb_of(r.button_hover);
+        return hud_tint_mul(base, 1.18f);
+    }
+    if (state == 2) {
+        if (r.button_press.x || r.button_press.y || r.button_press.z)
+            return hud_rgb_of(r.button_press);
+        return hud_tint_mul(base, 0.78f);
+    }
+    return base;
+}
+
 static dai_hud_image_fn g_hud_image = nullptr;
 static void            *g_hud_image_user = nullptr;
 void dai_hud_images(dai_hud_image_fn fn, void *user) {
     g_hud_image = fn; g_hud_image_user = user;
+}
+
+// ---- rich text -------------------------------------------------------
+// The spelling people already type, Unity's: <b>, <u>, <s>, <color=#RRGGBB>
+// and <br>. Anything that is not one of those is left EXACTLY as it was
+// typed - "<3" is a heart, "a < b" is a comparison, and a parser that eats
+// them is a parser people switch off.
+//
+// There is no <i>. Slanting a glyph needs a slanted glyph and the atlas holds
+// one shape per character; the honest answer is an italic .ttf in the Font
+// field. <i> is accepted and does nothing rather than silently printing
+// "<i>" in the middle of a sentence.
+enum { HUD_B = 1, HUD_U = 2, HUD_S = 4 };
+struct HudStyle { uint8_t f; uint32_t col; };   // col 0 = the label's own
+
+// #RGB, #RRGGBB, #RRGGBBAA or one of the names everybody tries first.
+// 0 means "not a colour" - the label's own is kept.
+static uint32_t hud_parse_col(const char *v) {
+    while (*v == ' ' || *v == '"' || *v == '\'') ++v;
+    if (*v == '#') {
+        ++v;
+        uint32_t val = 0;
+        int n = 0;
+        for (; n < 8; ++n) {
+            char c = v[n];
+            int d;
+            if (c >= '0' && c <= '9')      d = c - '0';
+            else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            else break;
+            val = (val << 4) | (uint32_t)d;
+        }
+        uint32_t r8 = 0, g8 = 0, b8 = 0, a8 = 255;
+        if (n == 3) {
+            r8 = ((val >> 8) & 0xF) * 17; g8 = ((val >> 4) & 0xF) * 17; b8 = (val & 0xF) * 17;
+        } else if (n == 6) {
+            r8 = (val >> 16) & 0xFF; g8 = (val >> 8) & 0xFF; b8 = val & 0xFF;
+        } else if (n == 8) {
+            r8 = (val >> 24) & 0xFF; g8 = (val >> 16) & 0xFF; b8 = (val >> 8) & 0xFF; a8 = val & 0xFF;
+        } else {
+            return 0;
+        }
+        return (a8 << 24) | (b8 << 16) | (g8 << 8) | r8;
+    }
+    struct Named { const char *name; uint32_t argb; };
+    static const Named NAMES[] = {
+        { "red", 0xFF0000FFu }, { "green", 0xFF00FF00u }, { "blue", 0xFFFF0000u },
+        { "white", 0xFFFFFFFFu }, { "black", 0xFF000000u }, { "yellow", 0xFF00FFFFu },
+        { "cyan", 0xFFFFFF00u }, { "magenta", 0xFFFF00FFu }, { "orange", 0xFF00A5FFu },
+        { "grey", 0xFF808080u }, { "gray", 0xFF808080u },
+    };
+    for (const Named &nm : NAMES) {
+        size_t l = std::strlen(nm.name);
+        if (std::strncmp(v, nm.name, l) == 0 && (v[l] == 0 || v[l] == ' ' || v[l] == '"'))
+            return nm.argb;
+    }
+    return 0;
+}
+
+// The words with the tags taken out, plus one style per remaining character.
+// Per CHARACTER and not per run, because the wrap happens afterwards and a
+// run that a line break falls inside has to survive being cut in two.
+static void hud_rich(const char *src, std::string &plain, std::vector<HudStyle> &out) {
+    plain.clear();
+    out.clear();
+    uint8_t f = 0;
+    uint32_t col = 0;
+    std::vector<uint32_t> stack;
+    for (size_t i = 0; src[i]; ) {
+        if (src[i] == '<') {
+            size_t j = i + 1;
+            while (src[j] && src[j] != '>' && j - i < 48) ++j;
+            if (src[j] == '>') {
+                std::string low;
+                for (size_t q = i + 1; q < j; ++q) {
+                    char c = src[q];
+                    low += (char)((c >= 'A' && c <= 'Z') ? c + 32 : c);
+                }
+                bool known = true;
+                if      (low == "b")  f |= HUD_B;
+                else if (low == "/b") f = (uint8_t)(f & ~HUD_B);
+                else if (low == "u")  f |= HUD_U;
+                else if (low == "/u") f = (uint8_t)(f & ~HUD_U);
+                else if (low == "s" || low == "strike")   f |= HUD_S;
+                else if (low == "/s" || low == "/strike") f = (uint8_t)(f & ~HUD_S);
+                else if (low == "i" || low == "/i" || low == "em" || low == "/em") { }
+                else if (low == "br" || low == "br/" || low == "/br") {
+                    plain += '\n';
+                    out.push_back(HudStyle{ f, col });
+                } else if (low.compare(0, 6, "color=") == 0) {
+                    uint32_t c = hud_parse_col(low.c_str() + 6);
+                    if (c) { stack.push_back(col); col = c; }
+                    else known = false;
+                } else if (low == "/color") {
+                    if (!stack.empty()) { col = stack.back(); stack.pop_back(); }
+                    else col = 0;
+                } else {
+                    known = false;
+                }
+                if (known) { i = j + 1; continue; }
+            }
+        }
+        plain += src[i];
+        out.push_back(HudStyle{ f, col });
+        ++i;
+    }
 }
 
 // Breaks `text` into lines that fit `maxw` at scale `k`. maxw <= 0 means "do
@@ -1255,13 +1454,20 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
     uint32_t n = ids.empty() ? 0 : dai_doc_nodes(doc, ids.data(), (uint32_t)ids.size());
     if (!n) return;
 
-    g_hud_rects_prev.swap(g_hud_rects);
-    g_hud_rects.clear();
+    if (!g_hud_frame_open) {
+        g_hud_rects_prev.swap(g_hud_rects);
+        g_hud_rects.clear();
+        g_hud_frame_open = true;
+    }
 
     dai_ui_clip_begin(ui, x, y, w, h);
     for (uint32_t i = 0; i < n; ++i) {
         dai_node_desc r{};
         if (dai_doc_get(doc, ids[i], &r) != DAI_OK) continue;
+        // Worked out at the Image and reused by the Text, so a button with a
+        // background AND a label reacts as ONE thing: both tint together, and
+        // the rectangle that answers the pointer is the background's.
+        int btn = 0;
         // `disabled` is the OBJECT: off means off, label included.
         // ---- Image ---------------------------------------------------------
         // Drawn before the text of the same frame, so a label on a panel is a
@@ -1288,6 +1494,10 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
                     tint = 0xFF000000u | (ch(r.image_color.z) << 16) |
                            (ch(r.image_color.y) << 8) | ch(r.image_color.x);
                 }
+                if (r.button_on && !r.disabled) {
+                    btn = hud_button_state(ui, ids[i], ix, iy, dw, dh);
+                    tint = hud_button_tint(r, btn, tint);
+                }
                 dai_ui_image_at(ui, tex, ix, iy, dw, dh, 0, 0, 1, 1, tint);
                 g_hud_rects.push_back(HudRect{ ids[i], ix, iy, dw, dh });
             }
@@ -1310,6 +1520,15 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
         }
         if (!txt || !txt[0]) continue;
 
+        // Tags out, styles kept. Everything below works on the WORDS - the
+        // wrap, the widths, the autosize - because "<b>" is not two
+        // characters wide on screen and a layout that measures it is wrong by
+        // exactly the length of the markup.
+        std::string plain;
+        std::vector<HudStyle> rich;
+        hud_rich(txt, plain, rich);
+        if (plain.empty()) continue;
+
         float px = r.text_size > 0.0f ? r.text_size : 24.0f;
         // The atlas is one size; a label asks for another. dai_ui_text_scaled
         // draws at the ratio, which is what makes a 48 px title possible
@@ -1324,7 +1543,7 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
         std::vector<std::string> lines;
         float lh = 0.0f, block_h = 0.0f, widest = 0.0f;
         for (int attempt = 0; attempt < 40; ++attempt) {
-            hud_wrap(ui, txt, boxw > 0.0f ? boxw : 0.0f, k, lines);
+            hud_wrap(ui, plain, boxw > 0.0f ? boxw : 0.0f, k, lines);
             lh = dai_ui_text_height(ui) * k * 1.25f;
             block_h = lh * (float)lines.size();
             widest = 0.0f;
@@ -1368,17 +1587,61 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
         }
 
         g_hud_rects.push_back(HudRect{ ids[i], bx, by, widest, block_h });
+        // A label with no background is still a button; the words ARE the
+        // rectangle. Only worked out here when the Image did not already do it.
+        if (r.button_on && !r.disabled) {
+            if (!r.image_on || !r.image[0])
+                btn = hud_button_state(ui, ids[i], bx, by, widest, block_h);
+            col32 = hud_button_tint(r, btn, col32);
+        }
+        // Where each wrapped line sits in the unwrapped words, so a line
+        // knows which styles are its own. Searched forward rather than
+        // counted: the wrap drops the space it broke at, and counting would
+        // drift by one character per line for the rest of the paragraph.
+        size_t cur = 0;
         for (size_t li = 0; li < lines.size(); ++li) {
+            const std::string &ln = lines[li];
+            size_t at = plain.find(ln, cur);
+            if (at == std::string::npos) at = cur;
+            cur = at + ln.size();
+
             // Centre and right anchors centre EACH line inside the block, so
             // a two line centred title looks centred rather than ragged.
-            float lw = dai_ui_text_width(ui, lines[li].c_str()) * k;
+            float lw = dai_ui_text_width(ui, ln.c_str()) * k;
             float lx = bx + (widest - lw) * (col * 0.5f);
             float ly = by + lh * (float)li;
-            // A one pixel shadow. Not decoration: white text on a bright sky
-            // is unreadable, and every game HUD in existence does this.
-            dai_ui_text_scaled(ui, lx + 1.0f * scale, ly + 1.0f * scale, lines[li].c_str(),
-                               0xB0000000u, k);
-            dai_ui_text_scaled(ui, lx, ly, lines[li].c_str(), col32, k);
+            float th = dai_ui_text_height(ui) * k;
+            float rule = th * 0.075f < 1.0f ? 1.0f : th * 0.075f;
+
+            // Runs of one style. Plain text is ONE run, so the common case is
+            // the same two draws it always was.
+            size_t s0 = 0;
+            float rx = lx;
+            while (s0 < ln.size()) {
+                HudStyle sy = at + s0 < rich.size() ? rich[at + s0] : HudStyle{ 0, 0 };
+                size_t s1 = s0 + 1;
+                while (s1 < ln.size()) {
+                    HudStyle s2 = at + s1 < rich.size() ? rich[at + s1] : HudStyle{ 0, 0 };
+                    if (s2.f != sy.f || s2.col != sy.col) break;
+                    ++s1;
+                }
+                std::string run = ln.substr(s0, s1 - s0);
+                float rw = dai_ui_text_width(ui, run.c_str()) * k;
+                uint32_t rc = sy.col ? sy.col : col32;
+                // A one pixel shadow. Not decoration: white text on a bright
+                // sky is unreadable, and every game HUD in existence does this.
+                dai_ui_text_scaled(ui, rx + 1.0f * scale, ly + 1.0f * scale, run.c_str(),
+                                   0xB0000000u, k);
+                dai_ui_text_scaled(ui, rx, ly, run.c_str(), rc, k);
+                // Bold out of one face: the same run again, a hair to the
+                // right. Not a real bold cut and it does not pretend to be
+                // one - it is what a single atlas can honestly do.
+                if (sy.f & HUD_B) dai_ui_text_scaled(ui, rx + 0.9f, ly, run.c_str(), rc, k);
+                if (sy.f & HUD_U) dai_ui_rect(ui, rx, ly + th * 0.98f, rw, rule, rc);
+                if (sy.f & HUD_S) dai_ui_rect(ui, rx, ly + th * 0.55f, rw, rule, rc);
+                rx += rw;
+                s0 = s1;
+            }
         }
     }
     dai_ui_clip_end(ui);
@@ -2354,22 +2617,6 @@ static void inspector_body(dai_editor_ui *p) {
         dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
         dai_ui_popup_open(&p->menu_comp, cmx, cmy);
     }
-    {
-        float mx = 0, my = 0;
-        dai_ui_mouse(p->ui, &mx, &my, nullptr, nullptr);
-        // header rows are full width; a right click over them while this
-        // section is open is ours.
-        if (dai_ui_right_pressed(p->ui) && dai_editor_selection_count(p->ed) > 0) {
-            char line[384];
-            std::snprintf(line, sizeof(line), "%s pos=%.3f,%.3f,%.3f rot=%.4f,%.4f,%.4f,%.4f scale=%.3f,%.3f,%.3f",
-                          r.name[0] ? r.name : "node",
-                          (double)r.position.x, (double)r.position.y, (double)r.position.z,
-                          (double)r.rotation.x, (double)r.rotation.y, (double)r.rotation.z, (double)r.rotation.w,
-                          (double)r.scale.x, (double)r.scale.y, (double)r.scale.z);
-            dai_editor_ui_clipboard_set(p, 0, line);
-            dai_editor_ui_toast(p, "transform copied", 1.5f);
-        }
-    }
     if (p->fold_transform) {
         // While playing the document still holds the pose from before play -
         // that is exactly what makes Stop able to restore it - so a panel that
@@ -2578,6 +2825,51 @@ static void inspector_body(dai_editor_ui *p) {
             dai_ui_num_field(p->ui, "Bounce", &r.restitution, 0.005f, 0.0f, 1.0f, "bounce");
             dai_ui_help(p->ui, "Restitution 0..1. 0 = stays put, 0.8 = basketball, "
                                "1 = keeps all its energy.");
+
+            // ---- Constraints ------------------------------------------
+            // Unity's, and in Unity's PLACE: a foldout inside the Rigidbody,
+            // not a block of its own. Freezing an axis is a property of the
+            // BODY - a heading of its own made it read as one more component
+            // to add, and it appeared under objects whose Rigidbody was
+            // three sections further up.
+            //
+            // Frozen means the SOLVER may not move it; a script setting the
+            // transform still can.
+            if (r.motion == DAI_DYNAMIC) {
+                dai_ui_spacing(p->ui, 2.0f);
+                dai_ui_header(p->ui, "Constraints", &p->fold_freeze, nullptr);
+                if (!p->fold_freeze) {
+                    struct Bit { const char *label; uint32_t bit; };
+                    static const Bit POS[3] = { { "X##fpx", DAI_FREEZE_POS_X },
+                                                { "Y##fpy", DAI_FREEZE_POS_Y },
+                                                { "Z##fpz", DAI_FREEZE_POS_Z } };
+                    static const Bit ROT[3] = { { "X##frx", DAI_FREEZE_ROT_X },
+                                                { "Y##fry", DAI_FREEZE_ROT_Y },
+                                                { "Z##frz", DAI_FREEZE_ROT_Z } };
+                    dai_ui_row(p->ui, 0.0f);
+                    dai_ui_label(p->ui, "Freeze Position");
+                    for (const Bit &b : POS) {
+                        int fon = (r.freeze & b.bit) != 0;
+                        if (dai_ui_checkbox(p->ui, b.label, &fon))
+                            r.freeze = fon ? (r.freeze | b.bit) : (r.freeze & ~b.bit);
+                    }
+                    dai_ui_row_end(p->ui);
+                    dai_ui_row(p->ui, 0.0f);
+                    dai_ui_label(p->ui, "Freeze Rotation");
+                    for (const Bit &b : ROT) {
+                        int fon = (r.freeze & b.bit) != 0;
+                        if (dai_ui_checkbox(p->ui, b.label, &fon))
+                            r.freeze = fon ? (r.freeze | b.bit) : (r.freeze & ~b.bit);
+                    }
+                    dai_ui_row_end(p->ui);
+                    // The two combinations anyone actually types out by hand.
+                    dai_ui_row(p->ui, 0.0f);
+                    if (dai_ui_button_fit(p->ui, "Upright")) r.freeze |= DAI_FREEZE_UPRIGHT;
+                    if (dai_ui_button_fit(p->ui, "2D plane")) r.freeze |= DAI_FREEZE_2D;
+                    dai_ui_row_end(p->ui);
+                    if (r.freeze && dai_ui_button_fit(p->ui, "Clear constraints")) r.freeze = 0;
+                }
+            }
         }
     }
 
@@ -2803,47 +3095,6 @@ static void inspector_body(dai_editor_ui *p) {
         }
     }
 
-    // ---- Constraints ---------------------------------------------------------
-    // Unity's, and for the same reason: a capsule that must not tip over is
-    // ONE bit here, and the alternative is a script fighting the solver with
-    // corrective torque every frame. Frozen means the SOLVER may not move it;
-    // a script setting the transform still can.
-    if (!r.no_rigidbody && !r.no_body && r.motion == DAI_DYNAMIC) {
-        dai_ui_spacing(p->ui, 2.0f);
-        dai_ui_header(p->ui, "Constraints", &p->fold_freeze, nullptr);
-        if (!p->fold_freeze) {
-            struct Bit { const char *label; uint32_t bit; };
-            static const Bit POS[3] = { { "X##fpx", DAI_FREEZE_POS_X },
-                                        { "Y##fpy", DAI_FREEZE_POS_Y },
-                                        { "Z##fpz", DAI_FREEZE_POS_Z } };
-            static const Bit ROT[3] = { { "X##frx", DAI_FREEZE_ROT_X },
-                                        { "Y##fry", DAI_FREEZE_ROT_Y },
-                                        { "Z##frz", DAI_FREEZE_ROT_Z } };
-            dai_ui_row(p->ui, 0.0f);
-            dai_ui_label(p->ui, "Freeze Position");
-            for (const Bit &b : POS) {
-                int on = (r.freeze & b.bit) != 0;
-                if (dai_ui_checkbox(p->ui, b.label, &on))
-                    r.freeze = on ? (r.freeze | b.bit) : (r.freeze & ~b.bit);
-            }
-            dai_ui_row_end(p->ui);
-            dai_ui_row(p->ui, 0.0f);
-            dai_ui_label(p->ui, "Freeze Rotation");
-            for (const Bit &b : ROT) {
-                int on = (r.freeze & b.bit) != 0;
-                if (dai_ui_checkbox(p->ui, b.label, &on))
-                    r.freeze = on ? (r.freeze | b.bit) : (r.freeze & ~b.bit);
-            }
-            dai_ui_row_end(p->ui);
-            // The two combinations anyone actually types out by hand.
-            dai_ui_row(p->ui, 0.0f);
-            if (dai_ui_button_fit(p->ui, "Upright")) r.freeze |= DAI_FREEZE_UPRIGHT;
-            if (dai_ui_button_fit(p->ui, "2D plane")) r.freeze |= DAI_FREEZE_2D;
-            dai_ui_row_end(p->ui);
-            if (r.freeze && dai_ui_button_fit(p->ui, "Clear constraints")) r.freeze = 0;
-        }
-    }
-
     // ---- Image (UI) ----------------------------------------------------------
     // The screen space picture: a panel, a heart, a crosshair. This is what
     // the old Sprite checkbox was meant to be - that one set a flag NOTHING
@@ -2897,6 +3148,50 @@ static void inspector_body(dai_editor_ui *p) {
         }
     }
 
+    // ---- Button (UI) --------------------------------------------------------
+    // Deliberately AFTER Image and before Text: it is the thing that makes
+    // those two answer the pointer, and reading the inspector top to bottom
+    // is then the same order as building one - a background, a reaction, a
+    // label.
+    if (r.button_on) {
+        int on = 1;
+        {
+            int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_SPRITE, rgba(0x7E, 0xD3, 0x9B, 255),
+                                             "Button (UI)", &p->fold_button, &on);
+            if (hrc == 2 && !on) r.button_on = 0;
+            else if (hrc == 3) {
+                p->comp_menu_target = 9;
+                float cmx = 0, cmy = 0;
+                dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
+                dai_ui_popup_open(&p->menu_comp, cmx, cmy);
+            }
+        }
+        if (p->fold_button && r.button_on) {
+            if (!r.image_on && !r.text_on)
+                dai_ui_label(p->ui, "add an Image or a Text - a button needs something to be");
+            {
+                char abuf[64];
+                std::snprintf(abuf, sizeof(abuf), "%s", r.button_action);
+                if (dai_ui_input_text(p->ui, "On click", abuf, sizeof(abuf)))
+                    std::snprintf(r.button_action, sizeof(r.button_action), "%s", abuf);
+            }
+            dai_ui_help(p->ui, "The function in this object's script. Empty = onClick().");
+            {
+                float hc[3] = { r.button_hover.x, r.button_hover.y, r.button_hover.z };
+                if (dai_ui_color(p->ui, "Hover", hc, "btnhov"))
+                    r.button_hover = dai_vec3{ hc[0], hc[1], hc[2] };
+            }
+            dai_ui_help(p->ui, "black = automatic: 18% brighter under the pointer.");
+            {
+                float pc[3] = { r.button_press.x, r.button_press.y, r.button_press.z };
+                if (dai_ui_color(p->ui, "Pressed", pc, "btnprs"))
+                    r.button_press = dai_vec3{ pc[0], pc[1], pc[2] };
+            }
+            dai_ui_help(p->ui, "black = automatic: 22% darker while held.");
+            dai_ui_label(p->ui, "fires on release INSIDE - let go outside cancels");
+        }
+    }
+
     // ---- Text ---------------------------------------------------------------
     // The game's own UI. Drawn on the picture, not in the world: a score
     // belongs to a corner of the screen, and a corner is where it has to stay
@@ -2921,6 +3216,10 @@ static void inspector_body(dai_editor_ui *p) {
                 std::snprintf(r.text, sizeof(r.text), "%s", tbuf);
             dai_ui_help(p->ui, "The words, or \"@key\" to look them up in the "
                                "project's string table");
+            dai_ui_label(p->ui, "markup: <b> <u> <s> <color=#ff0> <br>");
+            dai_ui_help(p->ui, "HTML-style tags, Unity's spelling. No <i>: an italic "
+                               "glyph needs an italic font - put one in Font below. "
+                               "Anything that is not a known tag stays as typed.");
             // What a PLAYER would see. A key on its own tells you the label
             // is localised; it does not tell you whether the table has it.
             if (r.text[0] == '@') {
@@ -4084,6 +4383,23 @@ int dai_editor_ui_viewport_input(dai_editor_ui *p, float mx, float my, int mouse
             p->viewport_dragging = dai_editor_dragging(p->ed) != 0;
             return 1;
         }
+        // A UI element drawn over the scene is a thing you can AIM at. Before
+        // this, the 3D pick ran first, found nothing behind the label - HUD
+        // nodes have no body - and cleared the selection. That is exactly the
+        // click you make to grab a panel and resize it, and it threw away the
+        // selection instead.
+        {
+            dai_node hn = DAI_INVALID_NODE;
+            if (dai_hud_pick(mx, my, &hn) && hn != DAI_INVALID_NODE) {
+                // Already selected: hands off. The move/resize grips take this
+                // same press, and re-selecting would cancel the drag.
+                if (dai_editor_selection_count(p->ed) > 0 &&
+                    dai_editor_selected(p->ed, 0) == hn)
+                    return 1;
+                dai_editor_select(p->ed, hn, 0);
+                return 1;
+            }
+        }
         dai_node hit = dai_editor_pick(p->ed, mx, my);
         dai_editor_select(p->ed, hit, 0);       // empty space clears the selection
         return 1;
@@ -4628,6 +4944,7 @@ static void run_context_menus(dai_editor_ui *p) {
             // for. Image (UI) is what it was trying to be.
             if (!ar2.text_on)     entries.push_back({ "Text (UI)", "Rendering", 7, "" });
             if (!ar2.image_on)    entries.push_back({ "Image (UI)", "Rendering", 8, "" });
+            if (!ar2.button_on)   entries.push_back({ "Button (UI)", "Rendering", 9, "" });
             if (!ar2.audio_event[0]) entries.push_back({ "Audio Source", "Audio", 5, "" });
             // NO "Remove X" entries. A menu called Add Component that offers
             // to remove things is a menu you have to read twice, and the
@@ -4707,6 +5024,15 @@ static void run_context_menus(dai_editor_ui *p) {
                 case 1: ar2.no_collider = 0; ar2.no_body = 0; break;
                 case 2: ar2.camera = 1; break;
                 case 3: ar2.light = 1; break;
+                case 9: ar2.button_on = 1;
+                        // A button with nothing to show is a button you cannot
+                        // find. Unity's Add > UI > Button does the same: it
+                        // arrives with a background and a label already on it.
+                        if (!ar2.image_on && !ar2.text_on) {
+                            ar2.text_on = 1;
+                            if (!ar2.text[0]) std::snprintf(ar2.text, sizeof(ar2.text), "Button");
+                        }
+                        break;
                 case 8: ar2.image_on = 1;
                         if (ar2.image_w <= 0.0f) { ar2.image_w = 128.0f; ar2.image_h = 128.0f; }
                         break;
@@ -5135,6 +5461,7 @@ static void run_context_menus(dai_editor_ui *p) {
                     else if (target == 5) ar.sprite = 0;
                     else if (target == 7) ar.text_on = 0;
                     else if (target == 8) ar.image_on = 0;
+                    else if (target == 9) ar.button_on = 0;
                     else if (target == 6) { ar.audio_event[0] = 0; ar.audio_autoplay = 0; ar.audio_bus = 0; }
                     ar.no_body = (ar.no_rigidbody && ar.no_collider) ? 1 : 0;
                     dai_doc_set(d, an, &ar);

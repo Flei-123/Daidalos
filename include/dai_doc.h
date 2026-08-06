@@ -159,6 +159,21 @@ typedef struct dai_node_desc {
     int      image_anchor;      /* same 3x3 grid as the text                 */
     float    image_x, image_y;
 
+    /* ---- Button: the Image/Text that answers the pointer ------------------
+     * A Button IS the Image (its background) and the Text (its label) on the
+     * same node, plus the one thing they lack: a reaction. It brightens under
+     * the pointer, darkens while held, and calls the node's script when it is
+     * let go INSIDE - let go outside is a cancelled click, which is what every
+     * toolkit does and what people do without thinking about it.
+     *
+     * `button_action` names the function to call; empty means `onClick`. The
+     * rectangle is the Image's when there is one, otherwise the text block's -
+     * a label with no background is still a button, it just has no frame. */
+    int      button_on;
+    dai_vec3 button_hover;      /* tint under the pointer, 0,0,0 -> automatic */
+    dai_vec3 button_press;      /* tint while held,        0,0,0 -> automatic */
+    char     button_action[64];
+
     char     audio_event[64];   /* AudioSource: event name in the sound bank    */
     int      audio_bus;         /* 0 master, 1 music, 2 sfx, 3 ui               */
     float    audio_volume;      /* 0 -> 1                                       */

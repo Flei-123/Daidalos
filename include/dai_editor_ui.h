@@ -47,6 +47,23 @@ DAI_API void dai_hud_images(dai_hud_image_fn fn, void *user);
  * else can know, because the anchor maths lives inside the draw. Returns 0
  * when that node drew nothing this frame. */
 DAI_API int dai_hud_rect_of(dai_node n, float *x, float *y, float *w, float *h);
+
+/* Once per frame, BEFORE the first dai_hud_draw of that frame. Tells the HUD
+ * that a new frame started, so several draws (Scene view and Game view) add to
+ * one list of rectangles instead of each throwing away the last one's. */
+DAI_API void dai_hud_frame(void);
+
+/* The UI node under the pointer, topmost first. 1 when there is one. */
+DAI_API int dai_hud_pick(float mx, float my, dai_node *out);
+
+/* Buttons answer the pointer only while this is on. The host turns it on for
+ * the Game view during Play and off again straight after - the same HUD is
+ * drawn a second time over the Scene view, and a button that fired there
+ * would go off every time you tried to move it. */
+DAI_API void dai_hud_interactive(int on);
+
+/* The buttons clicked since the last call, and forgets them. */
+DAI_API uint32_t dai_hud_take_clicks(dai_node *out, uint32_t max);
 DAI_API void dai_hud_draw(struct dai_ui *ui, struct dai_doc *doc,
                           float x, float y, float w, float h, float scale,
                           dai_hud_resolve_fn resolve, void *user);

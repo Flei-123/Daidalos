@@ -937,7 +937,10 @@ static dai_script_play_host g_play_host = {
     sp_key, sp_get_vel, sp_set_vel, sp_impulse, sp_grounded, sp_mouse, nullptr
 };
 
-struct RunningScript { dai_script *s = nullptr; std::string path; };
+// The node is part of it now: a button click has to reach the script ON
+// that button, and "which script belongs to which object" was the one
+// thing this list did not know.
+struct RunningScript { dai_script *s = nullptr; std::string path; dai_node node = DAI_INVALID_NODE; };
 static std::vector<RunningScript> g_running;
 static int g_scripts_live = 0;
 
@@ -1258,7 +1261,7 @@ static void scripts_start() {
             // frame already sees the inspector's numbers.
             if (!assign_js.empty()) dai_script_eval(s, assign_js.c_str(), "fields", err, sizeof(err));
             dai_script_call(s, "init", err, sizeof(err));
-            g_running.push_back({ s, path });
+            g_running.push_back({ s, path, id });
         }
     }
     if (!g_natives.empty()) {
@@ -3889,16 +3892,33 @@ int main(int argc, char **argv) {
         // Shown while EDITING too, not only during play. A label you cannot
         // see until you press play is a label you place by trial and error.
         {
+            dai_hud_frame();
+            float vx2, vy2, vw2, vh2;
+            dai_editor_ui_viewport_rect(panels, &vx2, &vy2, &vw2, &vh2);
             float hx, hy, hw, hh;
-            if (dai_editor_ui_game_view_rect(panels, &hx, &hy, &hw, &hh)) {
+            int has_game = dai_editor_ui_game_view_rect(panels, &hx, &hy, &hw, &hh);
+
+            // The Scene view draws the game's UI too. Unity's canvas lives IN
+            // the scene, and a HUD you can only see in the Game tab is a HUD
+            // you place by trial and error - which is what it was. Drawn
+            // FIRST, so dai_hud_rect_of finds the scene copy and the move and
+            // resize grips appear where the editing happens.
+            if (dai_editor_ui_view(panels) == DAI_VIEW_SCENE && vw2 > 0.0f && vh2 > 0.0f)
+                dai_hud_draw(ui, doc, vx2, vy2, vw2, vh2, 1.0f, hud_resolve, nullptr);
+
+            if (has_game) {
+                // Buttons answer the pointer HERE and only here: this is the
+                // picture the player is looking at. The copy over the Scene
+                // view is for editing, and a button that fired there would go
+                // off every time you tried to drag it.
+                dai_hud_interactive(dai_editor_state_get(ed) == DAI_EDITOR_PLAY);
                 dai_hud_draw(ui, doc, hx, hy, hw, hh, 1.0f, hud_resolve, nullptr);
+                dai_hud_interactive(0);
                 gui_flush(ui, hx, hy, hw, hh);
-            } else {
+            } else if (vw2 > 0.0f && vh2 > 0.0f) {
                 // No Game panel: the script's UI still has to go somewhere, or
                 // a menu drawn from code is invisible until you dock one.
-                float vx2, vy2, vw2, vh2;
-                dai_editor_ui_viewport_rect(panels, &vx2, &vy2, &vw2, &vh2);
-                if (vw2 > 0.0f && vh2 > 0.0f) gui_flush(ui, vx2, vy2, vw2, vh2);
+                gui_flush(ui, vx2, vy2, vw2, vh2);
             }
         }
         diag_step("ui end");
@@ -3969,6 +3989,44 @@ int main(int argc, char **argv) {
                         dai_editor_ui_log(panels, 2, line);   // collapses on repeat
                     }
                 }
+
+            // ---- what the UI buttons did this frame --------------------
+            // After frame(), so a click and the frame it happened in are in
+            // the order they read: the world moved, THEN the button fired.
+            // The call goes to the script on the clicked node only - a button
+            // press is a message to an object, not an announcement.
+            if (g_scripts_live) {
+                dai_node clicked[16];
+                uint32_t nc = dai_hud_take_clicks(clicked, 16);
+                for (uint32_t ci = 0; ci < nc; ++ci) {
+                    dai_node_desc bd{};
+                    const char *fn = "onClick";
+                    if (dai_doc_get(doc, clicked[ci], &bd) == DAI_OK && bd.button_action[0])
+                        fn = bd.button_action;
+                    bool any = false;
+                    for (RunningScript &rs : g_running) {
+                        if (rs.node != clicked[ci]) continue;
+                        any = true;
+                        char berr[256] = { 0 };
+                        dai_result br = dai_script_call(rs.s, fn, berr, sizeof(berr));
+                        if (br == DAI_ERR_NOT_FOUND) continue;   // no handler: fine
+                        if (br != DAI_OK && berr[0]) {
+                            char line[400];
+                            std::snprintf(line, sizeof(line), "%s: %s", rs.path.c_str(), berr);
+                            dai_editor_ui_log(panels, 2, line);
+                        }
+                    }
+                    if (!any) {
+                        // Worth saying out loud: a button that looks alive and
+                        // does nothing is the hardest kind of nothing to debug.
+                        char line[256];
+                        std::snprintf(line, sizeof(line),
+                                      "button '%s' clicked - no script on it defines %s()",
+                                      bd.name[0] ? bd.name : "(unnamed)", fn);
+                        dai_editor_ui_log(panels, 1, line);
+                    }
+                }
+            }
         }
 #endif
 
