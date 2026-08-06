@@ -209,6 +209,9 @@ public:
         bs.allow_sleeping   = d.no_sleeping ? 0 : 1;
         bs.is_sensor        = d.sensor != 0;   // reports overlaps, blocks nothing
         bs.user_data        = slot;
+        // Unity's Constraints. Only meaningful for a body the solver moves;
+        // a static one is frozen on all six axes by definition.
+        bs.allowed_dofs     = d.frozen ? dofs_from_frozen(d.frozen) : (uint32_t)TAL_DOF_ALL;
         // Same reasoning as the Jolt backend: a discrete step lets a falling
         // body arrive several centimetres inside whatever it landed on, and an
         // editor that draws collider outlines makes that immediately visible.
@@ -580,6 +583,19 @@ private:
         }
         }
     }
+    // dai_freeze says what may NOT move; Talos says what MAY. One inversion,
+    // in one place, with the bit order checked against the header next to it.
+    static uint32_t dofs_from_frozen(uint32_t frozen) {
+        uint32_t allow = TAL_DOF_ALL;
+        if (frozen & DAI_FREEZE_POS_X) allow &= ~(uint32_t)TAL_DOF_TRANSLATION_X;
+        if (frozen & DAI_FREEZE_POS_Y) allow &= ~(uint32_t)TAL_DOF_TRANSLATION_Y;
+        if (frozen & DAI_FREEZE_POS_Z) allow &= ~(uint32_t)TAL_DOF_TRANSLATION_Z;
+        if (frozen & DAI_FREEZE_ROT_X) allow &= ~(uint32_t)TAL_DOF_ROTATION_X;
+        if (frozen & DAI_FREEZE_ROT_Y) allow &= ~(uint32_t)TAL_DOF_ROTATION_Y;
+        if (frozen & DAI_FREEZE_ROT_Z) allow &= ~(uint32_t)TAL_DOF_ROTATION_Z;
+        return allow;
+    }
+
     static tal_shape *make_shape(const dai_body_desc &d, const std::vector<dai_compound_part> &parts) {
         if (d.shape != DAI_SHAPE_COMPOUND || parts.empty()) return one_shape(d.shape, d.half_extent);
         std::vector<tal_compound_child> kids;

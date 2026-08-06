@@ -1069,6 +1069,14 @@ void dai_editor_cam_speed(dai_editor *e, float s) {
 float dai_editor_cam_speed_get(const dai_editor *e) { return e ? e->cam_speed : 0.0f; }
 int dai_editor_cam_active(const dai_editor *e) { return (e && e->cam_mode != 0) ? 1 : 0; }
 
+void dai_editor_camera_get(const dai_editor *e, dai_vec3 *eye, dai_vec3 *target,
+                           float *fov_deg) {
+    if (!e) return;
+    if (eye) *eye = e->eye;
+    if (target) *target = e->target;
+    if (fov_deg) *fov_deg = e->fov;
+}
+
 dai_vec3 dai_editor_cam_pivot(const dai_editor *e) {
     if (!e) return dai_vec3{ 0, 0, 0 };
     dai_vec3 fwd, right, upv;

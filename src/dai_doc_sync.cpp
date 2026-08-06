@@ -43,6 +43,7 @@ bool needs_rebuild(const dai_node_desc &a, const dai_node_desc &b) {
            a.no_collider != b.no_collider || a.no_rigidbody != b.no_rigidbody ||
            a.trigger != b.trigger ||
            a.no_sleeping != b.no_sleeping ||
+           a.freeze != b.freeze ||
            std::memcmp(&a.half_extent, &b.half_extent, sizeof(dai_vec3)) != 0 ||
            std::memcmp(&a.scale, &b.scale, sizeof(dai_vec3)) != 0 ||
            a.density != b.density || a.friction != b.friction ||
@@ -164,6 +165,7 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
     d.body.friction_static = r.friction;
     d.body.restitution = r.restitution;
     d.body.no_sleeping = r.no_sleeping;
+    d.body.frozen = r.freeze;
     d.body.user_data = r.user_data;
     d.mesh = r.mesh;
     // An asset path wins over the mesh index. Failing to resolve is deliberately

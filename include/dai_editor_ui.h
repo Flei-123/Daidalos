@@ -40,6 +40,31 @@ DAI_API void dai_hud_draw(struct dai_ui *ui, struct dai_doc *doc,
                           float x, float y, float w, float h, float scale,
                           dai_hud_resolve_fn resolve, void *user);
 
+/* The Localisation window's data lives in the panel; the FILES belong to the
+ * host, which is the one that knows where Assets/Strings is. `load` fills the
+ * grid, `save` writes it back - both return 1 on success.
+ *
+ * The grid is reached with the three calls below, which is deliberately a
+ * poke-and-peek API rather than a shared struct: the panel owns its rows, and
+ * a host that reached into them would have to be updated every time a column
+ * is added. */
+typedef int (*dai_editor_ui_loc_fn)(void *user);
+DAI_API void dai_editor_ui_loc_host(dai_editor_ui *p, dai_editor_ui_loc_fn load,
+                                    dai_editor_ui_loc_fn save, void *user);
+/* Replaces the whole grid. Languages first, then one call per key. */
+DAI_API void dai_editor_ui_loc_begin(dai_editor_ui *p);
+DAI_API void dai_editor_ui_loc_lang(dai_editor_ui *p, const char *code, const char *name);
+DAI_API void dai_editor_ui_loc_set(dai_editor_ui *p, const char *key,
+                                   const char *lang, const char *text);
+/* Reading it back, for the host's writer. */
+DAI_API uint32_t    dai_editor_ui_loc_lang_count(const dai_editor_ui *p);
+DAI_API const char *dai_editor_ui_loc_lang_at(const dai_editor_ui *p, uint32_t i,
+                                              const char **out_name);
+DAI_API uint32_t    dai_editor_ui_loc_key_count(const dai_editor_ui *p);
+DAI_API const char *dai_editor_ui_loc_key_at(const dai_editor_ui *p, uint32_t i);
+DAI_API const char *dai_editor_ui_loc_get(const dai_editor_ui *p, uint32_t key_i,
+                                          uint32_t lang_i);
+
 /* Starts renaming a node in the hierarchy: the row turns into a text field,
  * focused, with the current name selected. What the toolbar's F2 and the
  * context menu's Rename both call. */

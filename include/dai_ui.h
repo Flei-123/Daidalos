@@ -709,7 +709,22 @@ DAI_API float dai_ui_text_height(dai_ui *ui);
 /* Attaches an explanation to the field drawn immediately before this call; it
  * is shown while the pointer rests on that row. Units belong here: "Friction"
  * with no tooltip is a number whose meaning you have to already know. */
+/* A colour, as a colour. `rgb` is three floats 0..1, edited in place; returns
+ * 1 on any frame it changed.
+ *
+ * It exists because "Color X 0.82 Y 0.24 Z 0.2" is not a colour, it is three
+ * numbers wearing a colour's name - you can read all three and still not know
+ * what it looks like. The row shows a SWATCH; clicking it opens the wheel,
+ * the value bar, and RGB/HSV/Hex, which is the arrangement Blender, Krita and
+ * every paint program settled on independently.
+ *
+ * `id` has to be unique per field, like every other stateful widget here. */
+DAI_API int  dai_ui_color(dai_ui *ui, const char *label, float *rgb, const char *id);
+
 DAI_API void dai_ui_help(dai_ui *ui, const char *text);
+/* A tooltip for a hand drawn widget, which has no row to hang off. */
+DAI_API void dai_ui_tooltip_at(dai_ui *ui, float x, float y, float w, float h,
+                               const char *text);
 
 #ifdef __cplusplus
 }

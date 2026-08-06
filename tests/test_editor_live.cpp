@@ -598,6 +598,54 @@ static void test_bodiless_node_moves_during_play() {
     r.kill();
 }
 
+// Freeze constraints, all the way through: document -> sync -> solver.
+//
+// The feature crosses four layers, and the only test that means anything is
+// the one that pushes a real body and looks at where it went. Talos had
+// allowed_dofs all along; nothing above it passed anything down, so this
+// checks the WIRING, not the solver.
+static void test_freeze_constraints() {
+    std::printf("freeze constraints: a locked axis does not move\n");
+    Rig r; r.make();
+
+    dai_node_desc fd = dai_node_desc_default();
+    fd.motion = DAI_STATIC;
+    fd.position = { 0, -0.5f, 0 };
+    fd.half_extent = { 20, 0.5f, 20 };
+    std::snprintf(fd.name, sizeof(fd.name), "Floor");
+    dai_doc_add(r.doc, &fd);
+
+    dai_node_desc bd = dai_node_desc_default();
+    bd.motion = DAI_DYNAMIC;
+    bd.position = { 0, 3, 0 };
+    std::snprintf(bd.name, sizeof(bd.name), "Free");
+    dai_node free_n = dai_doc_add(r.doc, &bd);
+
+    std::snprintf(bd.name, sizeof(bd.name), "LockedX");
+    bd.position = { 4, 3, 0 };
+    bd.freeze = DAI_FREEZE_POS_X;
+    dai_node lock_n = dai_doc_add(r.doc, &bd);
+    dai_doc_sync_apply(r.sync);
+
+    // The same sideways shove to both.
+    dai_body fb = r.body_of(free_n), lb = r.body_of(lock_n);
+    CHECK(fb != DAI_INVALID_BODY && lb != DAI_INVALID_BODY, "no bodies");
+    dai_body_set_velocity(r.w, fb, dai_vec3{ 5, 0, 0 }, dai_vec3{ 0, 0, 0 });
+    dai_body_set_velocity(r.w, lb, dai_vec3{ 5, 0, 0 }, dai_vec3{ 0, 0, 0 });
+    for (int i = 0; i < 60; ++i) dai_step(r.w);
+
+    dai_transform ft = r.body_transform(free_n), lt = r.body_transform(lock_n);
+    CHECK(ft.position.x > 1.0f, "the free body did not move sideways at all (x %.2f) - "
+                                "then this test cannot tell a lock from a bad push",
+          (double)ft.position.x);
+    CHECK(std::fabs(lt.position.x - 4.0f) < 0.05f,
+          "the X-locked body moved to x %.3f, it started at 4", (double)lt.position.x);
+    // ...and it still FALLS: freezing one axis must not freeze the body.
+    CHECK(lt.position.y < 2.5f, "the locked body did not fall (y %.2f) - a position "
+                                "constraint on X froze Y as well", (double)lt.position.y);
+    r.kill();
+}
+
 int main() {
     test_live_rotation();
     test_live_collider_center();
@@ -608,6 +656,7 @@ int main() {
     test_cylinder();
     test_cylinder_roundtrip();
     test_bodiless_node_moves_during_play();
+    test_freeze_constraints();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

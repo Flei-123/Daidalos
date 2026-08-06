@@ -209,6 +209,7 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
         if (!feq(r.light_range, def.light_range))         put(s, "  lrange %s\n", fstr(r.light_range).c_str());
         if (!feq(r.light_intensity, def.light_intensity)) put(s, "  lpower %s\n", fstr(r.light_intensity).c_str());
         if (!feq(r.light_cone, def.light_cone))           put(s, "  lcone %s\n", fstr(r.light_cone).c_str());
+        if (r.freeze != def.freeze)   put(s, "  freeze %u\n", (unsigned)r.freeze);
         if (r.sprite != def.sprite)   put(s, "  sprite %d\n", r.sprite);
         if (!feq(r.sprite_size.x, def.sprite_size.x) || !feq(r.sprite_size.y, def.sprite_size.y) ||
             !feq(r.sprite_size.z, def.sprite_size.z))
@@ -224,6 +225,7 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
             put(s, "  textcol %s %s %s\n", fstr(r.text_color.x).c_str(),
                 fstr(r.text_color.y).c_str(), fstr(r.text_color.z).c_str());
         if (r.text_anchor != def.text_anchor) put(s, "  textanchor %d\n", r.text_anchor);
+        if (r.text_font[0])                   put(s, "  textfont %s\n", r.text_font);
         if (!feq(r.text_x, def.text_x) || !feq(r.text_y, def.text_y))
             put(s, "  textpos %s %s\n", fstr(r.text_x).c_str(), fstr(r.text_y).c_str());
         if (r.audio_event[0])            put(s, "  audio %s\n", r.audio_event);
@@ -376,7 +378,14 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "textsize")   { ok = parse_floats(after, &rec.text_size, 1); }
         else if (key == "textcol")    { ok = parse_floats(after, &rec.text_color.x, 3); }
         else if (key == "textanchor") { ok = parse_i32(after, &rec.text_anchor); }
+        else if (key == "textfont") {
+            std::string v = after;
+            while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(0, 1);
+            while (!v.empty() && (v.back() == ' ' || v.back() == '\t' || v.back() == '\r')) v.pop_back();
+            if (v.size() >= sizeof(rec.text_font)) ok = false;
+            else std::snprintf(rec.text_font, sizeof(rec.text_font), "%s", v.c_str()); }
         else if (key == "textpos")    { ok = parse_floats(after, &rec.text_x, 2); }
+        else if (key == "freeze")  { int fv = 0; ok = parse_i32(after, &fv); rec.freeze = (uint32_t)fv; }
         else if (key == "sprite")  { ok = parse_i32(after, &rec.sprite); }
         else if (key == "spsize")  { ok = parse_floats(after, &rec.sprite_size.x, 3); }
         else if (key == "audio")   { std::string v = rest_of_line(after);

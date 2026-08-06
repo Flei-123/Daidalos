@@ -124,6 +124,14 @@ DAI_API float dai_editor_cam_speed_get(const dai_editor *e);
 DAI_API void dai_editor_cam_focus(dai_editor *e);
 DAI_API dai_vec3 dai_editor_cam_pivot(const dai_editor *e);
 
+/* The camera, as the editor holds it. Exists because the host used to rebuild
+ * it from a ray through the middle of the viewport - and a viewport that is
+ * not on screen is 0x0, so "the middle" was the corner and the camera turned
+ * by half a field of view every time the Scene tab was hidden. A value you
+ * can ask for cannot be reconstructed wrongly. */
+DAI_API void dai_editor_camera_get(const dai_editor *e, dai_vec3 *eye, dai_vec3 *target,
+                                   float *fov_deg);
+
 /* ---- selection --------------------------------------------------------- */
 
 /* The node under the pixel, or DAI_INVALID_NODE. */

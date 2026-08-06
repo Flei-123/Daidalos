@@ -1780,6 +1780,89 @@ static void strings_use(const char *code) {
 
 // What a Text component's contents mean to a player. Static buffer: the
 // caller uses it immediately, and this is called once per label per frame.
+// ---- the Localisation window's two halves --------------------------------
+//
+// Reading is easy: one dai_strings per file. WRITING is where the care is -
+// the file is hand editable and lives in version control, so it is written
+// sorted, with the same shape it was read in, and only the keys that have
+// text. An empty cell writes NO line rather than an empty one: a key with no
+// value would resolve to itself and look translated.
+static int loc_load_cb(void *user) {
+    dai_editor_ui *panels = (dai_editor_ui *)user;
+    if (!panels || !g_assets_dir[0]) return 0;
+    strings_scan();
+    dai_editor_ui_loc_begin(panels);
+    char dir[700];
+    std::snprintf(dir, sizeof(dir), "%s/Strings", g_assets_dir);
+    for (size_t i = 0; i < g_langs.size(); ++i)
+        dai_editor_ui_loc_lang(panels, g_langs[i].c_str(), g_lang_names[i].c_str());
+    for (const std::string &code : g_langs) {
+        char full[900];
+        std::snprintf(full, sizeof(full), "%s/%s.daistr", dir, code.c_str());
+        dai_strings *t = dai_strings_create();
+        char err[256] = { 0 };
+        if (dai_strings_load(t, full, err, sizeof(err)) == DAI_OK) {
+            std::vector<const char *> keys(dai_strings_count(t) + 1, nullptr);
+            uint32_t nk = dai_strings_keys(t, keys.data(), (uint32_t)keys.size());
+            for (uint32_t k = 0; k < nk && k < keys.size(); ++k)
+                if (keys[k]) dai_editor_ui_loc_set(panels, keys[k], code.c_str(),
+                                                   dai_strings_get(t, keys[k]));
+        }
+        dai_strings_destroy(t);
+    }
+    return 1;
+}
+
+static int loc_save_cb(void *user) {
+    dai_editor_ui *panels = (dai_editor_ui *)user;
+    if (!panels || !g_assets_dir[0]) return 0;
+    char dir[700];
+    std::snprintf(dir, sizeof(dir), "%s/Strings", g_assets_dir);
+#ifdef _WIN32
+    CreateDirectoryA(dir, nullptr);
+#else
+    mkdir(dir, 0755);
+#endif
+    uint32_t nl = dai_editor_ui_loc_lang_count(panels);
+    uint32_t nk = dai_editor_ui_loc_key_count(panels);
+    int wrote = 0;
+    for (uint32_t l = 0; l < nl; ++l) {
+        const char *name = nullptr;
+        const char *code = dai_editor_ui_loc_lang_at(panels, l, &name);
+        if (!code) continue;
+        std::string out = "daidalos-strings 1\n";
+        out += "lang "; out += code; out += "\n";
+        if (name && name[0]) { out += "name "; out += name; out += "\n"; }
+        out += "\n";
+        for (uint32_t k = 0; k < nk; ++k) {
+            const char *key = dai_editor_ui_loc_key_at(panels, k);
+            const char *val = dai_editor_ui_loc_get(panels, k, l);
+            if (!key || !val || !val[0]) continue;   // no text: no line
+            out += key;
+            out += "  ";
+            // A newline inside a value goes back as the escape it came from,
+            // or the file would grow a line the parser reads as a new key.
+            for (const char *c = val; *c; ++c) {
+                if (*c == '\n') out += "\\n";
+                else if (*c == '\r') continue;
+                else out += *c;
+            }
+            out += "\n";
+        }
+        char full[900];
+        std::snprintf(full, sizeof(full), "%s/%s.daistr", dir, code);
+        FILE *f = std::fopen(full, "wb");
+        if (!f) continue;
+        std::fwrite(out.data(), 1, out.size(), f);
+        std::fclose(f);
+        ++wrote;
+    }
+    // What was just written is what the editor should now be previewing.
+    strings_scan();
+    strings_use(g_lang);
+    return wrote > 0;
+}
+
 static const char *hud_resolve(const char *text, void *) {
     static char buf[256];
     return dai_strings_resolve(g_strings, text, buf, sizeof(buf));
@@ -2479,6 +2562,7 @@ int main(int argc, char **argv) {
     g_prefs = &prefs;
     crash_handler_install(g_projects_root);
     dai_editor_ui_settings_host(panels, apply_font, 13.0f * prefs.ui_scale, nullptr);
+    dai_editor_ui_loc_host(panels, loc_load_cb, loc_save_cb, panels);
     // The font is rasterised at a REAL pixel size: 13 px laid out but drawn
     // from a texture made for 13 * 1.5 = 19.5 is sharp at 1.5x zoom, 13 * 1.5
     // = 19.5 rasterised but 13 laid out is the blurry one. Fractional font
@@ -2964,12 +3048,19 @@ int main(int argc, char **argv) {
         // panel" is only known once the panels have been laid out this frame.
         // F2 renames the selection, in the hierarchy where the name lives.
         if (dai_window_key_down(win, DAI_KEY_F2) && !prev_f2 && !dai_ui_typing(ui)) {
-            // The Project window first: if something was clicked there, F2
-            // belongs to it - including a folder, which had no way to be
-            // renamed except through the context menu.
-            if (!dai_editor_ui_rename_project_pick(panels) &&
-                dai_editor_selection_count(ed) > 0)
+            // F2 follows THE selection, and there is only one. Selecting an
+            // object used to leave the Project window's own highlight
+            // standing, and F2 asked the Project window first - so with a
+            // crate selected in the hierarchy, F2 renamed a file.
+            //
+            // The object wins when one is selected, because selecting an
+            // object now clears the file pick (see the click handler), so
+            // "an object is selected" really does mean the last thing you
+            // touched was an object.
+            if (dai_editor_selection_count(ed) > 0)
                 dai_editor_ui_rename(panels, dai_editor_selected(ed, 0));
+            else
+                dai_editor_ui_rename_project_pick(panels);
         }
         prev_f2 = dai_window_key_down(win, DAI_KEY_F2);
 
@@ -3194,7 +3285,13 @@ int main(int argc, char **argv) {
         // frame, and Stop tears them down together with the world.
         {
             int st_now = dai_editor_state_get(ed);
-            if (st_now == DAI_EDITOR_PLAY && !g_scripts_live) scripts_start();
+            if (st_now == DAI_EDITOR_PLAY && !g_scripts_live) {
+                // A run starts with an empty console. Otherwise the first
+                // error of THIS run is somewhere below the errors of the last
+                // three, and the only way to tell them apart is the clock.
+                if (g_panels_for_log) dai_editor_ui_log_clear(g_panels_for_log);
+                scripts_start();
+            }
             if (st_now != DAI_EDITOR_PLAY && g_scripts_live) scripts_stop();
             g_scripts_live = st_now == DAI_EDITOR_PLAY;
             if (g_scripts_live && g_native) {
@@ -3238,15 +3335,14 @@ int main(int argc, char **argv) {
             }
         }
 
-        dai_vec3 eye, look;
-        {   // read the camera back out of the editor so both agree exactly
-            float cx, cy, cw2, ch2;
-            dai_editor_ui_viewport_rect(panels, &cx, &cy, &cw2, &ch2);
-            dai_vec3 o, d;
-            dai_editor_ray(ed, cx + cw2 * 0.5f, cy + ch2 * 0.5f, &o, &d);
-            eye = o;
-            look = dai_vec3{ o.x + d.x, o.y + d.y, o.z + d.z };
-        }
+        // The camera, asked for directly. This used to shoot a ray through the
+        // middle of the viewport and call the result "forward" - which works
+        // until the viewport is 0x0, and it IS 0x0 whenever the Scene tab is
+        // not the visible one. Then the middle is the corner, the corner ray
+        // became the camera's direction, and switching to the Script tab and
+        // back turned the view by half a field of view.
+        dai_vec3 eye{}, look{};
+        dai_editor_camera_get(ed, &eye, &look, nullptr);
         // The EDITOR camera is always updated from the editor's own state, in
         // both views: picking, the gizmo and the scene view all project
         // through it, and a game view that overwrote it would leave the scene
@@ -3265,8 +3361,12 @@ int main(int argc, char **argv) {
             uint32_t gn = dai_editor_ui_grid_lines(panels, grid_xyz, 420 * 2);
             dai_render_lines(r, grid_xyz, gn, 0.35f, 0.38f, 0.42f, 0.75f);
         }
-        dai_editor_camera(ed, eye, look, dai_vec3{ 0, 1, 0 }, 55.0f, 0.1f, 300.0f,
-                          vrw, vrh);
+        // ...and it is only written back when there IS a viewport. A frame in
+        // which the scene is not on screen has nothing to say about the
+        // camera, and saying it anyway is what broke this.
+        if (vrw > 0.0f && vrh > 0.0f)
+            dai_editor_camera(ed, eye, look, dai_vec3{ 0, 1, 0 }, 55.0f, 0.1f, 300.0f,
+                              vrw, vrh);
 
         // What gets RENDERED is the game camera while the Game tab is up.
         dai_vec3 reye = eye, rlook = look;

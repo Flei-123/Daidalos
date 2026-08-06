@@ -69,6 +69,11 @@ typedef struct dai_node_desc {
     float    friction;          /* 0 -> engine default                          */
     float    restitution;
     int      no_sleeping;
+    /* Unity's Constraints, as a dai_freeze mask. A frozen axis is one the
+     * SOLVER may not change - a script that sets the transform still moves
+     * the object. 0 = nothing frozen, which is what every scene written
+     * before this field existed means. */
+    uint32_t freeze;
     int      no_body;           /* 1 = pure transform/graphics node, no rigid
                                    body. Groups and markers need this. Such a
                                    node still RENDERS - rendering is not part
@@ -123,6 +128,10 @@ typedef struct dai_node_desc {
                                    and a score pinned to 1920 is off screen on
                                    a 1280 window.                              */
     float    text_x, text_y;    /* pixels from the anchor, + is right and down  */
+    /* The typeface, as a project path to a .ttf. Empty means the editor's own
+     * UI font - a label has to draw on the day it is added, before anyone has
+     * gone looking for a font file. */
+    char     text_font[96];
 
     char     audio_event[64];   /* AudioSource: event name in the sound bank    */
     int      audio_bus;         /* 0 master, 1 music, 2 sfx, 3 ui               */
