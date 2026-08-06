@@ -241,6 +241,7 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
         if (!feq(r.text_w, def.text_w) || !feq(r.text_h, def.text_h))
             put(s, "  textbox %s %s\n", fstr(r.text_w).c_str(), fstr(r.text_h).c_str());
         if (r.text_autosize != def.text_autosize) put(s, "  textfit %d\n", r.text_autosize);
+        if (r.text_align != def.text_align) put(s, "  textalign %d\n", r.text_align);
         if (r.image_on != def.image_on)       put(s, "  image %d\n", r.image_on);
         if (r.image[0])                       put(s, "  imagefile %s\n", r.image);
         if (!feq(r.image_w, def.image_w) || !feq(r.image_h, def.image_h))
@@ -431,6 +432,7 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "textanchor") { ok = parse_i32(after, &rec.text_anchor); }
         else if (key == "textbox")    { ok = parse_floats(after, &rec.text_w, 2); }
         else if (key == "textfit")    { ok = parse_i32(after, &rec.text_autosize); }
+        else if (key == "textalign")  { ok = parse_i32(after, &rec.text_align); }
         else if (key == "image")      { ok = parse_i32(after, &rec.image_on); }
         else if (key == "imagesize")  { ok = parse_floats(after, &rec.image_w, 2); }
         else if (key == "imagecol")   { ok = parse_floats(after, &rec.image_color.x, 3); }

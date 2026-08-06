@@ -143,6 +143,12 @@ typedef struct dai_node_desc {
      * and the box does not get bigger when it is. */
     float    text_w, text_h;
     int      text_autosize;     /* 1 = shrink to fit the box                 */
+    /* How the LINES sit inside the block, which is not the same question as
+     * where the block sits on screen. A subtitle is anchored bottom centre
+     * and its lines are centred; a stat list is anchored top right and its
+     * lines are left aligned. One field could not say both.
+     * 0 follow the anchor (what it always did), 1 left, 2 centre, 3 right. */
+    int      text_align;
 
     /* ---- Image: the game's UI, in pictures --------------------------------
      * A screen space sprite, anchored exactly like Text. `image` is a project

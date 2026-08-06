@@ -2556,38 +2556,19 @@ static uint32_t hud_image_cb(const char *path, float *out_w, float *out_h, void 
     // the project's asset folder, or that the PNG is a flavour the decoder
     // does not read.
     if (!e.tex && g_panels_for_log) {
-        // "not loaded" is two very different problems and they need two very
-        // different answers: the file is somewhere else, or the file is a PNG
-        // flavour this decoder does not read. Open it and say which.
+        // The DECODER already knows why it said no. Guessing from the IHDR
+        // bytes was a guess: it told the boss "16 bit samples and unusual
+        // layouts" about an 8 bit paletted image, which was simply wrong.
+        // Ask the renderer for the sentence it wrote and print THAT.
         char line[900];
+        const char *why = dai_render_last_error(g_renderer);
         FILE *tf = std::fopen(full, "rb");
         if (!tf) {
             std::snprintf(line, sizeof(line), "image: no such file - %s", full);
         } else {
-            unsigned char hd[26] = { 0 };
-            size_t got = std::fread(hd, 1, sizeof(hd), tf);
             std::fclose(tf);
-            bool png = got >= 8 && hd[1] == 'P' && hd[2] == 'N' && hd[3] == 'G';
-            if (!png) {
-                std::snprintf(line, sizeof(line),
-                              "image: not a PNG (only .png is decoded) - %s", full);
-            } else {
-                // IHDR: bit depth at 24, colour type at 25, interlace at 28.
-                // IHDR: 8 bytes of length+type, then w,h,depth,colour,
-                // compression,filter,interlace - so interlace is byte 28.
-                int depth = hd[24], ctype = hd[25], ilace = hd[28];
-                if (ilace) {
-                    std::snprintf(line, sizeof(line),
-                                  "image: interlaced PNG (Adam7) is not decoded - "
-                                  "re-save it without interlacing - %s", full);
-                } else {
-                    std::snprintf(line, sizeof(line),
-                                  "image: PNG not decoded (bit depth %d, colour type %d) "
-                                  "- 16 bit samples and unusual layouts are not read; "
-                                  "save it as 8 bit RGB or RGBA - %s",
-                                  depth, ctype, full);
-                }
-            }
+            std::snprintf(line, sizeof(line), "image: %s - %s",
+                          (why && why[0]) ? why : "could not be decoded", full);
         }
         dai_editor_ui_log(g_panels_for_log, 2, line);
     }

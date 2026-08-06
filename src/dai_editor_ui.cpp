@@ -1689,7 +1689,13 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
             // Centre and right anchors centre EACH line inside the block, so
             // a two line centred title looks centred rather than ragged.
             float lw = dai_ui_text_width(ui, ln.c_str()) * k;
-            float lx = bx + (widest - lw) * (col * 0.5f);
+            // The block's own alignment wins over the anchor's. 0 keeps the
+            // old behaviour: lines follow whichever corner the block is
+            // pinned to, which is right until it is not.
+            float af = (r.text_align == 1) ? 0.0f
+                     : (r.text_align == 2) ? 0.5f
+                     : (r.text_align == 3) ? 1.0f : (col * 0.5f);
+            float lx = bx + (widest - lw) * af;
             float ly = by + lh * (float)li;
             float th = dai_ui_text_height(ui) * k;
             float rule = th * 0.075f < 1.0f ? 1.0f : th * 0.075f;
@@ -3358,6 +3364,10 @@ static void inspector_body(dai_editor_ui *p) {
                 "Bottom left", "Bottom", "Bottom right",
             };
             dai_ui_option(p->ui, "Anchor", &r.text_anchor, ANCHOR, 9);
+            static const char *const TALIGN[] = { "Follow anchor", "Left", "Centre", "Right" };
+            dai_ui_option(p->ui, "Align", &r.text_align, TALIGN, 4);
+            dai_ui_help(p->ui, "Where the LINES sit inside the block. The anchor says "
+                               "where the block sits on screen - two different questions.");
             // The box. 0 wide means "as wide as the words", which is what a
             // score wants; a real width is what a subtitle wants.
             float bw2 = r.text_w, bh2 = r.text_h;

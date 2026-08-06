@@ -246,12 +246,15 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
 
     std::vector<uint8_t> raw;
     raw.reserve((size_t)w * h * channels + h);
-    if (!inflate_zlib(idat.data(), idat.size(), raw)) return fail("inflate failed");
+    if (idat.empty()) return fail("no IDAT data");
+    if (!inflate_zlib(idat.data(), idat.size(), raw))
+        return fail("inflate failed (compressed image data could not be unpacked)");
 
     int bits_per_pixel = channels * depth;
     size_t stride = ((size_t)w * bits_per_pixel + 7) / 8;
     int filter_bpp = (bits_per_pixel + 7) / 8;
-    if (raw.size() < (stride + 1) * h) return fail("not enough image data");
+    if (raw.size() < (stride + 1) * h)
+        return fail("image data is shorter than the header promises");
 
     // undo the per scanline filters in place
     std::vector<uint8_t> img((size_t)stride * h);
@@ -291,6 +294,7 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
                     int shift = 8 - depth * (int)(x % per) - depth;
                     idx = (row[x / per] >> shift) & ((1 << depth) - 1);
                 }
+                if (palette.empty()) return fail("paletted PNG with no PLTE chunk");
                 if (idx * 3 + 2 >= palette.size()) return fail("palette index out of range");
                 o[0] = palette[idx*3]; o[1] = palette[idx*3+1]; o[2] = palette[idx*3+2];
                 o[3] = idx < trns.size() ? trns[idx] : 255;
