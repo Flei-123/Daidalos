@@ -536,6 +536,8 @@ static const char *icon_for_asset(const std::string &path) {
     if (e == "png" || e == "jpg" || e == "jpeg" || e == "tga" || e == "svg") return DAI_ICON_IMAGE;
     if (e == "daidalos" || e == "prefab")             return DAI_ICON_C_PREFAB;
     if (e == "daimat")                                return DAI_ICON_MATERIAL;
+    if (e == "daistr")                                return DAI_ICON_C_TEXT;
+    if (e == "ttf" || e == "otf" || e == "ttc")       return DAI_ICON_C_TEXT;
     return DAI_ICON_FILE;
 }
 
@@ -552,6 +554,8 @@ static uint32_t icon_color_for_asset(const std::string &path, uint32_t fallback)
     if (e == "js" || e == "ts" || e == "cpp" || e == "cc" || e == "cxx" ||
         e == "h" || e == "hpp")                       return rgba(0xF2, 0xC1, 0x4E, 255);  // script gold
     if (e == "daimat")                                return rgba(0xC8, 0x8A, 0xE0, 255);  // material violet
+    if (e == "daistr")                                return rgba(0x9C, 0xD6, 0x8C, 255);  // strings green
+    if (e == "ttf" || e == "otf" || e == "ttc")       return rgba(0xD8, 0xC2, 0x7A, 255);  // font sand
     if (e == "daidalos" || e == "prefab")             return rgba(0x6C, 0xB2, 0xF0, 255);  // prefab blue
     if (e == "png" || e == "jpg" || e == "jpeg" || e == "tga" || e == "svg")
                                                       return rgba(0x6F, 0xCB, 0x9F, 255);  // texture green
@@ -1182,6 +1186,25 @@ int dai_editor_ui_clipboard_has(const dai_editor_ui *p) { return p && p->clipboa
 // both hosts set it once at startup and neither ever changes it, and threading
 // it through dai_hud_draw would put it in the signature of a function whose
 // whole point is that the editor and the runtime call it identically.
+// What the last draw laid out, so the editor can put a handle on it. A frame
+// of latency by construction - the rectangle is from the frame before the one
+// being built - and that is fine: it moves when the thing moves.
+struct HudRect { dai_node n; float x, y, w, h; };
+static std::vector<HudRect> g_hud_rects;
+static std::vector<HudRect> g_hud_rects_prev;
+
+int dai_hud_rect_of(dai_node n, float *x, float *y, float *w, float *h) {
+    for (const HudRect &r : g_hud_rects_prev) {
+        if (r.n != n) continue;
+        if (x) *x = r.x;
+        if (y) *y = r.y;
+        if (w) *w = r.w;
+        if (h) *h = r.h;
+        return 1;
+    }
+    return 0;
+}
+
 static dai_hud_image_fn g_hud_image = nullptr;
 static void            *g_hud_image_user = nullptr;
 void dai_hud_images(dai_hud_image_fn fn, void *user) {
@@ -1232,6 +1255,9 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
     uint32_t n = ids.empty() ? 0 : dai_doc_nodes(doc, ids.data(), (uint32_t)ids.size());
     if (!n) return;
 
+    g_hud_rects_prev.swap(g_hud_rects);
+    g_hud_rects.clear();
+
     dai_ui_clip_begin(ui, x, y, w, h);
     for (uint32_t i = 0; i < n; ++i) {
         dai_node_desc r{};
@@ -1263,6 +1289,7 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
                            (ch(r.image_color.y) << 8) | ch(r.image_color.x);
                 }
                 dai_ui_image_at(ui, tex, ix, iy, dw, dh, 0, 0, 1, 1, tint);
+                g_hud_rects.push_back(HudRect{ ids[i], ix, iy, dw, dh });
             }
         }
 
@@ -1340,6 +1367,7 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
             col32 = 0xFF000000u | (ch(r.text_color.z) << 16) | (ch(r.text_color.y) << 8) | ch(r.text_color.x);
         }
 
+        g_hud_rects.push_back(HudRect{ ids[i], bx, by, widest, block_h });
         for (size_t li = 0; li < lines.size(); ++li) {
             // Centre and right anchors centre EACH line inside the block, so
             // a two line centred title looks centred rather than ragged.
@@ -5136,14 +5164,15 @@ static void run_context_menus(dai_editor_ui *p) {
         { DAI_ICON_SCRIPT, "Create: C++ Behaviour", nullptr },
         { DAI_ICON_TRASH, "Delete", "Del" },
         { DAI_ICON_MATERIAL, "Create: Material", nullptr },
+        { DAI_ICON_C_SCRIPT, "Create: Player Controller (C++)", nullptr },
     };
     // The two row-only entries sit at 2 and 6; without a row the menu is the
     // other five, and the indices below are mapped back so nothing else moves.
-    static const int WITH_ROW[8]    = { 0, 1, 7, 2, 3, 4, 5, 6 };
-    static const int WITHOUT_ROW[6] = { 0, 1, 7, 3, 4, 5 };
-    dai_ui_menu_item shown_items[8];
+    static const int WITH_ROW[9]    = { 0, 1, 7, 8, 2, 3, 4, 5, 6 };
+    static const int WITHOUT_ROW[7] = { 0, 1, 7, 8, 3, 4, 5 };
+    dai_ui_menu_item shown_items[9];
     const int *map = on_row ? WITH_ROW : WITHOUT_ROW;
-    uint32_t shown_n = on_row ? 8u : 6u;
+    uint32_t shown_n = on_row ? 9u : 7u;
     for (uint32_t i = 0; i < shown_n; ++i) shown_items[i] = PROJ_ITEMS[map[i]];
     int raw = dai_ui_popup_menu(p->ui, &p->menu_project, shown_items, shown_n);
     int ppick = (raw >= 0 && raw < (int)shown_n) ? map[raw] : raw;
@@ -5214,6 +5243,21 @@ static void run_context_menus(dai_editor_ui *p) {
                 p->want_refresh = 1;
                 break;
             }
+        }
+    }
+    if (ppick == 8 && p->script_create) {
+        // Asks the host for that exact file name; the host knows the template
+        // that goes with it. One entry, one file, no second callback.
+        p->proj_tab = 0;
+        std::string base8 = p->proj_dir.empty() ? std::string() : p->proj_dir + "/";
+        std::string rel8 = base8 + "PlayerController.cpp";
+        if (p->script_create(rel8.c_str(), p->script_user)) {
+            project_expand_to(p, p->proj_dir);
+            p->want_refresh = 1;
+            dai_editor_ui_toast(p, "PlayerController.cpp created - drop it on an object "
+                                   "with a Rigidbody", 3.0f);
+        } else {
+            dai_editor_ui_toast(p, "PlayerController.cpp is already here", 2.0f);
         }
     }
     if (ppick == 0 && p->script_create) {

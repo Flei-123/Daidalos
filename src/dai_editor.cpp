@@ -132,6 +132,13 @@ struct dai_editor {
     std::unordered_map<uint32_t, LivePose> live_pose;
 
     int   cam_2d = 0;                  // Unity's 2D button
+    // Where the camera was standing in 3D. Coming back has to put you where
+    // you left, not at some canonical front view: 2D is a way of LOOKING at
+    // the scene you are working on, and losing your viewpoint every time you
+    // check the layout flat is a reason not to press the button twice.
+    int      cam_3d_saved = 0;
+    dai_vec3 cam_3d_eye{ 0, 0, 0 };
+    float    cam_3d_yaw = 0.0f, cam_3d_pitch = 0.0f, cam_3d_dist = 10.0f;
     int   cam_mode = 0;                // 0 none, 1 look, 2 pan, 3 orbit, 4 dolly
     int   cam_frozen = 0;              // the mode is locked while its button is held
     int   cam_btn = 0;                 // 1 left, 2 right, 4 middle: what started it
@@ -1077,16 +1084,31 @@ void dai_editor_cam_2d(dai_editor *e, int on) {
     e->cam_2d = want;
     cam_ensure_angles(e);
     if (want) {
-        // Square on to the XY plane. The pivot stays where it was, so the
-        // thing you were looking at is the thing you are still looking at -
-        // a 2D button that also moves you somewhere else is a button you
-        // press once and then undo.
+        // Remember where we were standing, THEN square on to the XY plane.
+        // The pivot stays where it was, so the thing you were looking at is
+        // the thing you are still looking at.
+        e->cam_3d_eye = e->eye;
+        e->cam_3d_yaw = e->cam_yaw;
+        e->cam_3d_pitch = e->cam_pitch;
+        e->cam_3d_dist = e->cam_pivot_dist;
+        e->cam_3d_saved = 1;
+
         dai_vec3 pivot = dai_editor_cam_pivot(e);
         e->cam_yaw = 0.0f;
         e->cam_pitch = 0.0f;
         dai_vec3 fwd, right, upv;
         cam_basis(e, &fwd, &right, &upv);
         e->eye = sub(pivot, mul(fwd, e->cam_pivot_dist));
+        cam_apply(e);
+    } else if (e->cam_3d_saved) {
+        // ...and back to exactly that. Position, both angles and the pivot
+        // distance: restoring the angles but not the distance would put the
+        // pivot somewhere else, and the next orbit would swing around a
+        // point that is not where you were looking.
+        e->eye = e->cam_3d_eye;
+        e->cam_yaw = e->cam_3d_yaw;
+        e->cam_pitch = e->cam_3d_pitch;
+        e->cam_pivot_dist = e->cam_3d_dist;
         cam_apply(e);
     }
 }

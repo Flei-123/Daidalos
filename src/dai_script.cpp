@@ -23,6 +23,8 @@ struct dai_script {
     dai_script_play_host play{};
     int has_play = 0;
     int has_nodes = 0;
+    dai_script_gui_host gui{};
+    int has_gui = 0;
     dai_script_anim_host anim{};
     int has_anim = 0;
     std::string last_path;
@@ -398,6 +400,72 @@ JSValue js_body_grounded(JSContext *ctx, JSValueConst, int argc, JSValueConst *a
 }
 
 } // namespace
+
+// ---------------------------------------------------------------- gui
+namespace {
+
+JSValue js_gui_text(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_gui && s->gui.text && argc >= 3)
+        s->gui.text(arg_num(ctx, argv[0]), arg_num(ctx, argv[1]),
+                    str(ctx, argv[2]).c_str(),
+                    argc >= 4 ? arg_num(ctx, argv[3]) : 24.0,
+                    argc >= 5 ? arg_num(ctx, argv[4]) : (double)0xFFFFFFFFu,
+                    s->gui.user);
+    return JS_UNDEFINED;
+}
+JSValue js_gui_rect(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_gui && s->gui.rect && argc >= 4)
+        s->gui.rect(arg_num(ctx, argv[0]), arg_num(ctx, argv[1]),
+                    arg_num(ctx, argv[2]), arg_num(ctx, argv[3]),
+                    argc >= 5 ? arg_num(ctx, argv[4]) : (double)0x80000000u,
+                    s->gui.user);
+    return JS_UNDEFINED;
+}
+JSValue js_gui_image(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_gui && s->gui.image && argc >= 5)
+        s->gui.image(arg_num(ctx, argv[0]), arg_num(ctx, argv[1]),
+                     arg_num(ctx, argv[2]), arg_num(ctx, argv[3]),
+                     str(ctx, argv[4]).c_str(),
+                     argc >= 6 ? arg_num(ctx, argv[5]) : (double)0xFFFFFFFFu,
+                     s->gui.user);
+    return JS_UNDEFINED;
+}
+JSValue js_gui_button(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_gui || !s->gui.button || argc < 5) return JS_FALSE;
+    return s->gui.button(arg_num(ctx, argv[0]), arg_num(ctx, argv[1]),
+                         arg_num(ctx, argv[2]), arg_num(ctx, argv[3]),
+                         str(ctx, argv[4]).c_str(), s->gui.user) ? JS_TRUE : JS_FALSE;
+}
+JSValue js_gui_size(JSContext *ctx, JSValueConst, int, JSValueConst *) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    double w = 0, h = 0;
+    if (s->has_gui && s->gui.size) s->gui.size(&w, &h, s->gui.user);
+    JSValue arr = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, w));
+    JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, h));
+    return arr;
+}
+
+} // namespace
+
+void dai_script_bind_gui(dai_script *s, const dai_script_gui_host *host) {
+    if (!s || !host) return;
+    s->gui = *host;
+    s->has_gui = 1;
+    JSValue global = JS_GetGlobalObject(s->ctx);
+    JSValue gui = JS_NewObject(s->ctx);
+    JS_SetPropertyStr(s->ctx, gui, "text", JS_NewCFunction(s->ctx, js_gui_text, "text", 5));
+    JS_SetPropertyStr(s->ctx, gui, "rect", JS_NewCFunction(s->ctx, js_gui_rect, "rect", 5));
+    JS_SetPropertyStr(s->ctx, gui, "image", JS_NewCFunction(s->ctx, js_gui_image, "image", 6));
+    JS_SetPropertyStr(s->ctx, gui, "button", JS_NewCFunction(s->ctx, js_gui_button, "button", 5));
+    JS_SetPropertyStr(s->ctx, gui, "size", JS_NewCFunction(s->ctx, js_gui_size, "size", 0));
+    JS_SetPropertyStr(s->ctx, global, "gui", gui);
+    JS_FreeValue(s->ctx, global);
+}
 
 void dai_script_bind_play(dai_script *s, const dai_script_play_host *host) {
     if (!s || !host) return;

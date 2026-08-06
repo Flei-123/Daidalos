@@ -41,6 +41,12 @@ typedef const char *(*dai_hud_resolve_fn)(const char *text, void *user);
  * which is the right behaviour for a headless test, not an error. */
 typedef uint32_t (*dai_hud_image_fn)(const char *path, float *out_w, float *out_h, void *user);
 DAI_API void dai_hud_images(dai_hud_image_fn fn, void *user);
+
+/* Where the last dai_hud_draw put a node's UI, in screen pixels. The editor
+ * uses it to draw a frame around the selected element and to drag it; nothing
+ * else can know, because the anchor maths lives inside the draw. Returns 0
+ * when that node drew nothing this frame. */
+DAI_API int dai_hud_rect_of(dai_node n, float *x, float *y, float *w, float *h);
 DAI_API void dai_hud_draw(struct dai_ui *ui, struct dai_doc *doc,
                           float x, float y, float w, float h, float scale,
                           dai_hud_resolve_fn resolve, void *user);

@@ -2417,6 +2417,93 @@ void dai_ui_code_caret_pos(const char *buf, int caret, int *line, int *col) {
     if (col)  *col = caret - ls + 1;
 }
 
+// The engine's own API, spelled once. It is a LIST, not a parse of the
+// headers: the headers are C and the scripts are JavaScript, and a generator
+// that mapped one to the other would be a build step that breaks silently the
+// day someone renames a binding.
+namespace {
+struct AcEntry { const char *text; const char *hint; };
+const AcEntry AC_JS[] = {
+    { "input.key(",        "\"w\", \"space\", \"shift\" - held?" },
+    { "input.mouseDX()",   "pixels moved this frame" },
+    { "input.mouseDY()",   "pixels moved this frame" },
+    { "input.mouseButton(","0 left, 1 right, 2 middle" },
+    { "body.getVel(",      "self -> [x, y, z]" },
+    { "body.setVel(",      "self, x, y, z" },
+    { "body.impulse(",     "self, x, y, z" },
+    { "body.grounded(",    "self -> standing on something?" },
+    { "node.getPos(",      "id -> [x, y, z]" },
+    { "node.setPos(",      "id, x, y, z" },
+    { "node.getRot(",      "id -> [x, y, z, w]" },
+    { "node.setRot(",      "id, x, y, z, w" },
+    { "node.setText(",     "id, \"...\" - the Text component" },
+    { "scene.find(",       "\"name\" -> id, or -1" },
+    { "gui.text(",         "x, y, text, size, colour" },
+    { "gui.rect(",         "x, y, w, h, colour" },
+    { "gui.image(",        "x, y, w, h, path, tint" },
+    { "gui.button(",       "x, y, w, h, label -> clicked?" },
+    { "gui.size()",        "[width, height] of the view" },
+    { "print(",            "one line into the Console" },
+    { "state.dt",          "seconds this frame" },
+    { "self",              "the node this script is on" },
+    { "params",            "what the inspector stored" },
+    { "function init() {", "runs once at Play" },
+    { "function frame() {","runs every frame" },
+    { "Math.sqrt(",        nullptr },
+    { "Math.atan2(",       nullptr },
+    { "Math.floor(",       nullptr },
+    { "Math.random()",     nullptr },
+};
+const AcEntry AC_CPP[] = {
+    { "api->log(api, ",          "one line into the Console" },
+    { "api->get_position(api, ", "self -> dai_nvec3" },
+    { "api->set_position(api, ", "self, dai_nvec3" },
+    { "api->get_velocity(api, ", "self -> dai_nvec3" },
+    { "api->set_velocity(api, ", "self, dai_nvec3" },
+    { "api->add_impulse(api, ",  "self, dai_nvec3" },
+    { "api->get_rotation(api, ", "self, float xyzw[4]" },
+    { "api->set_rotation(api, ", "self, const float xyzw[4]" },
+    { "api->get_scale(api, ",    "self -> dai_nvec3" },
+    { "api->set_scale(api, ",    "self, dai_nvec3" },
+    { "api->find(api, ",         "\"name\" -> entity, 0 if none" },
+    { "api->name_of(api, ",      "entity -> const char *" },
+    { "api->time(api)",          "seconds since Play" },
+    { "api->key_down(api, ",     "DAI_KEY_* or a letter" },
+    { "DAI_BEHAVIOUR_INIT(api, self) {",  "runs once at Play" },
+    { "DAI_BEHAVIOUR_FRAME(api, self, dt) {", "runs every frame" },
+    { "DAI_KEY_SPACE",  nullptr },
+    { "DAI_KEY_SHIFT_L", nullptr },
+    { "DAI_KEY_LEFT",   nullptr },
+    { "DAI_KEY_RIGHT",  nullptr },
+    { "DAI_KEY_UP",     nullptr },
+    { "DAI_KEY_DOWN",   nullptr },
+};
+
+// Every identifier already in the file, so a variable you declared three
+// lines up can be completed too. Cheap enough at every keystroke: a behaviour
+// is a few hundred lines, and this is a single pass over them.
+void ac_identifiers(const char *buf, const std::string &prefix, int skip_at,
+                    std::vector<std::string> &out) {
+    if (prefix.empty()) return;
+    int i = 0;
+    while (buf[i]) {
+        if (!code_is_word(buf[i]) || (buf[i] >= '0' && buf[i] <= '9')) { ++i; continue; }
+        int a = i;
+        while (buf[i] && code_is_word(buf[i])) ++i;
+        if (a == skip_at) continue;                 // the word being typed
+        std::string word(buf + a, buf + i);
+        if (word.size() <= prefix.size()) continue;
+        // Case sensitive: JavaScript is, C++ is, and a completion that
+        // changes the case of what you typed is a completion you retype.
+        if (word.compare(0, prefix.size(), prefix) != 0) continue;
+        bool have = false;
+        for (const std::string &e : out) if (e == word) { have = true; break; }
+        if (!have) out.push_back(word);
+        if (out.size() > 40) return;
+    }
+}
+} // namespace
+
 int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, float h,
                      char *buf, size_t buf_size, dai_ui_code_state *st, int lang) {
     if (!ui || !buf || !st || buf_size < 2 || w < 40.0f || h < 20.0f) return 0;
@@ -2540,8 +2627,9 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
         changed = 1;
     };
 
+    int ac_take = 0;
     if (st->focused) {
-        const dai_ui_input &in = ui->input;
+        dai_ui_input in = ui->input;      // a COPY: see the note above ac_take
         bool shift = in.key_shift != 0;
         int before = st->caret;
         if (in.text[0] || in.key_enter || in.key_tab || in.key_backspace ||
@@ -2549,6 +2637,24 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
             in.key_end || in.key_up_arrow || in.key_down_arrow ||
             in.key_paste || in.key_cut)
             caret_input = true;
+
+        // ---- autocomplete: the keys it owns --------------------------------
+        // Taken BEFORE the editor's own handling, because up, down, tab and
+        // escape mean something else while a list is open - and a completion
+        // list that you cannot dismiss with escape is a trap.
+        if (st->ac_open > 0) {
+            if (in.key_escape) { st->ac_open = 0; caret_input = true; }
+            else if (in.key_up_arrow)   { if (--st->ac_sel < 0) st->ac_sel = st->ac_open - 1; }
+            else if (in.key_down_arrow) { if (++st->ac_sel >= st->ac_open) st->ac_sel = 0; }
+            else if (in.key_tab || in.key_enter) {
+                ac_take = 1;                      // applied below, where the list is built
+            }
+            if (in.key_up_arrow || in.key_down_arrow || in.key_tab || in.key_enter || in.key_escape) {
+                // Swallow them: the editor must not also move the caret.
+                in.key_up_arrow = in.key_down_arrow = in.key_tab = in.key_enter = 0;
+                in.key_escape = 0;
+            }
+        }
 
         for (int i = 0; i < 8 && in.text[i]; ++i) {
             uint32_t cp = in.text[i];
@@ -2777,6 +2883,123 @@ int dai_ui_code_edit(dai_ui *ui, const char *id, float x, float y, float w, floa
         }
     }
     dai_ui_clip_end(ui);
+
+    // ---- autocomplete ------------------------------------------------------
+    // Built here, at the end, because it depends on the word under the caret
+    // AFTER this frame's typing. The list is what the engine offers plus what
+    // the file already contains, and nothing else: no parse, no types, no
+    // guessing what an expression evaluates to. A half parser is wrong on
+    // exactly the lines you are in the middle of writing.
+    {
+        // The word being typed: letters back from the caret. A completion
+        // that triggers on one character would pop up on every `i`.
+        int a = st->caret;
+        while (a > 0 && code_is_word(buf[a - 1])) --a;
+        std::string prefix(buf + a, buf + st->caret);
+        // A dotted call is one word for this purpose: typing "input.k" should
+        // offer input.key, and the dot is not a word character.
+        int dotted = a;
+        if (dotted > 0 && buf[dotted - 1] == '.') {
+            int b = dotted - 1;
+            while (b > 0 && code_is_word(buf[b - 1])) --b;
+            prefix = std::string(buf + b, buf + st->caret);
+            a = b;
+        } else if (dotted > 1 && buf[dotted - 1] == '>' && buf[dotted - 2] == '-') {
+            int b = dotted - 2;
+            while (b > 0 && code_is_word(buf[b - 1])) --b;
+            prefix = std::string(buf + b, buf + st->caret);
+            a = b;
+        }
+
+        std::vector<const AcEntry *> hits;
+        std::vector<std::string> words;
+        if (st->focused && prefix.size() >= 2) {
+            const AcEntry *table = lang == DAI_CODE_LANG_CPP ? AC_CPP : AC_JS;
+            size_t count = lang == DAI_CODE_LANG_CPP
+                         ? sizeof(AC_CPP) / sizeof(AC_CPP[0])
+                         : sizeof(AC_JS) / sizeof(AC_JS[0]);
+            for (size_t i = 0; i < count; ++i)
+                if (std::strncmp(table[i].text, prefix.c_str(), prefix.size()) == 0)
+                    hits.push_back(&table[i]);
+            ac_identifiers(buf, prefix, a, words);
+        }
+        int total = (int)hits.size() + (int)words.size();
+        if (total > 8) total = 8;
+        st->ac_open = total;
+        st->ac_start = a;
+        if (st->ac_sel >= total) st->ac_sel = 0;
+        if (st->ac_sel < 0) st->ac_sel = 0;
+
+        if (total > 0 && ac_take) {
+            const char *pick = st->ac_sel < (int)hits.size()
+                             ? hits[(size_t)st->ac_sel]->text
+                             : words[(size_t)(st->ac_sel - (int)hits.size())].c_str();
+            // Replace the typed prefix, do not append to it.
+            int plen = st->caret - a;
+            if (plen > 0) {
+                std::memmove(buf + a, buf + st->caret, (size_t)(len - st->caret + 1));
+                len -= plen;
+                st->caret = a;
+                st->anchor = a;
+            }
+            int n = (int)std::strlen(pick);
+            if ((size_t)(len + n + 1) <= buf_size) {
+                std::memmove(buf + st->caret + n, buf + st->caret, (size_t)(len - st->caret + 1));
+                std::memcpy(buf + st->caret, pick, (size_t)n);
+                len += n;
+                st->caret += n;
+                st->anchor = st->caret;
+                changed = 1;
+            }
+            st->ac_open = 0;
+            st->follow_caret = 1;
+        } else if (total > 0) {
+            // Under the caret, or above it when there is no room below - a
+            // list that falls off the bottom of the panel is a list you
+            // cannot read the last entry of.
+            float cx2, cy2;
+            {
+                int ls = code_line_start(buf, a);
+                cx2 = TEXT_X + code_run_w(ui, buf + ls, a - ls) - st->scroll_x;
+                cy2 = y + 4.0f + (float)code_line_of(buf, a) * LH - st->scroll_y;
+            }
+            const float RH = dai_font_line_height(ui->font) + 4.0f;
+            float lw = 180.0f;
+            for (const AcEntry *e : hits) {
+                float tw2 = dai_ui_text_width(ui, e->text) +
+                            (e->hint ? dai_ui_text_width(ui, e->hint) + 24.0f : 0.0f) + 24.0f;
+                if (tw2 > lw) lw = tw2;
+            }
+            if (lw > w - 20.0f) lw = w - 20.0f;
+            float lh2 = RH * (float)total + 4.0f;
+            float ly = cy2 + LH + 2.0f;
+            if (ly + lh2 > y + h) ly = cy2 - lh2 - 2.0f;
+            if (ly < y) ly = y;
+            float lx = cx2;
+            if (lx + lw > x + w - 4.0f) lx = x + w - 4.0f - lw;
+            if (lx < x + 2.0f) lx = x + 2.0f;
+
+            dai_ui_layer_push(ui, DAI_LAYER_POPUP);
+            dai_ui_rrect(ui, lx, ly, lw, lh2, 4.0f, sty->panel);
+            dai_ui_rect_outline(ui, lx, ly, lw, lh2, 1.0f, sty->accent);
+            for (int i = 0; i < total; ++i) {
+                float ry = ly + 2.0f + RH * (float)i;
+                bool on = i == st->ac_sel;
+                if (on) dai_ui_rect(ui, lx + 1.0f, ry, lw - 2.0f, RH, sty->button_active);
+                const char *label = i < (int)hits.size() ? hits[(size_t)i]->text
+                                                         : words[(size_t)(i - (int)hits.size())].c_str();
+                const char *hint = i < (int)hits.size() ? hits[(size_t)i]->hint : "in this file";
+                dai_ui_text(ui, lx + 8.0f, ry + 2.0f, label, on ? 0xFFFFFFFFu : sty->text);
+                if (hint) {
+                    float hw2 = dai_ui_text_width(ui, hint);
+                    if (lx + 8.0f + dai_ui_text_width(ui, label) + 12.0f + hw2 < lx + lw - 6.0f)
+                        dai_ui_text(ui, lx + lw - 6.0f - hw2, ry + 2.0f, hint, sty->text_dim);
+                }
+            }
+            dai_ui_layer_pop(ui);
+        }
+    }
+
     return changed;
 }
 

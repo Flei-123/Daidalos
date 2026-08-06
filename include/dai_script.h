@@ -126,6 +126,36 @@ typedef struct dai_script_play_host {
 } dai_script_play_host;
 DAI_API void dai_script_bind_play(dai_script *s, const dai_script_play_host *host);
 
+/* Immediate mode UI for the GAME, as the global `gui`.
+ *
+ *   function frame() {
+ *       gui.text(20, 20, "Score: " + score, 28, 0xFFFFFFFF);
+ *       if (gui.button(20, 60, 160, 34, "Restart")) restart();
+ *   }
+ *
+ * Coordinates are pixels from the top left of the view. This is the same
+ * model dai_ui uses and the same one the editor is written in: a frame says
+ * what should be on the screen, and nothing has to be deleted afterwards. A
+ * retained tree would need creation, destruction and an owner for every
+ * label - and the first bug it produces is a menu from the last game still
+ * hanging there after a restart.
+ *
+ * The Text and Image COMPONENTS are the other half: they are for what is
+ * always there, they are placed with a mouse, and they survive without a
+ * script running. Use those for a HUD, this for anything conditional. */
+typedef struct dai_script_gui_host {
+    void (*text)(double x, double y, const char *utf8, double size, double rgba, void *user);
+    void (*rect)(double x, double y, double w, double h, double rgba, void *user);
+    void (*image)(double x, double y, double w, double h, const char *path, double rgba, void *user);
+    /* Returns 1 on the frame the button is released over itself. */
+    int  (*button)(double x, double y, double w, double h, const char *label, void *user);
+    /* The view's size in pixels, so a script can lay out against the middle
+     * or the right edge without being told how big the window is. */
+    void (*size)(double *w, double *h, void *user);
+    void *user;
+} dai_script_gui_host;
+DAI_API void dai_script_bind_gui(dai_script *s, const dai_script_gui_host *host);
+
 /* Any host value scripts can read through `state.<name>`. */
 DAI_API void dai_script_set_number(dai_script *s, const char *name, double value);
 DAI_API void dai_script_set_string(dai_script *s, const char *name, const char *value);

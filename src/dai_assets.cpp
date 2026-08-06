@@ -375,7 +375,16 @@ uint32_t dai_assets_list(dai_assets *a, char *out, uint32_t max, uint32_t stride
                    e == "hpp" || e == "h" || e == "json" ||
                    e == "txt" || e == "md" || e == "png" || e == "jpg" ||
                    e == "jpeg" || e == "wav" || e == "ogg" ||
-                   e == "glsl" || e == "vert" || e == "frag";
+                   e == "glsl" || e == "vert" || e == "frag" ||
+                   // Written by the Localisation window, and invisible here
+                   // until this line existed - the SAME fault .daimat had,
+                   // three lines under the comment that warns about it. The
+                   // note is now a checklist: a new file type touches the
+                   // whitelist here, icon_for_asset() and icon_color_for_asset()
+                   // in dai_editor_ui.cpp, and nothing else.
+                   e == "daistr" ||
+                   // Fonts, for the Text component's Font field.
+                   e == "ttf" || e == "otf" || e == "ttc";
         }
         static void go(const std::string &root, const std::string &rel,
                        std::vector<std::string> &out, int depth) {

@@ -884,7 +884,74 @@ struct RunningScript { dai_script *s = nullptr; std::string path; };
 static std::vector<RunningScript> g_running;
 static int g_scripts_live = 0;
 
+// ---- gui: what the scripts asked to be drawn this frame -----------------
+//
+// COLLECTED, not drawn on the spot. frame() runs while the world is being
+// stepped, long before the UI pass; drawing from there would put a label in
+// the middle of the scene geometry or, worse, into last frame's vertex
+// buffer. So the calls land in a list and the list is played back in one
+// place, which is also what makes the coordinates mean the same thing every
+// time.
+struct GuiCmd {
+    int kind;                 // 0 text, 1 rect, 2 image, 3 button
+    float x, y, w, h;
+    float size;
+    uint32_t color;
+    std::string text;
+};
+static std::vector<GuiCmd> g_gui_cmds;
+static float g_gui_x = 0, g_gui_y = 0, g_gui_w = 0, g_gui_h = 0;   // the view
+static float g_gui_mx = 0, g_gui_my = 0;
+static int   g_gui_down = 0, g_gui_released = 0;
+
+static uint32_t gui_col(double v) {
+    // JavaScript numbers are doubles; 0xFFFFFFFF survives exactly, but a
+    // negative or absurd value must not wrap into something opaque black.
+    if (!(v >= 0.0)) return 0xFFFFFFFFu;
+    if (v > 4294967295.0) return 0xFFFFFFFFu;
+    return (uint32_t)v;
+}
+
+static void gui_text_cb(double x, double y, const char *t, double size, double rgba, void *) {
+    GuiCmd c{}; c.kind = 0; c.x = (float)x; c.y = (float)y;
+    c.size = size > 0 ? (float)size : 24.0f; c.color = gui_col(rgba); c.text = t ? t : "";
+    g_gui_cmds.push_back(c);
+}
+static void gui_rect_cb(double x, double y, double w, double h, double rgba, void *) {
+    GuiCmd c{}; c.kind = 1; c.x = (float)x; c.y = (float)y; c.w = (float)w; c.h = (float)h;
+    c.color = gui_col(rgba);
+    g_gui_cmds.push_back(c);
+}
+static void gui_image_cb(double x, double y, double w, double h, const char *path,
+                         double rgba, void *) {
+    GuiCmd c{}; c.kind = 2; c.x = (float)x; c.y = (float)y; c.w = (float)w; c.h = (float)h;
+    c.color = gui_col(rgba); c.text = path ? path : "";
+    g_gui_cmds.push_back(c);
+}
+static int gui_button_cb(double x, double y, double w, double h, const char *label, void *) {
+    GuiCmd c{}; c.kind = 3; c.x = (float)x; c.y = (float)y; c.w = (float)w; c.h = (float)h;
+    c.color = 0; c.text = label ? label : "";
+    g_gui_cmds.push_back(c);
+    // The ANSWER has to come now, in the same call, because the script uses it
+    // in an if. So the hit test runs against last frame's pointer state - one
+    // frame of latency on a click, which nobody can feel, in exchange for an
+    // API that reads like every immediate mode UI ever written.
+    float px = g_gui_x + (float)x, py = g_gui_y + (float)y;
+    bool over = g_gui_mx >= px && g_gui_mx < px + (float)w &&
+                g_gui_my >= py && g_gui_my < py + (float)h;
+    return (over && g_gui_released) ? 1 : 0;
+}
+static void gui_size_cb(double *w, double *h, void *) {
+    if (w) *w = g_gui_w;
+    if (h) *h = g_gui_h;
+}
+static dai_script_gui_host g_gui_host = {
+    gui_text_cb, gui_rect_cb, gui_image_cb, gui_button_cb, gui_size_cb, nullptr
+};
+
+
 static void scripts_stop() {
+    g_gui_cmds.clear();     // or the last frame's menu stays on the screen
     for (RunningScript &r : g_running) dai_script_destroy(r.s);
     g_running.clear();
     // Unloading the libraries on Stop is what makes editing a .cpp and
@@ -1007,6 +1074,7 @@ static void scripts_start() {
             }
             dai_script_bind_nodes(s, &g_node_host);
             dai_script_bind_play(s, &g_play_host);
+            dai_script_bind_gui(s, &g_gui_host);
             if (dai_script_load(s, full, err, sizeof(err)) != DAI_OK) {
                 std::printf("script %s: %s\n", path.c_str(), err);
                 if (g_panels_for_log) {
@@ -1659,6 +1727,145 @@ static int script_create(const char *name, void *) {
             }
             return 0;
         }
+        // "PlayerController.cpp" is the WORKED example, not the stub. It is
+        // the file examples/scripts/PlayerController.cpp in the engine repo,
+        // embedded here - because an example you have to go and find in a
+        // source tree you did not clone is not an example, it is a rumour.
+        //
+        // Recognised by name on purpose: the Create menu asks for it by
+        // asking for that file, and no second callback has to exist for one
+        // template.
+        {
+            const char *base_name = std::strrchr(name, '/');
+            base_name = base_name ? base_name + 1 : name;
+            if (std::strcmp(base_name, "PlayerController.cpp") == 0) {
+                std::fputs(
+                   "// PlayerController.cpp - a player controller in C++, kept deliberately short.\n"
+                   "//\n"
+                   "// Drop this on an object that has a Rigidbody and press Ctrl+P. The editor\n"
+                   "// compiles it the first time you play after it changed, loads it, and calls\n"
+                   "// frame() sixty times a second. Change a number, press Play, see it: the same\n"
+                   "// round trip the JavaScript behaviours have, with a compiler in the middle.\n"
+                   "//\n"
+                   "//   WASD / arrows   move\n"
+                   "//   Space           jump\n"
+                   "//   Shift           sprint\n"
+                   "//\n"
+                   "// WHY IT LOOKS LIKE THIS\n"
+                   "//\n"
+                   "// A behaviour is two functions and a struct. There is no base class to inherit\n"
+                   "// from, no virtual anything, and no header of ours to include beyond this one:\n"
+                   "// the engine hands you a table of function pointers (dai_native_api) and the\n"
+                   "// id of the object you are on. That is the whole contract, and it is a C\n"
+                   "// struct on purpose - a C++ base class would tie every behaviour to the exact\n"
+                   "// compiler and standard library the editor was built with, and then the .dll\n"
+                   "// you built on Tuesday would crash the editor on Wednesday.\n"
+                   "//\n"
+                   "// The fields the inspector shows are declared with \"// @param\" - the same\n"
+                   "// spelling the .js behaviours use, because the editor reads the FILE, not the\n"
+                   "// binary. A C++ member is not something an editor can see.\n"
+                   "//\n"
+                   "// @header Movement\n"
+                   "// @tooltip Metres per second on the ground.\n"
+                   "// @param float speed      = 6\n"
+                   "// @tooltip Multiplied onto speed while Shift is held.\n"
+                   "// @param float sprintMul  = 1.7\n"
+                   "// @tooltip Upward impulse. Roughly: jump height in metres, times two.\n"
+                   "// @param float jumpForce  = 5.5\n"
+                   "// @tooltip How much steering is left while airborne, 0 to 1.\n"
+                   "// @param float airControl = 0.35\n"
+                   "\n"
+                   "#include \"dai_native.h\"\n"
+                   "#include <cmath>\n"
+                   "\n"
+                   "// ---------------------------------------------------------------- state\n"
+                   "//\n"
+                   "// One instance of this struct per object carrying the script. Plain globals\n"
+                   "// would be shared by every player in the scene, which is fine until there are\n"
+                   "// two of them - and then it is a bug that takes an evening to find.\n"
+                   "struct Player {\n"
+                   "    float speed      = 6.0f;\n"
+                   "    float sprintMul  = 1.7f;\n"
+                   "    float jumpForce  = 5.5f;\n"
+                   "    float airControl = 0.35f;\n"
+                   "    bool  jumpHeld   = false;\n"
+                   "};\n"
+                   "\n"
+                   "static Player g_player;     // one object, one behaviour: see the note above\n"
+                   "\n"
+                   "// ---------------------------------------------------------------- helpers\n"
+                   "\n"
+                   "// \"Is this key down.\" The engine speaks key CODES; a letter is its own code,\n"
+                   "// which is why 'w' works directly.\n"
+                   "static bool key(const dai_native_api *api, unsigned code) {\n"
+                   "    return api->key_down(api, code) != 0;\n"
+                   "}\n"
+                   "\n"
+                   "// Standing on something? Not a raycast: a body that is neither rising nor\n"
+                   "// sinking measurably is resting on whatever is under it, and that is exactly\n"
+                   "// what a jump needs to know.\n"
+                   "static bool grounded(const dai_native_api *api, dai_nentity self) {\n"
+                   "    dai_nvec3 v = api->get_velocity(api, self);\n"
+                   "    return v.y > -0.35f && v.y < 0.35f;\n"
+                   "}\n"
+                   "\n"
+                   "// ---------------------------------------------------------------- the behaviour\n"
+                   "\n"
+                   "// Called once when Play starts.\n"
+                   "DAI_BEHAVIOUR_INIT(api, self) {\n"
+                   "    api->log(api, \"PlayerController ready - WASD, Space, Shift\");\n"
+                   "    (void)self;\n"
+                   "}\n"
+                   "\n"
+                   "// Called every frame while the game runs. dt is the length of this frame.\n"
+                   "DAI_BEHAVIOUR_FRAME(api, self, dt) {\n"
+                   "    Player &p = g_player;\n"
+                   "\n"
+                   "    // ---- what the keyboard is asking for, as a direction ----------------\n"
+                   "    float ix = 0.0f, iz = 0.0f;\n"
+                   "    if (key(api, 'a')) ix -= 1.0f;\n"
+                   "    if (key(api, 'd')) ix += 1.0f;\n"
+                   "    if (key(api, 'w')) iz -= 1.0f;\n"
+                   "    if (key(api, 's')) iz += 1.0f;\n"
+                   "\n"
+                   "    // Diagonals are not faster. Without this, holding W and D moves you 41%\n"
+                   "    // quicker than holding W - the classic bug of every first controller.\n"
+                   "    float len = std::sqrt(ix * ix + iz * iz);\n"
+                   "    if (len > 0.0001f) { ix /= len; iz /= len; }\n"
+                   "\n"
+                   "    float want = p.speed;\n"
+                   "    if (key(api, DAI_KEY_SHIFT_L) || key(api, DAI_KEY_SHIFT_R)) want *= p.sprintMul;\n"
+                   "\n"
+                   "    // ---- move by setting the horizontal velocity ------------------------\n"
+                   "    // Keeping the Y component is what makes gravity still apply. A controller\n"
+                   "    // that writes all three components every frame cannot fall.\n"
+                   "    bool on_ground = grounded(api, self);\n"
+                   "    dai_nvec3 v = api->get_velocity(api, self);\n"
+                   "    float t = on_ground ? 1.0f : p.airControl;     // less authority in the air\n"
+                   "    dai_nvec3 nv;\n"
+                   "    nv.x = v.x + (ix * want - v.x) * t;\n"
+                   "    nv.y = v.y;\n"
+                   "    nv.z = v.z + (iz * want - v.z) * t;\n"
+                   "    api->set_velocity(api, self, nv);\n"
+                   "\n"
+                   "    // ---- jumping ---------------------------------------------------------\n"
+                   "    // Edge triggered: held down, `space` is true every frame, and a jump that\n"
+                   "    // fires every frame is a rocket.\n"
+                   "    bool down = key(api, DAI_KEY_SPACE);\n"
+                   "    if (down && !p.jumpHeld && on_ground) {\n"
+                   "        dai_nvec3 up;\n"
+                   "        up.x = 0.0f; up.y = p.jumpForce; up.z = 0.0f;\n"
+                   "        api->add_impulse(api, self, up);\n"
+                   "    }\n"
+                   "    p.jumpHeld = down;\n"
+                   "\n"
+                   "    (void)dt;   // this controller is velocity based, so it needs no dt\n"
+                   "}\n"
+                   "\n", cf);
+                std::fclose(cf);
+                return 1;
+            }
+        }
         // The template is the documentation. A behaviour that starts as an
         // empty file means reading a header to find out what to type.
         std::fputs("// A Daidalos C++ behaviour.\n"
@@ -2075,6 +2282,42 @@ static uint32_t hud_image_cb(const char *path, float *out_w, float *out_h, void 
     if (out_h) *out_h = e.h;
     return e.tex;
 }
+
+
+// Plays the list back into the UI draw list, clipped to the view.
+static void gui_flush(dai_ui *ui, float vx, float vy, float vw, float vh) {
+    if (g_gui_cmds.empty()) return;
+    dai_ui_clip_begin(ui, vx, vy, vw, vh);
+    const float base = dai_ui_text_height(ui) > 0.0f ? dai_ui_text_height(ui) : 13.0f;
+    for (const GuiCmd &c : g_gui_cmds) {
+        float x = vx + c.x, y = vy + c.y;
+        if (c.kind == 1) {
+            dai_ui_rect(ui, x, y, c.w, c.h, c.color);
+        } else if (c.kind == 0) {
+            float k = c.size / base;
+            dai_ui_text_scaled(ui, x + 1.0f, y + 1.0f, c.text.c_str(), 0xB0000000u, k);
+            dai_ui_text_scaled(ui, x, y, c.text.c_str(), c.color, k);
+        } else if (c.kind == 2) {
+            float iw = 0, ih = 0;
+            uint32_t tex = hud_image_cb(c.text.c_str(), &iw, &ih, nullptr);
+            if (tex) dai_ui_image_at(ui, tex, x, y, c.w > 0 ? c.w : iw, c.h > 0 ? c.h : ih,
+                                     0, 0, 1, 1, c.color);
+        } else if (c.kind == 3) {
+            bool over = g_gui_mx >= x && g_gui_mx < x + c.w &&
+                        g_gui_my >= y && g_gui_my < y + c.h;
+            const dai_ui_style *st = dai_ui_style_of(ui);
+            uint32_t bg = over ? (g_gui_down ? st->button_active : st->button_hover) : st->button;
+            dai_ui_rrect(ui, x, y, c.w, c.h, 4.0f, bg);
+            dai_ui_rect_outline(ui, x, y, c.w, c.h, 1.0f, st->panel_border);
+            float tw = dai_ui_text_width(ui, c.text.c_str());
+            dai_ui_text(ui, x + (c.w - tw) * 0.5f,
+                        y + (c.h - dai_ui_text_height(ui)) * 0.5f, c.text.c_str(), st->text);
+        }
+    }
+    dai_ui_clip_end(ui);
+    g_gui_cmds.clear();
+}
+
 
 
 static dai_ui       *g_ui = nullptr;
@@ -3289,6 +3532,103 @@ int main(int argc, char **argv) {
                 if (ct && ct[0]) dai_window_clipboard_set(win, ct);
             }
         }
+        // What the script GUI needs to answer a button: where the pointer is
+        // and whether it was let go this frame, in the view the game is shown
+        // in. Taken here, once, before anything is drawn.
+        {
+            float gx2, gy2, gw2, gh2;
+            if (!dai_editor_ui_game_view_rect(panels, &gx2, &gy2, &gw2, &gh2))
+                dai_editor_ui_viewport_rect(panels, &gx2, &gy2, &gw2, &gh2);
+            g_gui_x = gx2; g_gui_y = gy2; g_gui_w = gw2; g_gui_h = gh2;
+            int down = 0;
+            dai_ui_mouse(ui, &g_gui_mx, &g_gui_my, &down, nullptr);
+            g_gui_released = (!down && g_gui_down) ? 1 : 0;
+            g_gui_down = down;
+        }
+
+        // ---- dragging the selected UI element ----------------------------
+        //
+        // A frame around what is selected, and a handle in its corner. Moving
+        // writes the OFFSET, not a position: the anchor is what makes a HUD
+        // survive a different window size, and a drag that replaced it with
+        // absolute pixels would quietly undo that.
+        static dai_node ui_drag_node = DAI_INVALID_NODE;
+        static int   ui_drag_kind = 0;         // 1 move, 2 resize
+        static float ui_drag_x0 = 0, ui_drag_y0 = 0, ui_drag_ox = 0, ui_drag_oy = 0;
+        if (dai_editor_selection_count(ed) > 0) {
+            dai_node sel_n = dai_editor_selected(ed, 0);
+            float rx, ry, rw, rh;
+            if (dai_hud_rect_of(sel_n, &rx, &ry, &rw, &rh)) {
+                dai_node_desc sr{};
+                int have = dai_doc_get(doc, sel_n, &sr) == DAI_OK;
+                float mx2 = 0, my2 = 0;
+                int mdown = 0, mpress = 0;
+                dai_ui_mouse(ui, &mx2, &my2, &mdown, &mpress);
+
+                // The frame, and a corner grip - only for a Text with a box
+                // and for an Image, because those are the two that HAVE a
+                // size. A grip on a label that is as wide as its words would
+                // resize nothing.
+                dai_ui_layer_push(ui, DAI_LAYER_WINDOW + 6);
+                dai_ui_rect_outline(ui, rx - 2.0f, ry - 2.0f, rw + 4.0f, rh + 4.0f, 1.0f,
+                                    0xFF3D84D8u);
+                bool sizable = have && (sr.image_on || (sr.text_on && sr.text_w > 0.0f));
+                float gx = rx + rw - 5.0f, gy = ry + rh - 5.0f;
+                if (sizable) {
+                    dai_ui_rect(ui, gx, gy, 10.0f, 10.0f, 0xFF3D84D8u);
+                    dai_ui_rect_outline(ui, gx, gy, 10.0f, 10.0f, 1.0f, 0xFFFFFFFFu);
+                }
+                dai_ui_layer_pop(ui);
+
+                bool over_grip = sizable && mx2 >= gx - 2.0f && mx2 < gx + 12.0f &&
+                                 my2 >= gy - 2.0f && my2 < gy + 12.0f;
+                bool over_body = mx2 >= rx - 2.0f && mx2 < rx + rw + 2.0f &&
+                                 my2 >= ry - 2.0f && my2 < ry + rh + 2.0f;
+                if (mpress && have && (over_grip || over_body)) {
+                    ui_drag_node = sel_n;
+                    ui_drag_kind = over_grip ? 2 : 1;
+                    ui_drag_x0 = mx2; ui_drag_y0 = my2;
+                    if (ui_drag_kind == 1) {
+                        ui_drag_ox = sr.image_on && !sr.text_on ? sr.image_x : sr.text_x;
+                        ui_drag_oy = sr.image_on && !sr.text_on ? sr.image_y : sr.text_y;
+                    } else {
+                        ui_drag_ox = sr.image_on && !sr.text_on ? sr.image_w : sr.text_w;
+                        ui_drag_oy = sr.image_on && !sr.text_on ? sr.image_h : sr.text_h;
+                    }
+                }
+                if (over_grip) dai_ui_cursor_set(ui, DAI_CURSOR_SIZE_NWSE);
+                else if (over_body && ui_drag_node == DAI_INVALID_NODE)
+                    dai_ui_cursor_set(ui, DAI_CURSOR_HAND);
+            }
+        }
+        if (ui_drag_node != DAI_INVALID_NODE) {
+            float mx2 = 0, my2 = 0;
+            int mdown = 0;
+            dai_ui_mouse(ui, &mx2, &my2, &mdown, nullptr);
+            dai_node_desc sr{};
+            if (dai_doc_get(doc, ui_drag_node, &sr) == DAI_OK) {
+                float dx2 = mx2 - ui_drag_x0, dy2 = my2 - ui_drag_y0;
+                bool img = sr.image_on && !sr.text_on;
+                if (ui_drag_kind == 1) {
+                    if (img) { sr.image_x = ui_drag_ox + dx2; sr.image_y = ui_drag_oy + dy2; }
+                    else     { sr.text_x  = ui_drag_ox + dx2; sr.text_y  = ui_drag_oy + dy2; }
+                } else {
+                    float nw = ui_drag_ox + dx2, nh = ui_drag_oy + dy2;
+                    if (nw < 8.0f) nw = 8.0f;
+                    if (nh < 8.0f) nh = 8.0f;
+                    if (img) { sr.image_w = nw; sr.image_h = nh; }
+                    else     { sr.text_w  = nw; sr.text_h  = nh; }
+                }
+                // No transaction while the button is down: a drag is ONE undo
+                // step, not one per frame. It is committed on release.
+                dai_doc_set(doc, ui_drag_node, &sr);
+            }
+            if (!mdown) {
+                ui_drag_node = DAI_INVALID_NODE;
+                ui_drag_kind = 0;
+            }
+        }
+
         // ---- the game's own UI ------------------------------------------
         // Drawn into the Game view, clipped to it, in the same draw list as
         // everything else - a HUD in a second pass would sit on top of the
@@ -3298,8 +3638,16 @@ int main(int argc, char **argv) {
         // see until you press play is a label you place by trial and error.
         {
             float hx, hy, hw, hh;
-            if (dai_editor_ui_game_view_rect(panels, &hx, &hy, &hw, &hh))
+            if (dai_editor_ui_game_view_rect(panels, &hx, &hy, &hw, &hh)) {
                 dai_hud_draw(ui, doc, hx, hy, hw, hh, 1.0f, hud_resolve, nullptr);
+                gui_flush(ui, hx, hy, hw, hh);
+            } else {
+                // No Game panel: the script's UI still has to go somewhere, or
+                // a menu drawn from code is invisible until you dock one.
+                float vx2, vy2, vw2, vh2;
+                dai_editor_ui_viewport_rect(panels, &vx2, &vy2, &vw2, &vh2);
+                if (vw2 > 0.0f && vh2 > 0.0f) gui_flush(ui, vx2, vy2, vw2, vh2);
+            }
         }
         diag_step("ui end");
         dai_ui_end(ui);
@@ -3411,9 +3759,6 @@ int main(int argc, char **argv) {
         dai_editor_ui_viewport_rect(panels, &vrx, &vry, &vrw, &vrh);
         dai_editor_camera_viewport_rect(ed, vrx, vry, vrw, vrh);
         dai_render_world_clip(r, vrx * uis, vry * uis, vrw * uis, vrh * uis);
-        // 2D: an orthographic projection, sized so that switching does not
-        // change how big anything looks. 0 puts the perspective back.
-        dai_render_ortho(r, dai_editor_cam_2d_get(ed) ? dai_editor_cam_ortho_height(ed) : 0.0f);
         {   // The floor grid as world lines: depth tested, so boxes hide it.
             // Bigger buffer than the old fixed 20 m mat needed: the grid now
             // follows the camera and carries a coarse set as well.
@@ -3450,10 +3795,14 @@ int main(int argc, char **argv) {
             }
         }
         dai_render_sky(r, no_world ? 0 : 1);
-        // Orthographic when the game camera says so: that IS the 2D mode.
-        // The Scene view stays perspective so the level is still navigable.
+        // Orthographic when the GAME camera says so, or when the scene view is
+        // in 2D. One call, at the end, because there is one projection for
+        // view 0 and whoever writes it last wins - the 2D toggle used to set
+        // it thirty lines above this and then have it overwritten with 0 here,
+        // which is why pressing 2 turned the camera without flattening it.
         float game_ortho = dai_editor_ui_game_ortho(panels);
-        dai_render_ortho(r, dai_editor_ui_view(panels) == DAI_VIEW_GAME ? game_ortho : 0.0f);
+        float scene_ortho = dai_editor_cam_2d_get(ed) ? dai_editor_cam_ortho_height(ed) : 0.0f;
+        dai_render_ortho(r, dai_editor_ui_view(panels) == DAI_VIEW_GAME ? game_ortho : scene_ortho);
         dai_render_camera(r, reye, rlook, dai_vec3{ 0, 1, 0 }, rfov, 0.1f, 300.0f);
 
         // Both panels docked open: the Scene panel keeps the editor camera

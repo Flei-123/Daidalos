@@ -156,3 +156,47 @@ localisation is opt-in per string, which is the only way it gets adopted.
 
 The language is a **project setting** (Settings > Project > Language), so
 everyone on a team sees the same labels, and the exported game starts in it.
+
+## UI from code
+
+The Text and Image components are for what is **always there** - a score, a
+crosshair, a logo. They are placed with the mouse and they work without a
+script running.
+
+For anything **conditional** - a menu, a death screen, a debug readout - there
+is `gui`, drawn per frame:
+
+```js
+function frame() {
+    gui.text(20, 20, "Score: " + score, 28, 0xFFFFFFFF);
+    if (dead) {
+        var s = gui.size();                       // [width, height] of the view
+        gui.rect(0, 0, s[0], s[1], 0xA0000000);   // dim everything
+        gui.text(s[0] / 2 - 60, s[1] / 2 - 40, "You died", 40, 0xFFFF5555);
+        if (gui.button(s[0] / 2 - 70, s[1] / 2 + 10, 140, 36, "Restart")) restart();
+    }
+}
+```
+
+- `gui.text(x, y, text, size, colour)`
+- `gui.rect(x, y, w, h, colour)`
+- `gui.image(x, y, w, h, "textures/heart.png", tint)`
+- `gui.button(x, y, w, h, label)` - true on the frame it is released over
+- `gui.size()` - the view, so you can lay out against the middle or the right
+
+Colours are `0xAARRGGBB`. Coordinates are pixels from the top left of the view.
+
+**Immediate mode**: a frame says what should be on the screen, and nothing has
+to be deleted afterwards. A retained tree needs creation, destruction and an
+owner for every label - and its first bug is always a menu from the last game
+still hanging there after a restart.
+
+## Autocomplete
+
+The script editor suggests after two characters: the engine API, and every
+identifier already in the file. **Up/Down** picks, **Tab** or **Enter** takes
+it, **Escape** dismisses.
+
+It is a list of names, not a parser. A half parser is wrong on exactly the
+lines you are in the middle of writing, and being confidently wrong there is
+worse than offering nothing.

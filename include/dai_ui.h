@@ -554,6 +554,13 @@ typedef struct dai_ui_code_state {
     int   last_caret;   /* what the caret was last frame - see the widget    */
     int   have_last;
     int   follow_caret; /* one shot: bring the caret into view on this draw  */
+    /* Autocomplete. `ac_open` is the list being shown, `ac_sel` the row the
+     * arrows are on, `ac_start` where the word being completed begins. Kept
+     * in the state rather than the widget so two open scripts each keep their
+     * own popup - and so closing a tab closes its list with it. */
+    int   ac_open;
+    int   ac_sel;
+    int   ac_start;
 } dai_ui_code_state;
 
 enum {
