@@ -121,6 +121,9 @@ struct dai_editor_ui {
     // The hierarchy's filter. A scene of four hundred objects is a scene you
     // scroll, and scrolling is not finding.
     char hier_filter[64] = { 0 };
+    // A right click closed a menu; open a new one at this point, same frame.
+    int   reopen_menu = 0;
+    float reopen_x = 0.0f, reopen_y = 0.0f;
     int  hier_flat = 0;      // filtering: draw the row, not the subtree
     uint32_t visible_rows = 0;
 
@@ -7302,6 +7305,41 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     if (!p->layout_ready) dai_editor_ui_layout_reset(p, vw, vh);
     p->layout_w = vw; p->layout_h = vh;
 
+    // ---- the second right click ------------------------------------------
+    // Handled HERE, before a single panel, a single dock and a single popup
+    // has run. Four fixes further down the stack did nothing, so this one
+    // does not trust anything below it: it reads the raw button, it closes
+    // whatever is open, and it remembers the point so the panel that owns it
+    // can open a fresh menu there this same frame.
+    //
+    // The Console line is deliberate. If this still does not work I want the
+    // editor to say what it saw rather than have me guess a sixth time.
+    {
+        int rp = dai_ui_right_pressed(ui);
+        int any_open = p->menu_canvas.open || p->menu_node.open || p->menu_comp.open ||
+                       p->menu_mesh.open || p->menu_layout.open || p->menu_window.open;
+        if (rp) {
+            float rx = 0, ry = 0;
+            dai_ui_mouse(ui, &rx, &ry, nullptr, nullptr);
+            char line[160];
+            std::snprintf(line, sizeof(line),
+                          "right click at %.0f,%.0f (a menu was %s)",
+                          (double)rx, (double)ry, any_open ? "open" : "closed");
+            dai_editor_ui_log(p, 0, line);
+            if (any_open) {
+                p->menu_canvas.open = 0;
+                p->menu_node.open = 0;
+                p->menu_comp.open = 0;
+                p->menu_mesh.open = 0;
+                p->menu_layout.open = 0;
+                p->menu_window.open = 0;
+                p->reopen_menu = 1;
+                p->reopen_x = rx;
+                p->reopen_y = ry;
+            }
+        }
+    }
+
     // The chrome: solid bars top and bottom, the dock tree in between. There
     // is no "free area" any more - every pixel between the bars belongs to
     // exactly one panel, which is what makes overlapping impossible.
@@ -7349,8 +7387,14 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         // root of its own, so while one is up the hierarchy is never hovered -
         // and that single word is why the second right click did nothing, in
         // four attempts at fixing it. The panel's rectangle does not lie.
-        if (dai_ui_right_pressed(ui) &&
-            mx >= px && mx < px + pw && my >= py && my < py + ph) {
+        bool re_here = p->reopen_menu &&
+                       p->reopen_x >= px && p->reopen_x < px + pw &&
+                       p->reopen_y >= py && p->reopen_y < py + ph;
+        if (re_here) {
+            dai_ui_popup_open(&p->menu_canvas, p->reopen_x, p->reopen_y);
+            p->reopen_menu = 0;
+        } else if (dai_ui_right_pressed(ui) &&
+                   mx >= px && mx < px + pw && my >= py && my < py + ph) {
             p->menu_node.open = 0;
             p->menu_canvas.open = 0;
             dai_ui_popup_open(&p->menu_canvas, mx, my);
@@ -8021,6 +8065,7 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         }
     }
 
+    p->reopen_menu = 0;
     run_context_menus(p);
 }
 
