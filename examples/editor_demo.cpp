@@ -3226,6 +3226,10 @@ int main(int argc, char **argv) {
         ci.mouse_left = (buttons & (1u << 1)) ? 1 : 0;
         ci.mouse_middle = (buttons & (1u << 2)) ? 1 : 0;
         ci.mouse_right = (buttons & (1u << 3)) ? 1 : 0;
+        // The RAW button, kept before the camera's copy is blanked below. The
+        // user interface must always know the truth about the pointer; only
+        // the camera is allowed to be told a convenient lie.
+        int raw_right = ci.mouse_right;
         if (dai_editor_ui_menu_open(panels)) ci.mouse_right = 0;
         ci.wheel = wheel;
         // The camera reads held keys; a field being typed into owns them first.
@@ -3688,13 +3692,23 @@ int main(int argc, char **argv) {
         uint32_t typed[8] = { 0 };
         dai_window_text(win, typed, 8);
 
-        // The menu swallows the right button: while one is open, right is not
-        // the camera's look button - otherwise dismissing a menu with the same
-        // button that summoned it also turns the world.
+        // THE bug behind "I can only right click once". This line used to read
+        //     in.right_down = menu_open ? 0 : ci.mouse_right;
+        // so while a menu was open the editor told the UI, in as many words,
+        // that the right button did not exist. Six fixes went in above this
+        // line - in the viewport, in the hierarchy, in the popup itself - and
+        // every one of them was reasoning about a click that had already been
+        // erased one layer down.
+        //
+        // What that line was actually for is real and stays: the CAMERA must
+        // not turn when you dismiss a menu with the same button that opened
+        // it. That is a fact about the camera, so it is told to the camera -
+        // ci.mouse_right is cleared above for exactly that - and not to the
+        // whole user interface.
         dai_ui_input in{};
         in.mouse_x = (float)mx / uis; in.mouse_y = (float)my / uis;
         in.mouse_down = ci.mouse_left;
-        in.right_down = dai_editor_ui_menu_open(panels) ? 0 : ci.mouse_right;
+        in.right_down = raw_right;
         in.wheel = wheel;
         std::memcpy(in.text, typed, sizeof(in.text));
         in.key_backspace = dai_window_key_down(win, DAI_KEY_BACKSPACE) && !prev_backspace;
