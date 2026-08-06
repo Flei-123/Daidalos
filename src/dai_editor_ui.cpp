@@ -7335,9 +7335,15 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         // Right click on empty space in the hierarchy: the GameObject menu.
         float mx = 0, my = 0;
         dai_ui_mouse(ui, &mx, &my, nullptr, nullptr);
-        if (dai_ui_right_pressed(ui) && dai_ui_root_hovered(ui, "Hierarchy") &&
-            !p->menu_node.open && !p->menu_canvas.open)
+        // The same rule as the viewport: a second right click REPLACES the
+        // menu. Testing "no menu is open" meant the second click was thrown
+        // away and the first menu just sat there, in the place you no longer
+        // wanted it.
+        if (dai_ui_right_pressed(ui) && dai_ui_root_hovered(ui, "Hierarchy")) {
+            p->menu_node.open = 0;
+            p->menu_canvas.open = 0;
             dai_ui_popup_open(&p->menu_canvas, mx, my);
+        }
         dai_ui_panel_end(ui);
         dai_dock_panel_end(p->dock);
     }
@@ -7985,10 +7991,20 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             // On the window layer, like the script drag: a pill clipped to
             // the panel it started in disappears the moment the drag leaves
             // the hierarchy, which is every drag that matters.
+            // Kept inside the window. Drawn at the pointer plus twelve, it
+            // ran off the right edge as soon as the drag reached it - and the
+            // name was cut off mid-word, which is when you most want to read
+            // it, because that is where you are about to drop the thing.
+            float pw2 = (float)p->layout_w, ph2 = (float)p->layout_h;
+            float gx = dmx + 12.0f, gy = dmy + 10.0f;
+            if (pw2 > 0.0f && gx + tw > pw2 - 4.0f) gx = dmx - tw - 12.0f;
+            if (gx < 4.0f) gx = 4.0f;
+            if (ph2 > 0.0f && gy + th > ph2 - 4.0f) gy = ph2 - th - 4.0f;
+            if (gy < 4.0f) gy = 4.0f;
             dai_ui_layer_push(ui, DAI_LAYER_WINDOW + 100);
-            dai_ui_rrect(ui, dmx + 12.0f, dmy + 10.0f, tw, th, 4.0f, st->accent);
-            dai_ui_rect_outline(ui, dmx + 12.0f, dmy + 10.0f, tw, th, 1.0f, 0xFFFFFFFFu);
-            dai_ui_text(ui, dmx + 21.0f, dmy + 14.0f, note, st->text);
+            dai_ui_rrect(ui, gx, gy, tw, th, 4.0f, st->accent);
+            dai_ui_rect_outline(ui, gx, gy, tw, th, 1.0f, 0xFFFFFFFFu);
+            dai_ui_text(ui, gx + 9.0f, gy + 4.0f, note, st->text);
             dai_ui_layer_pop(ui);
             dai_ui_claim_mouse(ui);
         }
