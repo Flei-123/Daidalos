@@ -169,6 +169,17 @@ typedef struct dai_node_desc {
      * `button_action` names the function to call; empty means `onClick`. The
      * rectangle is the Image's when there is one, otherwise the text block's -
      * a label with no background is still a button, it just has no frame. */
+    /* Components that are THERE but switched OFF. Removing one and turning
+     * one off are two different things, and the document only ever had the
+     * first: no_collider meant both, so the tick box in the header and the
+     * Remove entry in its menu were two names for one bit - and turning a
+     * collider off made its whole section vanish.
+     *
+     * Bit 0 the collider, bit 1 the rigidbody. */
+    uint32_t disabled_comps;
+#define DAI_COMP_COLLIDER   0x1u
+#define DAI_COMP_RIGIDBODY  0x2u
+
     int      button_on;
     dai_vec3 button_hover;      /* tint under the pointer, 0,0,0 -> automatic */
     dai_vec3 button_press;      /* tint while held,        0,0,0 -> automatic */

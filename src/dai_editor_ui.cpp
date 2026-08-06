@@ -2834,9 +2834,16 @@ static void inspector_body(dai_editor_ui *p) {
     // only state there is - there is no separate enabled flag - so a box that
     // claimed to be one was two names for the same bit.
     if (has_collider) {
+        // The tick box is ENABLED, not EXISTS. Both, because they are two
+        // different questions: "off for a moment while I test something" is
+        // not "gone", and the header has to stay put for the first one.
+        int con = (r.disabled_comps & DAI_COMP_COLLIDER) == 0;
         int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_COLLIDER, rgba(0x7A, 0xD9, 0x7A, 255), collider_title(r.shape),
-                                     &p->fold_collider, nullptr);
-        if (hrc == 3) {
+                                     &p->fold_collider, &con);
+        if (hrc == 2) {
+            r.disabled_comps = con ? (r.disabled_comps & ~DAI_COMP_COLLIDER)
+                                   : (r.disabled_comps | DAI_COMP_COLLIDER);
+        } else if (hrc == 3) {
             p->comp_menu_target = 2;
             float cmx = 0, cmy = 0;
             dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
@@ -2879,8 +2886,12 @@ static void inspector_body(dai_editor_ui *p) {
     // ---- Rigidbody ---------------------------------------------------------
     int has_body = !r.no_rigidbody && !r.no_body;
     if (has_body) {
-        int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_BODY, rgba(0xA7, 0x9B, 0xF0, 255), "Rigidbody", &p->fold_body, nullptr);
-        if (hrc == 3) {
+        int bon = (r.disabled_comps & DAI_COMP_RIGIDBODY) == 0;
+        int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_BODY, rgba(0xA7, 0x9B, 0xF0, 255), "Rigidbody", &p->fold_body, &bon);
+        if (hrc == 2) {
+            r.disabled_comps = bon ? (r.disabled_comps & ~DAI_COMP_RIGIDBODY)
+                                   : (r.disabled_comps | DAI_COMP_RIGIDBODY);
+        } else if (hrc == 3) {
             p->comp_menu_target = 1;
             float cmx = 0, cmy = 0;
             dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);

@@ -2573,11 +2573,20 @@ static uint32_t hud_image_cb(const char *path, float *out_w, float *out_h, void 
                               "image: not a PNG (only .png is decoded) - %s", full);
             } else {
                 // IHDR: bit depth at 24, colour type at 25, interlace at 28.
-                int depth = hd[24], ctype = hd[25];
-                std::snprintf(line, sizeof(line),
-                              "image: PNG found but not decoded (bit depth %d, colour type %d) "
-                              "- save it as 8 bit RGB or RGBA, not interlaced - %s",
-                              depth, ctype, full);
+                // IHDR: 8 bytes of length+type, then w,h,depth,colour,
+                // compression,filter,interlace - so interlace is byte 28.
+                int depth = hd[24], ctype = hd[25], ilace = hd[28];
+                if (ilace) {
+                    std::snprintf(line, sizeof(line),
+                                  "image: interlaced PNG (Adam7) is not decoded - "
+                                  "re-save it without interlacing - %s", full);
+                } else {
+                    std::snprintf(line, sizeof(line),
+                                  "image: PNG not decoded (bit depth %d, colour type %d) "
+                                  "- 16 bit samples and unusual layouts are not read; "
+                                  "save it as 8 bit RGB or RGBA - %s",
+                                  depth, ctype, full);
+                }
             }
         }
         dai_editor_ui_log(g_panels_for_log, 2, line);

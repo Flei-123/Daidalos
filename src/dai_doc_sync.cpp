@@ -41,6 +41,7 @@ bool needs_rebuild(const dai_node_desc &a, const dai_node_desc &b) {
     return a.disabled != b.disabled ||
            a.shape != b.shape || a.motion != b.motion || a.no_body != b.no_body ||
            a.no_collider != b.no_collider || a.no_rigidbody != b.no_rigidbody ||
+           a.disabled_comps != b.disabled_comps ||
            a.trigger != b.trigger ||
            a.no_sleeping != b.no_sleeping ||
            a.freeze != b.freeze ||
@@ -148,7 +149,11 @@ namespace {
 bool physicsless(const dai_node_desc &r) {
     // A disabled object has no physics at all - that is what the
     // checkbox next to the name means everywhere else.
-    return r.disabled || r.no_body || (r.no_collider && r.no_rigidbody);
+    // A component switched OFF counts as absent for the physics - that is the
+    // whole point of the tick box - while the inspector keeps showing it.
+    bool col_off  = r.no_collider  || (r.disabled_comps & DAI_COMP_COLLIDER);
+    bool body_off = r.no_rigidbody || (r.disabled_comps & DAI_COMP_RIGIDBODY);
+    return r.disabled || r.no_body || (col_off && body_off);
 }
 
 bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
@@ -158,8 +163,10 @@ bool spawn(dai_doc_sync *s, dai_node n, const dai_node_desc &r) {
 
     dai_entity_desc d = dai_entity_desc_default();
     d.body.shape = r.shape;
-    d.body.motion = r.no_rigidbody ? DAI_STATIC : r.motion;
-    d.body.sensor = (r.trigger || r.no_collider) && !physicsless(r);
+    bool rb_off  = r.no_rigidbody || (r.disabled_comps & DAI_COMP_RIGIDBODY);
+    bool col_off2 = r.no_collider  || (r.disabled_comps & DAI_COMP_COLLIDER);
+    d.body.motion = rb_off ? DAI_STATIC : r.motion;
+    d.body.sensor = (r.trigger || col_off2) && !physicsless(r);
     d.body.half_extent = scaled_extent(r, ws);
     d.body.position = wp;
     d.body.rotation = wr;
