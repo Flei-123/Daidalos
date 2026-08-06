@@ -226,6 +226,20 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
                 fstr(r.text_color.y).c_str(), fstr(r.text_color.z).c_str());
         if (r.text_anchor != def.text_anchor) put(s, "  textanchor %d\n", r.text_anchor);
         if (r.text_font[0])                   put(s, "  textfont %s\n", r.text_font);
+        if (!feq(r.text_w, def.text_w) || !feq(r.text_h, def.text_h))
+            put(s, "  textbox %s %s\n", fstr(r.text_w).c_str(), fstr(r.text_h).c_str());
+        if (r.text_autosize != def.text_autosize) put(s, "  textfit %d\n", r.text_autosize);
+        if (r.image_on != def.image_on)       put(s, "  image %d\n", r.image_on);
+        if (r.image[0])                       put(s, "  imagefile %s\n", r.image);
+        if (!feq(r.image_w, def.image_w) || !feq(r.image_h, def.image_h))
+            put(s, "  imagesize %s %s\n", fstr(r.image_w).c_str(), fstr(r.image_h).c_str());
+        if (!feq(r.image_color.x, def.image_color.x) || !feq(r.image_color.y, def.image_color.y) ||
+            !feq(r.image_color.z, def.image_color.z))
+            put(s, "  imagecol %s %s %s\n", fstr(r.image_color.x).c_str(),
+                fstr(r.image_color.y).c_str(), fstr(r.image_color.z).c_str());
+        if (r.image_anchor != def.image_anchor) put(s, "  imageanchor %d\n", r.image_anchor);
+        if (!feq(r.image_x, def.image_x) || !feq(r.image_y, def.image_y))
+            put(s, "  imagepos %s %s\n", fstr(r.image_x).c_str(), fstr(r.image_y).c_str());
         if (!feq(r.text_x, def.text_x) || !feq(r.text_y, def.text_y))
             put(s, "  textpos %s %s\n", fstr(r.text_x).c_str(), fstr(r.text_y).c_str());
         if (r.audio_event[0])            put(s, "  audio %s\n", r.audio_event);
@@ -378,6 +392,19 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "textsize")   { ok = parse_floats(after, &rec.text_size, 1); }
         else if (key == "textcol")    { ok = parse_floats(after, &rec.text_color.x, 3); }
         else if (key == "textanchor") { ok = parse_i32(after, &rec.text_anchor); }
+        else if (key == "textbox")    { ok = parse_floats(after, &rec.text_w, 2); }
+        else if (key == "textfit")    { ok = parse_i32(after, &rec.text_autosize); }
+        else if (key == "image")      { ok = parse_i32(after, &rec.image_on); }
+        else if (key == "imagesize")  { ok = parse_floats(after, &rec.image_w, 2); }
+        else if (key == "imagecol")   { ok = parse_floats(after, &rec.image_color.x, 3); }
+        else if (key == "imageanchor"){ ok = parse_i32(after, &rec.image_anchor); }
+        else if (key == "imagepos")   { ok = parse_floats(after, &rec.image_x, 2); }
+        else if (key == "imagefile") {
+            std::string v = after;
+            while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(0, 1);
+            while (!v.empty() && (v.back() == ' ' || v.back() == '\t' || v.back() == '\r')) v.pop_back();
+            if (v.size() >= sizeof(rec.image)) ok = false;
+            else std::snprintf(rec.image, sizeof(rec.image), "%s", v.c_str()); }
         else if (key == "textfont") {
             std::string v = after;
             while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(0, 1);

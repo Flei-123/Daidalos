@@ -131,6 +131,7 @@ struct dai_editor {
     struct LivePose { dai_vec3 pos; dai_quat rot; };
     std::unordered_map<uint32_t, LivePose> live_pose;
 
+    int   cam_2d = 0;                  // Unity's 2D button
     int   cam_mode = 0;                // 0 none, 1 look, 2 pan, 3 orbit, 4 dolly
     int   cam_frozen = 0;              // the mode is locked while its button is held
     int   cam_btn = 0;                 // 1 left, 2 right, 4 middle: what started it
@@ -1069,6 +1070,36 @@ void dai_editor_cam_speed(dai_editor *e, float s) {
 float dai_editor_cam_speed_get(const dai_editor *e) { return e ? e->cam_speed : 0.0f; }
 int dai_editor_cam_active(const dai_editor *e) { return (e && e->cam_mode != 0) ? 1 : 0; }
 
+void dai_editor_cam_2d(dai_editor *e, int on) {
+    if (!e) return;
+    int want = on ? 1 : 0;
+    if (e->cam_2d == want) return;
+    e->cam_2d = want;
+    cam_ensure_angles(e);
+    if (want) {
+        // Square on to the XY plane. The pivot stays where it was, so the
+        // thing you were looking at is the thing you are still looking at -
+        // a 2D button that also moves you somewhere else is a button you
+        // press once and then undo.
+        dai_vec3 pivot = dai_editor_cam_pivot(e);
+        e->cam_yaw = 0.0f;
+        e->cam_pitch = 0.0f;
+        dai_vec3 fwd, right, upv;
+        cam_basis(e, &fwd, &right, &upv);
+        e->eye = sub(pivot, mul(fwd, e->cam_pivot_dist));
+        cam_apply(e);
+    }
+}
+int dai_editor_cam_2d_get(const dai_editor *e) { return e ? e->cam_2d : 0; }
+
+float dai_editor_cam_ortho_height(const dai_editor *e) {
+    if (!e) return 5.0f;
+    // The height a PERSPECTIVE camera would show at the pivot. Toggling the
+    // mode then does not change the size of anything, which is the whole
+    // reason this is computed rather than a constant.
+    return e->cam_pivot_dist * std::tan(e->fov * PI / 360.0f);
+}
+
 void dai_editor_camera_get(const dai_editor *e, dai_vec3 *eye, dai_vec3 *target,
                            float *fov_deg) {
     if (!e) return;
@@ -1153,6 +1184,13 @@ int dai_editor_cam_update(dai_editor *e, const dai_editor_cam_input *in) {
     // Which mode a press starts. Checked in Unity's precedence: alt combos
     // first, then plain right for flythrough, then middle for pan.
     int mode = 0;
+    // In 2D the plane must stay square on, so the two gestures that would
+    // tilt it are simply not available: alt+left pans instead of orbiting,
+    // and the right button does nothing. Everything else - pan, wheel,
+    // dolly - is unchanged, because those are how you move around a plan.
+    if (e->cam_2d) {
+        if (in->mouse_middle || (in->key_alt && in->mouse_left)) mode = 2;
+    } else
     if (in->key_alt && in->mouse_left)        mode = 3;   // orbit
     else if (in->key_alt && in->mouse_right)  mode = 4;   // dolly by dragging
     else if (in->mouse_right)                 mode = 1;   // look around

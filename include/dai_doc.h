@@ -132,6 +132,32 @@ typedef struct dai_node_desc {
      * UI font - a label has to draw on the day it is added, before anyone has
      * gone looking for a font file. */
     char     text_font[96];
+    /* The box the text lives in, in pixels. 0,0 means "as wide as the words",
+     * which is what a score wants; a real width is what a subtitle wants,
+     * because a line that runs off the screen is not a subtitle.
+     *
+     * With a box, the text WRAPS at its width. With `text_autosize` on, it
+     * also shrinks until it fits the height - the thing every UI toolkit
+     * eventually grows, because a translated string is never the length the
+     * layout was drawn for. German is famously a third longer than English,
+     * and the box does not get bigger when it is. */
+    float    text_w, text_h;
+    int      text_autosize;     /* 1 = shrink to fit the box                 */
+
+    /* ---- Image: the game's UI, in pictures --------------------------------
+     * A screen space sprite, anchored exactly like Text. `image` is a project
+     * path to a .png; `image_w/h` is its size in pixels (0 = the file's own).
+     *
+     * This is what the old `sprite` flag was supposed to be. It set a bit that
+     * NOTHING read - not the sync layer, not the scene, not the renderer -
+     * so a Sprite component was a checkbox with no effect for as long as it
+     * has existed. */
+    int      image_on;
+    char     image[96];
+    float    image_w, image_h;
+    dai_vec3 image_color;       /* tint, 0,0,0 -> white                      */
+    int      image_anchor;      /* same 3x3 grid as the text                 */
+    float    image_x, image_y;
 
     char     audio_event[64];   /* AudioSource: event name in the sound bank    */
     int      audio_bus;         /* 0 master, 1 music, 2 sfx, 3 ui               */

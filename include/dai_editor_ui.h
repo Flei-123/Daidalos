@@ -36,6 +36,11 @@ typedef struct dai_editor_ui dai_editor_ui;
  * `scale` is the UI scale, so a HUD authored at 24 px is 24 px on a 4K
  * display too rather than a sixth of the size. */
 typedef const char *(*dai_hud_resolve_fn)(const char *text, void *user);
+/* Turns a project path into a texture the renderer already holds. Null means
+ * "this host has no textures", and then Image components simply do not draw -
+ * which is the right behaviour for a headless test, not an error. */
+typedef uint32_t (*dai_hud_image_fn)(const char *path, float *out_w, float *out_h, void *user);
+DAI_API void dai_hud_images(dai_hud_image_fn fn, void *user);
 DAI_API void dai_hud_draw(struct dai_ui *ui, struct dai_doc *doc,
                           float x, float y, float w, float h, float scale,
                           dai_hud_resolve_fn resolve, void *user);
@@ -48,6 +53,10 @@ DAI_API void dai_hud_draw(struct dai_ui *ui, struct dai_doc *doc,
  * poke-and-peek API rather than a shared struct: the panel owns its rows, and
  * a host that reached into them would have to be updated every time a column
  * is added. */
+/* What a "@key" means to a player. The inspector shows it under the Text
+ * field so a key can be checked without exporting. Same function the HUD uses. */
+DAI_API void dai_editor_ui_tr_host(dai_editor_ui *p, dai_hud_resolve_fn fn, void *user);
+
 typedef int (*dai_editor_ui_loc_fn)(void *user);
 DAI_API void dai_editor_ui_loc_host(dai_editor_ui *p, dai_editor_ui_loc_fn load,
                                     dai_editor_ui_loc_fn save, void *user);

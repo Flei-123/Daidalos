@@ -205,6 +205,45 @@ int main() {
         CHECK(rb > rs * 2.0f, "48 px is %.0f wide, 16 px is %.0f - size did nothing", rb, rs);
     }
 
+    // ---- 7. the box: wrapping and autosize ---------------------------------
+    // The case this exists for: a translated string is never the length the
+    // layout was drawn for. German runs about a third longer than English,
+    // and the box does not get bigger when it does.
+    {
+        const char *LONG = "Press the space bar to jump and hold shift to sprint across the floor";
+        dai_doc *d = dai_doc_create();
+        dai_node n = add_label(d, "Hint", LONG, 0, 20.0f, 1);
+        Box nobox = run(ui, d, W, H);
+
+        // With a width, it WRAPS: the same words, narrower, taller.
+        dai_node_desc r{};
+        dai_doc_get(d, n, &r);
+        r.text_w = 240.0f;
+        dai_doc_set(d, n, &r);
+        Box wrapped = run(ui, d, W, H);
+        CHECK(wrapped.x1 - wrapped.x0 <= 244.0f,
+              "the wrapped label is %.0f px wide, the box is 240", wrapped.x1 - wrapped.x0);
+        CHECK(wrapped.y1 - wrapped.y0 > (nobox.y1 - nobox.y0) * 1.5f,
+              "wrapping did not make it taller: %.0f px vs %.0f",
+              wrapped.y1 - wrapped.y0, nobox.y1 - nobox.y0);
+        CHECK(wrapped.quads == nobox.quads,
+              "wrapping changed the number of glyphs (%d vs %d) - it dropped or "
+              "duplicated words", wrapped.quads, nobox.quads);
+
+        // With a HEIGHT and autosize, it shrinks until it fits that height.
+        r.text_h = 44.0f;
+        r.text_autosize = 1;
+        dai_doc_set(d, n, &r);
+        Box fitted = run(ui, d, W, H);
+        CHECK(fitted.y1 - fitted.y0 <= 48.0f,
+              "autosize left the text %.0f px tall in a 44 px box", fitted.y1 - fitted.y0);
+        CHECK(fitted.quads == nobox.quads, "autosize lost characters (%d vs %d)",
+              fitted.quads, nobox.quads);
+        CHECK(fitted.x1 - fitted.x0 <= 244.0f, "autosize left it %.0f px wide",
+              fitted.x1 - fitted.x0);
+        dai_doc_destroy(d);
+    }
+
     dai_strings_destroy(g_tab);
     dai_ui_destroy(ui);
     dai_font_free(font);

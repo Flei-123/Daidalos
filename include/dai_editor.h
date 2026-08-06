@@ -132,6 +132,19 @@ DAI_API dai_vec3 dai_editor_cam_pivot(const dai_editor *e);
 DAI_API void dai_editor_camera_get(const dai_editor *e, dai_vec3 *eye, dai_vec3 *target,
                                    float *fov_deg);
 
+/* 2D mode: the camera looks straight down -Z, orbiting is off, and the host
+ * renders orthographically. Unity's 2D button, and it is a CAMERA mode rather
+ * than a project setting on purpose - a 2D game is a 3D scene you are looking
+ * at flat, and the day you want to see it in perspective you press the key
+ * again instead of converting anything.
+ *
+ * dai_editor_cam_ortho_height is what the host passes to dai_render_ortho:
+ * half the visible height in world units, derived from the pivot distance so
+ * that toggling the mode does not change how big things look. */
+DAI_API void  dai_editor_cam_2d(dai_editor *e, int on);
+DAI_API int   dai_editor_cam_2d_get(const dai_editor *e);
+DAI_API float dai_editor_cam_ortho_height(const dai_editor *e);
+
 /* ---- selection --------------------------------------------------------- */
 
 /* The node under the pixel, or DAI_INVALID_NODE. */

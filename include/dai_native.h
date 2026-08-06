@@ -108,6 +108,29 @@ struct dai_native_api {
     extern "C" DAI_BEHAVIOUR_EXPORT void dai_behaviour_frame(                  \
         const dai_native_api *api, dai_nentity self, float dt)
 
+/* The key codes a behaviour needs, spelled here rather than pulled in from
+ * dai_render.h. This header is the WHOLE contract - the editor embeds it into
+ * the project so a .cpp behaviour compiles with nothing else on the include
+ * path - and "include the renderer to ask about the space bar" would break
+ * that the moment someone exports a game.
+ *
+ * The values are the engine's own (X11 keysyms for the named keys, the ASCII
+ * code for letters and digits), so 'w' works directly. */
+#define DAI_KEY_SPACE     0x0020
+#define DAI_KEY_ESCAPE    0xFF1B
+#define DAI_KEY_TAB       0xFF09
+#define DAI_KEY_RETURN    0xFF0D
+#define DAI_KEY_LEFT      0xFF51
+#define DAI_KEY_UP        0xFF52
+#define DAI_KEY_RIGHT     0xFF53
+#define DAI_KEY_DOWN      0xFF54
+#define DAI_KEY_SHIFT_L   0xFFE1
+#define DAI_KEY_SHIFT_R   0xFFE2
+#define DAI_KEY_CTRL_L    0xFFE3
+#define DAI_KEY_CTRL_R    0xFFE4
+#define DAI_KEY_ALT_L     0xFFE9
+#define DAI_KEY_ALT_R     0xFFEA
+
 /* ---- the editor's side ------------------------------------------------- */
 
 typedef struct dai_native dai_native;

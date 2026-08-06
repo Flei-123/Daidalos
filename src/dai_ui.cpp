@@ -3837,6 +3837,15 @@ int dai_ui_num_vec3(dai_ui *ui, const char *label, float *xyz, float step) {
     return changed;
 }
 
+// The same, at a place the caller picked. The HUD is not a stack of rows, so
+// it cannot use the layout cursor - and neither can anything else drawn into
+// a viewport rectangle.
+void dai_ui_image_at(dai_ui *ui, dai_texture tex, float x, float y, float w, float h,
+                     float u0, float v0, float u1, float v1, uint32_t tint) {
+    if (!ui) return;
+    ui->quad(tex, x, y, x + w, y + h, u0, v0, u1, v1, tint ? tint : 0xFFFFFFFFu);
+}
+
 void dai_ui_image(dai_ui *ui, dai_texture tex, float w, float h,
                   float u0, float v0, float u1, float v1, uint32_t tint) {
     if (!ui) return;

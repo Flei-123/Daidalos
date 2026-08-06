@@ -399,6 +399,9 @@ struct dai_editor_ui {
     int  fold_camera = 1, fold_light = 1, fold_sprite = 1, fold_audio = 1;
     int  fold_text = 1;
     int  fold_freeze = 1;
+    int  fold_image = 1;
+    dai_ui_searchlist image_list{};
+    dai_node          image_pick_node = DAI_INVALID_NODE;
     // The project's active language, so the inspector previews a "@key" as
     // the words a player would see. Owned by the host - it knows which files
     // exist - and pushed in with dai_editor_ui_strings().
@@ -1175,6 +1178,51 @@ int dai_editor_ui_clipboard_has(const dai_editor_ui *p) { return p && p->clipboa
 //
 // IT IS CLIPPED TO THE VIEW. In the editor the Game view is a panel among
 // panels; a HUD that spilled past its edge would draw over the Hierarchy.
+// Where a HUD gets its pictures. A global rather than a parameter because
+// both hosts set it once at startup and neither ever changes it, and threading
+// it through dai_hud_draw would put it in the signature of a function whose
+// whole point is that the editor and the runtime call it identically.
+static dai_hud_image_fn g_hud_image = nullptr;
+static void            *g_hud_image_user = nullptr;
+void dai_hud_images(dai_hud_image_fn fn, void *user) {
+    g_hud_image = fn; g_hud_image_user = user;
+}
+
+// Breaks `text` into lines that fit `maxw` at scale `k`. maxw <= 0 means "do
+// not wrap" - a score is one line however long the number gets.
+static void hud_wrap(dai_ui *ui, const std::string &text, float maxw, float k,
+                     std::vector<std::string> &out) {
+    out.clear();
+    std::string para;
+    for (size_t i = 0; i <= text.size(); ++i) {
+        if (i == text.size() || text[i] == '\n') {
+            if (maxw <= 0.0f) { out.push_back(para); para.clear(); continue; }
+            // Greedy wrap at spaces; a word longer than the box is cut rather
+            // than allowed to stick out, because sticking out is what a box
+            // exists to prevent.
+            std::string line;
+            size_t pos = 0;
+            while (pos <= para.size()) {
+                size_t sp = para.find(' ', pos);
+                std::string word = para.substr(pos, sp == std::string::npos ? std::string::npos : sp - pos);
+                std::string cand = line.empty() ? word : line + " " + word;
+                if (dai_ui_text_width(ui, cand.c_str()) * k <= maxw || line.empty()) {
+                    line = cand;
+                } else {
+                    out.push_back(line);
+                    line = word;
+                }
+                if (sp == std::string::npos) break;
+                pos = sp + 1;
+            }
+            out.push_back(line);
+            para.clear();
+            continue;
+        }
+        para += text[i];
+    }
+}
+
 void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
                   float scale, dai_hud_resolve_fn resolve, void *user) {
     if (!ui || !doc || w <= 0.0f || h <= 0.0f) return;
@@ -1189,6 +1237,35 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
         dai_node_desc r{};
         if (dai_doc_get(doc, ids[i], &r) != DAI_OK) continue;
         // `disabled` is the OBJECT: off means off, label included.
+        // ---- Image ---------------------------------------------------------
+        // Drawn before the text of the same frame, so a label on a panel is a
+        // label on a panel and not behind it. Both live on their own node in
+        // practice; when they share one, the picture is the background.
+        if (r.image_on && !r.disabled && r.image[0] && g_hud_image) {
+            float iw = 0.0f, ih = 0.0f;
+            uint32_t tex = g_hud_image(r.image, &iw, &ih, g_hud_image_user);
+            if (tex) {
+                float dw = r.image_w > 0.0f ? r.image_w : (iw > 0.0f ? iw : 64.0f);
+                float dh = r.image_h > 0.0f ? r.image_h : (ih > 0.0f ? ih : 64.0f);
+                dw *= scale; dh *= scale;
+                int ia = r.image_anchor < 0 ? 0 : (r.image_anchor > 8 ? 8 : r.image_anchor);
+                const float IPAD = 8.0f * scale;
+                float icol = (float)(ia % 3), irow = (float)(ia / 3);
+                float ix = x + IPAD + (w - 2.0f * IPAD - dw) * (icol * 0.5f) + r.image_x * scale;
+                float iy = y + IPAD + (h - 2.0f * IPAD - dh) * (irow * 0.5f) + r.image_y * scale;
+                uint32_t tint = 0xFFFFFFFFu;
+                if (r.image_color.x != 0.0f || r.image_color.y != 0.0f || r.image_color.z != 0.0f) {
+                    auto ch = [](float v) -> uint32_t {
+                        float c = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+                        return (uint32_t)(c * 255.0f + 0.5f);
+                    };
+                    tint = 0xFF000000u | (ch(r.image_color.z) << 16) |
+                           (ch(r.image_color.y) << 8) | ch(r.image_color.x);
+                }
+                dai_ui_image_at(ui, tex, ix, iy, dw, dh, 0, 0, 1, 1, tint);
+            }
+        }
+
         if (!r.text_on || r.disabled) continue;
         // `hidden` deliberately does NOT hide the label. It is the MESH
         // renderer's checkbox, and every node here draws a box unless it is
@@ -1212,23 +1289,34 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
         // without a second font.
         float k = px / (dai_ui_text_height(ui) > 0.0f ? dai_ui_text_height(ui) : 13.0f);
 
-        // Multi-line: "\n" in a string table entry is a line break, and a
-        // two line label is the normal case for a subtitle or a hint.
+        // The box, if there is one. Without it the label is as wide as its
+        // words; with it the text wraps, and with autosize it also shrinks
+        // until it fits - which is the only honest answer to "the German
+        // translation is a third longer and the box did not grow".
+        float boxw = r.text_w * scale, boxh = r.text_h * scale;
         std::vector<std::string> lines;
-        {
-            std::string cur;
-            for (const char *c = txt; ; ++c) {
-                if (*c == '\n' || !*c) { lines.push_back(cur); cur.clear(); if (!*c) break; }
-                else cur += *c;
+        float lh = 0.0f, block_h = 0.0f, widest = 0.0f;
+        for (int attempt = 0; attempt < 40; ++attempt) {
+            hud_wrap(ui, txt, boxw > 0.0f ? boxw : 0.0f, k, lines);
+            lh = dai_ui_text_height(ui) * k * 1.25f;
+            block_h = lh * (float)lines.size();
+            widest = 0.0f;
+            for (const std::string &l : lines) {
+                float lw = dai_ui_text_width(ui, l.c_str()) * k;
+                if (lw > widest) widest = lw;
             }
+            if (!r.text_autosize || boxh <= 0.0f) break;
+            if (block_h <= boxh && (boxw <= 0.0f || widest <= boxw)) break;
+            // 4% a step: enough to converge in a few dozen tries, small enough
+            // that the result is not visibly quantised.
+            k *= 0.96f;
+            if (k * dai_ui_text_height(ui) < 6.0f) break;   // a floor: unreadable is not a fit
         }
-        float lh = dai_ui_text_height(ui) * k * 1.25f;
-        float block_h = lh * (float)lines.size();
-        float widest = 0.0f;
-        for (const std::string &l : lines) {
-            float lw = dai_ui_text_width(ui, l.c_str()) * k;
-            if (lw > widest) widest = lw;
-        }
+        // Inside a box the block is laid out against the BOX, not the words -
+        // otherwise a centred paragraph re-centres itself every time a word
+        // changes length.
+        if (boxw > 0.0f) widest = boxw;
+        if (boxh > 0.0f && block_h < boxh) block_h = boxh;
 
         // 0..8 in reading order: column is anchor%3, row is anchor/3.
         int a = r.text_anchor < 0 ? 0 : (r.text_anchor > 8 ? 8 : r.text_anchor);
@@ -1266,6 +1354,11 @@ void dai_hud_draw(dai_ui *ui, dai_doc *doc, float x, float y, float w, float h,
         }
     }
     dai_ui_clip_end(ui);
+}
+
+void dai_editor_ui_tr_host(dai_editor_ui *p, dai_hud_resolve_fn fn, void *user) {
+    if (!p) return;
+    p->tr_fn = fn; p->tr_user = user;
 }
 
 void dai_editor_ui_loc_host(dai_editor_ui *p, dai_editor_ui_loc_fn load,
@@ -2723,6 +2816,59 @@ static void inspector_body(dai_editor_ui *p) {
         }
     }
 
+    // ---- Image (UI) ----------------------------------------------------------
+    // The screen space picture: a panel, a heart, a crosshair. This is what
+    // the old Sprite checkbox was meant to be - that one set a flag NOTHING
+    // read, so it drew nothing, ever.
+    if (r.image_on) {
+        int on = 1;
+        {
+            int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_SPRITE, rgba(0x6F, 0xC7, 0xEA, 255),
+                                             "Image (UI)", &p->fold_image, &on);
+            if (hrc == 2 && !on) r.image_on = 0;
+            else if (hrc == 3) {
+                p->comp_menu_target = 8;
+                float cmx = 0, cmy = 0;
+                dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
+                dai_ui_popup_open(&p->menu_comp, cmx, cmy);
+            }
+        }
+        if (p->fold_image && r.image_on) {
+            std::string idisp = r.image[0] ? base_of(r.image) : std::string("None (Texture)");
+            int irc = dai_ui_object_field(p->ui, "Image", idisp.c_str(), DAI_ICON_IMAGE);
+            if (irc == 2) {
+                float imx = 0, imy = 0;
+                dai_ui_mouse(p->ui, &imx, &imy, nullptr, nullptr);
+                dai_ui_searchlist_open(&p->image_list, imx - 210.0f, imy);
+                p->image_list.wants_focus = 1;
+                std::snprintf(p->image_list.hint, sizeof(p->image_list.hint), "Search textures...");
+                p->image_pick_node = n;
+            }
+            float iw = r.image_w, ih = r.image_h;
+            if (dai_ui_num_field(p->ui, "Width", &iw, 1.0f, 0.0f, 8000.0f, "imgw")) r.image_w = iw;
+            if (dai_ui_num_field(p->ui, "Height", &ih, 1.0f, 0.0f, 8000.0f, "imgh")) r.image_h = ih;
+            r.image_w = iw; r.image_h = ih;
+            dai_ui_help(p->ui, "0 = the file's own size in pixels.");
+            {
+                float ic[3] = { r.image_color.x, r.image_color.y, r.image_color.z };
+                if (ic[0] == 0.0f && ic[1] == 0.0f && ic[2] == 0.0f) { ic[0] = ic[1] = ic[2] = 1.0f; }
+                if (dai_ui_color(p->ui, "Tint", ic, "imgcol"))
+                    r.image_color = dai_vec3{ ic[0], ic[1], ic[2] };
+            }
+            static const char *const ANCHOR2[] = {
+                "Top left", "Top", "Top right", "Left", "Centre", "Right",
+                "Bottom left", "Bottom", "Bottom right",
+            };
+            dai_ui_option(p->ui, "Anchor", &r.image_anchor, ANCHOR2, 9);
+            float ioff[2] = { r.image_x, r.image_y };
+            if (dai_ui_num_field(p->ui, "Offset X", &ioff[0], 1.0f, -8000.0f, 8000.0f, "imgox"))
+                r.image_x = ioff[0];
+            if (dai_ui_num_field(p->ui, "Offset Y", &ioff[1], 1.0f, -8000.0f, 8000.0f, "imgoy"))
+                r.image_y = ioff[1];
+            r.image_x = ioff[0]; r.image_y = ioff[1];
+        }
+    }
+
     // ---- Text ---------------------------------------------------------------
     // The game's own UI. Drawn on the picture, not in the world: a score
     // belongs to a corner of the screen, and a corner is where it has to stay
@@ -2752,10 +2898,13 @@ static void inspector_body(dai_editor_ui *p) {
             if (r.text[0] == '@') {
                 const char *shown = p->tr_fn ? p->tr_fn(r.text, p->tr_user) : nullptr;
                 char line[240];
-                if (shown && shown[0] && std::strcmp(shown, r.text + 1) != 0)
+                if (!p->tr_fn)
+                    std::snprintf(line, sizeof(line), "no string table loaded - it will show the key");
+                else if (shown && shown[0] && std::strcmp(shown, r.text + 1) != 0)
                     std::snprintf(line, sizeof(line), "shows: %s", shown);
                 else
-                    std::snprintf(line, sizeof(line), "no entry for %s - it will show the key",
+                    std::snprintf(line, sizeof(line),
+                                  "no entry for %s in the current language - it will show the key",
                                   r.text + 1);
                 dai_ui_label(p->ui, line);
             }
@@ -2790,6 +2939,19 @@ static void inspector_body(dai_editor_ui *p) {
                 "Bottom left", "Bottom", "Bottom right",
             };
             dai_ui_option(p->ui, "Anchor", &r.text_anchor, ANCHOR, 9);
+            // The box. 0 wide means "as wide as the words", which is what a
+            // score wants; a real width is what a subtitle wants.
+            float bw2 = r.text_w, bh2 = r.text_h;
+            if (dai_ui_num_field(p->ui, "Box W", &bw2, 1.0f, 0.0f, 8000.0f, "textbw")) r.text_w = bw2;
+            if (dai_ui_num_field(p->ui, "Box H", &bh2, 1.0f, 0.0f, 8000.0f, "textbh")) r.text_h = bh2;
+            r.text_w = bw2; r.text_h = bh2;
+            dai_ui_help(p->ui, "0 = no box: one line, as wide as the words. With a width "
+                               "the text wraps; with a height, autosize can shrink it.");
+            int fit = r.text_autosize;
+            if (dai_ui_checkbox(p->ui, "Autosize", &fit)) r.text_autosize = fit;
+            dai_ui_help(p->ui, "Shrink the text until it fits the box. Needs a box height. "
+                               "This is what saves a layout when a translation is a third "
+                               "longer than the language it was drawn for.");
             float off[2] = { r.text_x, r.text_y };
             if (dai_ui_num_field(p->ui, "Offset X", &off[0], 1.0f, -8000.0f, 8000.0f, "textox"))
                 r.text_x = off[0];
@@ -4432,8 +4594,12 @@ static void run_context_menus(dai_editor_ui *p) {
             if (ar2.no_collider)  entries.push_back({ "Collider", "Physics", 1, "" });
             if (!ar2.camera)      entries.push_back({ "Camera", "Rendering", 2, "" });
             if (!ar2.light)       entries.push_back({ "Light", "Rendering", 3, "" });
-            if (!ar2.sprite)      entries.push_back({ "Sprite (2D)", "Rendering", 4, "" });
+            // No "Sprite" entry any more. It set a flag nothing read - a
+            // component that cannot be seen after it is added is worse than
+            // one that is missing, because the second one you go and look
+            // for. Image (UI) is what it was trying to be.
             if (!ar2.text_on)     entries.push_back({ "Text (UI)", "Rendering", 7, "" });
+            if (!ar2.image_on)    entries.push_back({ "Image (UI)", "Rendering", 8, "" });
             if (!ar2.audio_event[0]) entries.push_back({ "Audio Source", "Audio", 5, "" });
             // NO "Remove X" entries. A menu called Add Component that offers
             // to remove things is a menu you have to read twice, and the
@@ -4493,7 +4659,8 @@ static void run_context_menus(dai_editor_ui *p) {
                         else if (e.cat == "Rendering")
                             ic = e.kind == 2 ? DAI_ICON_CAMERA
                                : e.kind == 3 ? DAI_ICON_LIGHT
-                               : e.kind == 7 ? DAI_ICON_C_TEXT : DAI_ICON_SPRITE;
+                               : e.kind == 7 ? DAI_ICON_C_TEXT
+                               : e.kind == 8 ? DAI_ICON_IMAGE : DAI_ICON_SPRITE;
                         break;
                     }
                 items[i] = { ic, flat[i].c_str(), nullptr, 0 };
@@ -4512,7 +4679,9 @@ static void run_context_menus(dai_editor_ui *p) {
                 case 1: ar2.no_collider = 0; ar2.no_body = 0; break;
                 case 2: ar2.camera = 1; break;
                 case 3: ar2.light = 1; break;
-                case 4: ar2.sprite = 1; break;
+                case 8: ar2.image_on = 1;
+                        if (ar2.image_w <= 0.0f) { ar2.image_w = 128.0f; ar2.image_h = 128.0f; }
+                        break;
                 case 7: ar2.text_on = 1;
                         // A label with nothing in it is invisible, and an
                         // invisible component reads as one that did not get
@@ -4647,6 +4816,36 @@ static void run_context_menus(dai_editor_ui *p) {
         }
     }
 
+    // The texture picker for an Image component.
+    if (p->image_list.open && p->image_pick_node != DAI_INVALID_NODE) {
+        std::vector<std::string> imgs;
+        imgs.push_back("None");
+        for (const char *a : p->assets) {
+            if (!a) continue;
+            std::string f = a;
+            size_t dot = f.find_last_of('.');
+            if (dot == std::string::npos) continue;
+            std::string e = f.substr(dot + 1);
+            for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            if (e == "png" || e == "jpg" || e == "jpeg" || e == "tga") imgs.push_back(f);
+        }
+        std::vector<dai_ui_menu_item> items(imgs.size());
+        for (size_t i = 0; i < imgs.size(); ++i)
+            items[i] = { i == 0 ? nullptr : DAI_ICON_IMAGE, imgs[i].c_str(), nullptr, 0 };
+        int pick = dai_ui_searchlist_draw(p->ui, &p->image_list, items.data(), (uint32_t)items.size());
+        if (pick >= 0 && pick < (int)imgs.size()) {
+            dai_node_desc ir{};
+            if (dai_doc_get(d, p->image_pick_node, &ir) == DAI_OK) {
+                dai_doc_begin(d, "Image");
+                if (pick == 0) ir.image[0] = 0;
+                else std::snprintf(ir.image, sizeof(ir.image), "%s", imgs[(size_t)pick].c_str());
+                dai_doc_set(d, p->image_pick_node, &ir);
+                dai_doc_commit(d);
+            }
+            p->image_pick_node = DAI_INVALID_NODE;
+        }
+    }
+
     // The font picker: every .ttf/.otf in the project, plus "Default".
     if (p->font_list.open && p->font_pick_node != DAI_INVALID_NODE) {
         std::vector<std::string> fonts;
@@ -4762,6 +4961,98 @@ static void run_context_menus(dai_editor_ui *p) {
             { DAI_ICON_TRASH, "Remove Component", nullptr },
         };
         int target = p->comp_menu_target;
+        // Transform gets its own menu. Copying "the transform" is almost never
+        // what is meant: you want this object to stand WHERE that one stands,
+        // and to keep its own rotation - or the other way round. One entry for
+        // all four values, three for the parts.
+        if (target == 0) {
+            static const dai_ui_menu_item TR_MENU[] = {
+                { DAI_ICON_RESET, "Reset Transform", nullptr },
+                { DAI_ICON_COPY,  "Copy All",        nullptr },
+                { DAI_ICON_COPY,  "Copy Position",   nullptr },
+                { DAI_ICON_COPY,  "Copy Rotation",   nullptr },
+                { DAI_ICON_COPY,  "Copy Scale",      nullptr },
+                { DAI_ICON_SAVE,  "Paste",           nullptr },
+            };
+            int tpick = dai_ui_popup_menu(p->ui, &p->menu_comp, TR_MENU, 6);
+            if (tpick >= 0 && dai_editor_selection_count(p->ed) > 0) {
+                dai_node tn = dai_editor_selected(p->ed, 0);
+                dai_node_desc tr{};
+                if (dai_doc_get(d, tn, &tr) == DAI_OK) {
+                    char buf[256];
+                    if (tpick == 0) {
+                        dai_doc_begin(d, "Reset Transform");
+                        tr.position = dai_vec3{ 0, 0, 0 };
+                        tr.rotation = dai_quat{ 0, 0, 0, 1 };
+                        tr.scale = dai_vec3{ 1, 1, 1 };
+                        dai_doc_set(d, tn, &tr);
+                        dai_doc_commit(d);
+                        dai_editor_resync(p->ed);
+                    } else if (tpick >= 1 && tpick <= 4) {
+                        // The clipboard says WHICH parts it holds, so a paste
+                        // knows what it may touch. A blob that always claims
+                        // to be a whole transform is how "copy position" ends
+                        // up rotating things.
+                        const char *what = tpick == 1 ? "all" : tpick == 2 ? "pos"
+                                         : tpick == 3 ? "rot" : "scale";
+                        std::snprintf(buf, sizeof(buf),
+                            "transform:%s p=%g,%g,%g r=%g,%g,%g,%g s=%g,%g,%g", what,
+                            (double)tr.position.x, (double)tr.position.y, (double)tr.position.z,
+                            (double)tr.rotation.x, (double)tr.rotation.y,
+                            (double)tr.rotation.z, (double)tr.rotation.w,
+                            (double)tr.scale.x, (double)tr.scale.y, (double)tr.scale.z);
+                        dai_editor_ui_clipboard_set(p, 0, buf);
+                        dai_editor_ui_toast(p,
+                            tpick == 1 ? "transform copied" :
+                            tpick == 2 ? "position copied" :
+                            tpick == 3 ? "rotation copied" : "scale copied", 1.5f);
+                    } else if (tpick == 5) {
+                        const char *cb = dai_editor_ui_clipboard_get(p, nullptr);
+                        if (!cb || std::strncmp(cb, "transform:", 10) != 0) {
+                            dai_editor_ui_toast(p, "the clipboard holds no transform", 2.0f);
+                        } else {
+                            const char *what = cb + 10;
+                            bool all = std::strncmp(what, "all", 3) == 0;
+                            bool pos = all || std::strncmp(what, "pos", 3) == 0;
+                            bool rot = all || std::strncmp(what, "rot", 3) == 0;
+                            bool scl = all || std::strncmp(what, "scale", 5) == 0;
+                            float v[10] = { 0 };
+                            const char *pp = std::strstr(cb, "p=");
+                            const char *rr = std::strstr(cb, "r=");
+                            const char *ss = std::strstr(cb, "s=");
+                            if (pp) std::sscanf(pp + 2, "%f,%f,%f", &v[0], &v[1], &v[2]);
+                            if (rr) std::sscanf(rr + 2, "%f,%f,%f,%f", &v[3], &v[4], &v[5], &v[6]);
+                            if (ss) std::sscanf(ss + 2, "%f,%f,%f", &v[7], &v[8], &v[9]);
+                            dai_doc_begin(d, "Paste Transform");
+                            // Onto the WHOLE selection: pasting one position
+                            // onto twelve selected crates is a real thing to
+                            // want, and it is the same rule the rest of the
+                            // inspector follows.
+                            for (uint32_t si = 0; si < dai_editor_selection_count(p->ed); ++si) {
+                                dai_node on = dai_editor_selected(p->ed, si);
+                                dai_node_desc orr{};
+                                if (dai_doc_get(d, on, &orr) != DAI_OK) continue;
+                                if (pos) orr.position = dai_vec3{ v[0], v[1], v[2] };
+                                if (rot) orr.rotation = dai_quat{ v[3], v[4], v[5], v[6] };
+                                if (scl) orr.scale = dai_vec3{ v[7], v[8], v[9] };
+                                dai_doc_set(d, on, &orr);
+                            }
+                            dai_doc_commit(d);
+                            dai_editor_resync(p->ed);
+                            dai_editor_ui_toast(p, pos && rot && scl ? "transform pasted"
+                                                : pos ? "position pasted"
+                                                : rot ? "rotation pasted" : "scale pasted", 1.5f);
+                        }
+                    }
+                }
+            }
+            if (!p->menu_comp.open) p->comp_menu_target = -1;
+            // NOT a return: the project menu, the delete confirmation and the
+            // window menu are all drawn further down in this same function,
+            // and skipping them for a frame is how a popup starts flickering.
+            goto after_component_menu;
+        }
+        {
         static const dai_ui_menu_item COMP_MENU_X[] = {
             { DAI_ICON_RESET, "Reset", nullptr },
             { DAI_ICON_COPY, "Copy Component", nullptr },
@@ -4815,6 +5106,7 @@ static void run_context_menus(dai_editor_ui *p) {
                     else if (target == 4) ar.light = 0;
                     else if (target == 5) ar.sprite = 0;
                     else if (target == 7) ar.text_on = 0;
+                    else if (target == 8) ar.image_on = 0;
                     else if (target == 6) { ar.audio_event[0] = 0; ar.audio_autoplay = 0; ar.audio_bus = 0; }
                     ar.no_body = (ar.no_rigidbody && ar.no_collider) ? 1 : 0;
                     dai_doc_set(d, an, &ar);
@@ -4825,7 +5117,9 @@ static void run_context_menus(dai_editor_ui *p) {
             }
         }
         if (!p->menu_comp.open) p->comp_menu_target = -1;
+        }
     }
+    after_component_menu:;
 
     // The project window's own Create menu. The editor owns the click, the
     // host owns the disk - the same split the asset browser already uses.

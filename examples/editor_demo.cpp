@@ -37,6 +37,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include <algorithm>
 #include <new>
@@ -2033,6 +2034,49 @@ static void console_capture_pump(dai_editor_ui *) {}
 // The settings window's font swap needs what main() owns, so main() publishes
 // it here. One editor, one font - this is not a place that needs generality.
 static dai_renderer *g_renderer = nullptr;
+
+// A texture for the HUD, by project path. Cached: the HUD asks once per image
+// per frame, and loading a PNG sixty times a second would be a slideshow.
+static uint32_t hud_image_cb(const char *path, float *out_w, float *out_h, void *) {
+    if (!path || !path[0] || !g_renderer || !g_assets_dir[0]) return 0;
+    struct Entry { dai_texture tex; float w, h; };
+    static std::unordered_map<std::string, Entry> cache;
+    auto it = cache.find(path);
+    if (it != cache.end()) {
+        if (out_w) *out_w = it->second.w;
+        if (out_h) *out_h = it->second.h;
+        return it->second.tex;
+    }
+    char full[700];
+    std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, path);
+    Entry e{ 0, 0, 0 };
+    e.tex = dai_render_texture_load(g_renderer, full, 1);
+    // The renderer does not hand back the pixel size, and the honest answer
+    // to "how big is this by default" is the file's own size. Read the PNG
+    // header - eight bytes at a fixed offset - rather than decode the whole
+    // image a second time.
+    if (e.tex) {
+        FILE *pf = std::fopen(full, "rb");
+        if (pf) {
+            unsigned char hdr[24] = { 0 };
+            if (std::fread(hdr, 1, sizeof(hdr), pf) == sizeof(hdr) &&
+                hdr[1] == 'P' && hdr[2] == 'N' && hdr[3] == 'G') {
+                e.w = (float)((hdr[16] << 24) | (hdr[17] << 16) | (hdr[18] << 8) | hdr[19]);
+                e.h = (float)((hdr[20] << 24) | (hdr[21] << 16) | (hdr[22] << 8) | hdr[23]);
+            }
+            std::fclose(pf);
+        }
+        if (e.w <= 0.0f) { e.w = 128.0f; e.h = 128.0f; }
+    }
+    // A failure is cached too: a missing file must cost one failed load, not
+    // one per frame for the rest of the session.
+    cache[path] = e;
+    if (out_w) *out_w = e.w;
+    if (out_h) *out_h = e.h;
+    return e.tex;
+}
+
+
 static dai_ui       *g_ui = nullptr;
 static dai_font     *g_font = nullptr;
 static float        *g_ui_scale_out = nullptr;   // prefs.ui_scale lives in main()
@@ -2563,6 +2607,11 @@ int main(int argc, char **argv) {
     crash_handler_install(g_projects_root);
     dai_editor_ui_settings_host(panels, apply_font, 13.0f * prefs.ui_scale, nullptr);
     dai_editor_ui_loc_host(panels, loc_load_cb, loc_save_cb, panels);
+    // THE line that was missing: the inspector's "@key" preview had no way to
+    // resolve anything, so it said "no entry" about every key, including the
+    // ones sitting right there in the Localisation window.
+    dai_editor_ui_tr_host(panels, hud_resolve, nullptr);
+    dai_hud_images(hud_image_cb, nullptr);
     // The font is rasterised at a REAL pixel size: 13 px laid out but drawn
     // from a texture made for 13 * 1.5 = 19.5 is sharp at 1.5x zoom, 13 * 1.5
     // = 19.5 rasterised but 13 laid out is the blurry one. Fractional font
@@ -2586,7 +2635,7 @@ int main(int argc, char **argv) {
     // and pressed(8)/pressed(9) read past the end of it. That is a heap buffer
     // overflow: on Windows it manifested as a startup crash (std::bad_alloc),
     // on Linux it quietly read whatever followed on the stack.
-    int prev_keys[10] = { 0 };
+    int prev_keys[11] = { 0 };
     std::vector<dai_render_instance> inst(4096);
     int prev_f2 = 0, prev_backspace = 0, prev_enter = 0, prev_tab = 0;
     int prev_edit_keys[6] = { 0 };
@@ -2652,13 +2701,14 @@ int main(int argc, char **argv) {
             }
         }
         int ctrl = dai_window_key_down(win, DAI_KEY_CTRL_L) || dai_window_key_down(win, DAI_KEY_CTRL_R);
-        int keys[10] = {
+        int keys[11] = {
             ci.key_w, ci.key_e, dai_window_key_down(win, DAI_KEY_R),
             dai_window_key_down(win, DAI_KEY_Z), dai_window_key_down(win, DAI_KEY_Y),
             dai_window_key_down(win, DAI_KEY_DELETE), dai_window_key_down(win, DAI_KEY_D),
             dai_window_key_down(win, DAI_KEY_SPACE),
             dai_window_key_down(win, DAI_KEY_S),
             dai_window_key_down(win, DAI_KEY_BACKSPACE),
+            dai_window_key_down(win, (uint32_t)DAI_KEY_0 + 2),   // the enum names 0 and 9; between them it is ASCII
         };
         auto pressed = [&](int i) { return keys[i] && !prev_keys[i]; };
         // While a field is being typed into, the keyboard belongs to the field.
@@ -2669,6 +2719,13 @@ int main(int argc, char **argv) {
             if (pressed(0)) dai_editor_gizmo_mode(ed, DAI_GIZMO_TRANSLATE);
             if (pressed(1)) dai_editor_gizmo_mode(ed, DAI_GIZMO_ROTATE);
             if (pressed(2)) dai_editor_gizmo_mode(ed, DAI_GIZMO_SCALE);
+            // 2 toggles 2D, Unity's button on a key. It is a camera mode:
+            // the scene does not change, the way you are looking at it does.
+            if (pressed(10)) {
+                int on = !dai_editor_cam_2d_get(ed);
+                dai_editor_cam_2d(ed, on);
+                dai_editor_ui_toast(panels, on ? "2D" : "3D", 1.0f);
+            }
         }
         if (ctrl && pressed(3) && !typing) dai_editor_undo(ed);
         if (ctrl && pressed(4) && !typing) dai_editor_redo(ed);
@@ -3354,6 +3411,9 @@ int main(int argc, char **argv) {
         dai_editor_ui_viewport_rect(panels, &vrx, &vry, &vrw, &vrh);
         dai_editor_camera_viewport_rect(ed, vrx, vry, vrw, vrh);
         dai_render_world_clip(r, vrx * uis, vry * uis, vrw * uis, vrh * uis);
+        // 2D: an orthographic projection, sized so that switching does not
+        // change how big anything looks. 0 puts the perspective back.
+        dai_render_ortho(r, dai_editor_cam_2d_get(ed) ? dai_editor_cam_ortho_height(ed) : 0.0f);
         {   // The floor grid as world lines: depth tested, so boxes hide it.
             // Bigger buffer than the old fixed 20 m mat needed: the grid now
             // follows the camera and carries a coarse set as well.

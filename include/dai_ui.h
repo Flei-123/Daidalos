@@ -438,6 +438,9 @@ DAI_API int dai_ui_num_vec3(dai_ui *ui, const char *label, float *xyz, float ste
  * for icons - one texture, many uv rects, one draw batch. */
 DAI_API void dai_ui_image(dai_ui *ui, dai_texture tex, float w, float h,
                           float u0, float v0, float u1, float v1, uint32_t tint);
+/* At an explicit position, for anything that is not a row in a panel. */
+DAI_API void dai_ui_image_at(dai_ui *ui, dai_texture tex, float x, float y, float w, float h,
+                             float u0, float v0, float u1, float v1, uint32_t tint);
 /* A sprite that reacts to clicks - icon buttons, inventory slots. */
 DAI_API int  dai_ui_image_button(dai_ui *ui, dai_texture tex, float w, float h,
                                  float u0, float v0, float u1, float v1);
