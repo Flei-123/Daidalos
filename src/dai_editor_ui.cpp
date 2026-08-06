@@ -118,7 +118,6 @@ struct dai_editor_ui {
     dai_editor *ed = nullptr;
     dai_ui     *ui = nullptr;
 
-    std::unordered_set<dai_node> folded;   // default is open, so this stays small
     // The hierarchy's filter. A scene of four hundred objects is a scene you
     // scroll, and scrolling is not finding.
     char hier_filter[64] = { 0 };
@@ -668,7 +667,7 @@ static void hierarchy_order(const dai_editor_ui *p, dai_doc *d, dai_node parent,
         if (dai_doc_get(d, all[i], &r) != DAI_OK) continue;
         if (r.parent != parent) continue;
         out.push_back(all[i]);
-        if (p->folded.count(all[i])) continue;      // collapsed: its rows are not on screen
+        if (r.ui_folded) continue;                  // collapsed: its rows are not on screen
         hierarchy_order(p, d, all[i], out);
     }
 }
@@ -992,7 +991,8 @@ void draw_subtree(dai_editor_ui *p, dai_doc *d, dai_node n, int depth) {
     if (dai_doc_get(d, n, &r) != DAI_OK) return;
 
     int kids = has_children(d, n) ? 1 : 0;
-    int open = p->folded.find(n) == p->folded.end() ? 1 : 0;
+    // The fold lives in the document, so it is still folded tomorrow.
+    int open = r.ui_folded ? 0 : 1;
     int was_open = open;
 
     if (p->rename_node == n) {
@@ -1016,8 +1016,16 @@ void draw_subtree(dai_editor_ui *p, dai_doc *d, dai_node n, int depth) {
             p->rename_node = DAI_INVALID_NODE;
         }
         if (kids && open != was_open) {
-            if (open) p->folded.erase(n);
-            else      p->folded.insert(n);
+            {
+                // No transaction: folding a row is not an edit anyone wants
+                // to undo, and one entry per triangle would bury the real
+                // ones. The scene is marked dirty by the write itself.
+                dai_node_desc fr{};
+                if (dai_doc_get(d, n, &fr) == DAI_OK) {
+                    fr.ui_folded = open ? 0 : 1;
+                    dai_doc_set(d, n, &fr);
+                }
+            }
         }
     } else {
         char tmp[80];
@@ -1084,8 +1092,16 @@ void draw_subtree(dai_editor_ui *p, dai_doc *d, dai_node n, int depth) {
         }
         ++p->visible_rows;
         if (kids && open != was_open) {
-            if (open) p->folded.erase(n);
-            else      p->folded.insert(n);
+            {
+                // No transaction: folding a row is not an edit anyone wants
+                // to undo, and one entry per triangle would bury the real
+                // ones. The scene is marked dirty by the write itself.
+                dai_node_desc fr{};
+                if (dai_doc_get(d, n, &fr) == DAI_OK) {
+                    fr.ui_folded = open ? 0 : 1;
+                    dai_doc_set(d, n, &fr);
+                }
+            }
         }
     }
     if (!kids || !open) return;
@@ -4642,10 +4658,16 @@ int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in) {
     int right_tap = in->mouse_right && !p->prev_right_down;
     p->prev_right_down = in->mouse_right != 0;
     // A second right click replaces the first menu instead of being swallowed
-    // by it: the old one closes, the new one opens where the pointer is now.
-    if (right_tap && !over_ui) {
+    // by it. `over_ui` is TRUE while a menu is open - the menu says so, that
+    // is how it stops everything else from reacting - so testing it here meant
+    // the second right click never arrived at all and the old menu just sat
+    // there. While one of OUR viewport menus is open, the pointer being "over
+    // ui" is exactly the situation we are handling.
+    bool mine_open = p->menu_canvas.open || p->menu_node.open;
+    if (right_tap && mine_open) {
         p->menu_canvas.open = 0;
         p->menu_node.open = 0;
+        over_ui = false;
     }
     if (right_tap && !over_ui) {
         dai_node hit = dai_editor_pick(p->ed, in->mouse_x, in->mouse_y);

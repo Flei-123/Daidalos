@@ -255,6 +255,7 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
             put(s, "  imagepos %s %s\n", fstr(r.image_x).c_str(), fstr(r.image_y).c_str());
         if (!feq(r.text_x, def.text_x) || !feq(r.text_y, def.text_y))
             put(s, "  textpos %s %s\n", fstr(r.text_x).c_str(), fstr(r.text_y).c_str());
+        if (r.ui_folded != def.ui_folded) put(s, "  folded %d\n", r.ui_folded);
         if (r.disabled_comps != def.disabled_comps)
             put(s, "  compoff %u\n", (unsigned)r.disabled_comps);
         if (r.button_on != def.button_on)  put(s, "  button %d\n", r.button_on);
@@ -438,6 +439,7 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "imagecol")   { ok = parse_floats(after, &rec.image_color.x, 3); }
         else if (key == "imageanchor"){ ok = parse_i32(after, &rec.image_anchor); }
         else if (key == "imagepos")   { ok = parse_floats(after, &rec.image_x, 2); }
+        else if (key == "folded")     { ok = parse_i32(after, &rec.ui_folded); }
         else if (key == "compoff")    { int v = 0; ok = parse_i32(after, &v); rec.disabled_comps = (uint32_t)v; }
         else if (key == "button")     { ok = parse_i32(after, &rec.button_on); }
         else if (key == "buttonhover"){ ok = parse_floats(after, &rec.button_hover.x, 3); }

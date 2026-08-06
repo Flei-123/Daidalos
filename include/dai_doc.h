@@ -182,6 +182,12 @@ typedef struct dai_node_desc {
      * collider off made its whole section vanish.
      *
      * Bit 0 the collider, bit 1 the rigidbody. */
+    /* The hierarchy row is collapsed. Editor state, kept in the SCENE file -
+     * Godot does the same, and for the same reason: it belongs to this scene,
+     * not to the machine. Held in memory only, it was gone on restart and a
+     * tidy tree had to be tidied again every morning. */
+    int      ui_folded;
+
     uint32_t disabled_comps;
 #define DAI_COMP_COLLIDER   0x1u
 #define DAI_COMP_RIGIDBODY  0x2u
