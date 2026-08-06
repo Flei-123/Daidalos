@@ -7345,11 +7345,9 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         // menu. Testing "no menu is open" meant the second click was thrown
         // away and the first menu just sat there, in the place you no longer
         // wanted it.
-        float rrx = 0.0f, rry = 0.0f;
-        int redo = dai_ui_right_redo(ui, &rrx, &rry);
-        if (redo && rrx >= px && rrx < px + pw && rry >= py && rry < py + ph) {
-            dai_ui_popup_open(&p->menu_canvas, rrx, rry);
-        } else if (dai_ui_right_pressed(ui) && dai_ui_root_hovered(ui, "Hierarchy")) {
+        // An open menu moves itself to the new point (see dai_ui_popup_menu),
+        // so nothing has to be replayed here.
+        if (dai_ui_right_pressed(ui) && dai_ui_root_hovered(ui, "Hierarchy")) {
             p->menu_node.open = 0;
             p->menu_canvas.open = 0;
             dai_ui_popup_open(&p->menu_canvas, mx, my);

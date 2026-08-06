@@ -4235,16 +4235,21 @@ int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
     if (m->armed &&
         ((ui->input.mouse_down && !ui->prev.mouse_down) ||
          (ui->input.right_down && !ui->prev.right_down)) && !over) {
-        m->open = 0;
-        result = -1;                    // dismissed
-        // A right click that closed a menu was MEANT to open one somewhere
-        // else. It cannot reach the panel this frame - an open menu blocks
-        // every other widget, and it is still open while this runs - so it is
-        // handed on to the next frame instead of being thrown away.
         if (ui->input.right_down && !ui->prev.right_down) {
-            ui->right_redo = 1;
-            ui->right_redo_x = mx;
-            ui->right_redo_y = my;
+            // A right click while a menu is open means "not there, HERE".
+            // Handing the click to the panel underneath does not work and two
+            // attempts at it did not change that: an open menu blocks every
+            // other widget by design, so the panel never sees the click no
+            // matter which flag it tests. So the menu moves itself. It stays
+            // open, it is placed again at the new point, and it is unarmed so
+            // this same press cannot pick a row on arrival.
+            m->x = mx; m->y = my;
+            m->placed = 0;
+            m->armed = 0;
+            result = -2;                // nothing chosen, nothing dismissed
+        } else {
+            m->open = 0;
+            result = -1;                // dismissed
         }
     }
 
