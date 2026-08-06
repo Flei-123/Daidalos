@@ -425,6 +425,7 @@ typedef struct dai_ui_popup {
      * the very press that summoned it: the button went down, the menu drew,
      * and the same press was still down over row zero. */
     int   armed;
+    int   age;      /* frames since it opened */
 } dai_ui_popup;
 
 typedef struct dai_ui_menu_item {

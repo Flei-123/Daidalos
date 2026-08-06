@@ -7345,9 +7345,12 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         // menu. Testing "no menu is open" meant the second click was thrown
         // away and the first menu just sat there, in the place you no longer
         // wanted it.
-        // An open menu moves itself to the new point (see dai_ui_popup_menu),
-        // so nothing has to be replayed here.
-        if (dai_ui_right_pressed(ui) && dai_ui_root_hovered(ui, "Hierarchy")) {
+        // The pointer's PLACE, not "which root is hovered". An open popup is a
+        // root of its own, so while one is up the hierarchy is never hovered -
+        // and that single word is why the second right click did nothing, in
+        // four attempts at fixing it. The panel's rectangle does not lie.
+        if (dai_ui_right_pressed(ui) &&
+            mx >= px && mx < px + pw && my >= py && my < py + ph) {
             p->menu_node.open = 0;
             p->menu_canvas.open = 0;
             dai_ui_popup_open(&p->menu_canvas, mx, my);

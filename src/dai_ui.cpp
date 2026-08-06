@@ -4165,6 +4165,7 @@ void dai_ui_popup_open(dai_ui_popup *m, float x, float y) {
     m->x = x; m->y = y; m->open = 1; m->placed = 0;
     // Not armed yet: the press that is opening it must not also pick a row.
     m->armed = 0;
+    m->age = 0;
 }
 
 void dai_ui_popup_close(dai_ui_popup *m) { if (m) m->open = 0; }
@@ -4232,9 +4233,9 @@ int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
     // said transform copied": the right press did not close the open menu, it
     // just moved on, and the next left click landed on whatever row happened
     // to be under the cursor.
-    if (m->armed &&
-        ((ui->input.mouse_down && !ui->prev.mouse_down) ||
-         (ui->input.right_down && !ui->prev.right_down)) && !over) {
+    bool right_now = ui->input.right_down && !ui->prev.right_down;
+    if (((m->armed && ui->input.mouse_down && !ui->prev.mouse_down) ||
+         (right_now && m->age > 0)) && !over) {
         if (ui->input.right_down && !ui->prev.right_down) {
             // A right click while a menu is open means "not there, HERE".
             // Handing the click to the panel underneath does not work and two
@@ -4292,6 +4293,10 @@ int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
 
     // Not until the button that opened this thing has been let go.
     if (!ui->input.mouse_down && !ui->input.right_down) m->armed = 1;
+    // One frame of life is enough to accept a RIGHT click even if the button
+    // that opened this menu is somehow still reported as down: 'armed' guards
+    // against picking a row, and moving is not picking.
+    m->age = m->age < 1000 ? m->age + 1 : m->age;
     if (m->armed && (int)hovered >= 0 && ui->input.mouse_down && !ui->prev.mouse_down) {
         result = hovered;
         m->open = 0;
