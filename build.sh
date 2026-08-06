@@ -290,6 +290,10 @@ if [ -n "${TALOS_LIB:-}" ]; then
 fi
 if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_script.cpp $SCRIPT_LIB $VKLIBS -o build/test_script
+    # The object model behaviours are written against - self.transform.position.x
+    g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_objmodel.cpp $SCRIPT_LIB $VKLIBS -o build/test_objmodel
+    # And the C++ example has to keep compiling: it is documentation that runs.
+    g++ $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/PlayerController.cpp -o build/_playercontroller_check.so && rm -f build/_playercontroller_check.so
 fi
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/test_font
 # The SVG rasteriser: no renderer, no font, no window - it turns text into

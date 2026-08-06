@@ -200,3 +200,53 @@ it, **Escape** dismisses.
 It is a list of names, not a parser. A half parser is wrong on exactly the
 lines you are in the middle of writing, and being confidently wrong there is
 worse than offering nothing.
+
+## The object model
+
+`self` is an object, spelled the way Unity spells it:
+
+```js
+self.transform.position.x += 3 * state.dt;
+self.transform.yaw = 90;                 // degrees
+self.velocity = [0, 0, -6];
+self.text = "Score: " + score;           // the Text component
+if (self.grounded) self.impulse(0, 5, 0);
+
+var cam = scene.find("Main Camera");
+cam.transform.position = self.transform.position;
+```
+
+Setting **one component** writes only that one: `position.x = 10` leaves y and
+z alone. That sounds obvious and is the thing a naive wrapper gets wrong.
+
+**Every older script still works.** `self` returns its id wherever a number is
+expected, so `body.setVel(self, 4, 0, 0)` and `node.setPos(self, ...)` are
+unchanged. That is what `valueOf()` is for, and it is the reason the model
+could be added at all rather than replacing what was there.
+
+## C++ behaviours
+
+Same idea, in a header-only wrapper over the C function table:
+
+```cpp
+DAI_BEHAVIOUR_FRAME(api, self, dt) {
+    Node me(api, self);
+    float speed = me.param("speed", 6.0f);     // the inspector's value
+    if (me.key('w')) me.velocity(Vec3(0, 0, -speed));
+    if (me.grounded() && me.key(DAI_KEY_SPACE)) me.impulse(Vec3(0, 5, 0));
+
+    Node cam = me.param_node("followCam");     // a @param camera field
+    if (cam) cam.position(me.position() + Vec3(0, 3, 8));
+}
+```
+
+`me.param()`, `me.param_text()` and `me.param_node()` are the inspector's
+fields. They used to be drawn, stored and then **never handed to the code** -
+which looks exactly like a setting that does nothing.
+
+The wrapper is sugar over `dai_native_api` and nothing else: no base class, no
+state, no second path into the engine. The contract stays a C struct so that a
+behaviour built with one compiler cannot crash an editor built with another.
+
+**A C++ behaviour needs a C++ compiler on PATH** (g++ or clang++). The Console
+says so if there is none. The `.js` behaviours need nothing.

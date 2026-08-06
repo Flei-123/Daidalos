@@ -3870,7 +3870,13 @@ int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
     ui->cur_layer = (1 << 20) - 1;      // just under the tooltip
     ui->in_popup = false;               // the menu itself is always hittable
 
-    if (ui->input.mouse_down && !ui->prev.mouse_down && !over) {
+    // A press OUTSIDE dismisses - either button. It used to be the left one
+    // only, and that is the bug behind "I right clicked into nothing and it
+    // said transform copied": the right press did not close the open menu, it
+    // just moved on, and the next left click landed on whatever row happened
+    // to be under the cursor.
+    if (((ui->input.mouse_down && !ui->prev.mouse_down) ||
+         (ui->input.right_down && !ui->prev.right_down)) && !over) {
         m->open = 0;
         result = -1;                    // dismissed
     }

@@ -465,6 +465,10 @@ static dai_script_node_host g_node_host = { sh_find, sh_get_pos, sh_set_pos, sh_
 static dai_native *g_native = nullptr;
 static float       g_native_time = 0.0f;
 static dai_window *g_win_for_scripts = nullptr;
+// Pointer movement this frame, shared by the JS and the C++ side. Declared
+// here because the native API table is built above where the play host lives.
+static double g_mouse_dx = 0.0, g_mouse_dy = 0.0;
+static int    g_mouse_buttons = 0;
 
 static void nv_log(const dai_native_api *, const char *text) {
     if (!text) return;
@@ -531,11 +535,66 @@ static int nv_key(const dai_native_api *, uint32_t key) {
     return g_win_for_scripts ? dai_window_key_down(g_win_for_scripts, key) : 0;
 }
 
+// The inspector's fields, for a C++ behaviour. They are stored on the NODE in
+// the same "path{key=value,...}" form the .js behaviours use, so this reads
+// the same string the JS path reads - one storage, two readers.
+static std::string nv_param_raw(dai_nentity e, const char *name) {
+    if (!g_scene_doc || !name) return std::string();
+    dai_node_desc r{};
+    if (dai_doc_get(g_scene_doc, (dai_node)e, &r) != DAI_OK) return std::string();
+    std::string all = r.script;
+    // entry{k=v,k=v};entry{...} - find any brace group holding this key.
+    size_t pos = 0;
+    while (pos < all.size()) {
+        size_t br = all.find('{', pos);
+        if (br == std::string::npos) break;
+        size_t en = all.find('}', br);
+        if (en == std::string::npos) break;
+        std::string inner = all.substr(br + 1, en - br - 1);
+        size_t p2 = 0;
+        while (p2 < inner.size()) {
+            size_t comma = inner.find(',', p2);
+            std::string kv = inner.substr(p2, comma == std::string::npos ? std::string::npos : comma - p2);
+            size_t eq = kv.find('=');
+            if (eq != std::string::npos && kv.substr(0, eq) == name) return kv.substr(eq + 1);
+            if (comma == std::string::npos) break;
+            p2 = comma + 1;
+        }
+        pos = en + 1;
+    }
+    return std::string();
+}
+static double nv_param_num(const dai_native_api *, dai_nentity e, const char *name, double fb) {
+    std::string v = nv_param_raw(e, name);
+    if (v.empty()) return fb;
+    if (v == "true") return 1.0;
+    if (v == "false") return 0.0;
+    return std::atof(v.c_str());
+}
+static const char *nv_param_str(const dai_native_api *, dai_nentity e, const char *name,
+                                const char *fb) {
+    static std::string held;      // valid until the next call, like name_of
+    held = nv_param_raw(e, name);
+    return held.empty() ? (fb ? fb : "") : held.c_str();
+}
+static dai_nentity nv_param_node(const dai_native_api *, dai_nentity e, const char *name) {
+    // A node reference is stored as the object's NAME, the same as in JS.
+    std::string v = nv_param_raw(e, name);
+    if (v.empty() || !g_scene_doc) return 0;
+    return (dai_nentity)dai_doc_find(g_scene_doc, v.c_str());
+}
+static void nv_mouse(const dai_native_api *, float *dx, float *dy, int *buttons) {
+    if (dx) *dx = (float)g_mouse_dx;
+    if (dy) *dy = (float)g_mouse_dy;
+    if (buttons) *buttons = g_mouse_buttons;
+}
+
 static dai_native_api g_native_api = {
     DAI_NATIVE_ABI, nullptr,
     nv_log, nv_get_pos, nv_set_pos, nv_get_vel, nv_set_vel, nv_impulse,
     nv_get_scale, nv_set_scale, nv_get_rot, nv_set_rot,
-    nv_find, nv_name_of, nv_time, nv_key
+    nv_find, nv_name_of, nv_time, nv_key,
+    nv_param_num, nv_param_str, nv_param_node, nv_mouse
 };
 
 struct RunningNative { int id; dai_node node; std::string path; };
@@ -866,10 +925,8 @@ static int sp_grounded(double id, void *) {
     return (l.y > -0.35f && l.y < 0.35f) ? 1 : 0;
 }
 
-// Mouse movement since the last frame, in pixels, plus the button mask. The
-// editor loop fills these in; a script asks for them through input.mouseDX().
-static double g_mouse_dx = 0.0, g_mouse_dy = 0.0;
-static int    g_mouse_buttons = 0;
+// Mouse movement since the last frame: declared next to g_win_for_scripts,
+// because the native API table is built before this point.
 static void sp_mouse(double *dx, double *dy, int *buttons, void *) {
     if (dx) *dx = g_mouse_dx;
     if (dy) *dy = g_mouse_dy;
@@ -1088,9 +1145,111 @@ static void scripts_start() {
             // Which object am I on. Unity calls it gameObject, Godot calls it
             // self; either way it is the first thing a behaviour needs and the
             // only one it cannot look up.
+            // The object model, then `self` as one of its Nodes. In this
+            // order: the wrapper has to exist before anything is wrapped.
             {
-                char selfjs[64];
-                std::snprintf(selfjs, sizeof(selfjs), "var self = %u;", (unsigned)id);
+                static const char *PRELUDE =
+                "\n"
+                "// ---- Daidalos object model (installed before every behaviour) -------------\n"
+                "// self.transform.position.x, self.name, scene.find(\"X\").transform - the\n"
+                "// Unity spelling. Everything here ends in the same node.*/body.* calls the\n"
+                "// engine has always had; this is sugar, and it is the good kind: the kind\n"
+                "// that costs one indirection and removes an argument you had to remember.\n"
+                "(function () {\n"
+                "    function V3(node, which) { this.__n = node; this.__w = which; }\n"
+                "    // Only position for now: the engine binds getPos/setPos and\n"
+                "    // nothing for scale, and a getter that calls a binding which\n"
+                "    // does not exist throws on the first read.\n"
+                "    function get3(n, w) { return node.getPos(n); }\n"
+                "    function set3(n, w, x, y, z) { node.setPos(n, x, y, z); }\n"
+                "    [\"x\", \"y\", \"z\"].forEach(function (name, i) {\n"
+                "        Object.defineProperty(V3.prototype, name, {\n"
+                "            get: function () { return get3(this.__n, this.__w)[i]; },\n"
+                "            set: function (v) {\n"
+                "                var c = get3(this.__n, this.__w);\n"
+                "                c[i] = v;\n"
+                "                set3(this.__n, this.__w, c[0], c[1], c[2]);\n"
+                "            }\n"
+                "        });\n"
+                "    });\n"
+                "    // A vector prints and compares like the array it is.\n"
+                "    V3.prototype.toString = function () {\n"
+                "        var c = get3(this.__n, this.__w);\n"
+                "        return \"(\" + c[0].toFixed(3) + \", \" + c[1].toFixed(3) + \", \" + c[2].toFixed(3) + \")\";\n"
+                "    };\n"
+                "    V3.prototype.set = function (x, y, z) { set3(this.__n, this.__w, x, y, z); return this; };\n"
+                "    V3.prototype.add = function (x, y, z) {\n"
+                "        var c = get3(this.__n, this.__w);\n"
+                "        set3(this.__n, this.__w, c[0] + x, c[1] + (y || 0), c[2] + (z || 0));\n"
+                "        return this;\n"
+                "    };\n"
+                "\n"
+                "    function Transform(n) { this.__n = n; }\n"
+                "    Object.defineProperty(Transform.prototype, \"position\", {\n"
+                "        get: function () { return new V3(this.__n, 0); },\n"
+                "        set: function (v) {\n"
+                "            if (v instanceof V3) { var c = get3(v.__n, v.__w); node.setPos(this.__n, c[0], c[1], c[2]); }\n"
+                "            else node.setPos(this.__n, v[0] || v.x || 0, v[1] || v.y || 0, v[2] || v.z || 0);\n"
+                "        }\n"
+                "    });\n"
+                "    Object.defineProperty(Transform.prototype, \"rotation\", {\n"
+                "        get: function () { return node.getRot(this.__n); },\n"
+                "        set: function (q) { node.setRot(this.__n, q[0], q[1], q[2], q[3]); }\n"
+                "    });\n"
+                "    // Yaw in DEGREES, because that is the number anyone actually has in mind.\n"
+                "    Object.defineProperty(Transform.prototype, \"yaw\", {\n"
+                "        get: function () {\n"
+                "            var q = node.getRot(this.__n);\n"
+                "            return Math.atan2(2 * (q[3] * q[1] + q[0] * q[2]),\n"
+                "                              1 - 2 * (q[1] * q[1] + q[0] * q[0])) * 180 / Math.PI;\n"
+                "        },\n"
+                "        set: function (deg) {\n"
+                "            var h = deg * Math.PI / 360;\n"
+                "            node.setRot(this.__n, 0, Math.sin(h), 0, Math.cos(h));\n"
+                "        }\n"
+                "    });\n"
+                "\n"
+                "    function Node(n) { this.__n = n; }\n"
+                "    // THE line that keeps every older script working: where a number is\n"
+                "    // wanted - body.setVel(self, ...) - JavaScript asks for one, and gets it.\n"
+                "    Node.prototype.valueOf = function () { return this.__n; };\n"
+                "    Node.prototype.toString = function () { return \"Node(\" + this.__n + \")\"; };\n"
+                "    Object.defineProperty(Node.prototype, \"id\", { get: function () { return this.__n; } });\n"
+                "    Object.defineProperty(Node.prototype, \"transform\", {\n"
+                "        get: function () { return new Transform(this.__n); }\n"
+                "    });\n"
+                "    Object.defineProperty(Node.prototype, \"position\", {\n"
+                "        get: function () { return new V3(this.__n, 0); },\n"
+                "        set: function (v) { this.transform.position = v; }\n"
+                "    });\n"
+                "    Object.defineProperty(Node.prototype, \"velocity\", {\n"
+                "        get: function () { return body.getVel(this.__n); },\n"
+                "        set: function (v) { body.setVel(this.__n, v[0], v[1], v[2]); }\n"
+                "    });\n"
+                "    Object.defineProperty(Node.prototype, \"grounded\", {\n"
+                "        get: function () { return body.grounded(this.__n); }\n"
+                "    });\n"
+                "    Object.defineProperty(Node.prototype, \"text\", {\n"
+                "        set: function (t) { node.setText(this.__n, \"\" + t); }\n"
+                "    });\n"
+                "    Node.prototype.impulse = function (x, y, z) { body.impulse(this.__n, x, y, z); return this; };\n"
+                "    Node.prototype.setVelocity = function (x, y, z) { body.setVel(this.__n, x, y, z); return this; };\n"
+                "    Node.prototype.isValid = function () { return this.__n >= 0; };\n"
+                "\n"
+                "    globalThis.Node = Node;\n"
+                "    globalThis.Vec3 = V3;\n"
+                "    // scene.find gives back a Node - and a Node is still a number where one\n"
+                "    // is wanted, so scene.find(\"X\") keeps working in old code too.\n"
+                "    var rawFind = scene.find;\n"
+                "    scene.find = function (name) { return new Node(rawFind(name)); };\n"
+                "    globalThis.__wrapSelf = function (id) { return new Node(id); };\n"
+                "})();\n"
+                "\n";
+                if (dai_script_eval(s, PRELUDE, "prelude", err, sizeof(err)) != DAI_OK && err[0])
+                    std::printf("prelude: %s\n", err);
+                char selfjs[96];
+                std::snprintf(selfjs, sizeof(selfjs),
+                              "var self = __wrapSelf(%u);", (unsigned)id);
                 dai_script_eval(s, selfjs, "self", err, sizeof(err));
             }
             if (!params_js.empty()) dai_script_eval(s, params_js.c_str(), "params", err, sizeof(err));
@@ -1742,28 +1901,20 @@ static int script_create(const char *name, void *) {
                 std::fputs(
                    "// PlayerController.cpp - a player controller in C++, kept deliberately short.\n"
                    "//\n"
-                   "// Drop this on an object that has a Rigidbody and press Ctrl+P. The editor\n"
-                   "// compiles it the first time you play after it changed, loads it, and calls\n"
-                   "// frame() sixty times a second. Change a number, press Play, see it: the same\n"
-                   "// round trip the JavaScript behaviours have, with a compiler in the middle.\n"
+                   "// Drop this on an object that has a Rigidbody and press Ctrl+P.\n"
                    "//\n"
                    "//   WASD / arrows   move\n"
                    "//   Space           jump\n"
                    "//   Shift           sprint\n"
                    "//\n"
-                   "// WHY IT LOOKS LIKE THIS\n"
+                   "// NEEDS A C++ COMPILER on PATH (g++ or clang++). The editor compiles this file\n"
+                   "// the first time you press Play after it changed; with no compiler it says so\n"
+                   "// in the Console and nothing happens. The .js behaviours need nothing.\n"
                    "//\n"
-                   "// A behaviour is two functions and a struct. There is no base class to inherit\n"
-                   "// from, no virtual anything, and no header of ours to include beyond this one:\n"
-                   "// the engine hands you a table of function pointers (dai_native_api) and the\n"
-                   "// id of the object you are on. That is the whole contract, and it is a C\n"
-                   "// struct on purpose - a C++ base class would tie every behaviour to the exact\n"
-                   "// compiler and standard library the editor was built with, and then the .dll\n"
-                   "// you built on Tuesday would crash the editor on Wednesday.\n"
-                   "//\n"
-                   "// The fields the inspector shows are declared with \"// @param\" - the same\n"
-                   "// spelling the .js behaviours use, because the editor reads the FILE, not the\n"
-                   "// binary. A C++ member is not something an editor can see.\n"
+                   "// The numbers below are the inspector's - \"// @param\" lines are read from\n"
+                   "// THIS FILE by the editor, drawn as fields, stored on the object, and handed\n"
+                   "// back through me.param(). So the value written here is the default and the\n"
+                   "// inspector is the truth, which is the same deal the .js behaviours have.\n"
                    "//\n"
                    "// @header Movement\n"
                    "// @tooltip Metres per second on the ground.\n"
@@ -1774,92 +1925,193 @@ static int script_create(const char *name, void *) {
                    "// @param float jumpForce  = 5.5\n"
                    "// @tooltip How much steering is left while airborne, 0 to 1.\n"
                    "// @param float airControl = 0.35\n"
+                   "// @header Camera\n"
+                   "// @tooltip Optional: an object that follows this one from behind.\n"
+                   "// @param camera followCam\n"
+                   "// @param float camDistance = 8\n"
+                   "// @param float camHeight   = 3\n"
                    "\n"
                    "#include \"dai_native.h\"\n"
-                   "#include <cmath>\n"
                    "\n"
-                   "// ---------------------------------------------------------------- state\n"
-                   "//\n"
-                   "// One instance of this struct per object carrying the script. Plain globals\n"
-                   "// would be shared by every player in the scene, which is fine until there are\n"
-                   "// two of them - and then it is a bug that takes an evening to find.\n"
-                   "struct Player {\n"
-                   "    float speed      = 6.0f;\n"
-                   "    float sprintMul  = 1.7f;\n"
-                   "    float jumpForce  = 5.5f;\n"
-                   "    float airControl = 0.35f;\n"
-                   "    bool  jumpHeld   = false;\n"
-                   "};\n"
+                   "// One flag that has to survive between frames - \"was space already down last\n"
+                   "// frame\". Everything else is read fresh from the object each frame, which is\n"
+                   "// what makes this file short.\n"
+                   "static bool g_jump_held = false;\n"
                    "\n"
-                   "static Player g_player;     // one object, one behaviour: see the note above\n"
-                   "\n"
-                   "// ---------------------------------------------------------------- helpers\n"
-                   "\n"
-                   "// \"Is this key down.\" The engine speaks key CODES; a letter is its own code,\n"
-                   "// which is why 'w' works directly.\n"
-                   "static bool key(const dai_native_api *api, unsigned code) {\n"
-                   "    return api->key_down(api, code) != 0;\n"
-                   "}\n"
-                   "\n"
-                   "// Standing on something? Not a raycast: a body that is neither rising nor\n"
-                   "// sinking measurably is resting on whatever is under it, and that is exactly\n"
-                   "// what a jump needs to know.\n"
-                   "static bool grounded(const dai_native_api *api, dai_nentity self) {\n"
-                   "    dai_nvec3 v = api->get_velocity(api, self);\n"
-                   "    return v.y > -0.35f && v.y < 0.35f;\n"
-                   "}\n"
-                   "\n"
-                   "// ---------------------------------------------------------------- the behaviour\n"
-                   "\n"
-                   "// Called once when Play starts.\n"
                    "DAI_BEHAVIOUR_INIT(api, self) {\n"
-                   "    api->log(api, \"PlayerController ready - WASD, Space, Shift\");\n"
-                   "    (void)self;\n"
+                   "    Node me(api, self);\n"
+                   "    me.log(\"PlayerController ready - WASD, Space, Shift\");\n"
                    "}\n"
                    "\n"
-                   "// Called every frame while the game runs. dt is the length of this frame.\n"
                    "DAI_BEHAVIOUR_FRAME(api, self, dt) {\n"
-                   "    Player &p = g_player;\n"
+                   "    Node me(api, self);\n"
                    "\n"
-                   "    // ---- what the keyboard is asking for, as a direction ----------------\n"
-                   "    float ix = 0.0f, iz = 0.0f;\n"
-                   "    if (key(api, 'a')) ix -= 1.0f;\n"
-                   "    if (key(api, 'd')) ix += 1.0f;\n"
-                   "    if (key(api, 'w')) iz -= 1.0f;\n"
-                   "    if (key(api, 's')) iz += 1.0f;\n"
+                   "    // ---- the inspector's numbers ----------------------------------------\n"
+                   "    float speed      = me.param(\"speed\", 6.0f);\n"
+                   "    float sprintMul  = me.param(\"sprintMul\", 1.7f);\n"
+                   "    float jumpForce  = me.param(\"jumpForce\", 5.5f);\n"
+                   "    float airControl = me.param(\"airControl\", 0.35f);\n"
                    "\n"
-                   "    // Diagonals are not faster. Without this, holding W and D moves you 41%\n"
-                   "    // quicker than holding W - the classic bug of every first controller.\n"
-                   "    float len = std::sqrt(ix * ix + iz * iz);\n"
-                   "    if (len > 0.0001f) { ix /= len; iz /= len; }\n"
+                   "    // ---- what the keyboard is asking for ---------------------------------\n"
+                   "    Vec3 dir;\n"
+                   "    if (me.key('a') || me.key(DAI_KEY_LEFT))  dir.x -= 1;\n"
+                   "    if (me.key('d') || me.key(DAI_KEY_RIGHT)) dir.x += 1;\n"
+                   "    if (me.key('w') || me.key(DAI_KEY_UP))    dir.z -= 1;\n"
+                   "    if (me.key('s') || me.key(DAI_KEY_DOWN))  dir.z += 1;\n"
+                   "    // Diagonals are not faster. Without this, W and D together move you 41%\n"
+                   "    // quicker than W alone - the classic bug of every first controller.\n"
+                   "    dir = dir.normalised();\n"
                    "\n"
-                   "    float want = p.speed;\n"
-                   "    if (key(api, DAI_KEY_SHIFT_L) || key(api, DAI_KEY_SHIFT_R)) want *= p.sprintMul;\n"
+                   "    float want = speed;\n"
+                   "    if (me.key(DAI_KEY_SHIFT_L) || me.key(DAI_KEY_SHIFT_R)) want *= sprintMul;\n"
                    "\n"
-                   "    // ---- move by setting the horizontal velocity ------------------------\n"
-                   "    // Keeping the Y component is what makes gravity still apply. A controller\n"
-                   "    // that writes all three components every frame cannot fall.\n"
-                   "    bool on_ground = grounded(api, self);\n"
-                   "    dai_nvec3 v = api->get_velocity(api, self);\n"
-                   "    float t = on_ground ? 1.0f : p.airControl;     // less authority in the air\n"
-                   "    dai_nvec3 nv;\n"
-                   "    nv.x = v.x + (ix * want - v.x) * t;\n"
-                   "    nv.y = v.y;\n"
-                   "    nv.z = v.z + (iz * want - v.z) * t;\n"
-                   "    api->set_velocity(api, self, nv);\n"
+                   "    // ---- move by setting the horizontal velocity -------------------------\n"
+                   "    // Keeping Y is what makes gravity still apply: a controller that writes\n"
+                   "    // all three components every frame cannot fall.\n"
+                   "    bool on_ground = me.grounded();\n"
+                   "    Vec3 v = me.velocity();\n"
+                   "    float t = on_ground ? 1.0f : airControl;      // less authority in the air\n"
+                   "    me.velocity(Vec3(v.x + (dir.x * want - v.x) * t,\n"
+                   "                     v.y,\n"
+                   "                     v.z + (dir.z * want - v.z) * t));\n"
                    "\n"
                    "    // ---- jumping ---------------------------------------------------------\n"
-                   "    // Edge triggered: held down, `space` is true every frame, and a jump that\n"
+                   "    // Edge triggered: held down, space is true every frame, and a jump that\n"
                    "    // fires every frame is a rocket.\n"
-                   "    bool down = key(api, DAI_KEY_SPACE);\n"
-                   "    if (down && !p.jumpHeld && on_ground) {\n"
-                   "        dai_nvec3 up;\n"
-                   "        up.x = 0.0f; up.y = p.jumpForce; up.z = 0.0f;\n"
-                   "        api->add_impulse(api, self, up);\n"
-                   "    }\n"
-                   "    p.jumpHeld = down;\n"
+                   "    bool down = me.key(DAI_KEY_SPACE);\n"
+                   "    if (down && !g_jump_held && on_ground) me.impulse(Vec3(0, jumpForce, 0));\n"
+                   "    g_jump_held = down;\n"
                    "\n"
-                   "    (void)dt;   // this controller is velocity based, so it needs no dt\n"
+                   "    // ---- face the way we are going ---------------------------------------\n"
+                   "    if (dir.length() > 0.01f) me.yaw(__builtin_atan2f(dir.x, dir.z) * 57.2957795f);\n"
+                   "\n"
+                   "    // ---- the camera, if one was dragged into the field --------------------\n"
+                   "    Node cam = me.param_node(\"followCam\");\n"
+                   "    if (cam) {\n"
+                   "        Vec3 p = me.position();\n"
+                   "        Vec3 goal(p.x, p.y + me.param(\"camHeight\", 3.0f), p.z + me.param(\"camDistance\", 8.0f));\n"
+                   "        Vec3 c = cam.position();\n"
+                   "        // Frame rate independent smoothing: close a fraction of the remaining\n"
+                   "        // distance derived from a half life, not a fixed step per frame.\n"
+                   "        float k = 1.0f - __builtin_powf(0.0001f, dt);\n"
+                   "        cam.position(c + (goal - c) * k);\n"
+                   "    }\n"
+                   "}\n"
+                   "\n", cf);
+                std::fclose(cf);
+                return 1;
+            }
+        }
+        // "PlayerController.cpp" is the WORKED example, not the stub. It is
+        // the file examples/scripts/PlayerController.cpp in the engine repo,
+        // embedded here - because an example you have to go and find in a
+        // source tree you did not clone is not an example, it is a rumour.
+        //
+        // Recognised by name on purpose: the Create menu asks for it by
+        // asking for that file, and no second callback has to exist for one
+        // template.
+        {
+            const char *base_name = std::strrchr(name, '/');
+            base_name = base_name ? base_name + 1 : name;
+            if (std::strcmp(base_name, "PlayerController.cpp") == 0) {
+                std::fputs(
+                   "// PlayerController.cpp - a player controller in C++, kept deliberately short.\n"
+                   "//\n"
+                   "// Drop this on an object that has a Rigidbody and press Ctrl+P.\n"
+                   "//\n"
+                   "//   WASD / arrows   move\n"
+                   "//   Space           jump\n"
+                   "//   Shift           sprint\n"
+                   "//\n"
+                   "// NEEDS A C++ COMPILER on PATH (g++ or clang++). The editor compiles this file\n"
+                   "// the first time you press Play after it changed; with no compiler it says so\n"
+                   "// in the Console and nothing happens. The .js behaviours need nothing.\n"
+                   "//\n"
+                   "// The numbers below are the inspector's - \"// @param\" lines are read from\n"
+                   "// THIS FILE by the editor, drawn as fields, stored on the object, and handed\n"
+                   "// back through me.param(). So the value written here is the default and the\n"
+                   "// inspector is the truth, which is the same deal the .js behaviours have.\n"
+                   "//\n"
+                   "// @header Movement\n"
+                   "// @tooltip Metres per second on the ground.\n"
+                   "// @param float speed      = 6\n"
+                   "// @tooltip Multiplied onto speed while Shift is held.\n"
+                   "// @param float sprintMul  = 1.7\n"
+                   "// @tooltip Upward impulse. Roughly: jump height in metres, times two.\n"
+                   "// @param float jumpForce  = 5.5\n"
+                   "// @tooltip How much steering is left while airborne, 0 to 1.\n"
+                   "// @param float airControl = 0.35\n"
+                   "// @header Camera\n"
+                   "// @tooltip Optional: an object that follows this one from behind.\n"
+                   "// @param camera followCam\n"
+                   "// @param float camDistance = 8\n"
+                   "// @param float camHeight   = 3\n"
+                   "\n"
+                   "#include \"dai_native.h\"\n"
+                   "\n"
+                   "// One flag that has to survive between frames - \"was space already down last\n"
+                   "// frame\". Everything else is read fresh from the object each frame, which is\n"
+                   "// what makes this file short.\n"
+                   "static bool g_jump_held = false;\n"
+                   "\n"
+                   "DAI_BEHAVIOUR_INIT(api, self) {\n"
+                   "    Node me(api, self);\n"
+                   "    me.log(\"PlayerController ready - WASD, Space, Shift\");\n"
+                   "}\n"
+                   "\n"
+                   "DAI_BEHAVIOUR_FRAME(api, self, dt) {\n"
+                   "    Node me(api, self);\n"
+                   "\n"
+                   "    // ---- the inspector's numbers ----------------------------------------\n"
+                   "    float speed      = me.param(\"speed\", 6.0f);\n"
+                   "    float sprintMul  = me.param(\"sprintMul\", 1.7f);\n"
+                   "    float jumpForce  = me.param(\"jumpForce\", 5.5f);\n"
+                   "    float airControl = me.param(\"airControl\", 0.35f);\n"
+                   "\n"
+                   "    // ---- what the keyboard is asking for ---------------------------------\n"
+                   "    Vec3 dir;\n"
+                   "    if (me.key('a') || me.key(DAI_KEY_LEFT))  dir.x -= 1;\n"
+                   "    if (me.key('d') || me.key(DAI_KEY_RIGHT)) dir.x += 1;\n"
+                   "    if (me.key('w') || me.key(DAI_KEY_UP))    dir.z -= 1;\n"
+                   "    if (me.key('s') || me.key(DAI_KEY_DOWN))  dir.z += 1;\n"
+                   "    // Diagonals are not faster. Without this, W and D together move you 41%\n"
+                   "    // quicker than W alone - the classic bug of every first controller.\n"
+                   "    dir = dir.normalised();\n"
+                   "\n"
+                   "    float want = speed;\n"
+                   "    if (me.key(DAI_KEY_SHIFT_L) || me.key(DAI_KEY_SHIFT_R)) want *= sprintMul;\n"
+                   "\n"
+                   "    // ---- move by setting the horizontal velocity -------------------------\n"
+                   "    // Keeping Y is what makes gravity still apply: a controller that writes\n"
+                   "    // all three components every frame cannot fall.\n"
+                   "    bool on_ground = me.grounded();\n"
+                   "    Vec3 v = me.velocity();\n"
+                   "    float t = on_ground ? 1.0f : airControl;      // less authority in the air\n"
+                   "    me.velocity(Vec3(v.x + (dir.x * want - v.x) * t,\n"
+                   "                     v.y,\n"
+                   "                     v.z + (dir.z * want - v.z) * t));\n"
+                   "\n"
+                   "    // ---- jumping ---------------------------------------------------------\n"
+                   "    // Edge triggered: held down, space is true every frame, and a jump that\n"
+                   "    // fires every frame is a rocket.\n"
+                   "    bool down = me.key(DAI_KEY_SPACE);\n"
+                   "    if (down && !g_jump_held && on_ground) me.impulse(Vec3(0, jumpForce, 0));\n"
+                   "    g_jump_held = down;\n"
+                   "\n"
+                   "    // ---- face the way we are going ---------------------------------------\n"
+                   "    if (dir.length() > 0.01f) me.yaw(__builtin_atan2f(dir.x, dir.z) * 57.2957795f);\n"
+                   "\n"
+                   "    // ---- the camera, if one was dragged into the field --------------------\n"
+                   "    Node cam = me.param_node(\"followCam\");\n"
+                   "    if (cam) {\n"
+                   "        Vec3 p = me.position();\n"
+                   "        Vec3 goal(p.x, p.y + me.param(\"camHeight\", 3.0f), p.z + me.param(\"camDistance\", 8.0f));\n"
+                   "        Vec3 c = cam.position();\n"
+                   "        // Frame rate independent smoothing: close a fraction of the remaining\n"
+                   "        // distance derived from a half life, not a fixed step per frame.\n"
+                   "        float k = 1.0f - __builtin_powf(0.0001f, dt);\n"
+                   "        cam.position(c + (goal - c) * k);\n"
+                   "    }\n"
                    "}\n"
                    "\n", cf);
                 std::fclose(cf);
