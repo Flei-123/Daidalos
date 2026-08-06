@@ -7326,6 +7326,16 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
                           "right click at %.0f,%.0f (a menu was %s)",
                           (double)rx, (double)ry, any_open ? "open" : "closed");
             dai_editor_ui_log(p, 0, line);
+            // Also as a toast. A Console line can be filtered, scrolled past
+            // or looked for in the wrong build; a toast cannot be missed, and
+            // right now the question "does this build even see the click" is
+            // worth more than a tidy screen. Carries the version, so the
+            // answer also says WHICH editor gave it.
+            {
+                char t[200];
+                std::snprintf(t, sizeof(t), "%s  [%s]", line, dai_version());
+                dai_editor_ui_toast(p, t, 1.4f);
+            }
             if (any_open) {
                 p->menu_canvas.open = 0;
                 p->menu_node.open = 0;

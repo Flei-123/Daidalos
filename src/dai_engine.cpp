@@ -233,6 +233,26 @@ extern "C" {
  * not the ones the project has source for. A build made with -DDAI_NO_JOLT
  * used to keep claiming Jolt, which is a lie the user reads on every start. */
 const char *dai_version(void) {
+    // The BUILD stamp, not just the release number. "0.2.1" was printed by
+    // every build ever made, so there was no way - for me or for anyone
+    // else - to tell which one was actually running. An afternoon went into
+    // arguing about exactly that, which is an afternoon a compiler macro
+    // would have ended in a second.
+    static char s_ver[128];
+    if (!s_ver[0]) {
+        std::snprintf(s_ver, sizeof(s_ver), "daidalos 0.2.1  build %s %s  (backends: "
+#ifndef DAI_NO_TALOS
+            "talos, "
+#endif
+#ifndef DAI_NO_JOLT
+            "jolt, "
+#endif
+            "null)", __DATE__, __TIME__);
+    }
+    return s_ver;
+}
+
+const char *dai_version_old(void) {
     return "daidalos 0.2.1 (backends: "
 #ifndef DAI_NO_TALOS
         "talos, "
