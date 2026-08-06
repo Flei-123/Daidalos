@@ -2825,14 +2825,18 @@ static void inspector_body(dai_editor_ui *p) {
     // never the model, that was the bug where a component toggle made the
     // mesh vanish.
     int has_collider = !r.no_collider && !r.no_body;
-    {
+    // A component that is not there is NOT DRAWN. It used to sit there with an
+    // empty tick box and the line "no collider - nothing can hit this", which
+    // is why removing one looked like it only greyed it out: the header stayed
+    // for ever and there was no way to make it go away.
+    //
+    // The tick box is gone with it. In this document "has a collider" IS the
+    // only state there is - there is no separate enabled flag - so a box that
+    // claimed to be one was two names for the same bit.
+    if (has_collider) {
         int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_COLLIDER, rgba(0x7A, 0xD9, 0x7A, 255), collider_title(r.shape),
-                                     &p->fold_collider, &has_collider);
-        if (hrc == 2) {
-            r.no_collider = !has_collider;
-            if (!has_collider && r.no_rigidbody) r.no_body = 1;
-            else r.no_body = 0;
-        } else if (hrc == 3) {
+                                     &p->fold_collider, nullptr);
+        if (hrc == 3) {
             p->comp_menu_target = 2;
             float cmx = 0, cmy = 0;
             dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
@@ -2841,7 +2845,7 @@ static void inspector_body(dai_editor_ui *p) {
     }
     if (p->fold_collider) {
         if (!has_collider) {
-            dai_ui_label(p->ui, "no collider - nothing can hit this");
+            /* not there: nothing is drawn, see above */
         } else {
             // Edit Collider: a real button that stays lit while the mode is
             // on - the icon next to a label did not read as something you can
@@ -2874,13 +2878,9 @@ static void inspector_body(dai_editor_ui *p) {
 
     // ---- Rigidbody ---------------------------------------------------------
     int has_body = !r.no_rigidbody && !r.no_body;
-    {
-        int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_BODY, rgba(0xA7, 0x9B, 0xF0, 255), "Rigidbody", &p->fold_body, &has_body);
-        if (hrc == 2) {
-            r.no_rigidbody = !has_body;
-            if (!has_body && r.no_collider) r.no_body = 1;
-            else r.no_body = 0;
-        } else if (hrc == 3) {
+    if (has_body) {
+        int hrc = dai_ui_header_icon_col(p->ui, DAI_ICON_C_BODY, rgba(0xA7, 0x9B, 0xF0, 255), "Rigidbody", &p->fold_body, nullptr);
+        if (hrc == 3) {
             p->comp_menu_target = 1;
             float cmx = 0, cmy = 0;
             dai_ui_mouse(p->ui, &cmx, &cmy, nullptr, nullptr);
@@ -2891,7 +2891,7 @@ static void inspector_body(dai_editor_ui *p) {
         if (!has_body) {
             // Inverted before this: the fields were INSIDE the "off" branch,
             // so switching the rigidbody off is what made them appear.
-            dai_ui_label(p->ui, "no rigidbody - nothing drives this");
+            /* not there: nothing is drawn */
         } else {
             dai_ui_option(p->ui, "Motion", &r.motion, MOTIONS, 3);
             dai_ui_help(p->ui, "Dynamic: moved by physics. Kinematic: moved by "
@@ -2930,36 +2930,12 @@ static void inspector_body(dai_editor_ui *p) {
                 dai_ui_subheader(p->ui, "Constraints", &c_open);
                 p->fold_freeze = !c_open;
                 if (c_open) {
-                    struct Bit { const char *label; uint32_t bit; };
-                    static const Bit POS[3] = { { "X##fpx", DAI_FREEZE_POS_X },
-                                                { "Y##fpy", DAI_FREEZE_POS_Y },
-                                                { "Z##fpz", DAI_FREEZE_POS_Z } };
-                    static const Bit ROT[3] = { { "X##frx", DAI_FREEZE_ROT_X },
-                                                { "Y##fry", DAI_FREEZE_ROT_Y },
-                                                { "Z##frz", DAI_FREEZE_ROT_Z } };
-                    dai_ui_row(p->ui, 0.0f);
-                    dai_ui_spacing(p->ui, 14.0f);          // the indent
-                    dai_ui_label(p->ui, "Freeze Position");
-                    for (const Bit &b : POS) {
-                        int fon = (r.freeze & b.bit) != 0;
-                        if (dai_ui_checkbox(p->ui, b.label, &fon))
-                            r.freeze = fon ? (r.freeze | b.bit) : (r.freeze & ~b.bit);
-                        dai_ui_spacing(p->ui, 6.0f);
-                    }
-                    dai_ui_row_end(p->ui);
-                    dai_ui_row(p->ui, 0.0f);
-                    dai_ui_spacing(p->ui, 14.0f);
-                    dai_ui_label(p->ui, "Freeze Rotation");
-                    for (const Bit &b : ROT) {
-                        int fon = (r.freeze & b.bit) != 0;
-                        if (dai_ui_checkbox(p->ui, b.label, &fon))
-                            r.freeze = fon ? (r.freeze | b.bit) : (r.freeze & ~b.bit);
-                        dai_ui_spacing(p->ui, 6.0f);
-                    }
-                    dai_ui_row_end(p->ui);
+                    dai_ui_axis_toggles(p->ui, "Freeze Position", &r.freeze,
+                                        DAI_FREEZE_POS_X, DAI_FREEZE_POS_Y, DAI_FREEZE_POS_Z);
+                    dai_ui_axis_toggles(p->ui, "Freeze Rotation", &r.freeze,
+                                        DAI_FREEZE_ROT_X, DAI_FREEZE_ROT_Y, DAI_FREEZE_ROT_Z);
                     // The two combinations anyone actually types out by hand.
                     dai_ui_row(p->ui, 0.0f);
-                    dai_ui_spacing(p->ui, 14.0f);
                     if (dai_ui_button_fit(p->ui, "Upright")) r.freeze |= DAI_FREEZE_UPRIGHT;
                     if (dai_ui_button_fit(p->ui, "2D plane")) r.freeze |= DAI_FREEZE_2D;
                     if (r.freeze && dai_ui_button_fit(p->ui, "Clear")) r.freeze = 0;

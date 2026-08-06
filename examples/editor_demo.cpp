@@ -2556,8 +2556,30 @@ static uint32_t hud_image_cb(const char *path, float *out_w, float *out_h, void 
     // the project's asset folder, or that the PNG is a flavour the decoder
     // does not read.
     if (!e.tex && g_panels_for_log) {
-        char line[800];
-        std::snprintf(line, sizeof(line), "image not loaded: %s", full);
+        // "not loaded" is two very different problems and they need two very
+        // different answers: the file is somewhere else, or the file is a PNG
+        // flavour this decoder does not read. Open it and say which.
+        char line[900];
+        FILE *tf = std::fopen(full, "rb");
+        if (!tf) {
+            std::snprintf(line, sizeof(line), "image: no such file - %s", full);
+        } else {
+            unsigned char hd[26] = { 0 };
+            size_t got = std::fread(hd, 1, sizeof(hd), tf);
+            std::fclose(tf);
+            bool png = got >= 8 && hd[1] == 'P' && hd[2] == 'N' && hd[3] == 'G';
+            if (!png) {
+                std::snprintf(line, sizeof(line),
+                              "image: not a PNG (only .png is decoded) - %s", full);
+            } else {
+                // IHDR: bit depth at 24, colour type at 25, interlace at 28.
+                int depth = hd[24], ctype = hd[25];
+                std::snprintf(line, sizeof(line),
+                              "image: PNG found but not decoded (bit depth %d, colour type %d) "
+                              "- save it as 8 bit RGB or RGBA, not interlaced - %s",
+                              depth, ctype, full);
+            }
+        }
         dai_editor_ui_log(g_panels_for_log, 2, line);
     }
     // The renderer does not hand back the pixel size, and the honest answer

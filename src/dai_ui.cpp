@@ -2054,6 +2054,57 @@ int dai_ui_input_multiline(dai_ui *ui, const char *label, char *buf, size_t buf_
                             buf, buf_size, st, DAI_CODE_LANG_NONE);
 }
 
+// "Freeze Position  [x] X  [x] Y  [x] Z" as ONE widget, drawn with explicit
+// rectangles.
+//
+// It was three dai_ui_checkbox calls inside a dai_ui_row after a dai_ui_label.
+// A label does not advance the row cursor - it never had to, because nothing
+// was ever drawn beside one - so all three ticks were laid on top of the
+// caption and the row showed a caption and nothing else. Three checkboxes
+// were there the whole time, stacked in the same six pixels.
+int dai_ui_axis_toggles(dai_ui *ui, const char *label, uint32_t *bits,
+                        uint32_t bx_, uint32_t by_, uint32_t bz_) {
+    if (!ui || !bits) return 0;
+    float h = widget_height(ui);
+    float x, y;
+    next_rect(ui, 0, h, &x, &y);
+    float full = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    float lw = ui->style.label_w > 0 ? ui->style.label_w : 62.0f;
+    if (lw > full * 0.55f) lw = full * 0.55f;
+    if (label && *label) dai_ui_text(ui, x, y + 2.0f, label, ui->style.text_dim);
+
+    const uint32_t BIT[3] = { bx_, by_, bz_ };
+    static const char *const NAME[3] = { "X", "Y", "Z" };
+    float box = h - 8.0f;
+    float step = box + 6.0f + dai_ui_text_width(ui, "X") + 12.0f;
+    float cx = x + lw;
+    int changed = 0;
+    for (int i = 0; i < 3; ++i) {
+        float bxp = cx, byp = y + 4.0f;
+        float hitw = box + 4.0f + dai_ui_text_width(ui, NAME[i]);
+        bool over = inside_chk(ui, bxp, y, hitw, h);
+        if (over) { ui->mouse_over_ui = true; ui->cursor_want = DAI_CURSOR_HAND; }
+        if (over && ui->input.mouse_down && !ui->prev.mouse_down) {
+            *bits ^= BIT[i];
+            changed = 1;
+        }
+        bool on = (*bits & BIT[i]) != 0;
+        dai_ui_rrect(ui, bxp, byp, box, box, ui->style.rounding * 0.75f,
+                     over ? ui->style.button_hover : ui->style.track);
+        dai_ui_rect_outline(ui, bxp, byp, box, box, 1.0f, ui->style.panel_border);
+        if (on) {
+            dai_ui_line(ui, bxp + box * 0.20f, byp + box * 0.52f,
+                            bxp + box * 0.42f, byp + box * 0.74f, 2.0f, ui->style.text);
+            dai_ui_line(ui, bxp + box * 0.42f, byp + box * 0.74f,
+                            bxp + box * 0.82f, byp + box * 0.24f, 2.0f, ui->style.text);
+        }
+        dai_ui_text(ui, bxp + box + 4.0f, y + ui->style.row_pad * 0.5f, NAME[i],
+                    ui->style.text);
+        cx += step;
+    }
+    return changed;
+}
+
 void dai_ui_separator(dai_ui *ui) {
     if (!ui) return;
     float x, y;

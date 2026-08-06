@@ -329,6 +329,12 @@ DAI_API int  dai_ui_slider(dai_ui *ui, const char *utf8, float *value, float min
 DAI_API void dai_ui_progress(dai_ui *ui, float fraction, const char *utf8);
 DAI_API void dai_ui_separator(dai_ui *ui);
 
+/* A caption and three axis ticks on ONE row: "Freeze Position [x]X [x]Y []Z".
+ * One widget because a label does not advance the row cursor, so a caption
+ * plus three checkboxes drew all four things in the same place. */
+DAI_API int  dai_ui_axis_toggles(dai_ui *ui, const char *label, uint32_t *bits,
+                                 uint32_t bit_x, uint32_t bit_y, uint32_t bit_z);
+
 /* A fold INSIDE a component: small triangle, dim label, no header bar. Unity
  * spells "Constraints" and "Info" this way, and for the reason it matters -
  * a full header makes a sub-section read as another component. */
