@@ -328,6 +328,16 @@ DAI_API int  dai_ui_toggle_button(dai_ui *ui, const char *utf8, int active);
 DAI_API int  dai_ui_slider(dai_ui *ui, const char *utf8, float *value, float min, float max);
 DAI_API void dai_ui_progress(dai_ui *ui, float fraction, const char *utf8);
 DAI_API void dai_ui_separator(dai_ui *ui);
+
+/* A fold INSIDE a component: small triangle, dim label, no header bar. Unity
+ * spells "Constraints" and "Info" this way, and for the reason it matters -
+ * a full header makes a sub-section read as another component. */
+DAI_API int  dai_ui_subheader(dai_ui *ui, const char *title, int *open);
+
+/* A multi-line text field, `rows` lines tall. Enter puts in a line break
+ * instead of committing. Returns 1 on any frame the buffer changed. */
+DAI_API int  dai_ui_input_multiline(dai_ui *ui, const char *label, char *buf,
+                                    size_t buf_size, int rows);
 /* One track, N cells, one of them lit: the control every settings page has
  * and the reason none of them writes [Preferences] to mark the current one.
  * Returns 1 the frame the choice changes. */
@@ -561,6 +571,9 @@ typedef struct dai_ui_code_state {
     int   ac_open;
     int   ac_sel;
     int   ac_start;
+    /* 1 = a plain multi-line field, not code: no gutter, no line numbers and
+     * no completion. Set by dai_ui_input_multiline; leave it 0 for scripts. */
+    int   plain;
 } dai_ui_code_state;
 
 enum {

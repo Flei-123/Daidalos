@@ -209,6 +209,26 @@ void dai_script_set_string(dai_script *s, const char *name, const char *v) {
     JS_FreeValue(s->ctx, g);
 }
 
+/* The string twin of dai_script_get_number. A HUD label wants "3 lives" as
+ * readily as it wants 3, and formatting a number the script already turned
+ * into words is a round trip that loses. */
+int dai_script_get_string(dai_script *s, const char *name, char *out, size_t out_size) {
+    if (!s || !name || !out || out_size < 2) return 0;
+    JSValue g = JS_GetGlobalObject(s->ctx);
+    JSValue st = JS_GetPropertyStr(s->ctx, g, "state");
+    JSValue v = JS_GetPropertyStr(s->ctx, st, name);
+    int ok = 0;
+    if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+        std::string sv = str(s->ctx, v);
+        std::snprintf(out, out_size, "%s", sv.c_str());
+        ok = 1;
+    }
+    JS_FreeValue(s->ctx, v);
+    JS_FreeValue(s->ctx, st);
+    JS_FreeValue(s->ctx, g);
+    return ok;
+}
+
 double dai_script_get_number(dai_script *s, const char *name, double fallback) {
     if (!s || !name) return fallback;
     JSValue g = JS_GetGlobalObject(s->ctx);

@@ -218,7 +218,19 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
         // Text. The words go last on their line, so they may contain spaces -
         // and they must, because "Press any key" is one string, not three.
         if (r.text_on != def.text_on)     put(s, "  text %d\n", r.text_on);
-        if (r.text[0])                    put(s, "  textstr %s\n", r.text);
+        if (r.text[0]) {
+            // A label may hold line breaks now, and this file is one record
+            // per LINE - so they go in escaped. A raw newline would end the
+            // record and the rest of the label would be read as a key.
+            std::string esc;
+            for (const char *q = r.text; *q; ++q) {
+                if (*q == '\\')      esc += "\\\\";
+                else if (*q == '\n') esc += "\\n";
+                else if (*q == '\r') { }
+                else                 esc += *q;
+            }
+            put(s, "  textstr %s\n", esc.c_str());
+        }
         if (!feq(r.text_size, def.text_size)) put(s, "  textsize %s\n", fstr(r.text_size).c_str());
         if (!feq(r.text_color.x, def.text_color.x) || !feq(r.text_color.y, def.text_color.y) ||
             !feq(r.text_color.z, def.text_color.z))
@@ -397,8 +409,19 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
             // whitespace off. A label is one value, not a word list.
             const char *b = after;
             while (*b == ' ' || *b == '\t') ++b;      // token() leaves the separator
-            std::string v = b;
-            while (!v.empty() && (v.back() == ' ' || v.back() == '\t' || v.back() == '\r')) v.pop_back();
+            std::string raw = b;
+            while (!raw.empty() && (raw.back() == ' ' || raw.back() == '\t' || raw.back() == '\r')) raw.pop_back();
+            // "\n" back into a newline. Written by the escape above; a file
+            // from before it simply has none, so old scenes are unchanged.
+            std::string v;
+            for (size_t q = 0; q < raw.size(); ++q) {
+                if (raw[q] == '\\' && q + 1 < raw.size()) {
+                    char nx = raw[q + 1];
+                    if (nx == 'n')      { v += '\n'; ++q; continue; }
+                    if (nx == '\\')     { v += '\\'; ++q; continue; }
+                }
+                v += raw[q];
+            }
             if (v.size() >= sizeof(rec.text)) ok = false;
             else std::snprintf(rec.text, sizeof(rec.text), "%s", v.c_str()); }
         else if (key == "textsize")   { ok = parse_floats(after, &rec.text_size, 1); }

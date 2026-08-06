@@ -89,6 +89,24 @@ void shape_to_mesh(int shape, dai_vec3 he, uint32_t *mesh, dai_vec3 *scale, floa
     }
 }
 
+// Which sizing rules a BUILTIN mesh follows. A Capsule mesh is sized like a
+// capsule whatever the collider under it happens to be.
+//
+// This is the whole of "I only changed the collider and the model changed
+// shape": the capsule mesh's `param` is its shaft length, and it was read out
+// of the COLLIDER. Switch the collider to a sphere and param went to 0 - the
+// capsule mesh collapsed into a ball while the Mesh field still said Capsule,
+// and the field was telling the truth.
+int shape_of_mesh(uint32_t mesh, int fallback) {
+    switch (mesh) {
+    case DAI_MESH_SPHERE:   return DAI_SHAPE_SPHERE;
+    case DAI_MESH_CAPSULE:  return DAI_SHAPE_CAPSULE;
+    case DAI_MESH_CYLINDER: return DAI_SHAPE_CYLINDER;
+    case DAI_MESH_BOX:      return DAI_SHAPE_BOX;
+    default:                return fallback;   /* a loaded model: no rule here */
+    }
+}
+
 } // namespace
 
 struct dai_scene {
@@ -160,6 +178,16 @@ dai_entity dai_scene_attach(dai_scene *s, dai_body b, const dai_entity_desc *des
     uint32_t mesh; dai_vec3 scale; float param;
     shape_to_mesh(desc->body.shape, desc->body.half_extent, &mesh, &scale, &param);
     r.mesh = (desc->mesh == 0xFFFFFFFFu) ? mesh : desc->mesh;
+    // A mesh that was CHOSEN is sized by its own rules, not by the collider's.
+    // Only when the mesh is left on "from shape" do the two follow each other,
+    // which is what "from shape" means.
+    if (desc->mesh != 0xFFFFFFFFu && r.mesh != mesh) {
+        uint32_t m2; dai_vec3 s2; float p2;
+        shape_to_mesh(shape_of_mesh(r.mesh, desc->body.shape),
+                      desc->body.half_extent, &m2, &s2, &p2);
+        scale = s2;
+        param = p2;
+    }
     r.scale = is_zero(desc->render_scale) ? scale : desc->render_scale;
     r.offset = desc->render_offset;
     r.param = param;

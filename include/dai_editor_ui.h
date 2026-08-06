@@ -62,6 +62,13 @@ DAI_API int dai_hud_pick(float mx, float my, dai_node *out);
  * would go off every time you tried to move it. */
 DAI_API void dai_hud_interactive(int on);
 
+/* Resolves {name} inside a HUD label against the script on node `n`. Write
+ * the value into `out` and return 1; return 0 for a name you do not know and
+ * the placeholder is left on screen, which is what the editor wants. */
+typedef int (*dai_hud_var_fn)(dai_node n, const char *name, char *out,
+                              size_t out_size, void *user);
+DAI_API void dai_hud_vars(dai_hud_var_fn fn, void *user);
+
 /* The buttons clicked since the last call, and forgets them. */
 DAI_API uint32_t dai_hud_take_clicks(dai_node *out, uint32_t max);
 DAI_API void dai_hud_draw(struct dai_ui *ui, struct dai_doc *doc,

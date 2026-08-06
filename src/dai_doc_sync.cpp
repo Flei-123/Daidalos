@@ -102,9 +102,23 @@ bool nonzero3(dai_vec3 v) { return v.x != 0.0f || v.y != 0.0f || v.z != 0.0f; }
 // The size the MESH is drawn at. Zero means "the same as the collider", which
 // is how every scene behaved before the two could differ - so old files look
 // exactly as they did, and a node that says otherwise is honoured.
+// Which shape's sizing rules the DRAWN mesh follows. See shape_of_mesh in
+// dai_scene.cpp - the same rule, and it has to be the same one, or the scale
+// and the mesh parameter disagree about what they are describing.
+int drawn_shape_of(const dai_node_desc &r) {
+    switch (r.mesh) {
+    case DAI_MESH_SPHERE:   return DAI_SHAPE_SPHERE;
+    case DAI_MESH_CAPSULE:  return DAI_SHAPE_CAPSULE;
+    case DAI_MESH_CYLINDER: return DAI_SHAPE_CYLINDER;
+    case DAI_MESH_BOX:      return DAI_SHAPE_BOX;
+    default:                return r.shape;
+    }
+}
+
 dai_vec3 render_scale_of(const dai_node_desc &r, dai_vec3 ws) {
-    dai_vec3 he = scaled_he(r.shape, r.render_extent, ws);
-    switch (r.shape) {
+    int ds = drawn_shape_of(r);
+    dai_vec3 he = scaled_he(ds, r.render_extent, ws);
+    switch (ds) {
     case DAI_SHAPE_SPHERE:
     case DAI_SHAPE_CAPSULE: return { he.x, he.x, he.x };
     // The cylinder mesh takes its half height from the scale, so it is the one

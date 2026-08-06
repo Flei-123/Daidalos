@@ -161,6 +161,10 @@ DAI_API void dai_script_set_number(dai_script *s, const char *name, double value
 DAI_API void dai_script_set_string(dai_script *s, const char *name, const char *value);
 DAI_API double dai_script_get_number(dai_script *s, const char *name, double fallback);
 
+/* state.<name> as text. 1 when it exists and is not null. */
+DAI_API int dai_script_get_string(dai_script *s, const char *name,
+                                  char *out, size_t out_size);
+
 DAI_API dai_result dai_script_eval(dai_script *s, const char *code, const char *name,
                                    char *err, size_t err_len);
 DAI_API dai_result dai_script_load(dai_script *s, const char *path, char *err, size_t err_len);
