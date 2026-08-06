@@ -143,6 +143,10 @@ struct dai_ui {
     // cannot fall through to whatever was underneath it.
     bool in_popup = false;
     bool popup_was_open = false;
+    // A right click that only closed a menu. Delivered on the NEXT frame, so
+    // the panel underneath gets the chance the open menu denied it.
+    int   right_redo = 0;
+    float right_redo_x = 0.0f, right_redo_y = 0.0f;
 
     // ---- roots and hit testing ---------------------------------------------
     // A "root" is anything that can overlap something else: a window, a popup,
@@ -4091,6 +4095,16 @@ int num_field_at(dai_ui *ui, float x, float y, float w, float h, float *value,
 int dai_ui_num_editing(const dai_ui *ui) { return ui && ui->edit.editing ? 1 : 0; }
 
 int dai_ui_right_down(const dai_ui *ui) { return ui ? ui->input.right_down : 0; }
+// The right click a menu swallowed while closing, replayed once. Returns 1 at
+// most one frame after it happened, and forgets it.
+int dai_ui_right_redo(dai_ui *ui, float *x, float *y) {
+    if (!ui || !ui->right_redo) return 0;
+    if (x) *x = ui->right_redo_x;
+    if (y) *y = ui->right_redo_y;
+    ui->right_redo = 0;
+    return 1;
+}
+
 int dai_ui_right_pressed(const dai_ui *ui) {
     return ui ? (ui->input.right_down && !ui->prev.right_down) : 0;
 }
@@ -4223,6 +4237,15 @@ int dai_ui_popup_menu(dai_ui *ui, dai_ui_popup *m,
          (ui->input.right_down && !ui->prev.right_down)) && !over) {
         m->open = 0;
         result = -1;                    // dismissed
+        // A right click that closed a menu was MEANT to open one somewhere
+        // else. It cannot reach the panel this frame - an open menu blocks
+        // every other widget, and it is still open while this runs - so it is
+        // handed on to the next frame instead of being thrown away.
+        if (ui->input.right_down && !ui->prev.right_down) {
+            ui->right_redo = 1;
+            ui->right_redo_x = mx;
+            ui->right_redo_y = my;
+        }
     }
 
     dai_ui_rect(ui, x + 2.0f, y + 3.0f, w, h, ui->style.shadow);

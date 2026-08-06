@@ -187,6 +187,12 @@ DAI_API int  dai_ui_double_click(const dai_ui *ui);
  * top level rather than buried in the input struct. */
 DAI_API int  dai_ui_right_down(const dai_ui *ui);
 DAI_API int  dai_ui_right_pressed(const dai_ui *ui);
+
+/* A right click that a closing menu swallowed, replayed once on the frame
+ * after. An open popup blocks every other widget - including the panel the
+ * user was aiming at - so without this the second right click of a pair is
+ * simply lost. */
+DAI_API int  dai_ui_right_redo(dai_ui *ui, float *x, float *y);
 /* Whether any numeric field is being typed into right now. An editor that
  * batches document edits into undo steps needs it: a drag ends when the
  * button comes up, but typing ends when the field LOSES FOCUS - and one undo

@@ -2267,12 +2267,18 @@ static void hierarchy_body(dai_editor_ui *p, float h) {
     p->hover_node = DAI_INVALID_NODE;
     // The filter, above the tree and outside the scroll: a search box that
     // scrolls away with its results is a search box you lose.
+    float search_h = dai_ui_text_height(p->ui) + 12.0f;
     {
         char fbuf[64];
         std::snprintf(fbuf, sizeof(fbuf), "%s", p->hier_filter);
         if (dai_ui_input_text(p->ui, "Search", fbuf, sizeof(fbuf)))
             std::snprintf(p->hier_filter, sizeof(p->hier_filter), "%s", fbuf);
     }
+    // The search box costs a row, and the scroll area has to give it up. It
+    // did not, so the list was one row taller than the panel and its last
+    // entries were drawn straight over the tab bar underneath.
+    h -= search_h;
+    if (h < 40.0f) h = 40.0f;
     dai_ui_scroll_begin(p->ui, "hierarchy", h);
     p->reveal_row_wanted = p->reveal_selection;
 
@@ -7339,7 +7345,11 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         // menu. Testing "no menu is open" meant the second click was thrown
         // away and the first menu just sat there, in the place you no longer
         // wanted it.
-        if (dai_ui_right_pressed(ui) && dai_ui_root_hovered(ui, "Hierarchy")) {
+        float rrx = 0.0f, rry = 0.0f;
+        int redo = dai_ui_right_redo(ui, &rrx, &rry);
+        if (redo && rrx >= px && rrx < px + pw && rry >= py && rry < py + ph) {
+            dai_ui_popup_open(&p->menu_canvas, rrx, rry);
+        } else if (dai_ui_right_pressed(ui) && dai_ui_root_hovered(ui, "Hierarchy")) {
             p->menu_node.open = 0;
             p->menu_canvas.open = 0;
             dai_ui_popup_open(&p->menu_canvas, mx, my);
