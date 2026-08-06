@@ -329,6 +329,12 @@ DAI_API int  dai_ui_slider(dai_ui *ui, const char *utf8, float *value, float min
 DAI_API void dai_ui_progress(dai_ui *ui, float fraction, const char *utf8);
 DAI_API void dai_ui_separator(dai_ui *ui);
 
+/* A strip of buttons of which exactly one is on, Unity's alignment control.
+ * For three or four short options this beats a dropdown: every choice is
+ * visible and picking one costs a single click. */
+DAI_API int  dai_ui_seg_buttons(dai_ui *ui, const char *label, int *value,
+                                const char *const *items, int count);
+
 /* A caption and three axis ticks on ONE row: "Freeze Position [x]X [x]Y []Z".
  * One widget because a label does not advance the row cursor, so a caption
  * plus three checkboxes drew all four things in the same place. */

@@ -213,7 +213,21 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
         uint32_t len = be32_at(file + pos);
         const char *type = (const char *)file + pos + 4;
         const uint8_t *data = file + pos + 8;
-        if (pos + 12 + len > size) return fail("truncated chunk");
+        if (pos + 12 + len > size) {
+            // The file ends inside a chunk. Hard-failing here threw away a
+            // picture that was perfectly readable: writers append things, a
+            // copy can lose its last bytes, and the ONLY chunks that matter
+            // have usually arrived long before. If the header and some pixel
+            // data are already in hand, decode what there is; complain only
+            // when there is nothing to decode.
+            if (w && h && !idat.empty()) break;
+            char m[128];
+            std::snprintf(m, sizeof(m),
+                          "file ends inside a '%c%c%c%c' chunk: it wants %u more bytes",
+                          type[0], type[1], type[2], type[3],
+                          (unsigned)(pos + 12 + len - size));
+            return fail(m);
+        }
         if (!std::memcmp(type, "IHDR", 4)) {
             if (len < 13) return fail("bad IHDR");
             w = be32_at(data); h = be32_at(data + 4);

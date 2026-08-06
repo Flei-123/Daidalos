@@ -2105,6 +2105,50 @@ int dai_ui_axis_toggles(dai_ui *ui, const char *label, uint32_t *bits,
     return changed;
 }
 
+// A row of buttons of which exactly one is on - Unity's alignment strip.
+// A dropdown hides the choice behind a click; a strip shows all of them and
+// costs one click. For three or four short options that is simply better.
+int dai_ui_seg_buttons(dai_ui *ui, const char *label, int *value,
+                       const char *const *items, int count) {
+    if (!ui || !value || !items || count <= 0) return 0;
+    float h = widget_height(ui);
+    float x, y;
+    next_rect(ui, 0, h, &x, &y);
+    float full = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
+    float lw = 0.0f;
+    if (label && *label) {
+        lw = ui->style.label_w > 0 ? ui->style.label_w : 62.0f;
+        if (lw > full * 0.55f) lw = full * 0.55f;
+        dai_ui_text(ui, x, y + 2.0f, label, ui->style.text_dim);
+    }
+    float sx = x + lw;
+    float sw = full - lw;
+    if (sw < 40.0f) sw = 40.0f;
+    float bw = sw / (float)count;
+    float bh = h - 2.0f;
+    int changed = 0;
+    for (int i = 0; i < count; ++i) {
+        float bx = sx + bw * (float)i;
+        bool over = inside_chk(ui, bx, y + 1.0f, bw, bh);
+        if (over) { ui->mouse_over_ui = true; ui->cursor_want = DAI_CURSOR_HAND; }
+        if (over && ui->input.mouse_down && !ui->prev.mouse_down && *value != i) {
+            *value = i;
+            changed = 1;
+        }
+        bool on = (*value == i);
+        uint32_t bg = on ? ui->style.accent
+                         : (over ? ui->style.button_hover : ui->style.button);
+        dai_ui_rect(ui, bx, y + 1.0f, bw - 1.0f, bh, bg);
+        dai_ui_rect_outline(ui, bx, y + 1.0f, bw - 1.0f, bh, 1.0f, ui->style.panel_border);
+        const char *t = items[i] ? items[i] : "";
+        float tw = dai_ui_text_width(ui, t);
+        dai_ui_text(ui, bx + (bw - 1.0f - tw) * 0.5f,
+                    y + (bh - dai_font_line_height(ui->font)) * 0.5f + 1.0f, t,
+                    on ? 0xFFFFFFFFu : ui->style.text);
+    }
+    return changed;
+}
+
 void dai_ui_separator(dai_ui *ui) {
     if (!ui) return;
     float x, y;

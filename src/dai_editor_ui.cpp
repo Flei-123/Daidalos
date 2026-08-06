@@ -3364,8 +3364,8 @@ static void inspector_body(dai_editor_ui *p) {
                 "Bottom left", "Bottom", "Bottom right",
             };
             dai_ui_option(p->ui, "Anchor", &r.text_anchor, ANCHOR, 9);
-            static const char *const TALIGN[] = { "Follow anchor", "Left", "Centre", "Right" };
-            dai_ui_option(p->ui, "Align", &r.text_align, TALIGN, 4);
+            static const char *const TALIGN[] = { "Auto", "Left", "Centre", "Right" };
+            dai_ui_seg_buttons(p->ui, "Alignment", &r.text_align, TALIGN, 4);
             dai_ui_help(p->ui, "Where the LINES sit inside the block. The anchor says "
                                "where the block sits on screen - two different questions.");
             // The box. 0 wide means "as wide as the words", which is what a
