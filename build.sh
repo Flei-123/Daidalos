@@ -161,6 +161,7 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_meshgen.cpp      -o build/dai_meshgen.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_image.cpp        -o build/dai_image.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_inflate.cpp      -o build/dai_inflate.o
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_jpeg.cpp         -o build/dai_jpeg.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_json.cpp         -o build/dai_json.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf.cpp         -o build/dai_gltf.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf_geom.cpp    -o build/dai_gltf_geom.o
@@ -195,7 +196,7 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c build/dai_shaders_embed.cpp -o build/dai_shaders_embed.o
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
            build/dai_shaders_embed.o \
-           $WINDOW_OBJ build/dai_dock.o build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
+           $WINDOW_OBJ build/dai_dock.o build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_jpeg.o build/dai_json.o \
            build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_svg.o build/dai_icons.o build/dai_thumb.o build/dai_ui.o build/dai_update.o \
            build/dai_editor_ui.o build/dai_native.o build/dai_native_header.o build/dai_tr.o \
            build/dai_strings.o
@@ -274,7 +275,7 @@ fi
 
 echo "-- tests"
 g++ $FLAGS $ARCH -Iinclude tests/test_daidalos.cpp $LIBS -o build/test_daidalos
-g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_image.cpp src/dai_inflate.cpp -o build/test_image
+g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_image.cpp src/dai_inflate.cpp src/dai_jpeg.cpp -o build/test_image
 g++ $FLAGS $ARCH -Iinclude tests/test_merge.cpp $LIBS -o build/test_merge
 g++ $FLAGS $ARCH -Iinclude tests/test_save.cpp $LIBS -o build/test_save
 g++ $FLAGS $ARCH -Iinclude tests/test_input.cpp $LIBS -o build/test_input

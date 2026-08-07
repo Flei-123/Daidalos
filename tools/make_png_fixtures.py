@@ -64,4 +64,120 @@ blob = rng.integers(0, 64, 200000, dtype=np.uint8).tobytes()   # compresses well
 open(f"{out}/blob.bin", "wb").write(blob)
 open(f"{out}/blob.z", "wb").write(zlib.compress(blob, 9))
 
+
+# ---------------------------------------------------------------- Adam7
+# PIL cannot WRITE interlaced PNG, so the fixture is built by hand - and then
+# read back with PIL, which CAN read one. If Pillow agrees with the reference
+# bytes, the fixture really is Adam7 and not our own misunderstanding of it
+# handed to a decoder that shares it.
+XO = [0, 4, 0, 2, 0, 1, 0]
+YO = [0, 0, 4, 0, 2, 0, 1]
+XS = [8, 8, 4, 4, 2, 2, 1]
+YS = [8, 8, 8, 4, 4, 2, 2]
+
+
+def _chunk(t, d):
+    c = t + d
+    return len(d).to_bytes(4, "big") + c + (zlib.crc32(c) & 0xFFFFFFFF).to_bytes(4, "big")
+
+
+def _pack_rows(row, depth):
+    """One scanline of sub byte palette indices, packed MSB first."""
+    if depth == 8:
+        return row.astype(np.uint8).tobytes()
+    per = 8 // depth
+    out = bytearray()
+    for i in range(0, len(row), per):
+        b = 0
+        for j in range(per):
+            v = int(row[i + j]) if i + j < len(row) else 0
+            b |= (v & ((1 << depth) - 1)) << (8 - depth * (j + 1))
+        out.append(b)
+    return bytes(out)
+
+
+def write_png_adam7(path, arr, color, depth=8, palette=None):
+    h, w = arr.shape[0], arr.shape[1]
+    raw = bytearray()
+    for p in range(7):
+        pw = (w - XO[p] + XS[p] - 1) // XS[p] if w > XO[p] else 0
+        ph = (h - YO[p] + YS[p] - 1) // YS[p] if h > YO[p] else 0
+        if pw == 0 or ph == 0:
+            continue
+        sub = arr[YO[p]::YS[p], XO[p]::XS[p]]
+        for row in sub:
+            raw.append(0)                      # filter: none
+            if color == 3:
+                raw += _pack_rows(row, depth)
+            else:
+                raw += row.astype(np.uint8).tobytes()
+    hdr = w.to_bytes(4, "big") + h.to_bytes(4, "big") + bytes([depth, color, 0, 0, 1])
+    png = b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", hdr)
+    if palette is not None:
+        png += _chunk(b"PLTE", palette)
+    png += _chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + _chunk(b"IEND", b"")
+    open(path, "wb").write(png)
+
+
+def save_adam7(name, arr, color, depth=8, palette=None, ref=None):
+    path = f"{out}/{name}.png"
+    write_png_adam7(path, arr, color, depth, palette)
+    if ref is None:
+        ref = arr
+    open(f"{out}/{name}.rgba", "wb").write(ref.tobytes())
+    back = np.asarray(Image.open(path).convert("RGBA"))
+    assert back.tobytes() == ref.tobytes(), f"{name}: Pillow disagrees with the reference"
+
+
+rgba_full = np.dstack([rgb, alpha])
+save_adam7("i_rgba8", rgba_full, 6, 8, None, rgba_full)
+save_adam7("i_rgb8", rgb, 2, 8, None,
+           np.dstack([rgb, np.full((h, w), 255, np.uint8)]))
+# 17x13: every Adam7 pass is a different shape here, and two of them are empty
+small = rgb[:13, :17]
+save_adam7("i_small", small, 2, 8, None,
+           np.dstack([small, np.full((13, 17), 255, np.uint8)]))
+
+# 4 bit palette, interlaced: the pass has to be unpacked AND repacked bit wise
+pal_img = Image.fromarray(rgb, "RGB").convert("P", palette=Image.ADAPTIVE, colors=16)
+idx = np.asarray(pal_img)
+pal = bytes(pal_img.getpalette()[: 16 * 3])
+pal_rgba = np.dstack([
+    np.asarray(pal_img.convert("RGB")),
+    np.full((h, w), 255, np.uint8),
+])
+save_adam7("i_pal4", idx, 3, 4, pal, pal_rgba)
+
+# ---------------------------------------------------------------- JPEG
+# Smooth pictures on purpose: libjpeg upsamples chroma with a triangle filter
+# and this decoder repeats the sample, so a hard edge in a 4:2:0 file would
+# measure the difference between two upsamplers rather than the decoder.
+jx, jy = np.meshgrid(np.arange(96), np.arange(64))
+smooth = np.stack([jx * 2 % 256, jy * 3 % 256, (jx + jy) % 256], -1).astype(np.uint8)
+smooth = np.asarray(Image.fromarray(smooth, "RGB").resize((96, 64), Image.BILINEAR))
+soft = np.asarray(Image.fromarray(smooth, "RGB").filter(__import__("PIL.ImageFilter", fromlist=["ImageFilter"]).GaussianBlur(2)))
+
+
+def save_jpeg(name, im, **kw):
+    path = f"{out}/{name}.jpg"
+    im.save(path, "JPEG", **kw)
+    ref = Image.open(path).convert("RGBA")
+    open(f"{out}/{name}.rgba", "wb").write(ref.tobytes())
+
+
+save_jpeg("j_444", Image.fromarray(soft, "RGB"), quality=95, subsampling=0)
+save_jpeg("j_422", Image.fromarray(soft, "RGB"), quality=90, subsampling=1)
+save_jpeg("j_420", Image.fromarray(soft, "RGB"), quality=90, subsampling=2)
+save_jpeg("j_grey", Image.fromarray(soft[:, :, 0], "L"), quality=92)
+# 4:2:0 on a size that is not a whole number of MCUs - the decoder pads to 16
+# and has to throw the padding away again.
+save_jpeg("j_odd", Image.fromarray(soft[:37, :51], "RGB"), quality=92, subsampling=2)
+try:
+    save_jpeg("j_restart", Image.fromarray(soft, "RGB"), quality=90, subsampling=2,
+              restart_marker_rows=1)
+except (TypeError, OSError, ValueError) as e:
+    print("  (no restart marker fixture:", e, ")")
+# Not supported, and the point of the fixture is that it says so politely.
+save_jpeg("j_progressive", Image.fromarray(soft, "RGB"), quality=90, progressive=True)
+
 print("fixtures in", out, ":", len(os.listdir(out)), "files")

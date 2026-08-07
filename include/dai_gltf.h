@@ -7,7 +7,7 @@
  *
  *   meshes      indexed triangles, position / normal / uv
  *   materials   metallic-roughness: base colour, ORM, normal, emissive
- *   textures    PNG, embedded in the GLB or next to the .gltf
+ *   textures    PNG or baseline JPEG, embedded in the GLB or next to the .gltf
  *   nodes       the transform hierarchy, flattened to world space TRS
  *
  * Anything a Principled BSDF can express through glTF arrives; anything it

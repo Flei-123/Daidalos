@@ -6,8 +6,13 @@
 // is verified against zlib-produced files in tests/test_image.cpp.
 //
 // Supported PNG subset: 8 and 16 bit, greyscale / GA / RGB / RGBA / palette,
-// non interlaced. That covers everything Blender, Krita, GIMP and any
-// texture pipeline will hand you. 16 bit is downsampled to 8.
+// plain or Adam7 interlaced. That covers everything Blender, Krita, GIMP and
+// any texture pipeline will hand you. 16 bit is downsampled to 8.
+//
+// read_png() also answers for JPEG. Every caller in the engine asks it "turn
+// these bytes into pixels", and having each of them sniff the first three
+// bytes for themselves is how one of them ends up not doing it. The JPEG
+// decoder itself lives in src/dai_jpeg.cpp.
 
 #include <cstdint>
 #include <cstring>
@@ -197,14 +202,18 @@ int paeth(int a, int b, int c) {
 
 } // namespace
 
+bool read_jpeg(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
+               uint32_t *out_w, uint32_t *out_h, char *err, size_t err_len);
+
 // Decodes a PNG file into tightly packed RGBA8. Returns false on anything it
 // does not support, and says why in `err` when given.
 bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
               uint32_t *out_w, uint32_t *out_h, char *err, size_t err_len) {
     auto fail = [&](const char *m) { if (err && err_len) std::snprintf(err, err_len, "%s", m); return false; };
     static const uint8_t SIG[8] = { 0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A };
+    // A JPEG is not a PNG, but it IS a picture, and the caller wanted pixels.
     if (size >= 3 && file[0] == 0xFF && file[1] == 0xD8 && file[2] == 0xFF)
-        return fail("this is a JPEG and only PNG is decoded - save it as .png");
+        return read_jpeg(file, size, rgba, out_w, out_h, err, err_len);
     if (size < 8 || std::memcmp(file, SIG, 8) != 0) return fail("not a PNG file");
 
     uint32_t w = 0, h = 0;
@@ -246,7 +255,7 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
         pos += 12 + len;
     }
     if (!w || !h) return fail("no IHDR");
-    if (interlace) return fail("interlaced PNG not supported");
+    if (interlace != 0 && interlace != 1) return fail("unknown PNG interlace method");
     if (depth != 8 && depth != 16 && !(color == 3 && (depth == 1 || depth == 2 || depth == 4)))
         return fail("unsupported bit depth");
 
@@ -269,32 +278,91 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
     int bits_per_pixel = channels * depth;
     size_t stride = ((size_t)w * bits_per_pixel + 7) / 8;
     int filter_bpp = (bits_per_pixel + 7) / 8;
-    if (raw.size() < (stride + 1) * h)
-        return fail("image data is shorter than the header promises");
 
-    // undo the per scanline filters in place
-    std::vector<uint8_t> img((size_t)stride * h);
+    // The picture, one row after another, filters already undone. Zeroed
+    // because an interlaced file fills it in seven visits and a pass that is
+    // empty on a narrow image must leave black rather than rubbish.
+    std::vector<uint8_t> img((size_t)stride * h, 0);
     const uint8_t *src = raw.data();
-    for (uint32_t y = 0; y < h; ++y) {
-        int f = *src++;
-        uint8_t *cur = &img[(size_t)y * stride];
-        const uint8_t *prev = y ? &img[(size_t)(y - 1) * stride] : nullptr;
-        for (size_t x = 0; x < stride; ++x) {
-            int a = (x >= (size_t)filter_bpp) ? cur[x - filter_bpp] : 0;
-            int b = prev ? prev[x] : 0;
-            int c = (prev && x >= (size_t)filter_bpp) ? prev[x - filter_bpp] : 0;
-            int v = src[x];
-            switch (f) {
-            case 0: break;
-            case 1: v += a; break;
-            case 2: v += b; break;
-            case 3: v += (a + b) / 2; break;
-            case 4: v += paeth(a, b, c); break;
-            default: return fail("bad filter type");
+    size_t left = raw.size();
+    const char *why = nullptr;
+
+    // Undoes the per scanline filters of ONE rectangle of pixels. A plain PNG
+    // is one of these that happens to be the whole image; an interlaced one is
+    // seven of them, each a smaller picture in its own right. Writing it once
+    // is the only reason Adam7 costs a dozen lines instead of a second decoder.
+    auto unfilter = [&](uint32_t pw, uint32_t ph, std::vector<uint8_t> &out) -> bool {
+        size_t ps = ((size_t)pw * bits_per_pixel + 7) / 8;
+        out.assign(ps * ph, 0);
+        if (!pw || !ph) return true;
+        if (left < (ps + 1) * ph) { why = "image data is shorter than the header promises"; return false; }
+        for (uint32_t y = 0; y < ph; ++y) {
+            int f = *src++; --left;
+            uint8_t *cur = &out[(size_t)y * ps];
+            const uint8_t *prev = y ? &out[(size_t)(y - 1) * ps] : nullptr;
+            for (size_t x = 0; x < ps; ++x) {
+                int a = (x >= (size_t)filter_bpp) ? cur[x - filter_bpp] : 0;
+                int b = prev ? prev[x] : 0;
+                int c = (prev && x >= (size_t)filter_bpp) ? prev[x - filter_bpp] : 0;
+                int v = src[x];
+                switch (f) {
+                case 0: break;
+                case 1: v += a; break;
+                case 2: v += b; break;
+                case 3: v += (a + b) / 2; break;
+                case 4: v += paeth(a, b, c); break;
+                default: why = "bad filter type"; return false;
+                }
+                cur[x] = (uint8_t)v;
             }
-            cur[x] = (uint8_t)v;
+            src += ps; left -= ps;
         }
-        src += stride;
+        return true;
+    };
+
+    if (!interlace) {
+        std::vector<uint8_t> pass;
+        if (!unfilter(w, h, pass)) return fail(why);
+        img.swap(pass);
+    } else {
+        // Adam7. Seven passes, each picking a coarser or finer lattice of the
+        // same picture, so a half loaded file already shows something. Nothing
+        // about DECODING changes - the pixels simply land somewhere other than
+        // next to each other, which is the whole of the work below.
+        static const uint32_t XO[7] = { 0, 4, 0, 2, 0, 1, 0 };
+        static const uint32_t YO[7] = { 0, 0, 4, 0, 2, 0, 1 };
+        static const uint32_t XS[7] = { 8, 8, 4, 4, 2, 2, 1 };
+        static const uint32_t YS[7] = { 8, 8, 8, 4, 4, 2, 2 };
+        for (int pi = 0; pi < 7; ++pi) {
+            uint32_t pw = w > XO[pi] ? (w - XO[pi] + XS[pi] - 1) / XS[pi] : 0;
+            uint32_t ph = h > YO[pi] ? (h - YO[pi] + YS[pi] - 1) / YS[pi] : 0;
+            if (!pw || !ph) continue;          // a pass can be empty on a small image
+            std::vector<uint8_t> pass;
+            if (!unfilter(pw, ph, pass)) return fail(why);
+            size_t ps = ((size_t)pw * bits_per_pixel + 7) / 8;
+            for (uint32_t py = 0; py < ph; ++py) {
+                const uint8_t *prow = &pass[(size_t)py * ps];
+                uint8_t *drow = &img[(size_t)(YO[pi] + py * YS[pi]) * stride];
+                for (uint32_t px = 0; px < pw; ++px) {
+                    uint32_t dx = XO[pi] + px * XS[pi];
+                    if (bits_per_pixel >= 8) {
+                        size_t n = (size_t)bits_per_pixel / 8;
+                        std::memcpy(drow + (size_t)dx * n, prow + (size_t)px * n, n);
+                    } else {
+                        // 1, 2 and 4 bit palette entries: the destination byte
+                        // holds several pixels, so this is a read and a merge,
+                        // not a copy.
+                        int per = 8 / bits_per_pixel;
+                        unsigned mask = (1u << bits_per_pixel) - 1u;
+                        int ss = 8 - bits_per_pixel * (int)(px % (uint32_t)per) - bits_per_pixel;
+                        unsigned v = ((unsigned)prow[px / (uint32_t)per] >> ss) & mask;
+                        int ds = 8 - bits_per_pixel * (int)(dx % (uint32_t)per) - bits_per_pixel;
+                        uint8_t &dst = drow[dx / (uint32_t)per];
+                        dst = (uint8_t)((dst & ~(mask << ds)) | (v << ds));
+                    }
+                }
+            }
+        }
     }
 
     rgba.assign((size_t)w * h * 4, 255);
