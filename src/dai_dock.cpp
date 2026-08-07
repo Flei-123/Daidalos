@@ -375,8 +375,13 @@ void run_leaf_menu(dai_dock *d) {
     }
     std::vector<dai_ui_menu_item> items;
     std::vector<std::string> storage;
-    std::vector<int> addable;                    // item index - 1 -> regs index
+    std::vector<int> addable;                    // item index - 2 -> regs index
     items.push_back({ DAI_ICON_CLOSE, "Close Tab", nullptr });
+    // Unity's second entry: pull this tab out of the layout into a window of
+    // its own. The gesture already existed - drag the tab far enough and it
+    // floats - but a gesture nobody is told about is not a feature, and it is
+    // the one thing a tab menu is expected to have.
+    items.push_back({ DAI_ICON_WINDOW, "Drop Window", nullptr });
     for (size_t i = 0; i < d->regs.size(); ++i) {
         const std::string &t = d->regs[i].title;
         if (find_tab(d->menu_leaf, t.c_str(), nullptr)) continue;  // already here
@@ -394,8 +399,16 @@ void run_leaf_menu(dai_dock *d) {
         // "Close Tab" - the closed list remembers it, so Add Tab can undo it.
         if (!d->is_closed(d->menu_tab)) d->closed.push_back(d->menu_tab);
         remove_tab(d, d->menu_tab);
-    } else if (pick > 0 && pick - 1 < (int)addable.size()) {
-        const std::string &t = d->regs[(size_t)addable[(size_t)(pick - 1)]].title;
+    } else if (pick == 1) {
+        // "Drop Window". Where: over the leaf it came from, nudged so the
+        // new window does not land exactly on the hole it left - two panels
+        // pixel for pixel on top of each other read as one.
+        Rect lr = d->menu_leaf->rect;
+        float w = lr.w > 240.0f ? (lr.w < 720.0f ? lr.w : 720.0f) : 320.0f;
+        float h = lr.h > 180.0f ? (lr.h < 560.0f ? lr.h : 560.0f) : 240.0f;
+        dai_dock_undock(d, d->menu_tab.c_str(), lr.x + 24.0f, lr.y + 24.0f, w, h);
+    } else if (pick > 1 && pick - 2 < (int)addable.size()) {
+        const std::string &t = d->regs[(size_t)addable[(size_t)(pick - 2)]].title;
         auto it = std::find(d->closed.begin(), d->closed.end(), t);
         if (it != d->closed.end()) d->closed.erase(it);
         // Only MOVE it here when it already exists somewhere - dragging a tab
@@ -660,6 +673,53 @@ void dai_dock_close(dai_dock *d, const char *title) {
     if (!d || !title) return;
     if (!d->is_closed(title)) d->closed.push_back(title);
     remove_tab(d, title);
+}
+
+int dai_dock_undock(dai_dock *d, const char *title, float x, float y, float w, float h) {
+    if (!d || !title || !*title) return 0;
+    std::string t = title;
+    Node *leaf = d->find(t, nullptr);
+    if (!leaf) return 0;
+
+    // The last panel standing may not float away: the layout would be an
+    // empty rectangle with a window over it, and there would be nothing left
+    // to drop it back onto. Same guard the drag has for the outer edges.
+    if (!leaf->parent && leaf->tabs.size() == 1) {
+        // A leaf with no parent is a root - either THE root or a float's.
+        if (leaf == d->root) return 0;
+        for (const auto &f : d->floats)
+            if (f.root == leaf) return 0;        // already a window of its own
+    }
+
+    if (w < 160.0f) w = 320.0f;
+    if (h < 120.0f) h = 240.0f;
+    // Keep it on screen. A window whose title bar starts off the left edge
+    // cannot be grabbed again, and this dock draws inside the editor.
+    float ax = d->area.w > 1.0f ? d->area.x : 0.0f;
+    float ay = d->area.w > 1.0f ? d->area.y : 0.0f;
+    float aw = d->area.w > 1.0f ? d->area.w : w;
+    float ah = d->area.h > 1.0f ? d->area.h : h;
+    if (w > aw) w = aw;
+    if (h > ah) h = ah;
+    if (x < ax) x = ax;
+    if (y < ay) y = ay;
+    if (x + w > ax + aw) x = ax + aw - w;
+    if (y + h > ay + ah) y = ay + ah - h;
+
+    remove_tab(d, t);
+    dai_dock::Floating f;
+    f.root = new Node();
+    f.root->tabs.push_back(t);
+    f.root->selected = 0;
+    f.rect = Rect{ x, y, w, h };
+    f.z = ++d->next_z;
+    d->floats.push_back(f);
+    // Scene and Game are one leaf wherever they go - the host renders one
+    // world per frame, so undocking one takes the other with it.
+    enforce_pair(d, t);
+    layout(d->root, d->area);
+    for (auto &fl : d->floats) layout(fl.root, fl.rect);
+    return 1;
 }
 
 int dai_dock_is_open(const dai_dock *d, const char *title) {

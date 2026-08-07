@@ -346,6 +346,97 @@ int main() {
         dai_dock_end(dock);
         dai_ui_end(ui);
     };
+    // ---- Drop Window: a panel can leave the layout on purpose --------------
+    // Tearing a tab off by dragging it always worked, but only if you knew
+    // the gesture and dragged far enough. This is the menu entry for it, and
+    // the thing it must never do is lose the panel: undocked is still open,
+    // still visible, and still findable.
+    std::printf("drop window\n");
+    dai_dock_reset(dock);
+    frame(-1, -1, 0);
+    frame(-1, -1, 0);
+    {
+        char dump[512] = { 0 };
+        dai_dock_dump(dock, dump, sizeof(dump));
+        CHECK(std::strstr(dump, "floats=0") != nullptr,
+              "the reset layout already floats something: %s", dump);
+
+        CHECK(dai_dock_undock(dock, "Inspector", 300.0f, 200.0f, 360.0f, 280.0f) == 1,
+              "Drop Window refused to undock the inspector");
+        frame(-1, -1, 0);
+        dai_dock_dump(dock, dump, sizeof(dump));
+        CHECK(std::strstr(dump, "floats=1") != nullptr,
+              "undocking made no floating window: %s", dump);
+        CHECK(dai_dock_is_open(dock, "Inspector") == 1, "the undocked panel counts as closed");
+        CHECK(dai_dock_visible(dock, "Inspector") == 1, "the undocked panel stopped being drawn");
+
+        float ux = 0, uy = 0, uw = 0, uh = 0;
+        CHECK(dai_dock_panel_rect(dock, "Inspector", 0, &ux, &uy, &uw, &uh) == 1,
+              "the floating inspector has no rectangle");
+        CHECK(std::fabs(ux - 300.0f) < 1.5f && std::fabs(uy - 200.0f) < 1.5f,
+              "the window landed at %.0f,%.0f instead of 300,200", ux, uy);
+        CHECK(std::fabs(uw - 360.0f) < 1.5f && std::fabs(uh - 280.0f) < 1.5f,
+              "the window came out %.0fx%.0f instead of 360x280", uw, uh);
+
+        // What stayed behind still tiles - the hole the inspector left closed
+        // up instead of becoming an empty rectangle.
+        rects.clear();
+        for (const char *t : ALL) {
+            float x, y, w, h;
+            if (!dai_dock_panel_rect(dock, t, 0, &x, &y, &w, &h)) continue;
+            if (std::strcmp(t, "Inspector") == 0) continue;   // it floats now, by design
+            if (!dai_dock_visible(dock, t)) continue;
+            rects.push_back(R{ x, y, w, h });
+        }
+        no_overlaps("with one panel floating");
+
+        // Doing it twice does not make two windows out of one panel.
+        CHECK(dai_dock_undock(dock, "Inspector", 100.0f, 100.0f, 300.0f, 200.0f) == 0,
+              "undocking a panel that already floats alone made a second window");
+        // A name the tree does not hold changes nothing.
+        CHECK(dai_dock_undock(dock, "Nope", 0.0f, 0.0f, 300.0f, 200.0f) == 0,
+              "undocked a panel that does not exist");
+
+        // A wish that is off screen is clamped: a title bar outside the
+        // editor cannot be grabbed again.
+        CHECK(dai_dock_undock(dock, "Project", 5000.0f, 5000.0f, 300.0f, 200.0f) == 1,
+              "Drop Window refused the project panel");
+        frame(-1, -1, 0);
+        float px4 = 0, py4 = 0, pw4 = 0, ph4 = 0;
+        CHECK(dai_dock_panel_rect(dock, "Project", 0, &px4, &py4, &pw4, &ph4) == 1,
+              "the floating project panel has no rectangle");
+        CHECK(px4 >= -0.5f && py4 >= 29.5f &&
+              px4 + pw4 <= W + 0.5f && py4 + ph4 <= H + 0.5f,
+              "a window asked for 5000,5000 ended up at %.0f,%.0f %.0fx%.0f",
+              px4, py4, pw4, ph4);
+
+        // Scene and Game are one leaf wherever they go.
+        CHECK(dai_dock_undock(dock, "Scene", 200.0f, 120.0f, 400.0f, 300.0f) == 1,
+              "Drop Window refused the scene view");
+        frame(-1, -1, 0);
+        float sxx = 0, syy = 0, gxx = 0, gyy = 0;
+        dai_dock_panel_rect(dock, "Scene", 0, &sxx, &syy, nullptr, nullptr);
+        dai_dock_panel_rect(dock, "Game", 0, &gxx, &gyy, nullptr, nullptr);
+        CHECK(std::fabs(sxx - gxx) < 0.5f && std::fabs(syy - gyy) < 0.5f,
+              "undocking Scene left Game behind (%.0f,%.0f vs %.0f,%.0f)",
+              sxx, syy, gxx, gyy);
+
+        // And the last one standing may not float away - there would be
+        // nothing left to drop it back onto.
+        dai_dock_reset(dock);
+        frame(-1, -1, 0);
+        dai_dock_close(dock, "Hierarchy");
+        dai_dock_close(dock, "Inspector");
+        dai_dock_close(dock, "Project");
+        dai_dock_close(dock, "Game");
+        frame(-1, -1, 0);
+        CHECK(dai_dock_undock(dock, "Scene", 10.0f, 40.0f, 300.0f, 200.0f) == 0,
+              "the only panel left floated away and left an empty editor");
+    }
+    dai_dock_reset(dock);
+    frame(-1, -1, 0);
+    frame(-1, -1, 0);
+
     float row_h = dai_font_line_height(font) + 8.0f;
     {
         // Right click the Hierarchy's tab: the menu opens on it, item 0 is
@@ -372,7 +463,8 @@ int main() {
         frame_r(tx2, ty2, 0, 1);
         frame_r(tx2, ty2, 0, 0);
         frame_r(-1, -1, 0, 0);
-        frame_r(tx2 + 12.0f, ty2 + 4.0f + row_h * 1.5f, 1, 0);  // item 1: Add Tab
+        // item 0 Close Tab, item 1 Drop Window, item 2 the first Add Tab
+        frame_r(tx2 + 12.0f, ty2 + 4.0f + row_h * 2.5f, 1, 0);  // item 2: Add Tab
         frame_r(-1, -1, 0, 0);
         CHECK(dai_dock_is_open(dock, "Hierarchy") == 1,
               "Add Tab did not reopen the closed panel");

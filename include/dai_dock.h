@@ -83,6 +83,16 @@ DAI_API void dai_dock_focus(dai_dock *d, const char *title);
 DAI_API void dai_dock_close(dai_dock *d, const char *title);
 /* Brings a closed panel back - the Window menu's job. Registering it again
  * with dai_dock_add does the same thing for a panel that is already known. */
+/* Pulls a panel out of the layout into a floating window of its own - the
+ * "Drop Window" entry of the tab menu, and Unity's gesture of dragging a tab
+ * off the bar without having to be accurate about it. The rectangle is a
+ * wish: it is clamped into the dock area, and w/h below a sane minimum are
+ * replaced by a default. Returns 0 and changes nothing when the panel is not
+ * in the tree, when it is already a window on its own, or when it is the only
+ * thing left in the layout - a dock with nothing docked in it has no home to
+ * drop the window back into. */
+DAI_API int  dai_dock_undock(dai_dock *d, const char *title,
+                             float x, float y, float w, float h);
 DAI_API void dai_dock_open(dai_dock *d, const char *title);
 DAI_API int  dai_dock_is_open(const dai_dock *d, const char *title);
 /* Every registered panel, for a Window menu. */
