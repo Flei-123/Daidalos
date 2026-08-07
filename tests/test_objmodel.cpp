@@ -16,6 +16,7 @@
 // host, so "it wrote through" is a value in a C++ array and not an impression.
 
 #include "dai_script.h"
+#include "dai_prelude.h"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -53,6 +54,50 @@ static void fh_set_rot(double id, const double *q, void *) {
 }
 static void fh_set_text(double id, const char *t, void *) { g_text[idx(id)] = t ? t : ""; }
 
+
+// ---- the fake components -------------------------------------------------
+// The property bridge is "a name goes in, a field comes out", so the fake is
+// a map. It checks the CONTRACT - that the prelude asks for the right names
+// and writes through - not what the editor does with them, which is
+// tests/test_editor's job.
+#include <map>
+static std::map<std::string, double> g_num;
+static std::map<std::string, double[3]> g_vecdummy;   // unused, kept out of the way
+static std::map<std::string, std::string> g_str;
+static double g_vec[64][3];
+static std::map<std::string, int> g_vecslot;
+static int g_vecn = 0;
+
+static std::string key(double id, const char *p) {
+    char b[128]; std::snprintf(b, sizeof(b), "%d/%s", (int)id, p ? p : "");
+    return b;
+}
+static double fh_get_num(double id, const char *p, void *) {
+    auto it = g_num.find(key(id, p));
+    return it == g_num.end() ? 0.0 : it->second;
+}
+static void fh_set_num(double id, const char *p, double v, void *) { g_num[key(id, p)] = v; }
+static int fh_get_vec(double id, const char *p, double *xyz, void *) {
+    auto it = g_vecslot.find(key(id, p));
+    if (it == g_vecslot.end()) { xyz[0] = xyz[1] = xyz[2] = 0; return 0; }
+    for (int i = 0; i < 3; ++i) xyz[i] = g_vec[it->second][i];
+    return 1;
+}
+static void fh_set_vec(double id, const char *p, const double *xyz, void *) {
+    std::string k = key(id, p);
+    if (!g_vecslot.count(k)) g_vecslot[k] = g_vecn++;
+    for (int i = 0; i < 3; ++i) g_vec[g_vecslot[k]][i] = xyz[i];
+}
+static const char *fh_get_str(double id, const char *p, void *) {
+    static std::string last;
+    auto it = g_str.find(key(id, p));
+    last = it == g_str.end() ? "" : it->second;
+    return last.c_str();
+}
+static void fh_set_str(double id, const char *p, const char *v, void *) {
+    g_str[key(id, p)] = v ? v : "";
+}
+
 static int  fp_key(const char *, void *) { return 0; }
 static int  fp_get_vel(double id, double *xyz, void *) {
     for (int i = 0; i < 3; ++i) xyz[i] = g_vel[idx(id)][i];
@@ -67,89 +112,6 @@ static void fp_mouse(double *dx, double *dy, int *b, void *) {
     if (dx) *dx = 0; if (dy) *dy = 0; if (b) *b = 0;
 }
 
-// The prelude, character for character the one the editor installs. Kept in a
-// file so the two cannot drift: a copy in a test is a copy that goes stale.
-static std::string load_prelude() {
-    // Extracted from the editor source at build time would be neater still,
-    // but the editor embeds it as a C string literal - so the honest thing is
-    // to state the contract here and check the BEHAVIOUR, not the bytes.
-    return R"JS(
-(function () {
-    function V3(node, which) { this.__n = node; this.__w = which; }
-    function get3(n, w) { return node.getPos(n); }
-    function set3(n, w, x, y, z) { node.setPos(n, x, y, z); }
-    ["x", "y", "z"].forEach(function (name, i) {
-        Object.defineProperty(V3.prototype, name, {
-            get: function () { return get3(this.__n, this.__w)[i]; },
-            set: function (v) {
-                var c = get3(this.__n, this.__w);
-                c[i] = v;
-                set3(this.__n, this.__w, c[0], c[1], c[2]);
-            }
-        });
-    });
-    V3.prototype.set = function (x, y, z) { set3(this.__n, this.__w, x, y, z); return this; };
-    V3.prototype.add = function (x, y, z) {
-        var c = get3(this.__n, this.__w);
-        set3(this.__n, this.__w, c[0] + x, c[1] + (y || 0), c[2] + (z || 0));
-        return this;
-    };
-    function Transform(n) { this.__n = n; }
-    Object.defineProperty(Transform.prototype, "position", {
-        get: function () { return new V3(this.__n, 0); },
-        set: function (v) {
-            if (v instanceof V3) { var c = get3(v.__n, v.__w); node.setPos(this.__n, c[0], c[1], c[2]); }
-            else node.setPos(this.__n, v[0] || v.x || 0, v[1] || v.y || 0, v[2] || v.z || 0);
-        }
-    });
-    Object.defineProperty(Transform.prototype, "rotation", {
-        get: function () { return node.getRot(this.__n); },
-        set: function (q) { node.setRot(this.__n, q[0], q[1], q[2], q[3]); }
-    });
-    Object.defineProperty(Transform.prototype, "yaw", {
-        get: function () {
-            var q = node.getRot(this.__n);
-            return Math.atan2(2 * (q[3] * q[1] + q[0] * q[2]),
-                              1 - 2 * (q[1] * q[1] + q[0] * q[0])) * 180 / Math.PI;
-        },
-        set: function (deg) {
-            var h = deg * Math.PI / 360;
-            node.setRot(this.__n, 0, Math.sin(h), 0, Math.cos(h));
-        }
-    });
-    function Node(n) { this.__n = n; }
-    Node.prototype.valueOf = function () { return this.__n; };
-    Node.prototype.toString = function () { return "Node(" + this.__n + ")"; };
-    Object.defineProperty(Node.prototype, "id", { get: function () { return this.__n; } });
-    Object.defineProperty(Node.prototype, "transform", {
-        get: function () { return new Transform(this.__n); }
-    });
-    Object.defineProperty(Node.prototype, "position", {
-        get: function () { return new V3(this.__n, 0); },
-        set: function (v) { this.transform.position = v; }
-    });
-    Object.defineProperty(Node.prototype, "velocity", {
-        get: function () { return body.getVel(this.__n); },
-        set: function (v) { body.setVel(this.__n, v[0], v[1], v[2]); }
-    });
-    Object.defineProperty(Node.prototype, "grounded", {
-        get: function () { return body.grounded(this.__n); }
-    });
-    Object.defineProperty(Node.prototype, "text", {
-        set: function (t) { node.setText(this.__n, "" + t); }
-    });
-    Node.prototype.impulse = function (x, y, z) { body.impulse(this.__n, x, y, z); return this; };
-    Node.prototype.setVelocity = function (x, y, z) { body.setVel(this.__n, x, y, z); return this; };
-    Node.prototype.isValid = function () { return this.__n >= 0; };
-    globalThis.Node = Node;
-    globalThis.Vec3 = V3;
-    var rawFind = scene.find;
-    scene.find = function (name) { return new Node(rawFind(name)); };
-    globalThis.__wrapSelf = function (id) { return new Node(id); };
-})();
-)JS";
-}
-
 int main() {
     std::printf("script object model\n");
     char err[512] = { 0 };
@@ -160,6 +122,9 @@ int main() {
     dai_script_node_host nh{};
     nh.find = fh_find; nh.get_pos = fh_get_pos; nh.set_pos = fh_set_pos;
     nh.get_rot = fh_get_rot; nh.set_rot = fh_set_rot; nh.set_text = fh_set_text;
+    nh.get_num = fh_get_num; nh.set_num = fh_set_num;
+    nh.get_vec = fh_get_vec; nh.set_vec = fh_set_vec;
+    nh.get_str = fh_get_str; nh.set_str = fh_set_str;
     dai_script_bind_nodes(s, &nh);
 
     dai_script_play_host ph{};
@@ -167,8 +132,10 @@ int main() {
     ph.impulse = fp_impulse; ph.grounded = fp_grounded; ph.mouse = fp_mouse;
     dai_script_bind_play(s, &ph);
 
-    std::string prelude = load_prelude();
-    CHECK(dai_script_eval(s, prelude.c_str(), "prelude", err, sizeof(err)) == DAI_OK,
+    // The prelude the EDITOR installs, not a copy of it: include/dai_prelude.h
+    // is the one and only text, so this test cannot pass while the editor
+    // ships something else - which is what the old copy in this file allowed.
+    CHECK(dai_script_eval(s, DAI_JS_PRELUDE, "prelude", err, sizeof(err)) == DAI_OK,
           "the prelude did not run: %s", err);
     dai_script_eval(s, "globalThis.state = globalThis.state || {};", "state", err, sizeof(err));
     CHECK(dai_script_eval(s, "var self = __wrapSelf(1);", "self", err, sizeof(err)) == DAI_OK,
@@ -243,6 +210,78 @@ int main() {
                     "yaw", err, sizeof(err));
     CHECK(std::fabs(dai_script_get_number(s, "y2", 0) - 90.0) < 0.5,
           "yaw round tripped to %.2f, expected 90", dai_script_get_number(s, "y2", 0));
+
+
+    // ---- 8. the components ----------------------------------------------
+    // Each one is a CLASS, and each property writes through to the field the
+    // inspector shows. The point of the exercise: self.light.intensity is not
+    // a variable on a wrapper object, it is the light.
+    CHECK(dai_script_eval(s, "self.light.intensity = 2.5; self.light.range = 12;"
+                             "self.light.color = [1, 0.5, 0];"
+                             "self.camera.fov = 75; self.camera.mode = 1;"
+                             "self.text.size = 32; self.text.value = 'hello';"
+                             "self.image.asset = 'logo.png'; self.image.size = [2, 1, 1];"
+                             "self.rigidbody.friction = 0.8;"
+                             "self.transform.scale = [3, 3, 3];",
+                          "components", err, sizeof(err)) == DAI_OK,
+          "writing the components threw: %s", err);
+    CHECK(g_num["1/light.intensity"] == 2.5, "light.intensity is %.2f in the world",
+          g_num["1/light.intensity"]);
+    CHECK(g_num["1/light.range"] == 12, "light.range is %.2f", g_num["1/light.range"]);
+    CHECK(g_num["1/camera.fov"] == 75, "camera.fov is %.2f", g_num["1/camera.fov"]);
+    CHECK(g_num["1/text.size"] == 32, "text.size is %.2f", g_num["1/text.size"]);
+    CHECK(g_num["1/rigidbody.friction"] == 0.8, "rigidbody.friction is %.2f",
+          g_num["1/rigidbody.friction"]);
+    CHECK(g_str["1/text.value"] == "hello", "text.value is '%s'", g_str["1/text.value"].c_str());
+    CHECK(g_str["1/image.asset"] == "logo.png", "image.asset is '%s'",
+          g_str["1/image.asset"].c_str());
+    {
+        double v[3] = {0,0,0};
+        fh_get_vec(1, "light.color", v, nullptr);
+        CHECK(std::fabs(v[0] - 1.0) < 1e-6 && std::fabs(v[1] - 0.5) < 1e-6 && v[2] == 0.0,
+              "light.color is (%.2f %.2f %.2f), expected (1 0.5 0)", v[0], v[1], v[2]);
+        fh_get_vec(1, "transform.scale", v, nullptr);
+        CHECK(v[0] == 3 && v[1] == 3 && v[2] == 3,
+              "transform.scale is (%.1f %.1f %.1f)", v[0], v[1], v[2]);
+    }
+
+    // Reading gives back what was written, through the same names.
+    CHECK(dai_script_eval(s, "state.li = self.light.intensity;"
+                             "state.cf = self.camera.fov;"
+                             "state.tv = self.text.value.length;"
+                             "state.lc = self.light.color[1];",
+                          "read components", err, sizeof(err)) == DAI_OK,
+          "reading the components threw: %s", err);
+    CHECK(std::fabs(dai_script_get_number(s, "li", -1) - 2.5) < 1e-6,
+          "light.intensity read back %.2f", dai_script_get_number(s, "li", -1));
+    CHECK(std::fabs(dai_script_get_number(s, "cf", -1) - 75.0) < 1e-6,
+          "camera.fov read back %.2f", dai_script_get_number(s, "cf", -1));
+    CHECK(dai_script_get_number(s, "tv", -1) == 5, "text.value read back a string of length %.0f",
+          dai_script_get_number(s, "tv", -1));
+    CHECK(std::fabs(dai_script_get_number(s, "lc", -1) - 0.5) < 1e-6,
+          "light.color[1] read back %.2f", dai_script_get_number(s, "lc", -1));
+
+    // A flag is a boolean on this side of the bridge, whatever it is on the
+    // other one.
+    dai_script_eval(s, "self.light.enabled = false; state.le = self.light.enabled ? 1 : 0;",
+                    "flag", err, sizeof(err));
+    CHECK(dai_script_get_number(s, "le", -1) == 0, "light.enabled did not come back false");
+
+    // ---- 9. THE COMPATIBILITY RULE, again --------------------------------
+    // `self.text = "..."` was how every HUD script written before components
+    // existed set its label. It has to keep meaning exactly that.
+    g_text[1].clear();
+    dai_script_eval(s, "self.text = 'still works';", "oldtext", err, sizeof(err));
+    CHECK(g_text[1] == "still works",
+          "self.text = ... stopped reaching node.setText - it wrote '%s'", g_text[1].c_str());
+    dai_script_eval(s, "state.ts = '' + self.text;", "textstr", err, sizeof(err));
+    CHECK(dai_script_get_number(s, "camid", -99) == 2, "the earlier state was clobbered");
+
+    // Every component is reachable by name from a found node too, not just
+    // from self - the same class, the same properties.
+    dai_script_eval(s, "scene.find('Camera').camera.fov = 33;", "findcomp", err, sizeof(err));
+    CHECK(g_num["2/camera.fov"] == 33, "a found node's camera.fov is %.1f",
+          g_num["2/camera.fov"]);
 
     dai_script_destroy(s);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);

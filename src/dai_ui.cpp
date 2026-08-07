@@ -2731,7 +2731,7 @@ const AcEntry AC_CPP[] = {
 };
 
 // What a NODE has, spelled the way the object model spells it (see the
-// prelude in editor_demo.cpp). Offered after any dotted root that is not one
+// prelude in include/dai_prelude.h). Offered after any dotted root that is not one
 // of the API globals: `self.` is the common case, `player.transform.` is the
 // same thing one level in, and both are the same kind of thing.
 //
@@ -2741,6 +2741,39 @@ const AcEntry AC_CPP[] = {
 // every one of them starts, and none of those members were ever offered -
 // which is exactly what "autocomplete only works in JavaScript" was.
 const AcEntry AC_NODE_CPP[] = {
+    // The components first: this is the spelling the header documents and the
+    // one the JavaScript side uses, so the two languages read alike.
+    { "transform().position",  "read and write through" },
+    { "transform().position.x()", "one axis; y and z stay" },
+    { "transform().position.y()", "one axis; x and z stay" },
+    { "transform().position.z()", "one axis; x and y stay" },
+    { "transform().scale",     "Vec3" },
+    { "transform().yaw(",      "degrees around Y" },
+    { "transform().translate(","Vec3 - move by" },
+    { "rigidbody().velocity",  "Vec3 - read and write" },
+    { "rigidbody().impulse(",  "Vec3 - one push" },
+    { "rigidbody().grounded()","standing on something?" },
+    { "rigidbody().friction",  "0..1" },
+    { "rigidbody().restitution", "bounciness" },
+    { "rigidbody().density",   "mass per volume" },
+    { "rigidbody().trigger",   "collider that blocks nothing" },
+    { "camera().fov",          "degrees, perspective" },
+    { "camera().size",         "half height, orthographic" },
+    { "camera().mode",         "0 none, 1 perspective, 2 ortho" },
+    { "camera().enabled",      "is there a camera here?" },
+    { "light().intensity",     "brightness" },
+    { "light().range",         "metres" },
+    { "light().color",         "Vec3, 0..1" },
+    { "light().cone",          "spot: half angle in degrees" },
+    { "light().mode",          "0 none, 1 point, 2 spot, 3 sun" },
+    { "light().enabled",       "is the light on?" },
+    { "text().value",          "the words, or \"@key\"" },
+    { "text().size",           "pixels" },
+    { "text().color",          "Vec3, 0..1" },
+    { "text().anchor",         "0 top left .. 8 bottom right" },
+    { "image().asset",         "the texture file" },
+    { "image().size",          "Vec3, world units" },
+    // The older, flatter spelling. Still valid, still offered.
     { "position()",   "-> Vec3" },
     { "position(",    "Vec3 - move it" },
     { "velocity()",   "-> Vec3" },
@@ -2763,6 +2796,32 @@ const AcEntry AC_NODE[] = {
     { "transform.position.z", "one axis; x and y stay" },
     { "transform.rotation",   "quaternion [x, y, z, w]" },
     { "transform.yaw",        "degrees around Y" },
+    { "transform.scale",      "[x, y, z]" },
+    { "transform.translate(", "x, y, z - move by" },
+    { "rigidbody.velocity",   "[x, y, z] - read and write" },
+    { "rigidbody.grounded",   "standing on something?" },
+    { "rigidbody.impulse(",   "x, y, z - one push" },
+    { "rigidbody.friction",   "0..1" },
+    { "rigidbody.restitution","bounciness" },
+    { "rigidbody.density",    "mass per volume" },
+    { "rigidbody.trigger",    "collider that blocks nothing" },
+    { "camera.fov",           "degrees, perspective" },
+    { "camera.size",          "half height, orthographic" },
+    { "camera.mode",          "0 none, 1 perspective, 2 ortho" },
+    { "camera.enabled",       "is there a camera here?" },
+    { "light.intensity",      "brightness" },
+    { "light.range",          "metres" },
+    { "light.color",          "[r, g, b], 0..1" },
+    { "light.cone",           "spot: half angle in degrees" },
+    { "light.mode",           "0 none, 1 point, 2 spot, 3 sun" },
+    { "light.enabled",        "is the light on?" },
+    { "text.value",           "the words, or \"@key\"" },
+    { "text.size",            "pixels" },
+    { "text.color",           "[r, g, b], 0..1" },
+    { "text.anchor",          "0 top left .. 8 bottom right" },
+    { "image.asset",          "the texture file" },
+    { "image.size",           "[x, y, z], world units" },
+    // The older, flatter spelling. Still valid, still offered.
     { "position",             "short for transform.position" },
     { "velocity",             "[x, y, z] - read and write" },
     { "grounded",             "standing on something?" },

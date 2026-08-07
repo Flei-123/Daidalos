@@ -46,6 +46,23 @@ typedef struct dai_script_node_host {
     /* The node's Text component - the whole point of having one, since a
      * score that cannot change is a decoration. */
     void     (*set_text)(double id, const char *str, void *user);
+    /* ---- the generic component bridge, APPENDED ------------------------
+     * Every optional component a node can carry - camera, light, text,
+     * image, and the rigidbody's settings - is a field of the node in the
+     * document. Binding one function per field would be forty bindings and
+     * a new one every time the editor grows a component; binding them BY
+     * NAME is one function that never has to change again.
+     *
+     * Names read "component.property": "light.intensity", "camera.fov",
+     * "text.value", "transform.scale". An unknown name is not an error - it
+     * answers the fallback - because a script written for a newer editor
+     * must degrade, not explode. */
+    double   (*get_num)(double id, const char *prop, void *user);
+    void     (*set_num)(double id, const char *prop, double v, void *user);
+    int      (*get_vec)(double id, const char *prop, double *xyz, void *user);
+    void     (*set_vec)(double id, const char *prop, const double *xyz, void *user);
+    const char *(*get_str)(double id, const char *prop, void *user);
+    void     (*set_str)(double id, const char *prop, const char *v, void *user);
     void    *user;
 } dai_script_node_host;
 DAI_API void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host);

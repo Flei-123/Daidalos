@@ -356,6 +356,64 @@ JSValue js_node_set_text(JSContext *ctx, JSValueConst, int argc, JSValueConst *a
     return JS_UNDEFINED;
 }
 
+// ---- the component bridge -----------------------------------------------
+// node.getNum(id, "light.intensity"), node.setVec(id, "light.color", r, g, b),
+// node.getStr(id, "text.value"). One pair of functions for every component
+// property there is or ever will be - see dai_script.h for why by name.
+//
+// A host that did not install them is not an error either: the prelude asks
+// whether they exist before it uses them, and these answer harmlessly if it
+// somehow does not.
+JSValue js_node_get_num(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_nodes || !s->nodes.get_num || argc < 2) return JS_NewFloat64(ctx, 0);
+    return JS_NewFloat64(ctx, s->nodes.get_num(arg_num(ctx, argv[0]),
+                                               str(ctx, argv[1]).c_str(), s->nodes.user));
+}
+
+JSValue js_node_set_num(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_nodes && s->nodes.set_num && argc >= 3)
+        s->nodes.set_num(arg_num(ctx, argv[0]), str(ctx, argv[1]).c_str(),
+                         arg_num(ctx, argv[2]), s->nodes.user);
+    return JS_UNDEFINED;
+}
+
+JSValue js_node_get_vec(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    double xyz[3] = { 0, 0, 0 };
+    if (s->has_nodes && s->nodes.get_vec && argc >= 2)
+        s->nodes.get_vec(arg_num(ctx, argv[0]), str(ctx, argv[1]).c_str(), xyz, s->nodes.user);
+    JSValue arr = JS_NewArray(ctx);
+    for (int i = 0; i < 3; ++i) JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewFloat64(ctx, xyz[i]));
+    return arr;
+}
+
+JSValue js_node_set_vec(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_nodes && s->nodes.set_vec && argc >= 5) {
+        double xyz[3] = { arg_num(ctx, argv[2]), arg_num(ctx, argv[3]), arg_num(ctx, argv[4]) };
+        s->nodes.set_vec(arg_num(ctx, argv[0]), str(ctx, argv[1]).c_str(), xyz, s->nodes.user);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue js_node_get_str(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    const char *r = nullptr;
+    if (s->has_nodes && s->nodes.get_str && argc >= 2)
+        r = s->nodes.get_str(arg_num(ctx, argv[0]), str(ctx, argv[1]).c_str(), s->nodes.user);
+    return JS_NewString(ctx, r ? r : "");
+}
+
+JSValue js_node_set_str(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_nodes && s->nodes.set_str && argc >= 3)
+        s->nodes.set_str(arg_num(ctx, argv[0]), str(ctx, argv[1]).c_str(),
+                         str(ctx, argv[2]).c_str(), s->nodes.user);
+    return JS_UNDEFINED;
+}
+
 JSValue js_input_key(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
     dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
     if (!s->has_play || !s->play.key || argc < 1) return JS_FALSE;
@@ -521,6 +579,12 @@ void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host) {
     JS_SetPropertyStr(s->ctx, node, "setPos", JS_NewCFunction(s->ctx, js_node_set_pos, "setPos", 4));
     JS_SetPropertyStr(s->ctx, node, "getRot", JS_NewCFunction(s->ctx, js_node_get_rot, "getRot", 1));
     JS_SetPropertyStr(s->ctx, node, "setRot", JS_NewCFunction(s->ctx, js_node_set_rot, "setRot", 5));
+    JS_SetPropertyStr(s->ctx, node, "getNum", JS_NewCFunction(s->ctx, js_node_get_num, "getNum", 2));
+    JS_SetPropertyStr(s->ctx, node, "setNum", JS_NewCFunction(s->ctx, js_node_set_num, "setNum", 3));
+    JS_SetPropertyStr(s->ctx, node, "getVec", JS_NewCFunction(s->ctx, js_node_get_vec, "getVec", 2));
+    JS_SetPropertyStr(s->ctx, node, "setVec", JS_NewCFunction(s->ctx, js_node_set_vec, "setVec", 5));
+    JS_SetPropertyStr(s->ctx, node, "getStr", JS_NewCFunction(s->ctx, js_node_get_str, "getStr", 2));
+    JS_SetPropertyStr(s->ctx, node, "setStr", JS_NewCFunction(s->ctx, js_node_set_str, "setStr", 3));
     JS_SetPropertyStr(s->ctx, global, "node", node);
     JS_FreeValue(s->ctx, global);
 }

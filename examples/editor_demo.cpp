@@ -30,6 +30,7 @@
 #include "dai_update.h"
 #ifdef DAI_WITH_SCRIPT
 #include "dai_script.h"
+#include "dai_prelude.h"
 #include "dai_native.h"
 #endif
 
@@ -456,8 +457,191 @@ static void sh_set_text(double id, const char *str, void *) {
     dai_doc_set(g_scene_doc, (dai_node)(uint32_t)id, &r);
 }
 
+// ---- the component bridge ------------------------------------------------
+// ONE table, addressed by name, shared by the JavaScript prelude and the C++
+// behaviour header. Both languages ask "what is light.intensity on node 7";
+// neither needs its own path into the document, and a component added to the
+// editor tomorrow is one line here rather than two new bindings and a header.
+//
+// It writes with dai_doc_set and NO dai_doc_begin/commit, for the reason
+// sh_set_text gives above: a behaviour changing a colour sixty times a second
+// must not put sixty entries on the undo stack. Play restores the document
+// snapshot on Stop, so nothing a script did survives into the saved scene.
+namespace {
+
+// Where the name points. Split so a getter and a setter cannot disagree about
+// which field a name means, which is exactly the bug a second switch invites.
+enum PropKind { P_NONE, P_NUM, P_VEC, P_STR };
+
+struct PropRef {
+    PropKind kind = P_NONE;
+    float   *f = nullptr;
+    int     *i = nullptr;
+    dai_vec3 *v = nullptr;
+    char    *str = nullptr;
+    size_t   str_len = 0;
+    int      bool_of_int = 0;   // 1 = the int is a flag, and 0/1 is the answer
+    int      invert = 0;        // no_body is "enabled" upside down
+};
+
+PropRef prop_ref(dai_node_desc &r, const char *name) {
+    PropRef p;
+    auto num = [&](float *f) { p.kind = P_NUM; p.f = f; return p; };
+    auto ival = [&](int *i) { p.kind = P_NUM; p.i = i; return p; };
+    auto flag = [&](int *i, int inv) { p.kind = P_NUM; p.i = i; p.bool_of_int = 1; p.invert = inv; return p; };
+    auto vec = [&](dai_vec3 *v) { p.kind = P_VEC; p.v = v; return p; };
+    auto text = [&](char *c, size_t n) { p.kind = P_STR; p.str = c; p.str_len = n; return p; };
+    if (!name) return p;
+
+    if (!std::strcmp(name, "node.name"))            return text(r.name, sizeof(r.name));
+    if (!std::strcmp(name, "node.tag"))             return text(r.tag, sizeof(r.tag));
+    if (!std::strcmp(name, "node.asset"))           return text(r.asset, sizeof(r.asset));
+
+    if (!std::strcmp(name, "transform.scale"))      return vec(&r.scale);
+
+    if (!std::strcmp(name, "rigidbody.density"))    return num(&r.density);
+    if (!std::strcmp(name, "rigidbody.friction"))   return num(&r.friction);
+    if (!std::strcmp(name, "rigidbody.restitution"))return num(&r.restitution);
+    if (!std::strcmp(name, "rigidbody.motion"))     return ival(&r.motion);
+    if (!std::strcmp(name, "rigidbody.trigger"))    return flag(&r.trigger, 0);
+    // "enabled" is the readable side of no_body: a node WITH a rigidbody is
+    // the normal case, and a script should not have to spell a double negative.
+    if (!std::strcmp(name, "rigidbody.enabled"))    return flag(&r.no_body, 1);
+
+    if (!std::strcmp(name, "camera.mode"))          return ival(&r.camera);
+    if (!std::strcmp(name, "camera.enabled"))       return flag(&r.camera, 0);
+    if (!std::strcmp(name, "camera.fov"))           return num(&r.camera_fov);
+    if (!std::strcmp(name, "camera.size"))          return num(&r.camera_size);
+
+    if (!std::strcmp(name, "light.mode"))           return ival(&r.light);
+    if (!std::strcmp(name, "light.enabled"))        return flag(&r.light, 0);
+    if (!std::strcmp(name, "light.range"))          return num(&r.light_range);
+    if (!std::strcmp(name, "light.intensity"))      return num(&r.light_intensity);
+    if (!std::strcmp(name, "light.cone"))           return num(&r.light_cone);
+    if (!std::strcmp(name, "light.color"))          return vec(&r.light_color);
+
+    if (!std::strcmp(name, "text.enabled"))         return flag(&r.text_on, 0);
+    if (!std::strcmp(name, "text.value"))           return text(r.text, sizeof(r.text));
+    if (!std::strcmp(name, "text.size"))            return num(&r.text_size);
+    if (!std::strcmp(name, "text.anchor"))          return ival(&r.text_anchor);
+    if (!std::strcmp(name, "text.color"))           return vec(&r.text_color);
+
+    if (!std::strcmp(name, "image.enabled"))        return flag(&r.sprite, 0);
+    if (!std::strcmp(name, "image.size"))           return vec(&r.sprite_size);
+    if (!std::strcmp(name, "image.asset"))          return text(r.asset, sizeof(r.asset));
+    return p;                                        // unknown: answers the fallback
+}
+
+// The words a component property can be read out of. Returned by pointer, so
+// the buffer has to outlive the call - a static one is right here: the value
+// is copied into a JS string or handed to a behaviour that uses it that frame.
+char g_prop_str[512];
+
+double comp_get_num(dai_node id, const char *name, double fallback) {
+    if (!g_scene_doc) return fallback;
+    dai_node_desc r{};
+    if (dai_doc_get(g_scene_doc, id, &r) != DAI_OK) return fallback;
+    PropRef p = prop_ref(r, name);
+    if (p.kind != P_NUM) return fallback;
+    if (p.f) return (double)*p.f;
+    if (!p.i) return fallback;
+    int v = *p.i;
+    if (p.bool_of_int) return (p.invert ? (v == 0) : (v != 0)) ? 1.0 : 0.0;
+    return (double)v;
+}
+
+void comp_set_num(dai_node id, const char *name, double value) {
+    if (!g_scene_doc) return;
+    dai_node_desc r{};
+    if (dai_doc_get(g_scene_doc, id, &r) != DAI_OK) return;
+    PropRef p = prop_ref(r, name);
+    if (p.kind != P_NUM) return;
+    if (p.f) *p.f = (float)value;
+    else if (p.i) {
+        if (p.bool_of_int) {
+            int on = value != 0.0 ? 1 : 0;
+            // A flag that names a KIND (camera 1/2, light 1/2/3) must not be
+            // stamped back to 1 when it was already 3 - turning a sun on
+            // would quietly make it a point light.
+            if (p.invert)                  *p.i = on ? 0 : 1;
+            else if (!on)                  *p.i = 0;
+            else if (*p.i == 0)            *p.i = 1;
+        } else {
+            *p.i = (int)value;
+        }
+    }
+    dai_doc_set(g_scene_doc, id, &r);
+}
+
+int comp_get_vec(dai_node id, const char *name, double *xyz) {
+    xyz[0] = xyz[1] = xyz[2] = 0.0;
+    if (!g_scene_doc) return 0;
+    dai_node_desc r{};
+    if (dai_doc_get(g_scene_doc, id, &r) != DAI_OK) return 0;
+    PropRef p = prop_ref(r, name);
+    if (p.kind != P_VEC || !p.v) return 0;
+    xyz[0] = p.v->x; xyz[1] = p.v->y; xyz[2] = p.v->z;
+    return 1;
+}
+
+void comp_set_vec(dai_node id, const char *name, const double *xyz) {
+    if (!g_scene_doc) return;
+    dai_node_desc r{};
+    if (dai_doc_get(g_scene_doc, id, &r) != DAI_OK) return;
+    PropRef p = prop_ref(r, name);
+    if (p.kind != P_VEC || !p.v) return;
+    p.v->x = (float)xyz[0]; p.v->y = (float)xyz[1]; p.v->z = (float)xyz[2];
+    dai_doc_set(g_scene_doc, id, &r);
+}
+
+const char *comp_get_str(dai_node id, const char *name) {
+    g_prop_str[0] = 0;
+    if (!g_scene_doc) return g_prop_str;
+    dai_node_desc r{};
+    if (dai_doc_get(g_scene_doc, id, &r) != DAI_OK) return g_prop_str;
+    PropRef p = prop_ref(r, name);
+    if (p.kind != P_STR || !p.str) return g_prop_str;
+    std::snprintf(g_prop_str, sizeof(g_prop_str), "%s", p.str);
+    return g_prop_str;
+}
+
+void comp_set_str(dai_node id, const char *name, const char *value) {
+    if (!g_scene_doc) return;
+    dai_node_desc r{};
+    if (dai_doc_get(g_scene_doc, id, &r) != DAI_OK) return;
+    PropRef p = prop_ref(r, name);
+    if (p.kind != P_STR || !p.str) return;
+    std::snprintf(p.str, p.str_len, "%s", value ? value : "");
+    // Putting words in a Text turns it on, the same shortcut sh_set_text has.
+    if (!std::strcmp(name, "text.value") && !r.text_on) r.text_on = 1;
+    dai_doc_set(g_scene_doc, id, &r);
+}
+
+} // namespace
+
+static double sh_get_num(double id, const char *prop, void *) {
+    return comp_get_num((dai_node)(uint32_t)id, prop, 0.0);
+}
+static void sh_set_num(double id, const char *prop, double v, void *) {
+    comp_set_num((dai_node)(uint32_t)id, prop, v);
+}
+static int sh_get_vec(double id, const char *prop, double *xyz, void *) {
+    return comp_get_vec((dai_node)(uint32_t)id, prop, xyz);
+}
+static void sh_set_vec(double id, const char *prop, const double *xyz, void *) {
+    comp_set_vec((dai_node)(uint32_t)id, prop, xyz);
+}
+static const char *sh_get_str(double id, const char *prop, void *) {
+    return comp_get_str((dai_node)(uint32_t)id, prop);
+}
+static void sh_set_str(double id, const char *prop, const char *v, void *) {
+    comp_set_str((dai_node)(uint32_t)id, prop, v);
+}
+
 static dai_script_node_host g_node_host = { sh_find, sh_get_pos, sh_set_pos, sh_get_rot, sh_set_rot,
-                                            sh_set_text, nullptr };
+                                            sh_set_text,
+                                            sh_get_num, sh_set_num, sh_get_vec, sh_set_vec,
+                                            sh_get_str, sh_set_str, nullptr };
 
 // ---- native (C++) behaviours -------------------------------------------
 //
@@ -592,12 +776,38 @@ static void nv_mouse(const dai_native_api *, float *dx, float *dy, int *buttons)
     if (buttons) *buttons = g_mouse_buttons;
 }
 
+// The component bridge, C++ side. Literally the same four functions the
+// JavaScript prelude reaches - one table, one meaning for "light.intensity".
+static double nv_get_num(const dai_native_api *, dai_nentity e, const char *prop, double fb) {
+    return comp_get_num((dai_node)e, prop, fb);
+}
+static void nv_set_num(const dai_native_api *, dai_nentity e, const char *prop, double v) {
+    comp_set_num((dai_node)e, prop, v);
+}
+static dai_nvec3 nv_get_vec(const dai_native_api *, dai_nentity e, const char *prop) {
+    double xyz[3] = { 0, 0, 0 };
+    comp_get_vec((dai_node)e, prop, xyz);
+    dai_nvec3 r{ (float)xyz[0], (float)xyz[1], (float)xyz[2] };
+    return r;
+}
+static void nv_set_vec(const dai_native_api *, dai_nentity e, const char *prop, dai_nvec3 v) {
+    double xyz[3] = { v.x, v.y, v.z };
+    comp_set_vec((dai_node)e, prop, xyz);
+}
+static const char *nv_get_str(const dai_native_api *, dai_nentity e, const char *prop) {
+    return comp_get_str((dai_node)e, prop);
+}
+static void nv_set_str(const dai_native_api *, dai_nentity e, const char *prop, const char *v) {
+    comp_set_str((dai_node)e, prop, v);
+}
+
 static dai_native_api g_native_api = {
     DAI_NATIVE_ABI, nullptr,
     nv_log, nv_get_pos, nv_set_pos, nv_get_vel, nv_set_vel, nv_impulse,
     nv_get_scale, nv_set_scale, nv_get_rot, nv_set_rot,
     nv_find, nv_name_of, nv_time, nv_key,
-    nv_param_num, nv_param_str, nv_param_node, nv_mouse
+    nv_param_num, nv_param_str, nv_param_node, nv_mouse,
+    nv_get_num, nv_set_num, nv_get_vec, nv_set_vec, nv_get_str, nv_set_str
 };
 
 struct RunningNative { int id; dai_node node; std::string path; };
@@ -1154,104 +1364,7 @@ static void scripts_start() {
             // The object model, then `self` as one of its Nodes. In this
             // order: the wrapper has to exist before anything is wrapped.
             {
-                static const char *PRELUDE =
-                "\n"
-                "// ---- Daidalos object model (installed before every behaviour) -------------\n"
-                "// self.transform.position.x, self.name, scene.find(\"X\").transform - the\n"
-                "// Unity spelling. Everything here ends in the same node.*/body.* calls the\n"
-                "// engine has always had; this is sugar, and it is the good kind: the kind\n"
-                "// that costs one indirection and removes an argument you had to remember.\n"
-                "(function () {\n"
-                "    function V3(node, which) { this.__n = node; this.__w = which; }\n"
-                "    // Only position for now: the engine binds getPos/setPos and\n"
-                "    // nothing for scale, and a getter that calls a binding which\n"
-                "    // does not exist throws on the first read.\n"
-                "    function get3(n, w) { return node.getPos(n); }\n"
-                "    function set3(n, w, x, y, z) { node.setPos(n, x, y, z); }\n"
-                "    [\"x\", \"y\", \"z\"].forEach(function (name, i) {\n"
-                "        Object.defineProperty(V3.prototype, name, {\n"
-                "            get: function () { return get3(this.__n, this.__w)[i]; },\n"
-                "            set: function (v) {\n"
-                "                var c = get3(this.__n, this.__w);\n"
-                "                c[i] = v;\n"
-                "                set3(this.__n, this.__w, c[0], c[1], c[2]);\n"
-                "            }\n"
-                "        });\n"
-                "    });\n"
-                "    // A vector prints and compares like the array it is.\n"
-                "    V3.prototype.toString = function () {\n"
-                "        var c = get3(this.__n, this.__w);\n"
-                "        return \"(\" + c[0].toFixed(3) + \", \" + c[1].toFixed(3) + \", \" + c[2].toFixed(3) + \")\";\n"
-                "    };\n"
-                "    V3.prototype.set = function (x, y, z) { set3(this.__n, this.__w, x, y, z); return this; };\n"
-                "    V3.prototype.add = function (x, y, z) {\n"
-                "        var c = get3(this.__n, this.__w);\n"
-                "        set3(this.__n, this.__w, c[0] + x, c[1] + (y || 0), c[2] + (z || 0));\n"
-                "        return this;\n"
-                "    };\n"
-                "\n"
-                "    function Transform(n) { this.__n = n; }\n"
-                "    Object.defineProperty(Transform.prototype, \"position\", {\n"
-                "        get: function () { return new V3(this.__n, 0); },\n"
-                "        set: function (v) {\n"
-                "            if (v instanceof V3) { var c = get3(v.__n, v.__w); node.setPos(this.__n, c[0], c[1], c[2]); }\n"
-                "            else node.setPos(this.__n, v[0] || v.x || 0, v[1] || v.y || 0, v[2] || v.z || 0);\n"
-                "        }\n"
-                "    });\n"
-                "    Object.defineProperty(Transform.prototype, \"rotation\", {\n"
-                "        get: function () { return node.getRot(this.__n); },\n"
-                "        set: function (q) { node.setRot(this.__n, q[0], q[1], q[2], q[3]); }\n"
-                "    });\n"
-                "    // Yaw in DEGREES, because that is the number anyone actually has in mind.\n"
-                "    Object.defineProperty(Transform.prototype, \"yaw\", {\n"
-                "        get: function () {\n"
-                "            var q = node.getRot(this.__n);\n"
-                "            return Math.atan2(2 * (q[3] * q[1] + q[0] * q[2]),\n"
-                "                              1 - 2 * (q[1] * q[1] + q[0] * q[0])) * 180 / Math.PI;\n"
-                "        },\n"
-                "        set: function (deg) {\n"
-                "            var h = deg * Math.PI / 360;\n"
-                "            node.setRot(this.__n, 0, Math.sin(h), 0, Math.cos(h));\n"
-                "        }\n"
-                "    });\n"
-                "\n"
-                "    function Node(n) { this.__n = n; }\n"
-                "    // THE line that keeps every older script working: where a number is\n"
-                "    // wanted - body.setVel(self, ...) - JavaScript asks for one, and gets it.\n"
-                "    Node.prototype.valueOf = function () { return this.__n; };\n"
-                "    Node.prototype.toString = function () { return \"Node(\" + this.__n + \")\"; };\n"
-                "    Object.defineProperty(Node.prototype, \"id\", { get: function () { return this.__n; } });\n"
-                "    Object.defineProperty(Node.prototype, \"transform\", {\n"
-                "        get: function () { return new Transform(this.__n); }\n"
-                "    });\n"
-                "    Object.defineProperty(Node.prototype, \"position\", {\n"
-                "        get: function () { return new V3(this.__n, 0); },\n"
-                "        set: function (v) { this.transform.position = v; }\n"
-                "    });\n"
-                "    Object.defineProperty(Node.prototype, \"velocity\", {\n"
-                "        get: function () { return body.getVel(this.__n); },\n"
-                "        set: function (v) { body.setVel(this.__n, v[0], v[1], v[2]); }\n"
-                "    });\n"
-                "    Object.defineProperty(Node.prototype, \"grounded\", {\n"
-                "        get: function () { return body.grounded(this.__n); }\n"
-                "    });\n"
-                "    Object.defineProperty(Node.prototype, \"text\", {\n"
-                "        set: function (t) { node.setText(this.__n, \"\" + t); }\n"
-                "    });\n"
-                "    Node.prototype.impulse = function (x, y, z) { body.impulse(this.__n, x, y, z); return this; };\n"
-                "    Node.prototype.setVelocity = function (x, y, z) { body.setVel(this.__n, x, y, z); return this; };\n"
-                "    Node.prototype.isValid = function () { return this.__n >= 0; };\n"
-                "\n"
-                "    globalThis.Node = Node;\n"
-                "    globalThis.Vec3 = V3;\n"
-                "    // scene.find gives back a Node - and a Node is still a number where one\n"
-                "    // is wanted, so scene.find(\"X\") keeps working in old code too.\n"
-                "    var rawFind = scene.find;\n"
-                "    scene.find = function (name) { return new Node(rawFind(name)); };\n"
-                "    globalThis.__wrapSelf = function (id) { return new Node(id); };\n"
-                "})();\n"
-                "\n";
-                if (dai_script_eval(s, PRELUDE, "prelude", err, sizeof(err)) != DAI_OK && err[0])
+                if (dai_script_eval(s, DAI_JS_PRELUDE, "prelude", err, sizeof(err)) != DAI_OK && err[0])
                     std::printf("prelude: %s\n", err);
                 char selfjs[96];
                 std::snprintf(selfjs, sizeof(selfjs),

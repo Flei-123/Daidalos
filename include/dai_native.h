@@ -66,7 +66,7 @@ typedef struct dai_native_api dai_native_api;
  * the wrong function, which is the one bug this design exists to prevent.
  * `abi` is checked on load; a mismatch is refused with a message instead of a
  * crash. */
-#define DAI_NATIVE_ABI 1
+#define DAI_NATIVE_ABI 2
 
 struct dai_native_api {
     uint32_t  abi;              /* DAI_NATIVE_ABI                              */
@@ -109,6 +109,28 @@ struct dai_native_api {
     /* How far the pointer moved this frame, and which buttons are down
      * (1 left, 2 right, 4 middle) - the same numbers the JS side gets. */
     void        (*mouse)(const dai_native_api *api, float *dx, float *dy, int *buttons);
+
+    /* ---- components, by name (ABI 2) ------------------------------------
+     * A camera's field of view, a light's colour, the words in a Text: each
+     * is a field of the node in the document, and this reaches all of them
+     * through one pair of calls instead of one pair per field. It is the
+     * SAME bridge the JavaScript side uses, with the same names, so
+     * self.light.intensity means one thing in the engine and not two.
+     *
+     * Names are "component.property": "light.intensity", "camera.fov",
+     * "text.value", "transform.scale", "image.asset". An unknown name is
+     * not a crash - it answers `fallback` - so a behaviour built against a
+     * newer editor degrades instead of exploding. */
+    double      (*get_num)(const dai_native_api *api, dai_nentity e,
+                           const char *prop, double fallback);
+    void        (*set_num)(const dai_native_api *api, dai_nentity e,
+                           const char *prop, double v);
+    dai_nvec3   (*get_vec)(const dai_native_api *api, dai_nentity e, const char *prop);
+    void        (*set_vec)(const dai_native_api *api, dai_nentity e,
+                           const char *prop, dai_nvec3 v);
+    const char *(*get_str)(const dai_native_api *api, dai_nentity e, const char *prop);
+    void        (*set_str)(const dai_native_api *api, dai_nentity e,
+                           const char *prop, const char *v);
 };
 
 /* The two entry points, spelled so a behaviour never has to remember the
@@ -158,10 +180,11 @@ struct dai_native_api {
  *
  *     DAI_BEHAVIOUR_FRAME(api, self, dt) {
  *         Node me(api, self);
- *         me.position.x += 3 * dt;              // reads and writes through
- *         if (me.key('w')) me.velocity = Vec3(0, 0, -6);
+ *         me.transform().position.x() += 3 * dt;   // reads and writes through
+ *         if (me.key('w')) me.rigidbody().velocity = Vec3(0, 0, -6);
+ *         me.light().intensity *= 1.01f;
  *         Node cam = me.param_node("followCam");
- *         if (cam) cam.position = me.position + Vec3(0, 4, 8);
+ *         if (cam) cam.position(me.position() + Vec3(0, 4, 8));
  *     }
  *
  * Why not a base class: see the note at the top of this file. The contract
@@ -206,7 +229,11 @@ public:
         Comp &operator-=(float f) { return *this = (float)*this - f; }
         Comp &operator*=(float f) { return *this = (float)*this * f; }
     };
-    Comp x_() { return Comp{ this, 0 }; }
+    /* Assignable components: me.transform.position.y() += 3 * dt. */
+    Comp x() { return Comp{ this, 0 }; }
+    Comp y() { return Comp{ this, 1 }; }
+    Comp z() { return Comp{ this, 2 }; }
+    Comp x_() { return Comp{ this, 0 }; }   /* the old spelling, still valid */
     Vec3 get() const {
         if (w == 0) return api->get_position(api, ent);
         if (w == 1) return api->get_velocity(api, ent);
@@ -219,6 +246,165 @@ public:
     }
 private:
     const dai_native_api *api; dai_nentity ent; int w;
+};
+
+/* A property that is one number in the document: light.intensity,
+ * camera.fov, text.size. Assignable and readable in the same place the
+ * engine keeps it, so there is no local copy to forget to write back. */
+class NumProp {
+public:
+    NumProp(const dai_native_api *a, dai_nentity e, const char *p) : api(a), ent(e), prop(p) {}
+    operator float() const { return get(); }
+    NumProp &operator=(float v) { set(v); return *this; }
+    NumProp &operator+=(float v) { set(get() + v); return *this; }
+    NumProp &operator-=(float v) { set(get() - v); return *this; }
+    NumProp &operator*=(float v) { set(get() * v); return *this; }
+    float get() const {
+        return (api && api->get_num) ? (float)api->get_num(api, ent, prop, 0.0) : 0.0f;
+    }
+    void set(float v) const { if (api && api->set_num) api->set_num(api, ent, prop, v); }
+private:
+    const dai_native_api *api; dai_nentity ent; const char *prop;
+};
+
+/* The same for a flag, so `me.light.enabled = false` reads like a sentence
+ * rather than like an integer. */
+class BoolProp {
+public:
+    BoolProp(const dai_native_api *a, dai_nentity e, const char *p) : api(a), ent(e), prop(p) {}
+    operator bool() const { return (api && api->get_num) ? api->get_num(api, ent, prop, 0.0) != 0.0 : false; }
+    BoolProp &operator=(bool v) { if (api && api->set_num) api->set_num(api, ent, prop, v ? 1.0 : 0.0); return *this; }
+private:
+    const dai_native_api *api; dai_nentity ent; const char *prop;
+};
+
+/* A three component property that is NOT the transform - a light colour, a
+ * sprite size. Same read-through/write-through contract as Vec3Prop. */
+class NamedVec3Prop {
+public:
+    NamedVec3Prop(const dai_native_api *a, dai_nentity e, const char *p) : api(a), ent(e), prop(p) {}
+    operator Vec3() const { return get(); }
+    NamedVec3Prop &operator=(const Vec3 &v) { set(v); return *this; }
+    Vec3 get() const {
+        if (!api || !api->get_vec) return Vec3();
+        return Vec3(api->get_vec(api, ent, prop));
+    }
+    void set(const Vec3 &v) const { if (api && api->set_vec) api->set_vec(api, ent, prop, v); }
+private:
+    const dai_native_api *api; dai_nentity ent; const char *prop;
+};
+
+/* Words in the document. Reading gives a pointer the engine owns, valid for
+ * this frame - copy it if you want to keep it. */
+class StrProp {
+public:
+    StrProp(const dai_native_api *a, dai_nentity e, const char *p) : api(a), ent(e), prop(p) {}
+    operator const char *() const { return get(); }
+    StrProp &operator=(const char *v) { set(v); return *this; }
+    const char *get() const { return (api && api->get_str) ? api->get_str(api, ent, prop) : ""; }
+    void set(const char *v) const { if (api && api->set_str) api->set_str(api, ent, prop, v); }
+private:
+    const dai_native_api *api; dai_nentity ent; const char *prop;
+};
+
+/* ---- the components ----------------------------------------------------
+ *
+ * One class per component, exactly the way the inspector shows them and the
+ * way the JavaScript side spells them:
+ *
+ *     me.transform.position.y() += 3 * dt;
+ *     me.rigidbody.velocity = Vec3(0, 6, 0);
+ *     me.light.intensity   *= 2;
+ *     me.text.value         = "score: 3";
+ *
+ * They hold an api pointer and a node id and nothing else, so one is made and
+ * thrown away per statement without allocating anything.
+ */
+class Transform {
+public:
+    Transform(const dai_native_api *a, dai_nentity e)
+        : position(a, e, 0), scale(a, e, 2), api(a), ent(e) {}
+    Vec3Prop position;
+    Vec3Prop scale;
+    /* Yaw in DEGREES around Y - the number anyone actually has in mind. */
+    void yaw(float degrees) {
+        float hh = degrees * 3.14159265f / 360.0f;
+        float q[4] = { 0, __builtin_sinf(hh), 0, __builtin_cosf(hh) };
+        api->set_rotation(api, ent, q);
+    }
+    void rotation(const float *xyzw) { api->set_rotation(api, ent, xyzw); }
+    void rotation(float *out) const { api->get_rotation(api, ent, out); }
+    void translate(const Vec3 &d) { position = position.get() + d; }
+private:
+    const dai_native_api *api; dai_nentity ent;
+};
+
+class Rigidbody {
+public:
+    Rigidbody(const dai_native_api *a, dai_nentity e)
+        : velocity(a, e, 1),
+          density(a, e, "rigidbody.density"),
+          friction(a, e, "rigidbody.friction"),
+          restitution(a, e, "rigidbody.restitution"),
+          trigger(a, e, "rigidbody.trigger"),
+          enabled(a, e, "rigidbody.enabled"),
+          api(a), ent(e) {}
+    Vec3Prop velocity;
+    NumProp  density, friction, restitution;
+    BoolProp trigger, enabled;
+    void impulse(const Vec3 &v) { api->add_impulse(api, ent, v); }
+    /* Standing on something. Not a raycast: a body that is neither rising nor
+     * sinking measurably is resting on whatever is under it. */
+    bool grounded() const {
+        Vec3 v = api->get_velocity(api, ent);
+        return v.y > -0.35f && v.y < 0.35f;
+    }
+private:
+    const dai_native_api *api; dai_nentity ent;
+};
+
+class Camera {
+public:
+    Camera(const dai_native_api *a, dai_nentity e)
+        : mode(a, e, "camera.mode"), fov(a, e, "camera.fov"), size(a, e, "camera.size"),
+          enabled(a, e, "camera.enabled") {}
+    NumProp  mode;          /* 0 none, 1 perspective, 2 orthographic */
+    NumProp  fov;           /* perspective, degrees */
+    NumProp  size;          /* orthographic, half the visible height */
+    BoolProp enabled;
+    bool orthographic() const { return (float)mode == 2.0f; }
+};
+
+class Light {
+public:
+    Light(const dai_native_api *a, dai_nentity e)
+        : mode(a, e, "light.mode"), range(a, e, "light.range"),
+          intensity(a, e, "light.intensity"), cone(a, e, "light.cone"),
+          color(a, e, "light.color"), enabled(a, e, "light.enabled") {}
+    NumProp        mode;    /* 0 none, 1 point, 2 spot, 3 sun */
+    NumProp        range, intensity, cone;
+    NamedVec3Prop  color;
+    BoolProp       enabled;
+};
+
+class Text {
+public:
+    Text(const dai_native_api *a, dai_nentity e)
+        : value(a, e, "text.value"), size(a, e, "text.size"), anchor(a, e, "text.anchor"),
+          color(a, e, "text.color"), enabled(a, e, "text.enabled") {}
+    StrProp       value;
+    NumProp       size, anchor;
+    NamedVec3Prop color;
+    BoolProp      enabled;
+};
+
+class Image {
+public:
+    Image(const dai_native_api *a, dai_nentity e)
+        : asset(a, e, "image.asset"), size(a, e, "image.size"), enabled(a, e, "image.enabled") {}
+    StrProp       asset;
+    NamedVec3Prop size;
+    BoolProp      enabled;
 };
 
 class Node {
@@ -266,6 +452,21 @@ public:
     Node param_node(const char *n) const {
         return api->param_node ? Node(api, api->param_node(api, ent, n)) : Node();
     }
+
+    /* ---- the components -------------------------------------------------
+     * Methods rather than members on purpose: a Node stays two words wide and
+     * costs nothing to copy, which is what the header promises at the top.
+     * The component is built where it is used and dies at the semicolon.
+     *
+     * The old spellings above - position(), velocity(), scale(), impulse() -
+     * are not going anywhere. Everything a behaviour was written against a
+     * year ago still compiles. */
+    ::Transform transform() const { return ::Transform(api, ent); }
+    ::Rigidbody rigidbody() const { return ::Rigidbody(api, ent); }
+    ::Camera    camera()    const { return ::Camera(api, ent); }
+    ::Light     light()     const { return ::Light(api, ent); }
+    ::Text      text()      const { return ::Text(api, ent); }
+    ::Image     image()     const { return ::Image(api, ent); }
 
     const dai_native_api *api;
     dai_nentity ent;

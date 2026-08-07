@@ -299,6 +299,11 @@ if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_objmodel.cpp $SCRIPT_LIB $VKLIBS -o build/test_objmodel
     # And the C++ example has to keep compiling: it is documentation that runs.
     g++ $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/PlayerController.cpp -o build/_playercontroller_check.so && rm -f build/_playercontroller_check.so
+    # The component classes, compiled the way the editor compiles a behaviour:
+    # against dai_native.h and nothing else. This is the C++ half of the object
+    # model, and a header that only compiles inside the engine is a header that
+    # does not work.
+    g++ $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/LampFlicker.cpp -o build/_lampflicker_check.so && rm -f build/_lampflicker_check.so
 fi
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/test_font
 # The SVG rasteriser: no renderer, no font, no window - it turns text into
