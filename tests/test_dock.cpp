@@ -573,6 +573,25 @@ int main() {
               (double)dai_dock_spill_height(dock));
         CHECK(dai_dock_native_windows(dock, nullptr, 0) == 0,
               "a window is still asking to be opened");
+
+        // The menu entry is not offered until a host says it can open windows.
+        // Offering it earlier would make a panel vanish into a strip nobody
+        // draws - the exact shape of "the feature is half wired up".
+        {
+            dai_dock *d3 = dai_dock_create();
+            dai_dock_add(d3, "A", 0, 0.5f);
+            dai_dock_add(d3, "B", 1, 0.5f);
+            dai_dock_begin(d3, ui, 0, 0, W, H);
+            dai_dock_undock(d3, "B", 100.0f, 100.0f, 300.0f, 200.0f);
+            // The MODEL always works; it is the menu that waits for the host.
+            CHECK(dai_dock_set_native(d3, "B", 1) == 1,
+                  "the model refused without a host - it should not need one");
+            CHECK(dai_dock_is_native(d3, "B") == 1, "the model did not record it");
+            dai_dock_native_supported(d3, 1);
+            CHECK(dai_dock_is_native(d3, "B") == 1,
+                  "telling the dock the host is ready changed the model");
+            dai_dock_destroy(d3);
+        }
     }
 
     dai_dock_destroy(dock);

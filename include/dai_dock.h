@@ -119,6 +119,12 @@ typedef struct dai_dock_native {
     float frame_x, frame_y; /* where in the offscreen frame it was drawn      */
 } dai_dock_native;
 
+/* The host says whether it can open OS windows at all. Until it does, the tab
+ * menu does not offer the entry - a menu item that makes a panel disappear
+ * because nobody is opening the window it went into is worse than no menu
+ * item. dai_dock_set_native still works, so a host can drive it directly. */
+DAI_API void  dai_dock_native_supported(dai_dock *d, int yes);
+
 /* Turns a FLOATING panel into an OS window and back. Returns 0 when the panel
  * is not floating - making a docked one a window is dai_dock_undock's job, and
  * one call that means two gestures is a call nobody can predict. */

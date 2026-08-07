@@ -181,6 +181,12 @@ struct dai_dock {
     // How much TALLER the offscreen frame has to be than the editor's window,
     // so every OS-window panel has a strip of it to be drawn into.
     float spill_h = 0.0f;
+    // Whether the HOST can actually open operating system windows. The dock
+    // knows how to model them; only the host can open one. Off by default, so
+    // an editor that has not wired it up never offers a menu entry that would
+    // make a panel vanish into a strip nobody shows. Nothing here is a
+    // half-feature waiting to be discovered by a user.
+    bool native_ok = false;
 
     // Registration, so a panel that was never seen before lands somewhere
     // sensible and one that has been dragged keeps its place.
@@ -407,7 +413,8 @@ void run_leaf_menu(dai_dock *d) {
         is_float = true;
         is_nat = f.native;
     }
-    if (is_float)
+    bool offer_native = is_float && d->native_ok;
+    if (offer_native)
         items.push_back({ DAI_ICON_WINDOW,
                           is_nat ? "Back Into the Editor" : "Own Window", nullptr });
     for (size_t i = 0; i < d->regs.size(); ++i) {
@@ -435,11 +442,11 @@ void run_leaf_menu(dai_dock *d) {
         float w = lr.w > 240.0f ? (lr.w < 720.0f ? lr.w : 720.0f) : 320.0f;
         float h = lr.h > 180.0f ? (lr.h < 560.0f ? lr.h : 560.0f) : 240.0f;
         dai_dock_undock(d, d->menu_tab.c_str(), lr.x + 24.0f, lr.y + 24.0f, w, h);
-    } else if (is_float && pick == 2) {
+    } else if (offer_native && pick == 2) {
         dai_dock_set_native(d, d->menu_tab.c_str(), is_nat ? 0 : 1);
-    } else if (pick > (is_float ? 2 : 1) &&
-               pick - (is_float ? 3 : 2) < (int)addable.size()) {
-        const std::string &t = d->regs[(size_t)addable[(size_t)(pick - (is_float ? 3 : 2))]].title;
+    } else if (pick > (offer_native ? 2 : 1) &&
+               pick - (offer_native ? 3 : 2) < (int)addable.size()) {
+        const std::string &t = d->regs[(size_t)addable[(size_t)(pick - (offer_native ? 3 : 2))]].title;
         auto it = std::find(d->closed.begin(), d->closed.end(), t);
         if (it != d->closed.end()) d->closed.erase(it);
         // Only MOVE it here when it already exists somewhere - dragging a tab
@@ -1554,6 +1561,10 @@ dai_result dai_dock_from_text(dai_dock *d, const char *text) {
 }
 
 // ---- panels that are their own OS window ---------------------------------
+
+void dai_dock_native_supported(dai_dock *d, int yes) {
+    if (d) d->native_ok = yes != 0;
+}
 
 int dai_dock_set_native(dai_dock *d, const char *title, int on) {
     if (!d || !title) return 0;
