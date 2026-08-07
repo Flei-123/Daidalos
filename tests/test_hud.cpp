@@ -244,6 +244,29 @@ int main() {
         dai_doc_destroy(d);
     }
 
+    // ---- what counts as a texture -----------------------------------------
+    // One answer, two callers: the picker that LISTS textures and the drop
+    // that ACCEPTS one. When those disagreed, a file was offered in the list
+    // and then refused by the drag - which reads as "drag and drop is broken"
+    // rather than "two extension tests differ".
+    std::printf("texture files\n");
+    {
+        const char *yes[] = {
+            "Textures/wall.png", "logo.PNG", "a.jpg", "a.JPEG", "sprites/hero.tga",
+            "deep/folder.with.dots/thing.png",
+        };
+        for (const char *f : yes)
+            CHECK(dai_editor_ui_is_texture(f) == 1, "'%s' should be a texture", f);
+        const char *no[] = {
+            "Scenes/level.daidalos", "mat.daimat", "Scripts/player.js", "readme.md",
+            "png", ".png", "Textures/.png", "no_extension", "model.glb",
+            "sound.wav", "", "picture.png.txt",
+        };
+        for (const char *f : no)
+            CHECK(dai_editor_ui_is_texture(f) == 0, "'%s' should NOT be a texture", f);
+        CHECK(dai_editor_ui_is_texture(nullptr) == 0, "a null path crashed or said yes");
+    }
+
     dai_strings_destroy(g_tab);
     dai_ui_destroy(ui);
     dai_font_free(font);

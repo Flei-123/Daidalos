@@ -352,6 +352,12 @@ DAI_API int  dai_editor_ui_script_editor_pref_get(const dai_editor_ui *p);
 DAI_API int  dai_editor_ui_drop_files(dai_editor_ui *p, const char *paths_nl,
                                       float x, float y);
 
+/* Is this file a picture the engine can use as a texture? .png, .jpg, .jpeg
+ * and .tga, case insensitive. Exported because the texture picker and the
+ * drag-and-drop target need the SAME answer - two copies of that test is how
+ * a file ends up offered in the list and refused by the drop. */
+DAI_API int  dai_editor_ui_is_texture(const char *path);
+
 /* The scene shown as the hierarchy's root row - which scene is open, the way
  * Unity puts the .unity file above everything. Dropping a node on it makes
  * that node a root again. */

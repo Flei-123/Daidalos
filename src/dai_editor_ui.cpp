@@ -409,6 +409,11 @@ struct dai_editor_ui {
     int  fold_image = 1;
     dai_ui_searchlist image_list{};
     dai_node          image_pick_node = DAI_INVALID_NODE;
+    // The Image object field under the pointer THIS frame, so a texture
+    // dragged out of the Project panel knows what it landed on. Written while
+    // the inspector draws (line order matters: the inspector runs before the
+    // drop is resolved) and cleared at the top of every frame.
+    dai_node          image_drop_node = DAI_INVALID_NODE;
     // The project's active language, so the inspector previews a "@key" as
     // the words a player would see. Owned by the host - it knows which files
     // exist - and pushed in with dai_editor_ui_strings().
@@ -598,6 +603,14 @@ static bool is_material_file(const std::string &path) {
     return tail == ext;
 }
 
+// A picture the engine can put on a surface. Exported (dai_editor_ui_is_texture)
+// because two places asked the same question with two copies of the answer:
+// the texture picker's list and, now, what a drag from the Project panel is
+// allowed to land on.
+static bool is_image_file(const std::string &path) {
+    return dai_editor_ui_is_texture(path.c_str()) != 0;
+}
+
 static bool is_text_file(const std::string &path) {
     size_t dot = path.find_last_of('.');
     if (dot == std::string::npos) return false;
@@ -613,6 +626,21 @@ static bool is_behaviour_file(const std::string &path) {
     std::string e = path.substr(dot + 1);
     for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
     return e == "js" || e == "cpp" || e == "cc" || e == "cxx";
+}
+
+extern "C" int dai_editor_ui_is_texture(const char *path) {
+    if (!path || !*path) return 0;
+    const char *dot = std::strrchr(path, '.');
+    if (!dot || !dot[1]) return 0;
+    // ".png" is a hidden FILE, not a picture - the dot has to separate a name
+    // from an extension, so there must be a name in front of it.
+    if (dot == path || dot[-1] == '/' || dot[-1] == '\\') return 0;
+    char e[8] = { 0 };
+    size_t n = 0;
+    for (const char *c = dot + 1; *c && n < sizeof(e) - 1; ++c, ++n)
+        e[n] = (*c >= 'A' && *c <= 'Z') ? (char)(*c - 'A' + 'a') : *c;
+    return std::strcmp(e, "png") == 0 || std::strcmp(e, "jpg") == 0 ||
+           std::strcmp(e, "jpeg") == 0 || std::strcmp(e, "tga") == 0;
 }
 
 static bool script_name_ok(const std::string &s) {
@@ -3295,6 +3323,13 @@ static void inspector_body(dai_editor_ui *p) {
         if (p->fold_image && r.image_on) {
             std::string idisp = r.image[0] ? base_of(r.image) : std::string("None (Texture)");
             int irc = dai_ui_object_field(p->ui, "Image", idisp.c_str(), DAI_ICON_IMAGE);
+            // Which node a dragged .png would land on. Asked HERE, of the
+            // widget that was just drawn - the drop is resolved much later in
+            // the frame, when this row is long gone.
+            {
+                const char *ihot = dai_ui_hot_label(p->ui);
+                if (ihot && std::strcmp(ihot, "Image") == 0) p->image_drop_node = n;
+            }
             if (irc == 2) {
                 float imx = 0, imy = 0;
                 dai_ui_mouse(p->ui, &imx, &imy, nullptr, nullptr);
@@ -5407,15 +5442,8 @@ static void run_context_menus(dai_editor_ui *p) {
     if (p->image_list.open && p->image_pick_node != DAI_INVALID_NODE) {
         std::vector<std::string> imgs;
         imgs.push_back("None");
-        for (const char *a : p->assets) {
-            if (!a) continue;
-            std::string f = a;
-            size_t dot = f.find_last_of('.');
-            if (dot == std::string::npos) continue;
-            std::string e = f.substr(dot + 1);
-            for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-            if (e == "png" || e == "jpg" || e == "jpeg" || e == "tga") imgs.push_back(f);
-        }
+        for (const char *a : p->assets)
+            if (a && is_image_file(a)) imgs.push_back(a);
         std::vector<dai_ui_menu_item> items(imgs.size());
         for (size_t i = 0; i < imgs.size(); ++i)
             items[i] = { i == 0 ? nullptr : DAI_ICON_IMAGE, imgs[i].c_str(), nullptr, 0 };
@@ -7315,6 +7343,9 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
 
     if (!p->layout_ready) dai_editor_ui_layout_reset(p, vw, vh);
     p->layout_w = vw; p->layout_h = vh;
+    // Raised by whichever Image field is hovered while the inspector draws,
+    // below. A flag that is only ever set is not a flag, it is a fuse.
+    p->image_drop_node = DAI_INVALID_NODE;
 
     // ---- the second right click ------------------------------------------
     // The diagnosis that lived here is gone: the bug was one layer below, in
@@ -7858,6 +7889,39 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
                                       base_of(p->drag_script).c_str());
                         dai_editor_ui_toast(p, mm, 1.5f);
                     }
+                } else if (is_image_file(p->drag_script)) {
+                    // A texture goes into something that SHOWS a texture. The
+                    // Image field in the inspector is the direct answer; a
+                    // node that already has an Image component is the same
+                    // question asked in the hierarchy or the viewport.
+                    //
+                    // A crate with no Image is deliberately NOT turned into
+                    // one: the material a texture would belong to has no
+                    // texture slot yet (see dai_material.h - the renderer does
+                    // not read one, and a field nothing reads is a lie), so
+                    // the only honest thing to do with that drop is nothing.
+                    dai_node target = p->image_drop_node;
+                    if (target == DAI_INVALID_NODE && p->hover_node != DAI_INVALID_NODE)
+                        target = p->hover_node;
+                    if (target == DAI_INVALID_NODE && dai_ui_root_hovered(ui, "Scene"))
+                        target = dai_editor_pick(p->ed, dmx, dmy);
+                    dai_doc *id2 = dai_editor_doc(p->ed);
+                    dai_node_desc ir2{};
+                    if (target != DAI_INVALID_NODE &&
+                        dai_doc_get(id2, target, &ir2) == DAI_OK && ir2.image_on) {
+                        dai_doc_begin(id2, "Image");
+                        std::snprintf(ir2.image, sizeof(ir2.image), "%s",
+                                      p->drag_script.c_str());
+                        dai_doc_set(id2, target, &ir2);
+                        dai_doc_commit(id2);
+                        dai_editor_resync(p->ed);
+                        char im[192];
+                        std::snprintf(im, sizeof(im), "%s -> Image",
+                                      base_of(p->drag_script).c_str());
+                        dai_editor_ui_toast(p, im, 1.5f);
+                    } else if (target != DAI_INVALID_NODE) {
+                        dai_editor_ui_toast(p, "that object has no Image component", 2.0f);
+                    }
                 } else if (is_behaviour_file(p->drag_script)) {
                     dai_node target = DAI_INVALID_NODE;
                     if (p->hover_node != DAI_INVALID_NODE) target = p->hover_node;
@@ -7885,6 +7949,9 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
                       dai_ui_root_hovered(ui, "Inspector") ||
                       dai_ui_root_hovered(ui, "Scene")))
                 lbl += "  ->  apply material";
+            else if (is_image_file(p->drag_script) &&
+                     p->image_drop_node != DAI_INVALID_NODE)
+                lbl += "  ->  set Image";
             // A ghost where it would land: a footprint on the ground plus a
             // box standing on it, drawn in the accent colour. It is not the
             // mesh - the editor has no renderer of its own and will not gain
