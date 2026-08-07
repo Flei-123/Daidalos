@@ -31,6 +31,109 @@ static dai_node add_named(dai_doc *d, const char *name, dai_vec3 pos, dai_node p
     return dai_doc_add(d, &r);
 }
 
+// Duplicate names count UP - they do not grow a tail of parentheses.
+//
+// The bug this pins: strip_copy_suffix used to remove exactly one " (N)".
+// Everything made by those builds is named "Box (2) (1) (1)", and stripping
+// one suffix off that leaves "Box (2) (1)" as the base - so the next copy was
+// "Box (2) (1) (1)" all over again. Copy of a copy means "another one of
+// those", so the list must read Box, Box (1), Box (2), Box (3).
+static void test_unique_names() {
+    std::printf("duplicate names: count up, never grow parentheses\n");
+
+    // --- counting up, including copying a copy -----------------------------
+    {
+        dai_doc *d = dai_doc_create();
+        dai_node_desc rec{};
+        const char *want[4] = { "Box", "Box (1)", "Box (2)", "Box (3)" };
+        // Each round asks for the name the PREVIOUS round produced - which is
+        // exactly what duplicating the newest copy does.
+        const char *ask = "Box";
+        for (int i = 0; i < 4; ++i) {
+            dai_node n = add_named(d, ask, { (float)i, 0, 0 });
+            CHECK(dai_doc_get(d, n, &rec) == DAI_OK, "copy %d was not added", i);
+            CHECK(std::strcmp(rec.name, want[i]) == 0,
+                  "copy %d should be '%s', is '%s'", i, want[i], rec.name);
+            ask = want[i];
+        }
+        dai_doc_destroy(d);
+    }
+
+    // --- a name already spoiled by an older build is repaired ---------------
+    {
+        dai_doc *d = dai_doc_create();
+        dai_node_desc rec{};
+        dai_node n = add_named(d, "Crate (2) (1) (1)", { 0, 0, 0 });
+        CHECK(dai_doc_get(d, n, &rec) == DAI_OK, "spoiled name was not added");
+        CHECK(std::strcmp(rec.name, "Crate") == 0,
+              "'Crate (2) (1) (1)' into an empty scene should be 'Crate', is '%s'",
+              rec.name);
+
+        dai_node deep = add_named(d, "A (1) (2) (3) (4) (5)", { 1, 0, 0 });
+        CHECK(dai_doc_get(d, deep, &rec) == DAI_OK, "deep name was not added");
+        CHECK(std::strcmp(rec.name, "A") == 0,
+              "five suffixes should all come off, got '%s'", rec.name);
+        dai_doc_destroy(d);
+    }
+
+    // --- names that only LOOK like a suffix are left alone -----------------
+    {
+        dai_doc *d = dai_doc_create();
+        dai_node_desc rec{};
+        struct { const char *in, *out; } keep[] = {
+            { "Box(2)",      "Box(2)"      },   // no space: somebody's name
+            { "Mark (v2)",   "Mark (v2)"   },   // not digits
+            { "Level 1",     "Level 1"     },   // no parentheses at all
+            { "Wall ()",     "Wall ()"     },   // empty parentheses
+        };
+        for (auto &k : keep) {
+            dai_node n = add_named(d, k.in, { 0, 0, 0 });
+            CHECK(dai_doc_get(d, n, &rec) == DAI_OK, "'%s' was not added", k.in);
+            CHECK(std::strcmp(rec.name, k.out) == 0,
+                  "'%s' should stay '%s', became '%s'", k.in, k.out, rec.name);
+        }
+        // "(2)" strips to nothing - it must fall back to what was asked for,
+        // not to an empty name.
+        dai_node bare = add_named(d, "(2)", { 0, 0, 0 });
+        CHECK(dai_doc_get(d, bare, &rec) == DAI_OK, "'(2)' was not added");
+        CHECK(rec.name[0] != 0, "a name that is only a suffix became empty");
+        dai_doc_destroy(d);
+    }
+
+    // --- uniqueness is per level, and stripping does not leak across levels -
+    {
+        dai_doc *d = dai_doc_create();
+        dai_node_desc rec{};
+        dai_node pa = add_named(d, "P1", { 0, 0, 0 });
+        dai_node pb = add_named(d, "P2", { 5, 0, 0 });
+        dai_node ka = add_named(d, "Box", { 0, 0, 0 }, pa);
+        dai_node kb = add_named(d, "Box", { 0, 0, 0 }, pb);
+        CHECK(dai_doc_get(d, ka, &rec) == DAI_OK && std::strcmp(rec.name, "Box") == 0,
+              "first child should be 'Box', is '%s'", rec.name);
+        CHECK(dai_doc_get(d, kb, &rec) == DAI_OK && std::strcmp(rec.name, "Box") == 0,
+              "a child of ANOTHER parent may also be 'Box', is '%s'", rec.name);
+        dai_node kc = add_named(d, "Box", { 1, 0, 0 }, pa);
+        CHECK(dai_doc_get(d, kc, &rec) == DAI_OK && std::strcmp(rec.name, "Box (1)") == 0,
+              "second child of the same parent should be 'Box (1)', is '%s'", rec.name);
+        dai_doc_destroy(d);
+    }
+
+    // --- a rename onto a taken name counts up too --------------------------
+    {
+        dai_doc *d = dai_doc_create();
+        dai_node_desc rec{};
+        add_named(d, "Lamp", { 0, 0, 0 });
+        dai_node other = add_named(d, "Spare", { 1, 0, 0 });
+        CHECK(dai_doc_get(d, other, &rec) == DAI_OK, "could not read 'Spare'");
+        std::snprintf(rec.name, sizeof(rec.name), "Lamp");
+        CHECK(dai_doc_set(d, other, &rec) == DAI_OK, "rename was refused");
+        CHECK(dai_doc_get(d, other, &rec) == DAI_OK, "could not read the rename back");
+        CHECK(std::strcmp(rec.name, "Lamp (1)") == 0,
+              "renaming onto a taken name should give 'Lamp (1)', gave '%s'", rec.name);
+        dai_doc_destroy(d);
+    }
+}
+
 // The Text component survives a save and a load - including the part that is
 // easiest to get wrong, a label with SPACES in it. A format that splits on
 // whitespace turns "Press any key" into "Press" and loses the rest, and it
@@ -722,6 +825,7 @@ int main() {
     dai_destroy(w);
 
     test_text_component();
+    test_unique_names();
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

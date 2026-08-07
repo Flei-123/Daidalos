@@ -280,20 +280,28 @@ uint64_t dai_doc_revision(const dai_doc *d) { return d ? d->revision : 0; }
 // Unity never lets two siblings share a name, and neither do we: a second
 // "Box" becomes "Box (1)" the moment it is created, and a script that looks
 // up by name always finds exactly one.
-// Strips one trailing " (N)" - the suffix THIS function adds. "Cylinder (3)"
-// gives "Cylinder"; "Mark (2019)" gives "Mark" too, and that is the right
-// trade: the alternative is that duplicating a copy appends a second suffix,
-// and then a third, until the hierarchy reads "Cylinder (1) (1) (1) (1)".
+// Strips EVERY trailing " (N)", not just the last one. "Cylinder (3)" gives
+// "Cylinder"; "Mark (2019)" gives "Mark" too, and that is the right trade:
+// the alternative is that duplicating a copy appends a second suffix, and
+// then a third, until the hierarchy reads "Cylinder (1) (1) (1) (1)".
 // Copying a copy means "another one of those", not "a copy of the copy".
+//
+// One pass was not enough. Names made by the builds BEFORE this loop existed
+// are already "Box (2) (1) (1)", and stripping a single suffix off those left
+// "Box (2) (1)" as the base - so the next copy was "Box (2) (1) (1)" again and
+// the hierarchy never recovered. The loop repairs those on the next copy.
+// It terminates because every pass makes the string strictly shorter.
 static void strip_copy_suffix(char *name) {
-    size_t n = std::strlen(name);
-    if (n < 4 || name[n - 1] != ')') return;
-    size_t i = n - 2;
-    if (name[i] < '0' || name[i] > '9') return;          // "(  )" or "(a)" is a name
-    while (i > 0 && name[i] >= '0' && name[i] <= '9') --i;
-    if (name[i] != '(') return;
-    if (i == 0 || name[i - 1] != ' ') return;            // "Box(2)" is somebody's name
-    name[i - 1] = 0;
+    for (;;) {
+        size_t n = std::strlen(name);
+        if (n < 4 || name[n - 1] != ')') return;
+        size_t i = n - 2;
+        if (name[i] < '0' || name[i] > '9') return;      // "(  )" or "(a)" is a name
+        while (i > 0 && name[i] >= '0' && name[i] <= '9') --i;
+        if (name[i] != '(') return;
+        if (i == 0 || name[i - 1] != ' ') return;        // "Box(2)" is somebody's name
+        name[i - 1] = 0;
+    }
 }
 
 static void make_unique_name(dai_doc *d, dai_node_desc *desc, dai_node parent) {
