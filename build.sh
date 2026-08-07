@@ -172,6 +172,10 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     # as the TrueType loader next to it - a few hundred lines instead of a
     # dependency, and icons that are sharp at whatever size the display wants.
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_svg.cpp           -o build/dai_svg.o
+    # Asset thumbnails: a mesh rasterised into a 64 px icon. No GPU on
+    # purpose - see include/dai_thumb.h - so it sits with the other things
+    # that turn data into pixels rather than with the renderer.
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_thumb.cpp         -o build/dai_thumb.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_icons.cpp         -o build/dai_icons.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_ui.cpp            -o build/dai_ui.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_update.cpp       -o build/dai_update.o
@@ -192,7 +196,7 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
            build/dai_shaders_embed.o \
            $WINDOW_OBJ build/dai_dock.o build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_json.o \
-           build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_svg.o build/dai_icons.o build/dai_ui.o build/dai_update.o \
+           build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_svg.o build/dai_icons.o build/dai_thumb.o build/dai_ui.o build/dai_update.o \
            build/dai_editor_ui.o build/dai_native.o build/dai_native_header.o build/dai_tr.o \
            build/dai_strings.o
     VK_OK=1
@@ -300,6 +304,10 @@ g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/t
 # coverage, so the test reads the coverage back.
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_svg.cpp src/dai_svg.cpp src/dai_icons.cpp \
     -o build/test_svg && ./build/test_svg
+# Thumbnails are arithmetic on triangles: no renderer, no window, and the
+# checks read the pixels back. Run here rather than merely built.
+g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_thumb.cpp src/dai_thumb.cpp \
+    -o build/test_thumb && ./build/test_thumb
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
     # Cheap and load bearing: dai_key must stay bit identical to the X11

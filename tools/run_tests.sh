@@ -46,10 +46,18 @@ test_script
 test_strings
 test_hud
 test_objmodel
+test_assets
+test_thumb
 "
 # Deliberately NOT here (each needs a GPU or a display):
 #   test_render_visual test_ui_text test_gltf test_particles test_skinning
-#   test_ui test_viewport test_editor_ui test_window test_assets
+#   test_ui test_viewport test_editor_ui test_window
+#
+# test_assets USED to be on that list and does not belong there: it mounts a
+# folder and reads geometry, and the only thing it ever wanted a renderer for
+# is a handle it never draws. It was excluded, so nobody noticed it had gone
+# red - [8c] was still asserting that a .png is junk months after the browser
+# started opening textures on purpose. Excluded tests rot.
 
 # test_image needs fixtures produced by a REAL encoder (Python zlib + PIL) -
 # checking our decoder against our own encoder would prove nothing. Without

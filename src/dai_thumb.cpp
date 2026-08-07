@@ -170,6 +170,33 @@ void gen_tube(std::vector<float> &v, float radius, float y_lo, float y_hi, int s
     }
 }
 
+// One unit shape, centred on the origin and one unit across in every
+// direction it has one. The transform a caller hands in carries the real
+// size, so these never need to know how big anything is.
+// The dai_shape values, not a private numbering. DAI_SHAPE_COMPOUND (3) has
+// no geometry of its own - its parts are separate nodes - so it draws as a
+// box, and DAI_SHAPE_CYLINDER is 4 because it was added at the END of the
+// enum on purpose (see daidalos.h: renumbering would turn every saved capsule
+// into a compound).
+void gen_unit(int shape, std::vector<float> &v) {
+    switch (shape) {
+    case DAI_SHAPE_SPHERE:
+        gen_sphere_part(v, 0.5f, 0.0f, 20, 12, 0.0f, 1.0f);
+        break;
+    case DAI_SHAPE_CAPSULE:   // a tube with two half spheres, one unit tall
+        gen_tube(v, 0.28f, -0.22f, 0.22f, 20, false);
+        gen_sphere_part(v, 0.28f,  0.22f, 20, 6, 0.0f, 0.5f);
+        gen_sphere_part(v, 0.28f, -0.22f, 20, 6, 0.5f, 1.0f);
+        break;
+    case DAI_SHAPE_CYLINDER:
+        gen_tube(v, 0.4f, -0.5f, 0.5f, 22, true);
+        break;
+    default:                  // BOX, COMPOUND, anything a newer file invents
+        gen_box(v);
+        break;
+    }
+}
+
 } // namespace
 
 extern "C" {
@@ -287,18 +314,33 @@ int dai_thumb_render(const dai_thumb_mesh *mesh, uint8_t *rgba, uint32_t size,
     return drawn;
 }
 
+int dai_thumb_render_parts(const dai_thumb_part *parts, uint32_t count,
+                           uint8_t *rgba, uint32_t size, uint32_t tint_rgb) {
+    if (!rgba || size == 0) return 0;
+    if (!parts || !count) {
+        std::memset(rgba, 0, (size_t)size * size * 4);
+        return 0;
+    }
+    std::vector<float> all;
+    std::vector<float> one;
+    for (uint32_t i = 0; i < count; ++i) {
+        one.clear();
+        gen_unit(parts[i].shape, one);
+        const float *m = parts[i].xform;
+        for (size_t k = 0; k + 2 < one.size(); k += 3) {
+            float x = one[k], y = one[k + 1], z = one[k + 2];
+            all.push_back(m[0] * x + m[1] * y + m[2]  * z + m[3]);
+            all.push_back(m[4] * x + m[5] * y + m[6]  * z + m[7]);
+            all.push_back(m[8] * x + m[9] * y + m[10] * z + m[11]);
+        }
+    }
+    dai_thumb_mesh mesh{ all.data(), (uint32_t)(all.size() / 3), nullptr, 0 };
+    return dai_thumb_render(&mesh, rgba, size, tint_rgb);
+}
+
 int dai_thumb_render_shape(int shape, uint8_t *rgba, uint32_t size, uint32_t tint_rgb) {
     std::vector<float> v;
-    switch (shape) {
-    case 1:  gen_sphere_part(v, 0.5f, 0.0f, 20, 12, 0.0f, 1.0f); break;   // SPHERE
-    case 2:  // CAPSULE: a tube with two half spheres, total height 1
-        gen_tube(v, 0.28f, -0.22f, 0.22f, 20, false);
-        gen_sphere_part(v, 0.28f,  0.22f, 20, 6, 0.0f, 0.5f);
-        gen_sphere_part(v, 0.28f, -0.22f, 20, 6, 0.5f, 1.0f);
-        break;
-    case 3:  gen_tube(v, 0.4f, -0.5f, 0.5f, 22, true); break;             // CYLINDER
-    default: gen_box(v); break;                                           // BOX
-    }
+    gen_unit(shape, v);
     dai_thumb_mesh m{ v.data(), (uint32_t)(v.size() / 3), nullptr, 0 };
     return dai_thumb_render(&m, rgba, size, tint_rgb);
 }

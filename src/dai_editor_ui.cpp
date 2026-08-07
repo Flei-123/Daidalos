@@ -207,6 +207,26 @@ struct dai_editor_ui {
     std::string proj_current;
     char   proj_name_buf[64] = { 0 };
     int    proj_tab = 0;              // 0 = files, 1 = projects
+    // The project the pointer MARKED, which is not the project that is open.
+    // A single click used to load - so a mis-click threw away the scene you
+    // were standing in, and there was no way to look at the list without
+    // committing to one of them.
+    std::string proj_pick;
+    // A load that is waiting for an answer to "unsaved changes", and how many
+    // frames it may keep waiting for the save to land. A save that fails must
+    // not leave the editor half way into another project for ever.
+    std::string proj_open_pending;
+    int         proj_open_wait = 0;
+
+    // ---- "the scene has unsaved changes" ---------------------------------
+    // Drawn by the editor rather than by the operating system: it looks the
+    // same on Windows and on Linux, it cannot end up behind the window, and
+    // the host can raise it too (dai_editor_ui_ask_unsaved) so closing the
+    // editor asks exactly the question opening a project asks.
+    dai_ui_popup menu_unsaved{};
+    std::string  unsaved_what;        // "open Foo", "close the editor"
+    int          unsaved_answer = 0;  // 0 none yet, 1 save first, 2 discard, 3 cancel
+    int          unsaved_for = 0;     // 0 the host asked, 1 a project is waiting
 
     // The Files half, Unity's two column browser: the folder tree left, the
     // chosen folder's contents right. The tree is derived from the flat asset
@@ -407,6 +427,13 @@ struct dai_editor_ui {
     int  fold_text = 1;
     int  fold_freeze = 1;
     int  fold_image = 1;
+    // Asset thumbnails. The editor does not make them - it has no renderer
+    // and no file access - it asks the host for a texture and draws whatever
+    // comes back, icon if that is 0. The host owns the cache, so a folder of
+    // fifty models is fifty pictures made once, not once a frame.
+    dai_editor_ui_thumb_fn thumb_fn = nullptr;
+    void                  *thumb_user = nullptr;
+
     dai_ui_searchlist image_list{};
     dai_node          image_pick_node = DAI_INVALID_NODE;
     // The Image object field under the pointer THIS frame, so a texture
@@ -2190,6 +2217,34 @@ void dai_editor_ui_folder_host(dai_editor_ui *p,
     if (!p) return;
     p->folder_create = create;
     if (user) p->script_user = user;
+}
+
+void dai_editor_ui_thumb_host(dai_editor_ui *p, dai_editor_ui_thumb_fn fn, void *user) {
+    if (!p) return;
+    p->thumb_fn = fn;
+    p->thumb_user = user;
+}
+
+void dai_editor_ui_ask_unsaved(dai_editor_ui *p, const char *what) {
+    if (!p) return;
+    p->unsaved_what = what ? what : "continue";
+    p->unsaved_answer = 0;
+    p->unsaved_for = 0;                  // the HOST asked; the editor reads none of it
+    // In the middle of the layout: this one is not attached to a row, and a
+    // question about losing work should not have to be hunted for.
+    dai_ui_popup_open(&p->menu_unsaved,
+                      p->layout_w * 0.5f - 110.0f, p->layout_h * 0.4f);
+}
+
+int dai_editor_ui_take_unsaved_answer(dai_editor_ui *p) {
+    if (!p || p->unsaved_for != 0 || !p->unsaved_answer) return 0;
+    int a = p->unsaved_answer;
+    p->unsaved_answer = 0;
+    return a;
+}
+
+int dai_editor_ui_unsaved_open(const dai_editor_ui *p) {
+    return p && p->menu_unsaved.open ? 1 : 0;
 }
 
 int dai_editor_ui_take_save(dai_editor_ui *p) {
@@ -5088,6 +5143,18 @@ static int comp_from_text(const char *t, int want_id, dai_node_desc *r) {
     return 1;
 }
 
+// Opening a project, once the question of unsaved work is settled.
+static void project_open_now(dai_editor_ui *p, const std::string &name) {
+    if (!p->proj_open) return;
+    if (p->proj_open(name.c_str(), p->proj_user)) {
+        p->proj_current = name;
+        p->proj_pick = name;
+        p->proj_tab = 0;                 // straight into the files of it
+    } else {
+        dai_editor_ui_toast(p, "could not open that project", 2.5f);
+    }
+}
+
 static void run_context_menus(dai_editor_ui *p) {
     dai_doc *d = dai_editor_doc(p->ed);
 
@@ -5351,6 +5418,56 @@ static void run_context_menus(dai_editor_ui *p) {
             p->delete_ask.clear();
         } else if (!p->menu_delete.open) {
             p->delete_ask.clear();
+        }
+    }
+
+    // "Unsaved changes" - the same three answers Unity gives, and the same
+    // three the Windows close box gives: save, throw them away, or stay put.
+    if (p->menu_unsaved.open) {
+        std::string q = "Unsaved changes - " +
+                        (p->unsaved_what.empty() ? std::string("continue") : p->unsaved_what) +
+                        "?";
+        dai_ui_menu_item items[4] = {
+            { DAI_ICON_WARNING, q.c_str(), nullptr, 1 },   // the question, not a choice
+            { DAI_ICON_SAVE,  "Save first",       nullptr, 0 },
+            { DAI_ICON_TRASH, "Discard changes",  nullptr, 0 },
+            { DAI_ICON_CLOSE, "Cancel",           nullptr, 0 },
+        };
+        int pick = dai_ui_popup_menu(p->ui, &p->menu_unsaved, items, 4);
+        // Dismissing it by clicking elsewhere is CANCEL. Anything else would
+        // be a dialog that can throw work away by being ignored.
+        if (pick >= 1 && pick <= 3) p->unsaved_answer = pick;
+        else if (pick == -1)        p->unsaved_answer = 3;
+    }
+
+    // A project waiting behind that question. Kept here, one frame after the
+    // dialog was drawn, because "did the save land" is a thing only the host
+    // can answer - it owns the file - and it answers it by clearing the dirty
+    // flag on the frame after dai_editor_ui_take_save.
+    if (!p->proj_open_pending.empty()) {
+        int ans = p->unsaved_for == 1 ? p->unsaved_answer : 0;
+        if (ans) p->unsaved_answer = 0;
+        if (ans == 1) {
+            p->want_save = 1;
+            p->proj_open_wait = 240;          // ~4 seconds at 60 fps
+        } else if (ans == 2) {
+            std::string want = p->proj_open_pending;
+            p->proj_open_pending.clear();
+            p->proj_open_wait = 0;
+            project_open_now(p, want);
+        } else if (ans == 3) {
+            p->proj_open_pending.clear();
+            p->proj_open_wait = 0;
+        } else if (p->proj_open_wait > 0) {
+            if (!p->scene_dirty) {
+                std::string want = p->proj_open_pending;
+                p->proj_open_pending.clear();
+                p->proj_open_wait = 0;
+                project_open_now(p, want);
+            } else if (--p->proj_open_wait == 0) {
+                p->proj_open_pending.clear();
+                dai_editor_ui_toast(p, "the scene did not save - nothing was opened", 3.0f);
+            }
         }
     }
 
@@ -6063,7 +6180,7 @@ static dai_vec3 spawn_point(dai_editor_ui *p, dai_doc *d, float half_y) {
 // the frame it is left-clicked. An open popup menu eats every click.
 static int browser_row(dai_editor_ui *p, float x, float y, float w, float h,
                        const char *icon, const char *label, int selected,
-                       uint32_t icon_col) {
+                       uint32_t icon_col, dai_texture thumb = 0) {
     dai_ui *ui = p->ui;
     const dai_ui_style *st = dai_ui_style_of(ui);
     float mx = 0, my = 0;
@@ -6073,7 +6190,14 @@ static int browser_row(dai_editor_ui *p, float x, float y, float w, float h,
     if (selected)  dai_ui_rect(ui, x, y, w, h, st->accent);
     else if (over) dai_ui_rect(ui, x, y, w, h, st->button_hover);
     float tx = x + 4.0f;
-    if (icon && dai_ui_has_icon(ui, icon)) {
+    // A PICTURE of the model beats a coloured square that says "model". Same
+    // slot, same width, so nothing else in the row moves.
+    if (thumb) {
+        float sz = h - 2.0f;
+        if (sz > 17.0f) sz = 17.0f;
+        dai_ui_image_at(ui, thumb, tx, y + (h - sz) * 0.5f, sz, sz, 0, 0, 1, 1, 0xFFFFFFFFu);
+        tx += 19.0f;
+    } else if (icon && dai_ui_has_icon(ui, icon)) {
         // On a selected row the fill is already the accent colour; a hue on
         // top of it fights the fill instead of naming the file, so the icon
         // goes plain white there and keeps its colour everywhere else.
@@ -6920,13 +7044,34 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                         p->proj_list ? "no projects yet" : "no project host", st->text_dim);
         for (const std::string &name : p->projects) {
             int is_open = name == p->proj_current;
+            // The row is highlighted by what is PICKED; the open one is named
+            // by its icon. Two different facts, two different signals - the
+            // old code had one row style for both and no way to look.
+            int marked = name == p->proj_pick;
             if (browser_row(p, px + 2.0f, pry, ptree_w - 4.0f, PROW,
-                            DAI_ICON_FOLDER, name.c_str(), is_open,
+                            is_open ? DAI_ICON_FOLDER_OPEN : DAI_ICON_FOLDER,
+                            name.c_str(), marked,
                             rgba(0xD8, 0xB4, 0x6A, 255)) && clicks_ok &&
                 p->proj_open) {
-                if (p->proj_open(name.c_str(), p->proj_user)) {
-                    p->proj_current = name;
-                    p->proj_tab = 0;
+                if (dai_ui_double_click(ui)) {
+                    // Double click LOADS - and asks first if the scene has
+                    // work in it, the same question closing the editor asks.
+                    if (name == p->proj_current) {
+                        p->proj_tab = 0;              // already open: just go in
+                    } else if (p->scene_dirty) {
+                        p->proj_open_pending = name;
+                        p->proj_open_wait = 0;
+                        p->unsaved_for = 1;
+                        p->unsaved_answer = 0;
+                        p->unsaved_what = "open " + name;
+                        float ux = 0, uy = 0;
+                        dai_ui_mouse(ui, &ux, &uy, nullptr, nullptr);
+                        dai_ui_popup_open(&p->menu_unsaved, ux, uy);
+                    } else {
+                        project_open_now(p, name);
+                    }
+                } else {
+                    p->proj_pick = name;
                 }
             }
             pry += PROW;
@@ -6937,10 +7082,18 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
         dai_ui_clip_begin(ui, pright_x, pcols_y, px + pw - pright_x, pcols_h);
         float ry2 = pcols_y + 4.0f;
         if (p->proj_current.empty())
-            dai_ui_text(ui, pright_x + 6.0f, ry2, "no project open - pick one on the left", st->text_dim);
+            dai_ui_text(ui, pright_x + 6.0f, ry2, "no project open - double click one on the left", st->text_dim);
         else
             dai_ui_text(ui, pright_x + 6.0f, ry2, p->proj_current.c_str(), st->text);
-        ry2 += 22.0f;
+        ry2 += 16.0f;
+        // What a single click bought you: the name, and how to act on it.
+        if (!p->proj_pick.empty() && p->proj_pick != p->proj_current) {
+            char hint[160];
+            std::snprintf(hint, sizeof(hint), "%s - double click to open",
+                          p->proj_pick.c_str());
+            dai_ui_text(ui, pright_x + 6.0f, ry2, hint, st->accent);
+        }
+        ry2 += 12.0f;
         // Scenes are FILES of the open project, like Unity's .unity assets.
         if (p->scene_list) {
             dai_ui_text(ui, pright_x + 6.0f, ry2, "Scenes", st->text_dim);
@@ -7219,10 +7372,11 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
                         p->want_refresh = 1;
                     }
                 } else {
+                    dai_texture th = p->thumb_fn ? p->thumb_fn(full.c_str(), p->thumb_user) : 0;
                     if (browser_row(p, list_x + 2.0f, ry, list_w - 4.0f, ROW,
                                     icon_for_asset(full), label.c_str(),
                                     selected || (p->click_kind == 2 && p->click_path == full),
-                                    icon_color_for_asset(full, 0))
+                                    icon_color_for_asset(full, 0), th)
                             && clicks_ok) {
                         // Armed only. What it means - select, open, place -
                         // is decided when the button comes up, because until

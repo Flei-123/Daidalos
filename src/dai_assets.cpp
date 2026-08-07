@@ -301,6 +301,33 @@ dai_node dai_assets_instantiate(dai_assets *a, dai_doc *doc, const char *path, d
 
     dai_doc_begin(doc, "Instantiate model");
 
+    // ---- one root for the whole file --------------------------------------
+    // A .glb with five top level objects used to drop five loose nodes into
+    // the scene, and then "move the model" meant selecting five things and
+    // hoping you found them all. Everything the file contains goes under one
+    // node named after the file, exactly the way Unity places an FBX.
+    //
+    // It is an EMPTY: a transform, no body, nothing drawn. The pieces keep
+    // their own bodies - that is the whole point of placing a model as a tree
+    // - and a collider around the group would be a second, wrong one.
+    dai_node group = 0;
+    {
+        std::string base = file;
+        size_t slash = base.find_last_of("/\\");
+        if (slash != std::string::npos) base = base.substr(slash + 1);
+        size_t dot = base.find_last_of('.');
+        if (dot != std::string::npos && dot > 0) base = base.substr(0, dot);
+        if (base.empty()) base = "Model";
+
+        dai_node_desc g = dai_node_desc_default();
+        std::snprintf(g.name, sizeof(g.name), "%s", base.c_str());
+        g.parent = parent;
+        g.no_body = 1;
+        g.hidden = 1;
+        group = dai_doc_add(doc, &g);
+        if (!group) group = parent;      // never lose the pieces over a name
+    }
+
     // A piece can point at a parent that has not been created yet only if the
     // file is malformed - glTF children always follow their parent in the walk
     // - but map defensively anyway and fall back to the requested parent.
@@ -337,7 +364,7 @@ dai_node dai_assets_instantiate(dai_assets *a, dai_doc *doc, const char *path, d
         d.shape = DAI_SHAPE_BOX;
         d.motion = DAI_STATIC;          // the scene decides what moves, not the file
 
-        dai_node p = parent;
+        dai_node p = group;
         if (n->parent >= 0 && (uint32_t)n->parent < count && made[(size_t)n->parent])
             p = made[(size_t)n->parent];
         d.parent = p;
@@ -348,7 +375,9 @@ dai_node dai_assets_instantiate(dai_assets *a, dai_doc *doc, const char *path, d
     }
 
     dai_doc_commit(doc);
-    return root;
+    // The GROUP is what was placed. Handing back the first piece meant the
+    // selection after a drop was one arbitrary child of what just arrived.
+    return group ? group : root;
 }
 
 uint32_t dai_assets_list(dai_assets *a, char *out, uint32_t max, uint32_t stride) {

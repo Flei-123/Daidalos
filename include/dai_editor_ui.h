@@ -358,6 +358,36 @@ DAI_API int  dai_editor_ui_drop_files(dai_editor_ui *p, const char *paths_nl,
  * a file ends up offered in the list and refused by the drop. */
 DAI_API int  dai_editor_ui_is_texture(const char *path);
 
+/* Asset thumbnails. The editor draws a picture of a model where it used to
+ * draw a coloured icon - but it cannot MAKE that picture: it has no renderer
+ * of its own and no file access. So the host answers "what does this asset
+ * look like" with a texture, and owns the cache behind it.
+ *
+ * Return 0 for "no picture" (not a model, not read yet, not worth one) and
+ * the row falls back to its icon. Called once per visible row per frame, so
+ * the answer must be a lookup - see the cache in examples/editor_demo.cpp.
+ * The path is relative to the assets folder, exactly as the browser shows it. */
+typedef dai_texture (*dai_editor_ui_thumb_fn)(const char *asset_path, void *user);
+DAI_API void dai_editor_ui_thumb_host(dai_editor_ui *p, dai_editor_ui_thumb_fn fn,
+                                      void *user);
+
+/* "The scene has unsaved changes" - asked INSIDE the editor, so the question
+ * looks the same on every platform and cannot end up behind the window.
+ * `what` completes the sentence: "open Crates", "close the editor".
+ *
+ * The answer arrives through take_unsaved_answer, which reads and clears:
+ *   0 nothing yet (or the editor raised the question for itself)
+ *   1 save first, then do it
+ *   2 do it and lose the changes
+ *   3 cancelled - do nothing
+ * Dismissing the dialog by clicking elsewhere answers 3: a dialog that throws
+ * work away by being ignored is not a safeguard. */
+DAI_API void dai_editor_ui_ask_unsaved(dai_editor_ui *p, const char *what);
+DAI_API int  dai_editor_ui_take_unsaved_answer(dai_editor_ui *p);
+/* Is that question on screen right now? For a host that must not close the
+ * window while it is being asked. */
+DAI_API int  dai_editor_ui_unsaved_open(const dai_editor_ui *p);
+
 /* The scene shown as the hierarchy's root row - which scene is open, the way
  * Unity puts the .unity file above everything. Dropping a node on it makes
  * that node a root again. */

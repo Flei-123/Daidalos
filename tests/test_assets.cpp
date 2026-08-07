@@ -340,8 +340,23 @@ int main(int argc, char **argv) {
             uint32_t undo_before = dai_doc_undo_depth(doc);
             dai_node root = dai_assets_instantiate(a, doc, "parented.gltf", 0);
             CHECK(root != 0, "instantiate returned nothing: %s", dai_assets_last_error(a));
-            CHECK(dai_doc_count(doc) == before + 2,
-                  "instantiate added %u nodes, expected 2", dai_doc_count(doc) - before);
+            // Two pieces plus the root the file is placed under. That root is
+            // the thing this test is really about: without it a model with
+            // several top level objects scatters them across the scene.
+            CHECK(dai_doc_count(doc) == before + 3,
+                  "instantiate added %u nodes, expected 3 (a root and 2 pieces)",
+                  dai_doc_count(doc) - before);
+            {
+                dai_node_desc gr{};
+                CHECK(dai_doc_get(doc, root, &gr) == DAI_OK, "the root cannot be read back");
+                CHECK(std::strcmp(gr.name, "parented") == 0,
+                      "the root is called '%s', expected the file's name 'parented'", gr.name);
+                CHECK(gr.parent == 0, "the root was parented to %u instead of the scene",
+                      gr.parent);
+                CHECK(gr.no_body && gr.hidden,
+                      "the root is not an empty - it would draw a box and collide with things");
+                CHECK(gr.asset[0] == 0, "the root points at an asset; only the pieces should");
+            }
             CHECK(dai_doc_undo_depth(doc) == undo_before + 1,
                   "instantiate should be exactly one undo step, it pushed %u",
                   dai_doc_undo_depth(doc) - undo_before);
@@ -349,6 +364,13 @@ int main(int argc, char **argv) {
             dai_node crate = dai_doc_find(doc, "Crate");
             dai_node lid = dai_doc_find(doc, "Lid");
             CHECK(crate != 0 && lid != 0, "the piece names did not become node names");
+            {
+                dai_node_desc cr2{};
+                dai_doc_get(doc, crate, &cr2);
+                CHECK(cr2.parent == root,
+                      "the top level piece hangs off %u, not off the file's root %u",
+                      cr2.parent, root);
+            }
 
             dai_node_desc cd{}, ld{};
             dai_doc_get(doc, crate, &cd);
@@ -397,7 +419,9 @@ int main(int argc, char **argv) {
             CHECK(dai_doc_count(doc) == before,
                   "undo left %u nodes behind", dai_doc_count(doc) - before);
             dai_doc_redo(doc);
-            CHECK(dai_doc_count(doc) == before + 2, "redo did not put the tree back");
+            CHECK(dai_doc_count(doc) == before + 3,
+                  "redo put %u nodes back, expected the root and its 2 pieces",
+                  dai_doc_count(doc) - before);
             dai_doc_sync_apply(sync);
         }
     }
@@ -418,8 +442,12 @@ int main(int argc, char **argv) {
             std::string e = &buf[(size_t)i * 96];
             if (e.find("blender_scene.glb") != std::string::npos) has_glb = true;
             if (e.find("parented.gltf") != std::string::npos) has_gltf = true;
-            if (e.find(".png") != std::string::npos || e.find(".bin") != std::string::npos)
-                has_junk = true;
+            // .bin is a glTF sidecar: the loader reaches it through the
+            // .gltf and there is nothing to do WITH it on its own.
+            // .png is not junk - the editor opens textures, and hiding a
+            // file the editor just wrote is what the whitelist in
+            // dai_assets_list warns about three lines above itself.
+            if (e.find(".bin") != std::string::npos) has_junk = true;
             if (!prev.empty() && e < prev) sorted = false;
             prev = e;
         }

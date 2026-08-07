@@ -64,9 +64,34 @@ DAI_API int dai_thumb_render(const dai_thumb_mesh *mesh, uint8_t *rgba,
 
 /* The same picture for something the engine can draw but has no mesh file
  * for - a box, a sphere, a capsule, a cylinder - so a prefab made of shapes
- * gets a thumbnail too. `shape` is a dai_shape value. */
+ * gets a thumbnail too. `shape` is a dai_shape value, the engine's own enum
+ * (DAI_SHAPE_CYLINDER is 4, not 3 - it was appended so old scenes keep
+ * loading), and anything without geometry of its own draws as a box. */
 DAI_API int dai_thumb_render_shape(int shape, uint8_t *rgba, uint32_t size,
                                    uint32_t tint_rgb);
+
+/* A PREFAB is not one shape, it is a handful of them at their own places: a
+ * crate with a lid, a lamp post with a light. One part per node.
+ *
+ * `xform` is a row major 3x4 matrix - the 3x3 basis (rotation TIMES the full
+ * size, not the half extent: the unit shapes below are one unit across) and
+ * then the translation:
+ *
+ *     [ b0 b1 b2 tx ]
+ *     [ b3 b4 b5 ty ]
+ *     [ b6 b7 b8 tz ]
+ *
+ * so a 2x1x2 box turned 45 degrees about Y and standing at (3, 0.5, 0) is a
+ * rotation matrix with its columns scaled by 2, 1, 2 and tx/ty/tz = 3, 0.5, 0.
+ * The whole set is fitted into the frame together, which is what makes the
+ * lid sit on the crate rather than fill the icon on its own. */
+typedef struct dai_thumb_part {
+    int   shape;          /* a dai_shape value; COMPOUND draws as a box  */
+    float xform[12];
+} dai_thumb_part;
+
+DAI_API int dai_thumb_render_parts(const dai_thumb_part *parts, uint32_t count,
+                                   uint8_t *rgba, uint32_t size, uint32_t tint_rgb);
 
 #ifdef __cplusplus
 }

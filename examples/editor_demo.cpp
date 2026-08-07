@@ -22,6 +22,9 @@
 #include "dai_tr.h"
 #include "dai_render.h"
 #include "dai_assets.h"
+#include "dai_thumb.h"
+
+#include <map>
 #include "dai_material.h"
 #include "dai_project.h"
 #include "dai_update.h"
@@ -1633,6 +1636,162 @@ static uint32_t asset_read_text(const char *rel, char *out, uint32_t max, void *
     return (uint32_t)w;
 }
 
+// ---- asset thumbnails ---------------------------------------------------
+//
+// The Project window asks "what does this asset look like" once per visible
+// row per frame, so the answer has to be a lookup. Making one costs a file
+// read and a few thousand triangles through dai_thumb, which is nothing on
+// its own and quite a lot fifty times in the frame a folder is opened - so
+// at most ONE new picture is made per frame and the rest arrive over the next
+// second. A thumbnail that appears a few frames late is not a bug; a browser
+// that stutters when you open a folder is.
+//
+// A path that produced nothing is cached as 0 as well: without that, every
+// frame retries every .txt in the folder for ever.
+static std::map<std::string, dai_texture> g_thumbs;
+static dai_renderer *g_thumb_r = nullptr;
+static int g_thumb_budget = 0;
+
+static bool thumb_ext_is(const std::string &p2, const char *ext) {
+    size_t n = std::strlen(ext);
+    if (p2.size() <= n) return false;
+    std::string tail = p2.substr(p2.size() - n);
+    for (char &c : tail) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return tail == ext;
+}
+
+// Every triangle a .glb holds, in the file's own space. The node hierarchy is
+// deliberately ignored: a thumbnail wants the SHAPE of the thing, and the
+// transforms in a well behaved export are the identity anyway.
+static bool thumb_model_soup(const std::string &full, std::vector<float> &pos) {
+    FILE *f = std::fopen(full.c_str(), "rb");
+    if (!f) return false;
+    std::fseek(f, 0, SEEK_END);
+    long len = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    // 64 MB is a lot of crate. Past that a thumbnail is not worth the stall.
+    if (len <= 0 || len > 64 * 1024 * 1024) { std::fclose(f); return false; }
+    std::vector<uint8_t> bytes((size_t)len);
+    size_t got = std::fread(bytes.data(), 1, bytes.size(), f);
+    std::fclose(f);
+    if (got != bytes.size()) return false;
+
+    dai_mesh_data prims[64]{};
+    char err[256] = { 0 };
+    uint32_t n = dai_gltf_read_geometry(bytes.data(), bytes.size(), prims, 64, err, sizeof(err));
+    if (!n) return false;
+    for (uint32_t i = 0; i < n && i < 64; ++i) {
+        const dai_mesh_data &m = prims[i];
+        if (!m.vertices) continue;
+        if (m.indices && m.index_count) {
+            for (uint32_t k = 0; k < m.index_count; ++k) {
+                uint32_t vi = m.indices[k];
+                if (vi >= m.vertex_count) continue;
+                pos.push_back(m.vertices[vi].position.x);
+                pos.push_back(m.vertices[vi].position.y);
+                pos.push_back(m.vertices[vi].position.z);
+            }
+        } else {
+            for (uint32_t k = 0; k < m.vertex_count; ++k) {
+                pos.push_back(m.vertices[k].position.x);
+                pos.push_back(m.vertices[k].position.y);
+                pos.push_back(m.vertices[k].position.z);
+            }
+        }
+    }
+    dai_gltf_free_geometry(prims, n < 64 ? n : 64);
+    return pos.size() >= 9;
+}
+
+// A prefab is a scene file: its nodes, at their own places, as the shapes they
+// are. Loaded into a throwaway document - the one on screen must not notice.
+static bool thumb_prefab_parts(const std::string &full, std::vector<dai_thumb_part> &parts) {
+    dai_doc *pd = dai_doc_create();
+    if (!pd) return false;
+    char err[256] = { 0 };
+    if (dai_doc_load(pd, full.c_str(), err, sizeof(err)) != DAI_OK) {
+        dai_doc_destroy(pd);
+        return false;
+    }
+    std::vector<dai_node> ids(dai_doc_count(pd) + 1);
+    uint32_t n = dai_doc_nodes(pd, ids.data(), (uint32_t)ids.size());
+    for (uint32_t i = 0; i < n && parts.size() < 64; ++i) {
+        dai_node_desc d{};
+        if (dai_doc_get(pd, ids[i], &d) != DAI_OK) continue;
+        if (d.hidden || d.no_body) continue;          // empties draw nothing
+        dai_vec3 wp{}, ws{ 1, 1, 1 };
+        dai_quat wr{ 0, 0, 0, 1 };
+        if (dai_doc_world_transform(pd, ids[i], &wp, &wr, &ws) != DAI_OK) continue;
+        // The unit shapes are one unit across, so the basis carries the FULL
+        // size: rotation, times scale, times twice the half extent.
+        float sx = 2.0f * d.half_extent.x * ws.x;
+        float sy = 2.0f * d.half_extent.y * ws.y;
+        float sz = 2.0f * d.half_extent.z * ws.z;
+        if (sx < 1e-4f) sx = 1e-4f;
+        if (sy < 1e-4f) sy = 1e-4f;
+        if (sz < 1e-4f) sz = 1e-4f;
+        float x = wr.x, y = wr.y, z = wr.z, w = wr.w;
+        float R[9] = {
+            1 - 2 * (y * y + z * z), 2 * (x * y - z * w),     2 * (x * z + y * w),
+            2 * (x * y + z * w),     1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+            2 * (x * z - y * w),     2 * (y * z + x * w),     1 - 2 * (x * x + y * y),
+        };
+        dai_thumb_part pt{};
+        pt.shape = d.shape;
+        pt.xform[0] = R[0] * sx; pt.xform[1] = R[1] * sy; pt.xform[2]  = R[2] * sz; pt.xform[3]  = wp.x;
+        pt.xform[4] = R[3] * sx; pt.xform[5] = R[4] * sy; pt.xform[6]  = R[5] * sz; pt.xform[7]  = wp.y;
+        pt.xform[8] = R[6] * sx; pt.xform[9] = R[7] * sy; pt.xform[10] = R[8] * sz; pt.xform[11] = wp.z;
+        parts.push_back(pt);
+    }
+    dai_doc_destroy(pd);
+    return !parts.empty();
+}
+
+static dai_texture thumb_for(const char *rel, void *) {
+    if (!rel || !*rel || !g_thumb_r || !g_assets_dir[0]) return 0;
+    std::string key = rel;
+    auto it = g_thumbs.find(key);
+    if (it != g_thumbs.end()) return it->second;
+
+    bool model  = thumb_ext_is(key, ".glb") || thumb_ext_is(key, ".gltf");
+    bool prefab = thumb_ext_is(key, ".daidalos");
+    if (!model && !prefab) { g_thumbs[key] = 0; return 0; }
+    // One new picture per frame. Not cached as a failure - it is a "not yet".
+    if (g_thumb_budget <= 0) return 0;
+    --g_thumb_budget;
+
+    char full[700];
+    std::snprintf(full, sizeof(full), "%s/%s", g_assets_dir, rel);
+
+    const uint32_t SZ = 64;
+    std::vector<uint8_t> rgba((size_t)SZ * SZ * 4, 0);
+    int ok = 0;
+    if (model) {
+        std::vector<float> pos;
+        if (thumb_model_soup(full, pos)) {
+            dai_thumb_mesh m{ pos.data(), (uint32_t)(pos.size() / 3), nullptr, 0 };
+            ok = dai_thumb_render(&m, rgba.data(), SZ, 0xE0936C);   // the model amber
+        }
+    } else {
+        std::vector<dai_thumb_part> parts;
+        if (thumb_prefab_parts(full, parts))
+            ok = dai_thumb_render_parts(parts.data(), (uint32_t)parts.size(),
+                                        rgba.data(), SZ, 0x8FB6E8);
+    }
+    dai_texture t = 0;
+    if (ok) t = dai_render_texture_create(g_thumb_r, rgba.data(), SZ, SZ, 0);
+    g_thumbs[key] = t;
+    return t;
+}
+
+// A file changed on disk: its picture is a lie now. Cheap enough to throw the
+// whole cache away - it rebuilds one row at a time.
+static void thumbs_forget_all(void) {
+    for (auto &kv : g_thumbs)
+        if (kv.second && g_thumb_r) dai_render_texture_destroy(g_thumb_r, kv.second);
+    g_thumbs.clear();
+}
+
 static int asset_write_text(const char *rel, const char *text, void *) {
     if (!rel || !text || !g_assets_dir[0]) return 0;
     if (std::strstr(rel, "..") || rel[0] == '/' || rel[0] == '\\') return 0;
@@ -3083,6 +3242,8 @@ int main(int argc, char **argv) {
     dai_editor_ui *panels = dai_editor_ui_create(ed, ui);
     dai_editor_ui_project_host(panels, project_list, project_create, project_open, nullptr);
     dai_editor_ui_mesh_host(panels, mesh_name_of, DAI_MESH_BUILTIN_COUNT, nullptr);
+    g_thumb_r = r;
+    dai_editor_ui_thumb_host(panels, thumb_for, nullptr);
     dai_editor_ui_script_host(panels, script_create, nullptr);
     dai_editor_ui_rename_host(panels, asset_rename, nullptr);
     dai_editor_ui_import_host(panels, asset_import, nullptr);
@@ -3502,7 +3663,11 @@ int main(int argc, char **argv) {
         // The list below only re-feeds on a revision change and a new file
         // does not move the revision - so force the re-feed here.
         static uint32_t fed_rev = 0xFFFFFFFFu;
+        // One new thumbnail per frame, so opening a folder of models does not
+        // stall the frame it was opened in.
+        g_thumb_budget = 1;
         if (dai_editor_ui_take_refresh(panels) && assets) {
+            thumbs_forget_all();
             dai_assets_poll(assets);
             fed_rev = 0xFFFFFFFFu;
             apply_materials(doc);       // a refresh is also "the files moved"
