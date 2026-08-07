@@ -267,6 +267,11 @@ dai_texture dai_render_texture_load(dai_renderer *r, const char *path, int srgb)
         std::snprintf(r->err, sizeof(r->err), "%s", err);
         return 0;
     }
+    // The decoder also talks on the way OUT: a file that was damaged but still
+    // yielded a picture leaves its reason in `err`. Carrying it here is what
+    // lets the editor say "58 of 330 rows" instead of showing a mangled logo
+    // and letting the user guess.
+    std::snprintf(r->err, sizeof(r->err), "%s", err);
     return dai_render_texture_create(r, px.data(), w, h, srgb);
 }
 

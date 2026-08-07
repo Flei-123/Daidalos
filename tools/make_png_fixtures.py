@@ -180,4 +180,33 @@ except (TypeError, OSError, ValueError) as e:
 # Not supported, and the point of the fixture is that it says so politely.
 save_jpeg("j_progressive", Image.fromarray(soft, "RGB"), quality=90, progressive=True)
 
+
+# ---------------------------------------------------------------- damaged
+# A file that stops in the middle. Not a hypothetical: the logo Justin dragged
+# into the editor on 07.08.2026 was exactly this, and the decoder threw the
+# whole picture away over it. What a decoder owes you there is the part that
+# IS still a picture, plus a sentence saying how much of it that was.
+def truncate_idat(src, dst, keep):
+    d = open(src, "rb").read()
+    pos, out_chunks = 8, [d[:8]]
+    while pos + 8 <= len(d):
+        ln = int.from_bytes(d[pos:pos + 4], "big")
+        t = d[pos + 4:pos + 8]
+        data = d[pos + 8:pos + 8 + ln]
+        if t == b"IDAT":
+            data = data[: int(len(data) * keep)]
+            ln = len(data)
+        out_chunks.append(ln.to_bytes(4, "big") + t + data +
+                          (zlib.crc32(t + data) & 0xFFFFFFFF).to_bytes(4, "big"))
+        pos += 12 + int.from_bytes(d[pos:pos + 4], "big")
+        if t == b"IEND":
+            break
+    open(dst, "wb").write(b"".join(out_chunks))
+
+
+truncate_idat(f"{out}/rgb8.png", f"{out}/cut_rgb8.png", 0.55)
+# The reference stays the WHOLE picture: the test only compares the rows the
+# decoder claims to have recovered, which is the contract being checked.
+open(f"{out}/cut_rgb8.rgba", "wb").write(open(f"{out}/rgb8.rgba", "rb").read())
+
 print("fixtures in", out, ":", len(os.listdir(out)), "files")

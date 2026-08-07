@@ -8146,12 +8146,27 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             }
             float tw = dai_ui_text_width(ui, lbl.c_str()) + 18.0f;
             float th = dai_ui_text_height(ui) + 8.0f;
+            // The PICTURE of what is in flight, above the name. Dragging
+            // "Room1.glb" told you the filename you had just clicked on and
+            // nothing else; a model has a shape, the editor already renders
+            // one for the browser row, and this is the moment somebody most
+            // wants to see it - "am I dragging the right thing".
+            dai_texture dth = p->thumb_fn ? p->thumb_fn(p->drag_script.c_str(), p->thumb_user) : 0;
+            const float PSZ = 48.0f;
+            float py0 = dmy + 10.0f;
             // Drawn on the window layer so the pill survives leaving the
             // editor window - a drag you cannot see outside is a drag lost.
             dai_ui_layer_push(ui, DAI_LAYER_WINDOW + 100);
-            dai_ui_rrect(ui, dmx + 12.0f, dmy + 10.0f, tw, th, 4.0f, st->accent);
-            dai_ui_rect_outline(ui, dmx + 12.0f, dmy + 10.0f, tw, th, 1.0f, 0xFFFFFFFFu);
-            dai_ui_text(ui, dmx + 21.0f, dmy + 14.0f, lbl.c_str(), st->text);
+            if (dth) {
+                dai_ui_rect(ui, dmx + 12.0f, py0, PSZ, PSZ, st->panel);
+                dai_ui_rect_outline(ui, dmx + 12.0f, py0, PSZ, PSZ, 1.0f, st->accent);
+                dai_ui_image_at(ui, dth, dmx + 14.0f, py0 + 2.0f, PSZ - 4.0f, PSZ - 4.0f,
+                                0, 0, 1, 1, 0xFFFFFFFFu);
+                py0 += PSZ + 2.0f;
+            }
+            dai_ui_rrect(ui, dmx + 12.0f, py0, tw, th, 4.0f, st->accent);
+            dai_ui_rect_outline(ui, dmx + 12.0f, py0, tw, th, 1.0f, 0xFFFFFFFFu);
+            dai_ui_text(ui, dmx + 21.0f, py0 + 4.0f, lbl.c_str(), st->text);
             dai_ui_layer_pop(ui);
             dai_ui_claim_mouse(ui);
         }

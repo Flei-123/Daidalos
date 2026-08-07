@@ -2848,6 +2848,17 @@ static uint32_t hud_image_cb(const char *path, float *out_w, float *out_h, void 
     // to "how big is this by default" is the file's own size. Read the PNG
     // header - eight bytes at a fixed offset - rather than decode the whole
     // image a second time.
+    // A picture that loaded but is not all there says so ONCE. A logo that is
+    // 58 rows of 330 is not a decoder bug and not a mystery - it is a damaged
+    // file, and the only way anybody finds that out is if the editor says it.
+    if (e.tex && g_panels_for_log) {
+        const char *why = dai_render_last_error(g_renderer);
+        if (why && why[0]) {
+            char line[900];
+            std::snprintf(line, sizeof(line), "image: %s - %s", why, full);
+            dai_editor_ui_log(g_panels_for_log, 1, line);
+        }
+    }
     if (e.tex) {
         FILE *pf = std::fopen(full, "rb");
         if (pf) {
@@ -3767,9 +3778,27 @@ int main(int argc, char **argv) {
 
         if (dai_editor_ui_take_save(panels)) {
             const char *sp = scene_path ? scene_path : (g_scene_path[0] ? g_scene_path : nullptr);
-            if (sp && dai_doc_save(doc, sp) == DAI_OK) {
+            if (!sp) {
+                // Nowhere to put it. Silence here is what made "Save first"
+                // look like it did nothing: the dialog waited for the scene to
+                // stop being dirty, and it never would.
+                dai_editor_ui_toast(panels, "this scene has no file yet - use Save As", 3.0f);
+                dai_editor_ui_log(panels, 2, "save: the scene has no path");
+            } else if (dai_doc_save(doc, sp) == DAI_OK) {
+                // THE line that was missing. Without it the document stays
+                // "dirty" after a successful save for ever: the title keeps
+                // its asterisk, and anything that waits for the save to land -
+                // the unsaved changes dialog's "Save first" - waits until it
+                // gives up and says the scene did not save.
+                g_saved_rev = dai_doc_revision(doc);
+                dai_editor_ui_scene_dirty(panels, 0);
                 std::printf("saved %s\n", sp);
                 dai_editor_ui_toast(panels, "scene saved", 2.0f);
+            } else {
+                dai_editor_ui_toast(panels, "the scene could not be saved", 3.0f);
+                char line[700];
+                std::snprintf(line, sizeof(line), "save failed: %s", sp);
+                dai_editor_ui_log(panels, 2, line);
             }
         }
         // A refresh means the Project window WROTE files (new script/folder).

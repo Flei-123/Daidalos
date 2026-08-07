@@ -183,7 +183,26 @@ bool inflate_zlib(const uint8_t *data, size_t size, std::vector<uint8_t> &out) {
     if ((data[0] & 0x0f) != 8) return false;          // must be deflate
     if (((data[0] << 8) | data[1]) % 31 != 0) return false;
     if (data[1] & 0x20) return false;                 // preset dictionary: no
-    return inflate_raw(data + 2, size - 6, out);
+    if (inflate_raw(data + 2, size - 6, out)) return true;
+
+    // The stream did not finish. Two things can be true at once here, and
+    // treating them as one is what threw a readable picture away:
+    //
+    //   1. the last four bytes are the adler32 checksum - UNLESS the file was
+    //      truncated, in which case they are the last four bytes of the data
+    //      and skipping them removes real bits from the end;
+    //   2. whatever WAS unpacked before it stopped is still correct. Deflate
+    //      is sequential: byte 4000 does not become wrong because byte 90000
+    //      never arrived.
+    //
+    // So: try again over the whole tail, keep whichever attempt recovered
+    // more, and hand it back with a false. The caller decides whether what
+    // arrived is enough to be a picture - see read_png, which draws the rows
+    // it got instead of showing nothing at all.
+    std::vector<uint8_t> tail;
+    inflate_raw(data + 2, size - 2, tail);
+    if (tail.size() > out.size()) out.swap(tail);
+    return false;
 }
 
 // ---------------------------------------------------------------- PNG
@@ -272,7 +291,8 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
     std::vector<uint8_t> raw;
     raw.reserve((size_t)w * h * channels + h);
     if (idat.empty()) return fail("no IDAT data");
-    if (!inflate_zlib(idat.data(), idat.size(), raw))
+    bool whole = inflate_zlib(idat.data(), idat.size(), raw);
+    if (!whole && raw.empty())
         return fail("inflate failed (compressed image data could not be unpacked)");
 
     int bits_per_pixel = channels * depth;
@@ -286,6 +306,8 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
     const uint8_t *src = raw.data();
     size_t left = raw.size();
     const char *why = nullptr;
+    uint32_t short_by = 0;             // rows the file did not contain
+    bool     broken = false;           // the bytes stopped being the picture
 
     // Undoes the per scanline filters of ONE rectangle of pixels. A plain PNG
     // is one of these that happens to be the whole image; an interlaced one is
@@ -295,7 +317,15 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
         size_t ps = ((size_t)pw * bits_per_pixel + 7) / 8;
         out.assign(ps * ph, 0);
         if (!pw || !ph) return true;
-        if (left < (ps + 1) * ph) { why = "image data is shorter than the header promises"; return false; }
+        // A truncated file gets the rows it has. Refusing the whole picture
+        // over a missing tail is how a logo that was 99% there showed up as a
+        // red cross - and the cross says nothing about which bytes were lost.
+        uint32_t have = (ps + 1) ? (uint32_t)(left / (ps + 1)) : 0;
+        if (have < ph) {
+            short_by += ph - have;
+            ph = have;
+            if (!ph) return true;      // nothing at all: the rows stay blank
+        }
         for (uint32_t y = 0; y < ph; ++y) {
             int f = *src++; --left;
             uint8_t *cur = &out[(size_t)y * ps];
@@ -311,7 +341,15 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
                 case 2: v += b; break;
                 case 3: v += (a + b) / 2; break;
                 case 4: v += paeth(a, b, c); break;
-                default: why = "bad filter type"; return false;
+                default:
+                    // An impossible filter byte means the data stopped being
+                    // the picture here - a corrupt file, not an unsupported
+                    // one. The rows BEFORE it are still exactly right, and a
+                    // logo that is right for 58 rows beats a red cross that
+                    // says nothing about where it went wrong.
+                    short_by += ph - y;
+                    broken = true;
+                    return true;
                 }
                 cur[x] = (uint8_t)v;
             }
@@ -337,6 +375,7 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
             uint32_t pw = w > XO[pi] ? (w - XO[pi] + XS[pi] - 1) / XS[pi] : 0;
             uint32_t ph = h > YO[pi] ? (h - YO[pi] + YS[pi] - 1) / YS[pi] : 0;
             if (!pw || !ph) continue;          // a pass can be empty on a small image
+            if (broken) { short_by += ph; continue; }   // the data ran out earlier
             std::vector<uint8_t> pass;
             if (!unfilter(pw, ph, pass)) return fail(why);
             size_t ps = ((size_t)pw * bits_per_pixel + 7) / 8;
@@ -394,6 +433,25 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
         }
     }
     *out_w = w; *out_h = h;
+    // It IS a picture, and the caller gets it. But a file that ends in the
+    // middle is a file somebody should know about - a download that stopped,
+    // a disk that filled up - so the reason travels back in `err` even on the
+    // way out of a successful call.
+    if ((!whole || short_by) && err && err_len) {
+        if (broken)
+            std::snprintf(err, err_len,
+                          "the file is damaged: %u of %u rows are readable, the rest is not "
+                          "picture data any more",
+                          h - short_by, h);
+        else if (short_by)
+            std::snprintf(err, err_len,
+                          "the file ends early: %u of %u rows arrived, the rest is blank",
+                          h - short_by, h);
+        else
+            std::snprintf(err, err_len,
+                          "the file ends without its checksum - every row arrived, so it "
+                          "was decoded anyway");
+    }
     return true;
 }
 

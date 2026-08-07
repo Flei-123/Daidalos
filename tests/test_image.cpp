@@ -176,6 +176,62 @@ int main(int argc, char **argv) {
     check_jpeg(dir, "j_odd",  51, 37, 1.2, 8);    // not a whole number of MCUs
     check_jpeg(dir, "j_restart", 96, 64, 1.2, 8);
 
+    // ---- a file that stops in the middle ---------------------------------
+    // The decoder must hand back what IS a picture and say how much that was.
+    // Refusing outright is what turned a damaged logo into a red cross with no
+    // explanation, and a red cross is not a bug report.
+    {
+        std::vector<uint8_t> got, want;
+        uint32_t w = 0, h = 0;
+        char err[256] = { 0 };
+        std::string cut = dir + "/cut_rgb8.png";
+        bool ok = daiimg::read_png_file(cut.c_str(), got, &w, &h, err, sizeof(err));
+        if (!ok) {
+            std::printf("  FAIL cut_rgb8               refused a partly readable file: %s\n", err);
+            ++g_fail;
+        } else if (w != 64 || h != 48) {
+            std::printf("  FAIL cut_rgb8               size %ux%u, expected 64x48\n", w, h);
+            ++g_fail;
+        } else if (!err[0]) {
+            std::printf("  FAIL cut_rgb8               decoded silently - nobody learns the file is damaged\n");
+            ++g_fail;
+        } else if (!load(dir + "/rgb8.rgba", want)) {
+            std::printf("  SKIP cut_rgb8               (no reference)\n");
+        } else {
+            // The rows that arrived have to be RIGHT, not merely present.
+            size_t rows_ok = 0;
+            for (uint32_t y = 0; y < h; ++y) {
+                bool same = std::memcmp(&got[(size_t)y * w * 4], &want[(size_t)y * w * 4],
+                                        (size_t)w * 4) == 0;
+                if (!same) break;
+                ++rows_ok;
+            }
+            if (rows_ok < 8) {
+                std::printf("  FAIL cut_rgb8               only %zu rows came back correct\n", rows_ok);
+                ++g_fail;
+            } else if (rows_ok >= h) {
+                std::printf("  FAIL cut_rgb8               all %u rows survived a cut file - "
+                            "is the fixture actually truncated?\n", h);
+                ++g_fail;
+            } else {
+                std::printf("  ok   cut_rgb8               %zu of %u rows recovered, and it says so: %s\n",
+                            rows_ok, h, err);
+                ++g_pass;
+            }
+        }
+    }
+    // A file that is whole says NOTHING - a warning on every good picture is a
+    // warning nobody reads.
+    {
+        std::vector<uint8_t> px;
+        uint32_t w = 0, h = 0;
+        char err[256] = { 0 };
+        std::string good = dir + "/rgb8.png";
+        bool ok = daiimg::read_png_file(good.c_str(), px, &w, &h, err, sizeof(err));
+        if (ok && !err[0]) { std::printf("  ok   rgb8 (intact)          decoded without a complaint\n"); ++g_pass; }
+        else { std::printf("  FAIL rgb8 (intact)          ok=%d, said '%s'\n", (int)ok, err); ++g_fail; }
+    }
+
     check_refused(dir, "j_progressive.jpg", "progressive");
     check_refused(dir, "rgb8.png", "not a JPEG");
 
