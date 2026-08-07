@@ -213,6 +213,40 @@ uint32_t be32_at(const uint8_t *p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
 }
 
+// PNG's own CRC, so a chunk can be asked whether it is telling the truth about
+// its own length. It is not paranoia: the file that started all this declares
+// an IDAT 66 bytes shorter than the one it actually contains, and believing
+// the number threw away the end of the picture.
+uint32_t png_crc(const uint8_t *d, size_t n) {
+    static uint32_t table[256];
+    static bool ready = false;
+    if (!ready) {
+        for (uint32_t i = 0; i < 256; ++i) {
+            uint32_t c = i;
+            for (int k = 0; k < 8; ++k) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            table[i] = c;
+        }
+        ready = true;
+    }
+    uint32_t c = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; ++i) c = table[(c ^ d[i]) & 0xFF] ^ (c >> 8);
+    return c ^ 0xFFFFFFFFu;
+}
+
+// Does a chunk header start here, and does it look like one? A type is four
+// letters; a length past the end of the file is not a length.
+bool looks_like_chunk(const uint8_t *file, size_t size, size_t at) {
+    if (at + 8 > size) return false;
+    for (int i = 0; i < 4; ++i) {
+        uint8_t c = file[at + 4 + i];
+        bool letter = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+        if (!letter) return false;
+    }
+    uint32_t len = ((uint32_t)file[at] << 24) | ((uint32_t)file[at + 1] << 16) |
+                   ((uint32_t)file[at + 2] << 8) | file[at + 3];
+    return (size_t)len + 12 + at <= size + 12;
+}
+
 int paeth(int a, int b, int c) {
     int p = a + b - c, pa = abs(p - a), pb = abs(p - b), pc = abs(p - c);
     if (pa <= pb && pa <= pc) return a;
@@ -267,7 +301,33 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
         } else if (!std::memcmp(type, "tRNS", 4)) {
             trns.assign(data, data + len);
         } else if (!std::memcmp(type, "IDAT", 4)) {
-            idat.insert(idat.end(), data, data + len);
+            uint32_t stored = be32_at(data + len);
+            uint32_t want = png_crc(file + pos + 4, len + 4);
+            uint32_t use = len;
+            if (stored != want) {
+                // The chunk is lying about itself. Rather than trust it or
+                // give up, find where the NEXT chunk really starts and take
+                // everything up to it: a writer that got the length wrong
+                // still wrote the bytes, and those bytes are the picture.
+                //
+                // Windows opens this file. So should this decoder - being
+                // stricter than every other reader on the machine is not
+                // correctness, it is a bug with a rulebook.
+                for (size_t q = pos + 8; q + 12 <= size; ++q) {
+                    if (!looks_like_chunk(file, size, q)) continue;
+                    const char *t2 = (const char *)file + q + 4;
+                    if (std::memcmp(t2, "IEND", 4) && std::memcmp(t2, "IDAT", 4)) continue;
+                    uint32_t l2 = be32_at(file + q);
+                    if (png_crc(file + q + 4, l2 + 4) != be32_at(file + q + 8 + l2)) continue;
+                    size_t end = q - 4;                     // its own CRC sits here
+                    if (end > pos + 8 && end - (pos + 8) <= size) use = (uint32_t)(end - (pos + 8));
+                    break;
+                }
+                if (use < len) use = len;                   // never shrink below the claim
+            }
+            if (pos + 8 + use > size) use = (uint32_t)(size - pos - 8);
+            idat.insert(idat.end(), data, data + use);
+            if (use != len) { pos += 12 + use; continue; }  // walk on from the REAL end
         } else if (!std::memcmp(type, "IEND", 4)) {
             break;
         }
@@ -307,7 +367,7 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
     size_t left = raw.size();
     const char *why = nullptr;
     uint32_t short_by = 0;             // rows the file did not contain
-    bool     broken = false;           // the bytes stopped being the picture
+    uint32_t bad_rows = 0;             // rows whose filter byte was impossible
 
     // Undoes the per scanline filters of ONE rectangle of pixels. A plain PNG
     // is one of these that happens to be the whole image; an interlaced one is
@@ -328,6 +388,7 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
         }
         for (uint32_t y = 0; y < ph; ++y) {
             int f = *src++; --left;
+            if (f > 4) { ++bad_rows; f = 0; }
             uint8_t *cur = &out[(size_t)y * ps];
             const uint8_t *prev = y ? &out[(size_t)(y - 1) * ps] : nullptr;
             for (size_t x = 0; x < ps; ++x) {
@@ -342,14 +403,12 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
                 case 3: v += (a + b) / 2; break;
                 case 4: v += paeth(a, b, c); break;
                 default:
-                    // An impossible filter byte means the data stopped being
-                    // the picture here - a corrupt file, not an unsupported
-                    // one. The rows BEFORE it are still exactly right, and a
-                    // logo that is right for 58 rows beats a red cross that
-                    // says nothing about where it went wrong.
-                    short_by += ph - y;
-                    broken = true;
-                    return true;
+                    // An impossible filter byte. Every other reader on the
+                    // machine - Windows Photos included - treats it as "no
+                    // filter" and keeps going, and what comes out is a picture
+                    // with a scar rather than no picture at all. Counted, so
+                    // the Console can say how much of it is suspect.
+                    break;
                 }
                 cur[x] = (uint8_t)v;
             }
@@ -375,7 +434,6 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
             uint32_t pw = w > XO[pi] ? (w - XO[pi] + XS[pi] - 1) / XS[pi] : 0;
             uint32_t ph = h > YO[pi] ? (h - YO[pi] + YS[pi] - 1) / YS[pi] : 0;
             if (!pw || !ph) continue;          // a pass can be empty on a small image
-            if (broken) { short_by += ph; continue; }   // the data ran out earlier
             std::vector<uint8_t> pass;
             if (!unfilter(pw, ph, pass)) return fail(why);
             size_t ps = ((size_t)pw * bits_per_pixel + 7) / 8;
@@ -405,6 +463,7 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
     }
 
     rgba.assign((size_t)w * h * 4, 255);
+    size_t bad_rows_dummy = 0;         // pixels whose palette index does not exist
     for (uint32_t y = 0; y < h; ++y) {
         const uint8_t *row = &img[(size_t)y * stride];
         for (uint32_t x = 0; x < w; ++x) {
@@ -418,7 +477,13 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
                     idx = (row[x / per] >> shift) & ((1 << depth) - 1);
                 }
                 if (palette.empty()) return fail("paletted PNG with no PLTE chunk");
-                if (idx * 3 + 2 >= palette.size()) return fail("palette index out of range");
+                // An index past the end of the palette can only come from
+                // bytes that are not picture data any more. Refusing the whole
+                // file over one is how a damaged logo became a red cross;
+                // clamping it paints that pixel the first colour and lets the
+                // rest of the image through, which is what every other reader
+                // does.
+                if (idx * 3 + 2 >= palette.size()) { idx = 0; ++bad_rows_dummy; }
                 o[0] = palette[idx*3]; o[1] = palette[idx*3+1]; o[2] = palette[idx*3+2];
                 o[3] = idx < trns.size() ? trns[idx] : 255;
             } else {
@@ -437,12 +502,13 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
     // middle is a file somebody should know about - a download that stopped,
     // a disk that filled up - so the reason travels back in `err` even on the
     // way out of a successful call.
-    if ((!whole || short_by) && err && err_len) {
-        if (broken)
+    if (bad_rows_dummy && !bad_rows) bad_rows = 1;   // damaged, even if the rows lined up
+    if ((!whole || short_by || bad_rows) && err && err_len) {
+        if (bad_rows)
             std::snprintf(err, err_len,
-                          "the file is damaged: %u of %u rows are readable, the rest is not "
-                          "picture data any more",
-                          h - short_by, h);
+                          "the file is damaged: %u of %u rows had to be guessed at, so the "
+                          "picture is shown but parts of it will look wrong",
+                          bad_rows, h);
         else if (short_by)
             std::snprintf(err, err_len,
                           "the file ends early: %u of %u rows arrived, the rest is blank",

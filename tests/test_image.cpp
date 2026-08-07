@@ -176,6 +176,12 @@ int main(int argc, char **argv) {
     check_jpeg(dir, "j_odd",  51, 37, 1.2, 8);    // not a whole number of MCUs
     check_jpeg(dir, "j_restart", 96, 64, 1.2, 8);
 
+    // ---- a chunk that lies about its own length --------------------------
+    // Every byte of the picture is in the file; the number in front of it is
+    // 66 too small. Believing that number is what made a logo Windows opens
+    // fine unreadable here. The decoded image has to come out EXACT.
+    check_png(dir, "lie_rgb8", 64, 48);
+
     // ---- a file that stops in the middle ---------------------------------
     // The decoder must hand back what IS a picture and say how much that was.
     // Refusing outright is what turned a damaged logo into a red cross with no

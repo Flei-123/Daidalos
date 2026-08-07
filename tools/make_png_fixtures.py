@@ -209,4 +209,24 @@ truncate_idat(f"{out}/rgb8.png", f"{out}/cut_rgb8.png", 0.55)
 # decoder claims to have recovered, which is the contract being checked.
 open(f"{out}/cut_rgb8.rgba", "wb").write(open(f"{out}/rgb8.rgba", "rb").read())
 
+
+# A file whose IDAT chunk LIES about its own length - 66 bytes short, which is
+# exactly what the logo that would not load did. Every byte of the picture is
+# present; only the number in front of it is wrong. A decoder that believes the
+# number loses the end of the image, and Windows does not believe it either.
+def shrink_idat_header(src, dst, by):
+    d = bytearray(open(src, "rb").read())
+    pos = 8
+    while pos + 8 <= len(d):
+        ln = int.from_bytes(d[pos:pos + 4], "big")
+        if d[pos + 4:pos + 8] == b"IDAT":
+            d[pos:pos + 4] = (ln - by).to_bytes(4, "big")   # CRC now wrong, on purpose
+            break
+        pos += 12 + ln
+    open(dst, "wb").write(bytes(d))
+
+
+shrink_idat_header(f"{out}/rgb8.png", f"{out}/lie_rgb8.png", 66)
+open(f"{out}/lie_rgb8.rgba", "wb").write(open(f"{out}/rgb8.rgba", "rb").read())
+
 print("fixtures in", out, ":", len(os.listdir(out)), "files")
