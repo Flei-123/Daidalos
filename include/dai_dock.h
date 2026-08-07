@@ -93,6 +93,46 @@ DAI_API void dai_dock_close(dai_dock *d, const char *title);
  * drop the window back into. */
 DAI_API int  dai_dock_undock(dai_dock *d, const char *title,
                              float x, float y, float w, float h);
+/* ---- a panel that is its own window of the OPERATING SYSTEM --------------
+ *
+ * A floating panel is an overlay drawn inside the editor, and an overlay stops
+ * at the editor's edge. That is fine until someone with two monitors wants the
+ * Console on the second one - which is the entire reason to tear a panel off
+ * in the first place.
+ *
+ * The trick that makes this cheap: the panel is still drawn into the SAME
+ * frame, in a strip UNDER the dock area that the editor's own window never
+ * shows, and the OS window blits that strip (dai_window_source_rect). One
+ * rendered frame, several windows. No second renderer, no second render pass,
+ * and the panel cannot be on screen twice because only one window shows each
+ * part of the frame.
+ *
+ * The host's side of the deal, once per frame:
+ *   1. make the offscreen frame dai_dock_spill_height() taller than the window
+ *   2. dai_dock_native_windows() -> open/close/move real windows to match
+ *   3. point each window at frame_x/frame_y with dai_window_source_rect
+ *   4. hand back where the user dragged it with dai_dock_native_moved()
+ */
+typedef struct dai_dock_native {
+    const char *title;      /* the first tab, which names the window          */
+    float x, y, w, h;       /* on the DESKTOP, in screen pixels               */
+    float frame_x, frame_y; /* where in the offscreen frame it was drawn      */
+} dai_dock_native;
+
+/* Turns a FLOATING panel into an OS window and back. Returns 0 when the panel
+ * is not floating - making a docked one a window is dai_dock_undock's job, and
+ * one call that means two gestures is a call nobody can predict. */
+DAI_API int   dai_dock_set_native(dai_dock *d, const char *title, int on);
+DAI_API int   dai_dock_is_native(const dai_dock *d, const char *title);
+/* How much taller the offscreen frame must be than the editor's window. 0 when
+ * nothing is torn off, which is the normal case and costs nothing. */
+DAI_API float dai_dock_spill_height(const dai_dock *d);
+/* Every panel that wants a window. Call with out=NULL to ask how many. */
+DAI_API uint32_t dai_dock_native_windows(const dai_dock *d, dai_dock_native *out, uint32_t max);
+/* Where the user dragged (or resized) it, so the layout remembers. */
+DAI_API void  dai_dock_native_moved(dai_dock *d, const char *title,
+                                    float x, float y, float w, float h);
+
 DAI_API void dai_dock_open(dai_dock *d, const char *title);
 DAI_API int  dai_dock_is_open(const dai_dock *d, const char *title);
 /* Every registered panel, for a Window menu. */

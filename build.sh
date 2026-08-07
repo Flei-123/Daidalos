@@ -357,6 +357,10 @@ g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_hud.cpp src/dai_ui.cpp src/dai_font.
         -o build/test_project && ./build/test_project
     g++ $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
+    # Two windows on one renderer: the claim that a torn off panel can be a
+    # real OS window without a second render pass. Needs a display, so it is
+    # built here and run by tools/run_tests.sh under Xvfb.
+    [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window_two.cpp $VKLIBS -o build/test_window_two
     if [ -n "$ASSETS_LIB" ]; then
         g++ $FLAGS $ARCH -Iinclude -I"$MNEMOSYNE/include" tests/test_assets.cpp \
             $ASSETS_LIB $LIBS $VKLIBS -o build/test_assets

@@ -31,6 +31,11 @@ struct dai_window {
     Atom wm_delete = 0;
     bool open = true;
 
+    // Which part of the offscreen frame this window shows. Zero width or
+    // height means "all of it", which is what every window did before torn
+    // off panels needed a strip of their own.
+    int src_x = 0, src_y = 0, src_w = 0, src_h = 0;
+
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
     VkFormat format = VK_FORMAT_B8G8R8A8_UNORM;
@@ -485,7 +490,18 @@ dai_result dai_window_present(dai_window *w) {
     // the offscreen target is already in TRANSFER_SRC_OPTIMAL after a frame
     VkImageBlit blit{};
     blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    blit.srcOffsets[1] = { (int32_t)r->width, (int32_t)r->height, 1 };
+    // The source rectangle, clamped into the frame that actually exists: a
+    // host that shrank the offscreen target must not hand Vulkan a blit that
+    // reads past it, and a device loss is a bad way to learn that.
+    int sx = w->src_x, sy = w->src_y, sw = w->src_w, sh = w->src_h;
+    if (sw <= 0 || sh <= 0) { sx = 0; sy = 0; sw = (int)r->width; sh = (int)r->height; }
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    if (sx + sw > (int)r->width)  sw = (int)r->width - sx;
+    if (sy + sh > (int)r->height) sh = (int)r->height - sy;
+    if (sw <= 0 || sh <= 0) { sx = 0; sy = 0; sw = (int)r->width; sh = (int)r->height; }
+    blit.srcOffsets[0] = { sx, sy, 0 };
+    blit.srcOffsets[1] = { sx + sw, sy + sh, 1 };
     blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
     blit.dstOffsets[1] = { (int32_t)w->width, (int32_t)w->height, 1 };
     vkCmdBlitImage(w->cmd, r->color_rt, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -516,6 +532,54 @@ dai_result dai_window_present(dai_window *w) {
         return DAI_ERR_STATE;
     }
     return DAI_OK;
+}
+
+void dai_window_source_rect(dai_window *w, int x, int y, int width, int height) {
+    if (!w) return;
+    w->src_x = x; w->src_y = y; w->src_w = width; w->src_h = height;
+}
+
+int dai_window_move(dai_window *w, int x, int y) {
+    if (!w || !w->dpy || !w->win) return 0;
+    XMoveWindow(w->dpy, w->win, x, y);
+    XFlush(w->dpy);
+    return 1;
+}
+
+int dai_window_position(dai_window *w, int *x, int *y) {
+    if (!w || !w->dpy || !w->win) return 0;
+    // XGetGeometry answers in the PARENT's coordinates, and a window managed
+    // by a window manager has been reparented into a frame - so it answers
+    // the offset inside the title bar decoration, not the desktop. Translating
+    // to the root window is the question that was actually asked.
+    Window child = 0;
+    int rx = 0, ry = 0;
+    if (!XTranslateCoordinates(w->dpy, w->win, DefaultRootWindow(w->dpy), 0, 0, &rx, &ry, &child))
+        return 0;
+    if (x) *x = rx;
+    if (y) *y = ry;
+    return 1;
+}
+
+void dai_window_resize(dai_window *w, uint32_t width, uint32_t height) {
+    if (!w || !w->dpy || !w->win || !width || !height) return;
+    XResizeWindow(w->dpy, w->win, width, height);
+    XFlush(w->dpy);
+}
+
+void dai_window_tool_style(dai_window *w, int on) {
+    if (!w || !w->dpy || !w->win) return;
+    // _NET_WM_WINDOW_TYPE_UTILITY is the freedesktop way to say "this is a
+    // tool palette": no task bar entry, kept above its owner. Setting the
+    // override-redirect bit instead would take the window away from the
+    // window manager entirely, which also takes away moving it with the
+    // keyboard and putting it on another workspace.
+    Atom type = XInternAtom(w->dpy, "_NET_WM_WINDOW_TYPE", False);
+    Atom util = XInternAtom(w->dpy, on ? "_NET_WM_WINDOW_TYPE_UTILITY"
+                                       : "_NET_WM_WINDOW_TYPE_NORMAL", False);
+    XChangeProperty(w->dpy, w->win, type, XA_ATOM, 32, PropModeReplace,
+                    (unsigned char *)&util, 1);
+    XFlush(w->dpy);
 }
 
 uint32_t dai_window_text(dai_window *w, uint32_t *out, uint32_t max) {

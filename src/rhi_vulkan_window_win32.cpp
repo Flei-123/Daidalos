@@ -33,6 +33,11 @@ struct dai_window {
     uint32_t width = 0, height = 0;
     bool resized = false;
 
+    // Which part of the offscreen frame this window shows; 0 width or height
+    // means all of it - what every window did before torn off panels needed a
+    // strip of their own.
+    int src_x = 0, src_y = 0, src_w = 0, src_h = 0;
+
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
     VkFormat format = VK_FORMAT_B8G8R8A8_UNORM;
@@ -445,7 +450,18 @@ dai_result dai_window_present(dai_window *w) {
 
     VkImageBlit blit{};
     blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    blit.srcOffsets[1] = { (int32_t)r->width, (int32_t)r->height, 1 };
+    // Only the part of the frame this window shows - see dai_window_source_rect.
+    // Clamped into the frame that exists, because a blit that reads past the
+    // offscreen target is a device loss, not an error code.
+    int sx = w->src_x, sy = w->src_y, sw = w->src_w, sh = w->src_h;
+    if (sw <= 0 || sh <= 0) { sx = 0; sy = 0; sw = (int)r->width; sh = (int)r->height; }
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    if (sx + sw > (int)r->width)  sw = (int)r->width - sx;
+    if (sy + sh > (int)r->height) sh = (int)r->height - sy;
+    if (sw <= 0 || sh <= 0) { sx = 0; sy = 0; sw = (int)r->width; sh = (int)r->height; }
+    blit.srcOffsets[0] = { sx, sy, 0 };
+    blit.srcOffsets[1] = { sx + sw, sy + sh, 1 };
     blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
     blit.dstOffsets[1] = { (int32_t)w->width, (int32_t)w->height, 1 };
     vkCmdBlitImage(w->cmd, r->color_rt, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -636,6 +652,53 @@ int dai_window_double_click(dai_window *w) {
     int v = w->dbl_click;
     w->dbl_click = 0;
     return v;
+}
+
+void dai_window_source_rect(dai_window *w, int x, int y, int width, int height) {
+    if (!w) return;
+    w->src_x = x; w->src_y = y; w->src_w = width; w->src_h = height;
+}
+
+int dai_window_move(dai_window *w, int x, int y) {
+    if (!w || !w->hwnd) return 0;
+    // SWP_NOZORDER: moving a panel must not raise it over the editor, or
+    // dragging one across the screen shuffles the whole stack behind it.
+    SetWindowPos(w->hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    return 1;
+}
+
+int dai_window_position(dai_window *w, int *x, int *y) {
+    if (!w || !w->hwnd) return 0;
+    RECT rc{};
+    if (!GetWindowRect(w->hwnd, &rc)) return 0;
+    if (x) *x = rc.left;
+    if (y) *y = rc.top;
+    return 1;
+}
+
+void dai_window_resize(dai_window *w, uint32_t width, uint32_t height) {
+    if (!w || !w->hwnd || !width || !height) return;
+    // The CLIENT area is what the caller means; a window styled with a frame
+    // is larger than the picture it holds, and sizing to the outside makes
+    // every torn off panel a few pixels short.
+    RECT rc{ 0, 0, (LONG)width, (LONG)height };
+    DWORD style = (DWORD)GetWindowLongPtrW(w->hwnd, GWL_STYLE);
+    DWORD ex    = (DWORD)GetWindowLongPtrW(w->hwnd, GWL_EXSTYLE);
+    AdjustWindowRectEx(&rc, style, FALSE, ex);
+    SetWindowPos(w->hwnd, nullptr, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void dai_window_tool_style(dai_window *w, int on) {
+    if (!w || !w->hwnd) return;
+    // WS_EX_TOOLWINDOW: no task bar button, thin caption - Windows' own name
+    // for a floating palette. WS_EX_TOPMOST keeps it over the editor, which is
+    // the behaviour anyone who has torn a panel off in Unity expects.
+    LONG_PTR ex = GetWindowLongPtrW(w->hwnd, GWL_EXSTYLE);
+    if (on) ex |= WS_EX_TOOLWINDOW; else ex &= ~(LONG_PTR)WS_EX_TOOLWINDOW;
+    SetWindowLongPtrW(w->hwnd, GWL_EXSTYLE, ex);
+    SetWindowPos(w->hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
 void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height) {

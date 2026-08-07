@@ -163,9 +163,24 @@ struct dai_dock {
         Node *root = nullptr;
         Rect  rect;
         int   z = 0;
+        // A window of the OPERATING SYSTEM, not an overlay drawn inside the
+        // editor. The difference matters exactly once: at the edge of the
+        // editor window. An overlay is clipped there; a real window can be
+        // dragged onto the second monitor, which is what anyone who tears a
+        // panel off is trying to do.
+        //
+        // The panel is still drawn into the SAME frame - into a strip below
+        // the dock area that nothing else can see - and the OS window blits
+        // that strip (dai_window_source_rect). No second renderer, no second
+        // render pass: one frame, several windows.
+        bool  native = false;
+        Rect  screen;              // where it is on the DESKTOP, and how big
     };
     std::vector<Floating> floats;
     int next_z = 1;
+    // How much TALLER the offscreen frame has to be than the editor's window,
+    // so every OS-window panel has a strip of it to be drawn into.
+    float spill_h = 0.0f;
 
     // Registration, so a panel that was never seen before lands somewhere
     // sensible and one that has been dragged keeps its place.
@@ -382,6 +397,19 @@ void run_leaf_menu(dai_dock *d) {
     // floats - but a gesture nobody is told about is not a feature, and it is
     // the one thing a tab menu is expected to have.
     items.push_back({ DAI_ICON_WINDOW, "Drop Window", nullptr });
+    // And the step past that: a window of the OPERATING SYSTEM, which is the
+    // one that can be dragged onto a second monitor. Only offered for a panel
+    // that is ALREADY floating, because "drop it out AND make it a window" is
+    // two decisions and one of them is usually wrong.
+    bool is_float = false, is_nat = false;
+    for (auto &f : d->floats) {
+        if (!find_tab(f.root, d->menu_tab, nullptr)) continue;
+        is_float = true;
+        is_nat = f.native;
+    }
+    if (is_float)
+        items.push_back({ DAI_ICON_WINDOW,
+                          is_nat ? "Back Into the Editor" : "Own Window", nullptr });
     for (size_t i = 0; i < d->regs.size(); ++i) {
         const std::string &t = d->regs[i].title;
         if (find_tab(d->menu_leaf, t.c_str(), nullptr)) continue;  // already here
@@ -407,8 +435,11 @@ void run_leaf_menu(dai_dock *d) {
         float w = lr.w > 240.0f ? (lr.w < 720.0f ? lr.w : 720.0f) : 320.0f;
         float h = lr.h > 180.0f ? (lr.h < 560.0f ? lr.h : 560.0f) : 240.0f;
         dai_dock_undock(d, d->menu_tab.c_str(), lr.x + 24.0f, lr.y + 24.0f, w, h);
-    } else if (pick > 1 && pick - 2 < (int)addable.size()) {
-        const std::string &t = d->regs[(size_t)addable[(size_t)(pick - 2)]].title;
+    } else if (is_float && pick == 2) {
+        dai_dock_set_native(d, d->menu_tab.c_str(), is_nat ? 0 : 1);
+    } else if (pick > (is_float ? 2 : 1) &&
+               pick - (is_float ? 3 : 2) < (int)addable.size()) {
+        const std::string &t = d->regs[(size_t)addable[(size_t)(pick - (is_float ? 3 : 2))]].title;
         auto it = std::find(d->closed.begin(), d->closed.end(), t);
         if (it != d->closed.end()) d->closed.erase(it);
         // Only MOVE it here when it already exists somewhere - dragging a tab
@@ -777,7 +808,20 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
     enforce_pair(d, d->lock_a);
 
     layout(d->root, d->area);
+    // Panels that are their own OS window are laid out in a STRIP under the
+    // dock area - part of the frame the editor's own window never shows. Each
+    // one's window blits its strip and nothing else, so the panel appears in
+    // exactly one place instead of two.
+    float spill = 0.0f;
     for (auto &f : d->floats) {
+        if (f.native) {
+            float fw = f.screen.w > 80.0f ? f.screen.w : 320.0f;
+            float fh = f.screen.h > 60.0f ? f.screen.h : 240.0f;
+            f.rect = Rect{ x, y + h + spill, fw, fh };
+            spill += fh;
+            layout(f.root, f.rect);
+            continue;
+        }
         // Keep floating windows on the surface: one dragged off the bottom can
         // never be grabbed again.
         if (f.rect.x > x + w - 60.0f) f.rect.x = x + w - 60.0f;
@@ -786,6 +830,7 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
         if (f.rect.y < y) f.rect.y = y;
         layout(f.root, f.rect);
     }
+    d->spill_h = spill;
 
     float mx = 0, my = 0;
     int down = 0, pressed = 0;
@@ -873,7 +918,10 @@ void dai_dock_begin(dai_dock *d, dai_ui *ui, float x, float y, float w, float h)
             int t = tab_at(ui, leaf, mx, &hit_x, &hit_w);
             if (t >= 0) { hit_leaf = leaf; hit_tab = t; hit_float = f; break; }
         }
-        if (!hit_leaf) hit_float = f;     // the window itself, for raising/moving
+        // A native window is moved by the OPERATING SYSTEM's title bar. Letting
+        // the editor drag it too would fight the window manager, and the strip
+        // it is drawn in is not where the user sees it anyway.
+        if (!hit_leaf && !f->native) hit_float = f;   // the window itself, for raising/moving
     }
     if (!hit_leaf && !hit_float) {
         for (Node *leaf : leaves) {
@@ -1413,8 +1461,17 @@ size_t dai_dock_to_text(const dai_dock *d, char *buf, size_t buf_size) {
     s += "\n";
     for (const auto &f : d->floats) {
         char head[96];
-        std::snprintf(head, sizeof(head), "float %.1f %.1f %.1f %.1f ",
-                      (double)f.rect.x, (double)f.rect.y, (double)f.rect.w, (double)f.rect.h);
+        // A native window remembers its DESKTOP rectangle; an overlay
+        // remembers the one inside the editor. Writing the strip rect for a
+        // native one would put it back at the bottom of the screen on the next
+        // start, every start.
+        if (f.native)
+            std::snprintf(head, sizeof(head), "nativefloat %.1f %.1f %.1f %.1f ",
+                          (double)f.screen.x, (double)f.screen.y,
+                          (double)f.screen.w, (double)f.screen.h);
+        else
+            std::snprintf(head, sizeof(head), "float %.1f %.1f %.1f %.1f ",
+                          (double)f.rect.x, (double)f.rect.y, (double)f.rect.w, (double)f.rect.h);
         s += head;
         write_node(f.root, s);
         s += "\n";
@@ -1459,7 +1516,19 @@ dai_result dai_dock_from_text(dai_dock *d, const char *text) {
 
     for (;;) {
         p = skip_ws(p);
-        if (std::strncmp(p, "float", 5) == 0) {
+        if (std::strncmp(p, "nativefloat", 11) == 0) {
+            p += 11;
+            dai_dock::Floating f;
+            f.native = true;
+            f.screen.x = (float)std::strtod(p, (char **)&p);
+            f.screen.y = (float)std::strtod(p, (char **)&p);
+            f.screen.w = (float)std::strtod(p, (char **)&p);
+            f.screen.h = (float)std::strtod(p, (char **)&p);
+            f.rect = f.screen;              // until the first dai_dock_begin
+            f.root = read_node(&p);
+            f.z = ++d->next_z;
+            if (f.root) d->floats.push_back(f);
+        } else if (std::strncmp(p, "float", 5) == 0) {
             p += 5;
             dai_dock::Floating f;
             f.rect.x = (float)std::strtod(p, (char **)&p);
@@ -1482,6 +1551,78 @@ dai_result dai_dock_from_text(dai_dock *d, const char *text) {
         } else break;
     }
     return DAI_OK;
+}
+
+// ---- panels that are their own OS window ---------------------------------
+
+int dai_dock_set_native(dai_dock *d, const char *title, int on) {
+    if (!d || !title) return 0;
+    // Only a FLOATING panel can become a window: one that is still docked has
+    // a place in the layout, and taking it out is dai_dock_undock's job. Doing
+    // both here would make "make this a window" mean two different gestures.
+    for (auto &f : d->floats) {
+        int idx = 0;
+        if (!find_tab(f.root, title, &idx)) continue;
+        if (on && !f.native) {
+            f.native = true;
+            // The desktop rectangle starts where the overlay was, so the panel
+            // does not jump across the screen at the moment it is torn off.
+            f.screen = f.rect;
+            if (f.screen.w < 120.0f) f.screen.w = 320.0f;
+            if (f.screen.h < 80.0f)  f.screen.h = 240.0f;
+        } else if (!on && f.native) {
+            f.native = false;
+            f.rect = f.screen;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+int dai_dock_is_native(const dai_dock *d, const char *title) {
+    if (!d || !title) return 0;
+    for (const auto &f : d->floats) {
+        int idx = 0;
+        if (find_tab(f.root, title, &idx)) return f.native ? 1 : 0;
+    }
+    return 0;
+}
+
+float dai_dock_spill_height(const dai_dock *d) { return d ? d->spill_h : 0.0f; }
+
+uint32_t dai_dock_native_windows(const dai_dock *d, dai_dock_native *out, uint32_t max) {
+    if (!d) return 0;
+    uint32_t n = 0;
+    for (const auto &f : d->floats) {
+        if (!f.native) continue;
+        if (out && n < max) {
+            dai_dock_native &o = out[n];
+            // The FIRST tab names the window, the way a browser tab names a
+            // browser window. A leaf with three tabs is one window with three
+            // tabs in it, not three windows.
+            std::vector<Node *> ls;
+            collect_leaves(f.root, &ls);
+            o.title = (!ls.empty() && !ls[0]->tabs.empty()) ? ls[0]->tabs[0].c_str() : "";
+            o.x = f.screen.x; o.y = f.screen.y;
+            o.w = f.screen.w; o.h = f.screen.h;
+            o.frame_x = f.rect.x; o.frame_y = f.rect.y;
+        }
+        ++n;
+    }
+    return n;
+}
+
+void dai_dock_native_moved(dai_dock *d, const char *title, float x, float y, float w, float h) {
+    if (!d || !title) return;
+    for (auto &f : d->floats) {
+        int idx = 0;
+        if (!find_tab(f.root, title, &idx)) continue;
+        if (!f.native) return;
+        f.screen.x = x; f.screen.y = y;
+        if (w > 80.0f) f.screen.w = w;
+        if (h > 60.0f) f.screen.h = h;
+        return;
+    }
 }
 
 void dai_dock_dump(const dai_dock *d, char *out, size_t n) {

@@ -492,6 +492,89 @@ int main() {
         no_overlaps("after the kebab menu");
     }
 
+    // ---- a panel that is its own OS window --------------------------------
+    // The model only, which is all that can be checked without a screen: the
+    // panel leaves the frame the editor's window shows, the frame grows by
+    // exactly its height, and the layout remembers it as a DESKTOP rectangle
+    // rather than as the strip it happened to be drawn in.
+    {
+        dai_dock_open(dock, "Console");
+        CHECK(dai_dock_undock(dock, "Console", 200.0f, 150.0f, 340.0f, 220.0f) == 1,
+              "Console could not be undocked");
+        frame_r(-1, -1, 0, 0);
+        CHECK(dai_dock_spill_height(dock) == 0.0f,
+              "a plain floating panel already asked for a strip (%.1f)",
+              (double)dai_dock_spill_height(dock));
+        CHECK(dai_dock_is_native(dock, "Console") == 0, "it started out native");
+
+        // A DOCKED panel cannot be made a window - that is undock's gesture.
+        CHECK(dai_dock_set_native(dock, "Inspector", 1) == 0,
+              "a docked panel was turned into a window");
+
+        CHECK(dai_dock_set_native(dock, "Console", 1) == 1,
+              "the floating panel refused to become a window");
+        CHECK(dai_dock_is_native(dock, "Console") == 1, "it did not become native");
+        frame_r(-1, -1, 0, 0);
+        CHECK(dai_dock_spill_height(dock) >= 219.0f && dai_dock_spill_height(dock) <= 221.0f,
+              "the frame has to grow by the panel's height, it grew by %.1f",
+              (double)dai_dock_spill_height(dock));
+
+        dai_dock_native n[4] = {};
+        uint32_t got = dai_dock_native_windows(dock, n, 4);
+        CHECK(got == 1, "%u windows want opening, expected 1", got);
+        CHECK(got == 1 && std::strcmp(n[0].title, "Console") == 0,
+              "the window is named '%s'", got ? n[0].title : "?");
+        CHECK(got == 1 && n[0].w == 340.0f && n[0].h == 220.0f,
+              "the window is %.0fx%.0f, expected 340x220",
+              got ? (double)n[0].w : 0.0, got ? (double)n[0].h : 0.0);
+        // The strip is BELOW everything the editor's own window shows. If it
+        // were not, the panel would be on screen twice.
+        CHECK(got == 1 && n[0].frame_y >= H,
+              "the strip starts at y=%.0f, inside the %0.f tall window",
+              got ? (double)n[0].frame_y : 0.0, (double)H);
+
+        // Where the user dragged it - onto a second monitor, say, which is a
+        // negative x on every desktop that has one to the left.
+        dai_dock_native_moved(dock, "Console", -1200.0f, 80.0f, 400.0f, 300.0f);
+        frame_r(-1, -1, 0, 0);
+        got = dai_dock_native_windows(dock, n, 4);
+        CHECK(got == 1 && n[0].x == -1200.0f && n[0].y == 80.0f,
+              "the window is at %.0f,%.0f after being dragged off screen left",
+              got ? (double)n[0].x : 0.0, got ? (double)n[0].y : 0.0);
+        CHECK(dai_dock_spill_height(dock) >= 299.0f,
+              "resizing the window did not resize its strip (%.1f)",
+              (double)dai_dock_spill_height(dock));
+
+        // It survives being written down and read back, still off screen and
+        // still a window - not as the strip it was drawn in.
+        {
+            char buf[4096] = {0};
+            dai_dock_to_text(dock, buf, sizeof(buf));
+            CHECK(std::strstr(buf, "nativefloat") != nullptr,
+                  "the layout does not record the window at all");
+            CHECK(std::strstr(buf, "-1200") != nullptr,
+                  "the layout wrote the strip rectangle instead of the desktop one");
+            dai_dock *d2 = dai_dock_create();
+            CHECK(dai_dock_from_text(d2, buf) == DAI_OK, "the layout did not read back");
+            CHECK(dai_dock_is_native(d2, "Console") == 1,
+                  "the panel came back as an overlay instead of a window");
+            dai_dock_native m[4] = {};
+            uint32_t g2 = dai_dock_native_windows(d2, m, 4);
+            CHECK(g2 == 1 && m[0].x == -1200.0f,
+                  "the window came back at x=%.0f", g2 ? (double)m[0].x : 0.0);
+            dai_dock_destroy(d2);
+        }
+
+        // And back into the editor: no strip, no window, an overlay again.
+        CHECK(dai_dock_set_native(dock, "Console", 0) == 1, "it refused to come back");
+        frame_r(-1, -1, 0, 0);
+        CHECK(dai_dock_spill_height(dock) == 0.0f,
+              "the frame is still %.1f taller than the window",
+              (double)dai_dock_spill_height(dock));
+        CHECK(dai_dock_native_windows(dock, nullptr, 0) == 0,
+              "a window is still asking to be opened");
+    }
+
     dai_dock_destroy(dock);
     dai_ui_destroy(ui);
     dai_font_free(font);

@@ -324,6 +324,37 @@ DAI_API dai_window *dai_window_open(dai_renderer *r, const char *title,
                                     uint32_t width, uint32_t height, char *err, size_t err_len);
 DAI_API void        dai_window_close(dai_window *w);
 
+/* ---- one frame, several windows ---------------------------------------
+ * A window blits the WHOLE offscreen frame by default. Give it a rectangle
+ * and it blits only that part of it, which is what lets one rendered frame
+ * feed several windows: the host draws the editor into the top of a taller
+ * frame and each torn off panel into a strip below it, and every window
+ * shows its own strip.
+ *
+ * No renderer state changes and no second render pass: the blit already had
+ * a source rectangle, it was simply always the whole image. Passing 0,0,0,0
+ * puts it back to the whole image.
+ *
+ * The rectangle is in the OFFSCREEN frame's pixels (dai_render_resize), not
+ * in the window's. */
+DAI_API void dai_window_source_rect(dai_window *w, int x, int y, int width, int height);
+
+/* Where the window sits on the DESKTOP, in screen pixels, and how big it is.
+ * A torn off panel has to be movable past the edge of the editor and onto a
+ * second monitor - that is the whole point of tearing it off - and that means
+ * the position is the operating system's business, not a rectangle clipped
+ * inside another window.
+ *
+ * dai_window_move returns 0 if the backend cannot place its own windows.
+ * Wayland is that backend by design: a client there does not get to say where
+ * it is, so the compositor decides and the answer is an honest 0 rather than
+ * a silent no-op. */
+DAI_API int  dai_window_move(dai_window *w, int x, int y);
+DAI_API int  dai_window_position(dai_window *w, int *x, int *y);
+DAI_API void dai_window_resize(dai_window *w, uint32_t width, uint32_t height);
+/* Borderless and always on top, the way a tool palette floats. */
+DAI_API void dai_window_tool_style(dai_window *w, int on);
+
 /* Pumps events. Returns 0 once the window has been closed. */
 DAI_API int  dai_window_poll(dai_window *w);
 /* Undo a close request. The window is not destroyed when the user presses the

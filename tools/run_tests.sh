@@ -48,6 +48,7 @@ test_hud
 test_objmodel
 test_assets
 test_thumb
+test_window_two
 "
 # Deliberately NOT here (each needs a GPU or a display):
 #   test_render_visual test_ui_text test_gltf test_particles test_skinning
@@ -76,6 +77,22 @@ if [ ! -f "$PNGFIX/gradient.png" ]; then
     fi
 fi
 
+# test_window_two needs a DISPLAY - it opens two real windows and checks that
+# each one shows a different part of the same frame. A virtual screen is enough
+# and the machine that builds this has one, so it runs rather than being
+# excluded: excluded tests rot, and this one guards the claim that a torn off
+# panel needs no second renderer.
+DAI_TEST_DISPLAY=${DAI_TEST_DISPLAY:-:77}
+if command -v Xvfb >/dev/null 2>&1; then
+    if ! xdpyinfo -display "$DAI_TEST_DISPLAY" >/dev/null 2>&1; then
+        Xvfb "$DAI_TEST_DISPLAY" -screen 0 1024x640x24 >/dev/null 2>&1 &
+        XVFB_PID=$!
+        sleep 1
+    fi
+else
+    echo "-- no Xvfb: test_window_two will report itself skipped"
+fi
+
 TOTAL_PASS=0
 TOTAL_FAIL=0
 MISSING=""
@@ -90,7 +107,11 @@ for s in $SUITES; do
     fi
     ARGS=""
     [ "$s" = "test_image" ] && ARGS="$PNGFIX"
-    OUT=$(DAI_SHADER_DIR=shaders timeout 120 "$BIN" $ARGS 2>&1)
+    if [ "$s" = "test_window_two" ]; then
+        OUT=$(DAI_SHADER_DIR=shaders DISPLAY="$DAI_TEST_DISPLAY" timeout 120 "$BIN" 2>&1)
+    else
+        OUT=$(DAI_SHADER_DIR=shaders timeout 120 "$BIN" $ARGS 2>&1)
+    fi
     RC=$?
     # The suites do NOT all print the same summary. Four shapes exist:
     #

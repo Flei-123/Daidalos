@@ -49,6 +49,11 @@ struct dai_window {
     uint32_t width = 0, height = 0;
     uint32_t pending_w = 0, pending_h = 0;
 
+    // Which part of the offscreen frame this window shows; 0 width or height
+    // means all of it - what every window did before torn off panels needed a
+    // strip of their own.
+    int src_x = 0, src_y = 0, src_w = 0, src_h = 0;
+
     VkSurfaceKHR vksurface = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
     VkFormat format = VK_FORMAT_B8G8R8A8_UNORM;
@@ -346,7 +351,16 @@ dai_result dai_window_present(dai_window *w) {
 
     VkImageBlit blit{};
     blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    blit.srcOffsets[1] = { (int32_t)r->width, (int32_t)r->height, 1 };
+    // Only the part of the frame this window shows - see dai_window_source_rect.
+    int sx = w->src_x, sy = w->src_y, sw = w->src_w, sh = w->src_h;
+    if (sw <= 0 || sh <= 0) { sx = 0; sy = 0; sw = (int)r->width; sh = (int)r->height; }
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    if (sx + sw > (int)r->width)  sw = (int)r->width - sx;
+    if (sy + sh > (int)r->height) sh = (int)r->height - sy;
+    if (sw <= 0 || sh <= 0) { sx = 0; sy = 0; sw = (int)r->width; sh = (int)r->height; }
+    blit.srcOffsets[0] = { sx, sy, 0 };
+    blit.srcOffsets[1] = { sx + sw, sy + sh, 1 };
     blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
     blit.dstOffsets[1] = { (int32_t)w->width, (int32_t)w->height, 1 };
     vkCmdBlitImage(w->cmd, r->color_rt, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -438,6 +452,30 @@ uint32_t dai_window_dropped_files(dai_window *w, char *out, uint32_t max, int *x
     if (out && max) out[0] = 0;
     return 0;
 }
+
+void dai_window_source_rect(dai_window *w, int x, int y, int width, int height) {
+    if (!w) return;
+    w->src_x = x; w->src_y = y; w->src_w = width; w->src_h = height;
+}
+
+// Wayland does not let a client place itself. That is not an oversight in this
+// file, it is the protocol: the compositor owns window positions so a program
+// cannot cover another one's dialog or park itself off screen. Saying so with
+// a 0 is honest; pretending to move and doing nothing is not.
+int dai_window_move(dai_window *w, int x, int y) { (void)w; (void)x; (void)y; return 0; }
+int dai_window_position(dai_window *w, int *x, int *y) {
+    (void)w;
+    if (x) *x = 0;
+    if (y) *y = 0;
+    return 0;
+}
+
+void dai_window_resize(dai_window *w, uint32_t width, uint32_t height) {
+    if (!w || !width || !height) return;
+    w->pending_w = width; w->pending_h = height;
+}
+
+void dai_window_tool_style(dai_window *w, int on) { (void)w; (void)on; }
 
 void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height) {
     if (!w) return;
