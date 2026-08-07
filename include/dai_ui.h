@@ -688,6 +688,19 @@ DAI_API int  dai_ui_array_object_row(dai_ui *ui, int index, const char *value,
 /* The +/- pair. Returns +1, -1 or 0; the caller owns the list. */
 DAI_API int  dai_ui_array_end(dai_ui *ui, int count, int min_n, int max_n);
 
+/* The grip on the left of a row drags it. Ask right after dai_ui_array_end:
+ *
+ *     int f, t;
+ *     if (dai_ui_array_reorder(ui, &f, &t)) move_element(list, f, t);
+ *
+ * Both are indices into the list as the caller knows it, and `to` is where
+ * the element ends up AFTER it has been taken out - so a plain erase-then-
+ * insert is exactly right. Returns 1 once per completed drag. */
+DAI_API int  dai_ui_array_reorder(dai_ui *ui, int *from, int *to);
+/* The gap a dragged row would land in, 0..count, or -1 while nothing is being
+ * dragged. For tests and for a caller that wants to preview the move. */
+DAI_API int  dai_ui_array_drag_slot(const dai_ui *ui);
+
 DAI_API void dai_ui_scroll_begin(dai_ui *ui, const char *id, float height);
 DAI_API void dai_ui_scroll_end(dai_ui *ui);
 /* Bring a rectangle inside the current scroll region into view. What "Focus

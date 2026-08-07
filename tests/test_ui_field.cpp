@@ -18,6 +18,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { \
@@ -290,6 +292,110 @@ int main() {
     CHECK(win.h > h0 + 30.0f, "dragging the bottom edge down 40 px changed the height by %.1f",
           win.h - h0);
     win_frame(300.0f, 340.0f, 0);
+
+
+    // ---- array rows: the grip on the left reorders the list ----------------
+    // The handle used to be three lines of decoration - it said "this is a
+    // list" and did nothing. Dragging it has to MOVE the element, and the
+    // element has to land where the insertion line was, not one off.
+    std::printf("array rows: drag the grip, the element moves\n");
+    {
+        std::vector<std::string> list = { "Red", "Green", "Blue", "Yellow" };
+        int arr_open = 1;
+        int moves = 0;
+        int last_from = -1, last_to = -1;
+
+        const float LH   = dai_font_line_height(font);
+        const float ROWH = LH + st->row_pad;              // widget_height
+        const float HEAD = 20.0f + 1.0f + st->spacing;    // the array header row
+        const float ROW0 = st->padding + HEAD;            // top of Element 0
+        const float STEP = ROWH + 1.0f + st->spacing;     // one row to the next
+        const float GRIP = 14.0f;                         // inside the handle column
+
+        // One frame of the whole array, driven at (mx,my) with the button in
+        // the given state. Returns nothing - the checks read `list`.
+        auto arr_frame = [&](float mx, float my, int down) {
+            in.mouse_x = mx; in.mouse_y = my; in.mouse_down = down;
+            dai_ui_begin(ui, 800, 600, &in);
+            dai_ui_panel_begin(ui, 0, 0, 300, 400, nullptr);
+            int n = (int)list.size();
+            if (dai_ui_array_begin(ui, "Materials", &n, &arr_open, 1, 8)) {
+                for (size_t i = 0; i < list.size(); ++i)
+                    dai_ui_array_object_row(ui, (int)i, list[i].c_str(), nullptr);
+                dai_ui_array_end(ui, (int)list.size(), 1, 8);
+                int f = -1, t = -1;
+                if (dai_ui_array_reorder(ui, &f, &t) &&
+                    f >= 0 && f < (int)list.size() && t >= 0 && t < (int)list.size()) {
+                    std::string moved = list[(size_t)f];
+                    list.erase(list.begin() + f);
+                    list.insert(list.begin() + t, moved);
+                    ++moves; last_from = f; last_to = t;
+                }
+            }
+            dai_ui_panel_end(ui);
+            dai_ui_end(ui);
+            in.double_click = 0;
+        };
+        auto row_mid = [&](int i) { return ROW0 + STEP * (float)i + ROWH * 0.5f; };
+
+        // 1. grabbing the grip starts a drag - and says which gap it is over
+        arr_frame(GRIP, row_mid(2), 0);
+        CHECK(dai_ui_array_drag_slot(ui) == -1, "a drag started without anyone pressing");
+        arr_frame(GRIP, row_mid(2), 1);
+        CHECK(dai_ui_array_drag_slot(ui) == 2,
+              "pressing the grip of Element 2 gave slot %d, expected 2 - the handle "
+              "is not where the test thinks it is", dai_ui_array_drag_slot(ui));
+
+        // 2. drag it to the very top: the gap above Element 0
+        arr_frame(GRIP, ROW0 + 1.0f, 1);
+        CHECK(dai_ui_array_drag_slot(ui) == 0,
+              "dragging to the top gave slot %d, expected 0", dai_ui_array_drag_slot(ui));
+        CHECK(moves == 0, "the list moved while the button was still held");
+
+        // 3. release: Blue is now first, and nothing else changed order
+        arr_frame(GRIP, ROW0 + 1.0f, 0);
+        CHECK(moves == 1, "releasing the grip reported %d moves, expected 1", moves);
+        CHECK(last_from == 2 && last_to == 0,
+              "the move was %d -> %d, expected 2 -> 0", last_from, last_to);
+        CHECK(list.size() == 4, "the list changed length: %d", (int)list.size());
+        CHECK(list[0] == "Blue" && list[1] == "Red" && list[2] == "Green" &&
+              list[3] == "Yellow",
+              "after dragging Element 2 to the top the list reads %s,%s,%s,%s",
+              list[0].c_str(), list[1].c_str(), list[2].c_str(), list[3].c_str());
+        CHECK(dai_ui_array_drag_slot(ui) == -1, "the grip stayed stuck to the mouse");
+
+        // 4. downwards, and the OFF BY ONE: the gap below the last row is
+        //    slot == count, and the element must land at count-1, not past it.
+        arr_frame(GRIP, row_mid(0), 1);
+        CHECK(dai_ui_array_drag_slot(ui) == 0, "grabbing Element 0 gave slot %d",
+              dai_ui_array_drag_slot(ui));
+        arr_frame(GRIP, ROW0 + STEP * 4.0f, 1);           // below every row
+        CHECK(dai_ui_array_drag_slot(ui) == 4,
+              "dragging past the last row gave slot %d, expected 4",
+              dai_ui_array_drag_slot(ui));
+        arr_frame(GRIP, ROW0 + STEP * 4.0f, 0);
+        CHECK(moves == 2, "the second drag reported nothing");
+        CHECK(last_from == 0 && last_to == 3,
+              "dropping below the last row was %d -> %d, expected 0 -> 3",
+              last_from, last_to);
+        CHECK(list[0] == "Red" && list[1] == "Green" && list[2] == "Yellow" &&
+              list[3] == "Blue",
+              "after moving the top element to the bottom the list reads %s,%s,%s,%s",
+              list[0].c_str(), list[1].c_str(), list[2].c_str(), list[3].c_str());
+
+        // 5. a drag that ends where it started is not a move
+        arr_frame(GRIP, row_mid(1), 1);
+        arr_frame(GRIP, row_mid(1), 0);
+        CHECK(moves == 2, "dropping a row on itself counted as a move");
+
+        // 6. pressing the FIELD (not the grip) still picks - it must not drag
+        const float FIELD_X = st->label_w > 90.0f ? st->label_w + 20.0f : 110.0f;
+        arr_frame(FIELD_X, row_mid(1), 1);
+        CHECK(dai_ui_array_drag_slot(ui) == -1,
+              "clicking the value field started a reorder drag");
+        arr_frame(FIELD_X, row_mid(1), 0);
+        CHECK(moves == 2, "clicking the value field moved an element");
+    }
 
     dai_ui_destroy(ui);
     dai_font_free(font);

@@ -2892,6 +2892,17 @@ static void inspector_body(dai_editor_ui *p) {
                     }
                 }
                 int delta = dai_ui_array_end(p->ui, (int)mats.size(), 1, 8);
+                // Dragged by the grip: take it out, put it back in. Slot 0 is
+                // the first material and the renderer reads slot order, so
+                // this is a real edit, not a cosmetic one.
+                int rf = -1, rt = -1;
+                if (dai_ui_array_reorder(p->ui, &rf, &rt) &&
+                    rf >= 0 && rf < (int)mats.size() &&
+                    rt >= 0 && rt < (int)mats.size() && rf != rt) {
+                    std::string moved = mats[(size_t)rf];
+                    mats.erase(mats.begin() + rf);
+                    mats.insert(mats.begin() + rt, moved);
+                }
                 if (delta > 0) mats.push_back("Default");
                 else if (delta < 0 && mats.size() > 1) mats.pop_back();
             } else {
@@ -7306,37 +7317,17 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     p->layout_w = vw; p->layout_h = vh;
 
     // ---- the second right click ------------------------------------------
-    // Handled HERE, before a single panel, a single dock and a single popup
-    // has run. Four fixes further down the stack did nothing, so this one
-    // does not trust anything below it: it reads the raw button, it closes
-    // whatever is open, and it remembers the point so the panel that owns it
-    // can open a fresh menu there this same frame.
-    //
-    // The Console line is deliberate. If this still does not work I want the
-    // editor to say what it saw rather than have me guess a sixth time.
+    // The diagnosis that lived here is gone: the bug was one layer below, in
+    // the host, which was blanking the right button whenever a menu was open.
+    // Closing the open menus here stays - it is what makes a right click
+    // REPLACE a menu rather than be swallowed by it - but it no longer has to
+    // announce itself.
     {
-        int rp = dai_ui_right_pressed(ui);
-        int any_open = p->menu_canvas.open || p->menu_node.open || p->menu_comp.open ||
-                       p->menu_mesh.open || p->menu_layout.open || p->menu_window.open;
-        if (rp) {
+        if (dai_ui_right_pressed(ui)) {
             float rx = 0, ry = 0;
             dai_ui_mouse(ui, &rx, &ry, nullptr, nullptr);
-            char line[160];
-            std::snprintf(line, sizeof(line),
-                          "right click at %.0f,%.0f (a menu was %s)",
-                          (double)rx, (double)ry, any_open ? "open" : "closed");
-            dai_editor_ui_log(p, 0, line);
-            // Also as a toast. A Console line can be filtered, scrolled past
-            // or looked for in the wrong build; a toast cannot be missed, and
-            // right now the question "does this build even see the click" is
-            // worth more than a tidy screen. Carries the version, so the
-            // answer also says WHICH editor gave it.
-            {
-                char t[200];
-                std::snprintf(t, sizeof(t), "%s  [%s]", line, dai_version());
-                dai_editor_ui_toast(p, t, 1.4f);
-            }
-            if (any_open) {
+            if (p->menu_canvas.open || p->menu_node.open || p->menu_comp.open ||
+                p->menu_mesh.open || p->menu_layout.open || p->menu_window.open) {
                 p->menu_canvas.open = 0;
                 p->menu_node.open = 0;
                 p->menu_comp.open = 0;

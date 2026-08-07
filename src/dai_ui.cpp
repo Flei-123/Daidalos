@@ -137,6 +137,22 @@ struct dai_ui {
     int focus_next_field = 0;   // the next text field takes focus on its own (create flows)
     const char *hot_label = nullptr;   // label of the hovered widget, for drop targets
 
+    // ---- array rows that can be dragged into a different order -------------
+    // The grip on the left of an array row is a handle, not decoration. Rows
+    // are drawn one at a time and only dai_ui_array_end knows how many there
+    // were, so every row records its rectangle here and the END of the array
+    // does the arithmetic: which gap the pointer is nearest, where the marker
+    // goes, and - on release - which move to report. Doing it in the row would
+    // mean guessing the list length from inside the list.
+    uint64_t arr_id = 0;             // the array being laid out right now
+    struct ArrRow { int index; float x, y, w, h; };
+    std::vector<ArrRow> arr_rows;
+    uint64_t arr_drag_id = 0;        // the array a row is being dragged inside
+    int      arr_drag_from = -1;     // the row that was grabbed
+    int      arr_drag_slot = -1;     // the gap it would drop into, 0..count
+    int      arr_move_from = -1;     // a finished move, waiting to be read once
+    int      arr_move_to   = -1;
+
     // An open menu swallows every hit test outside its own rectangle - see
     // dai_ui_popup_menu. popup_was_open is written at the end of a frame and
     // read at the start of the next, so the click that dismisses the menu
@@ -4493,6 +4509,13 @@ int dai_ui_array_begin(dai_ui *ui, const char *label, int *count,
     float y = ui->cursor_y;
     dai_ui_advance(ui, 0, h + 1.0f);
 
+    // This array owns the rows that follow, and a move reported by the LAST
+    // array must not be read by this one: clear it here rather than hope the
+    // caller asked.
+    ui->arr_id = hash_id(label ? label : "Array", x, y);
+    ui->arr_rows.clear();
+    ui->arr_move_from = ui->arr_move_to = -1;
+
     bool over_head = inside_chk(ui, x, y, w - 56.0f, h);
     bool pressed = ui->input.mouse_down && !ui->prev.mouse_down;
     if (over_head) { ui->mouse_over_ui = true; ui->cursor_want = DAI_CURSOR_HAND; }
@@ -4533,11 +4556,31 @@ int dai_ui_array_object_row(dai_ui *ui, int index, const char *value,
     float y = ui->cursor_y;
     dai_ui_advance(ui, 0, h + 1.0f);
 
-    // The handle. It does not drag yet; it is what tells you the row belongs
-    // to a list rather than being another field that happens to be numbered.
+    // The row belongs to the array that is being laid out - remember where it
+    // is so dai_ui_array_end can work out which gap the pointer is nearest.
+    if (ui->arr_id) ui->arr_rows.push_back({ index, x, y, w, h + 1.0f });
+
+    // The handle, and it drags. Only the handle does: the field next to it
+    // still opens the picker on a click, which is the whole reason the grip
+    // is a separate few pixels instead of "anywhere on the row".
     float hx = x + 12.0f, hy = y + h * 0.5f - 3.0f;
+    bool dragging_here = (ui->arr_id != 0 && ui->arr_drag_id == ui->arr_id);
+    bool over_grip = inside_chk(ui, x + 6.0f, y, 22.0f, h);
+    if (over_grip || (dragging_here && ui->arr_drag_from == index)) {
+        ui->mouse_over_ui = true;
+        ui->cursor_want = DAI_CURSOR_SIZE_NS;
+    }
+    if (over_grip && ui->arr_id && ui->input.mouse_down && !ui->prev.mouse_down &&
+        !ui->arr_drag_id) {
+        ui->arr_drag_id = ui->arr_id;
+        ui->arr_drag_from = index;
+        ui->arr_drag_slot = index;
+        dragging_here = true;
+    }
+    bool is_dragged = dragging_here && ui->arr_drag_from == index;
+    uint32_t grip_col = (over_grip || is_dragged) ? ui->style.text : ui->style.text_dim;
     for (int k = 0; k < 3; ++k)
-        dai_ui_rect(ui, hx, hy + (float)k * 3.0f, 9.0f, 1.0f, ui->style.text_dim);
+        dai_ui_rect(ui, hx, hy + (float)k * 3.0f, 9.0f, 1.0f, grip_col);
 
     char lbl[32];
     std::snprintf(lbl, sizeof(lbl), "Element %d", index);
@@ -4580,6 +4623,12 @@ int dai_ui_array_object_row(dai_ui *ui, int index, const char *value,
             dai_ui_icon_at(ui, "target", bx + (bw - isz) * 0.5f, y + (h - isz) * 0.5f,
                            isz, ui->style.text);
     }
+    // The row being carried is outlined, so it is obvious which one is moving
+    // when the insertion line is three rows away from the pointer.
+    if (is_dragged)
+        dai_ui_rect_outline(ui, x + 2.0f, y, w - 4.0f, h, 1.0f, ui->style.accent);
+    // A press that started on the grip is a drag, not a click on the field.
+    if (dragging_here) pressed = false;
     return pressed ? 1 : 0;
 }
 
@@ -4629,9 +4678,66 @@ int dai_ui_array_end(dai_ui *ui, int count, int min_n, int max_n) {
                 count > min_n ? ui->style.text : ui->style.text_dim);
     int sub = (over_m && pressed) ? 1 : 0;
 
+    // ---- the drag that started on a grip -----------------------------------
+    // Which gap the pointer is nearest, drawn as the line the row would land
+    // on, and on release the move itself. Gaps are numbered 0..count: 0 is
+    // above the first row, count is below the last.
+    if (ui->arr_drag_id && ui->arr_drag_id == ui->arr_id && !ui->arr_rows.empty()) {
+        float my = ui->input.mouse_y;
+        int slot = (int)ui->arr_rows.size();
+        for (size_t i = 0; i < ui->arr_rows.size(); ++i) {
+            if (my < ui->arr_rows[i].y + ui->arr_rows[i].h * 0.5f) { slot = (int)i; break; }
+        }
+        ui->arr_drag_slot = slot;
+        ui->mouse_over_ui = true;
+        ui->cursor_want = DAI_CURSOR_SIZE_NS;
+
+        const dai_ui::ArrRow &first = ui->arr_rows.front();
+        const dai_ui::ArrRow &last  = ui->arr_rows.back();
+        float ly = (slot < (int)ui->arr_rows.size()) ? ui->arr_rows[slot].y - 1.0f
+                                                     : last.y + last.h - 1.0f;
+        dai_ui_rect(ui, first.x + 6.0f, ly, first.w - 12.0f, 2.0f, ui->style.accent);
+
+        if (!ui->input.mouse_down && ui->prev.mouse_down) {
+            int from = ui->arr_drag_from;
+            // The gap is counted in the list as it looks NOW; once the row is
+            // lifted out, every gap below it shifts up by one.
+            int to = (slot > from) ? slot - 1 : slot;
+            if (from >= 0 && to >= 0 && to != from) {
+                ui->arr_move_from = from;
+                ui->arr_move_to   = to;
+            }
+            ui->arr_drag_id = 0; ui->arr_drag_from = -1; ui->arr_drag_slot = -1;
+        }
+    }
+    // A drag that ended somewhere else (the array stopped being drawn, the
+    // pointer left the window) must not leave the grip stuck to the mouse.
+    if (ui->arr_drag_id && !ui->input.mouse_down) {
+        ui->arr_drag_id = 0; ui->arr_drag_from = -1; ui->arr_drag_slot = -1;
+    }
+    ui->arr_id = 0;
+
     if (add && count < max_n) return +1;
     if (sub && count > min_n) return -1;
     return 0;
+}
+
+// The move the grip just made, read once. Separate from dai_ui_array_end
+// because that one already answers a different question (+1 / -1 from the
+// buttons under the list) and a function with two answers has neither.
+int dai_ui_array_reorder(dai_ui *ui, int *from, int *to) {
+    if (!ui || ui->arr_move_from < 0 || ui->arr_move_to < 0) return 0;
+    if (from) *from = ui->arr_move_from;
+    if (to)   *to   = ui->arr_move_to;
+    ui->arr_move_from = ui->arr_move_to = -1;
+    return 1;
+}
+
+// Which gap a row would drop into right now, -1 when nothing is being
+// dragged. The editor uses it for nothing; the test uses it to see the
+// insertion point without reading pixels.
+int dai_ui_array_drag_slot(const dai_ui *ui) {
+    return ui ? (ui->arr_drag_id ? ui->arr_drag_slot : -1) : -1;
 }
 
 // ------------------------------------------------------------ segmented
