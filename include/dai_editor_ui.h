@@ -162,6 +162,27 @@ DAI_API void dai_editor_ui_status(dai_editor_ui *p, float x, float y, float w, f
  * Clears itself when read. */
 DAI_API int dai_editor_ui_take_asset(dai_editor_ui *p, const char **out_path, int *out_as_tree);
 
+/* ---- the thing being dragged, standing IN the scene ----------------------
+ * 1 while a model or a prefab is being dragged over the viewport, with the
+ * file and the point on the ground under the pointer. It does NOT clear when
+ * read - it is the state of the drag, asked every frame - so the host can:
+ *
+ *   the path changed  -> place that model in the scene, remember the node
+ *   the point moved   -> move that node, WITHOUT an undo step per frame
+ *   it returns 0      -> the drag left the viewport or was let go; if no
+ *                        asset came through take_asset, undo the placement
+ *
+ * Which is what Unity does, and why dragging a model there shows the model
+ * rather than an outline: the preview is not a preview, it is the object. */
+DAI_API int dai_editor_ui_drag_preview(const dai_editor_ui *p, const char **out_path,
+                                       float *x, float *y, float *z);
+
+/* Can the SCENE place this file - a model or a prefab, as opposed to a scene,
+ * a script, a texture or a material? The drag preview and the drop both ask
+ * this one function, so a file type can never be previewable and undroppable
+ * at the same time. */
+DAI_API int dai_editor_ui_is_placeable(const char *path);
+
 /* Where the last taken asset was dropped, in world space, and whether there
  * IS such a place (0 when it was picked by double click rather than dragged
  * into the viewport - then the host decides, as it always did).

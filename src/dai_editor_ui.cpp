@@ -261,6 +261,19 @@ struct dai_editor_ui {
     // a script on an object ADDS a script component to it).
     std::string drag_pending;           // row the press started on
     std::string drag_script;            // moved far enough: actively dragged
+    // ---- the thing being dragged, IN the scene ---------------------------
+    // Unity does not draw a ghost of a model you drag in: it puts the model
+    // in the scene the moment the pointer crosses the viewport, moves it with
+    // the pointer, and throws it away again if you let go somewhere else. You
+    // see the real mesh at its real size, lit by the real lights, because it
+    // IS the object - and that answers "will this fit here" in a way no
+    // wireframe box ever did.
+    //
+    // The editor cannot make one: it has no renderer and no assets root. So
+    // it says WHAT and WHERE, once a frame, and the host - which owns both -
+    // does the placing. Same division of labour as pending_asset.
+    std::string preview_path;           // empty = nothing is hovering the scene
+    dai_vec3    preview_at{};           // where the pointer is on the ground
     float       drag_px = 0, drag_py = 0;
     dai_node    hover_node = DAI_INVALID_NODE;  // hierarchy row under the pointer
     // Inline rename of a just-created asset (Unity's create flow).
@@ -620,6 +633,35 @@ static bool is_scene_file(const std::string &path) {
 static bool is_scene_asset(const std::string &path) {
     return is_scene_file(path) &&
            (path.compare(0, 7, "Scenes/") == 0 || path.compare(0, 7, "scenes/") == 0);
+}
+
+// A file the scene PLACES as geometry. Dropping one used to do nothing at all:
+// every branch of the drop asked "is it a prefab, a material, a picture, a
+// script" and a .glb is none of those, so it fell off the end in silence.
+static bool is_model_file(const std::string &path) {
+    size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string e = path.substr(dot + 1);
+    for (char &c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return e == "glb" || e == "gltf" || e == "obj";
+}
+
+// Can the SCENE place this file? Exported, and used by both the drag preview
+// and the drop, for the reason dai_editor_ui_is_texture is exported: the two
+// asked the same question in two places once before, and the .glb branch of
+// the drop simply did not exist - so dragging a model into the viewport did
+// nothing at all and gave no reason for it.
+extern "C" int dai_editor_ui_is_placeable(const char *path) {
+    if (!path || !*path) return 0;
+    std::string p2(path);
+    // ".glb" is an extension, not a file. A dotfile has no name in front of
+    // its dot, and placing "whatever .glb means" is how a hidden file ends up
+    // in somebody's scene.
+    size_t slash = p2.find_last_of("/\\");
+    std::string base = slash == std::string::npos ? p2 : p2.substr(slash + 1);
+    if (base.empty() || base[0] == '.') return 0;
+    if (is_model_file(p2)) return 1;
+    return (is_scene_file(p2) && !is_scene_asset(p2)) ? 1 : 0;
 }
 
 static bool is_material_file(const std::string &path) {
@@ -7986,7 +8028,7 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
                 // a crate would add a behaviour called crate.png.
                 if (p->proj_drop_ok) {
                     project_move(p, p->drag_script, p->proj_drop_dir);
-                } else if (is_scene_file(p->drag_script) && !is_scene_asset(p->drag_script) &&
+                } else if (dai_editor_ui_is_placeable(p->drag_script.c_str()) &&
                            (dai_ui_root_hovered(ui, "Scene") ||
                             dai_ui_root_hovered(ui, "Hierarchy"))) {
                     // A prefab dragged into the viewport (or onto the
@@ -8088,6 +8130,21 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             p->drag_pending.clear();
             p->drag_script.clear();
         }
+        // Is a placeable thing hovering the viewport right now? Answered every
+        // frame, before the pill is drawn, because the pill wants to know too:
+        // a picture of the mesh in the corner is noise when the mesh itself is
+        // standing in the scene under the pointer.
+        p->preview_path.clear();
+        if (!p->drag_script.empty() && !p->proj_drop_ok &&
+            dai_ui_root_hovered(ui, "Scene") &&
+            dai_editor_ui_is_placeable(p->drag_script.c_str())) {
+            dai_vec3 g{};
+            if (viewport_ground_point(p, dmx, dmy, &g)) {
+                p->preview_path = p->drag_script;
+                p->preview_at = g;
+            }
+        }
+
         if (!p->drag_script.empty()) {
             std::string lbl = base_of(p->drag_script);
             if (p->proj_drop_ok)
@@ -8112,7 +8169,8 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             // one for a drag - but it is the POSITION, the SIZE and the
             // ORIENTATION of what is about to appear, which is what the
             // question "where will this go" is actually asking.
-            if (is_scene_file(p->drag_script) && !is_scene_asset(p->drag_script) &&
+            if (p->preview_path.empty() &&
+                is_scene_file(p->drag_script) && !is_scene_asset(p->drag_script) &&
                 dai_ui_root_hovered(ui, "Scene")) {
                 dai_vec3 g{};
                 if (viewport_ground_point(p, dmx, dmy, &g)) {
@@ -8151,7 +8209,8 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             // nothing else; a model has a shape, the editor already renders
             // one for the browser row, and this is the moment somebody most
             // wants to see it - "am I dragging the right thing".
-            dai_texture dth = p->thumb_fn ? p->thumb_fn(p->drag_script.c_str(), p->thumb_user) : 0;
+            dai_texture dth = (p->thumb_fn && p->preview_path.empty())
+                            ? p->thumb_fn(p->drag_script.c_str(), p->thumb_user) : 0;
             const float PSZ = 48.0f;
             float py0 = dmy + 10.0f;
             // Drawn on the window layer so the pill survives leaving the
@@ -8365,6 +8424,16 @@ int dai_editor_ui_take_asset_at(const dai_editor_ui *p, float *x, float *y, floa
     if (x) *x = p->pending_at.x;
     if (y) *y = p->pending_at.y;
     if (z) *z = p->pending_at.z;
+    return 1;
+}
+
+int dai_editor_ui_drag_preview(const dai_editor_ui *p, const char **out_path,
+                               float *x, float *y, float *z) {
+    if (!p || p->preview_path.empty()) return 0;
+    if (out_path) *out_path = p->preview_path.c_str();
+    if (x) *x = p->preview_at.x;
+    if (y) *y = p->preview_at.y;
+    if (z) *z = p->preview_at.z;
     return 1;
 }
 

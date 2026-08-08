@@ -48,6 +48,7 @@ test_hud
 test_objmodel
 test_assets
 test_thumb
+test_assetkind
 test_window_two
 "
 # Deliberately NOT here (each needs a GPU or a display):

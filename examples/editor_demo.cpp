@@ -311,6 +311,27 @@ static char g_prefab_return[512] = { 0 };
 // because it is the same counter the undo system moves.
 static uint64_t g_saved_rev = 0;
 
+// The model a drag is currently holding over the viewport. It is a real node
+// in the real document - that is the whole point - so abandoning the drag has
+// to take it back out again, and taking it out is exactly the undo step the
+// instantiate pushed.
+static dai_node    g_preview_node = DAI_INVALID_NODE;
+static std::string g_preview_path;
+static uint32_t    g_preview_undo = 0;
+
+static void preview_drop(dai_doc *doc, dai_doc_sync *sync) {
+    if (g_preview_node == DAI_INVALID_NODE) { g_preview_path.clear(); return; }
+    // Undo, not delete: the instantiate was one transaction and popping it
+    // takes the whole tree - the root and every piece under it - in one go.
+    // Deleting the root by hand would leave the children orphaned in the
+    // document, which is the bug this used to be.
+    if (dai_doc_undo_depth(doc) == g_preview_undo) dai_doc_undo(doc);
+    else                                           dai_doc_remove(doc, g_preview_node);
+    g_preview_node = DAI_INVALID_NODE;
+    g_preview_path.clear();
+    dai_doc_sync_apply(sync);
+}
+
 // <project>/assets/Scenes, made on demand. Capital S: it is a folder a person
 // reads in a file browser, next to Materials and Models.
 static std::string scene_dir() {
@@ -3896,8 +3917,15 @@ int main(int argc, char **argv) {
                     // the assets folder and the scene stays portable; the
                     // base dir is how it is found again.
                     (void)full;
-                    dai_node made = dai_doc_prefab_instantiate(doc, pick, DAI_INVALID_NODE,
-                                                               g_assets_dir, perr, sizeof(perr));
+                    dai_node made = DAI_INVALID_NODE;
+                    if (g_preview_node != DAI_INVALID_NODE && g_preview_path == pick) {
+                        made = g_preview_node;            // the drag already placed it
+                        g_preview_node = DAI_INVALID_NODE;
+                        g_preview_path.clear();
+                    } else {
+                        made = dai_doc_prefab_instantiate(doc, pick, DAI_INVALID_NODE,
+                                                          g_assets_dir, perr, sizeof(perr));
+                    }
                     if (made) {
                         // Dropped into the viewport? Then it goes where it was
                         // dropped. The prefab file stores its root at its own
@@ -3922,12 +3950,82 @@ int main(int argc, char **argv) {
                         dai_editor_ui_log(panels, 2, m);
                     }
                 } else if (dai_assets_model_blocking(assets, pick)) {
-                    dai_node made = dai_assets_instantiate(assets, doc, pick, 0);
+                    // The drag already put this model in the scene and has
+                    // been moving it with the pointer - see the preview block
+                    // below. Then it IS the placement: keeping it is one
+                    // object and one undo step, instantiating a second one
+                    // would leave the first behind at the same spot.
+                    dai_node made = DAI_INVALID_NODE;
+                    if (g_preview_node != DAI_INVALID_NODE && g_preview_path == pick) {
+                        made = g_preview_node;
+                        g_preview_node = DAI_INVALID_NODE;   // adopted, not undone
+                        g_preview_path.clear();
+                    } else {
+                        made = dai_assets_instantiate(assets, doc, pick, 0);
+                    }
                     if (made) {
+                        float dx = 0, dy = 0, dz = 0;
+                        if (dai_editor_ui_take_asset_at(panels, &dx, &dy, &dz)) {
+                            dai_node_desc mr5{};
+                            if (dai_doc_get(doc, made, &mr5) == DAI_OK) {
+                                mr5.position = dai_vec3{ dx, dy, dz };
+                                dai_doc_set(doc, made, &mr5);
+                            }
+                        }
                         dai_doc_sync_apply(sync);
                         dai_editor_select(ed, made, 0);
                     }
                 }
+            }
+        }
+
+        // ---- the model under the pointer, actually in the scene ----------
+        // Unity's trick, and it is not a trick: while you drag a model over
+        // the viewport the model IS in the scene, moving with the pointer.
+        // Let go and it stays; drag back out and it is undone. No ghost, no
+        // outline, no guessing at the size of a thing you have not seen yet.
+        {
+            const char *pvp = nullptr;
+            float pvx = 0, pvy = 0, pvz = 0;
+            if (dai_editor_ui_drag_preview(panels, &pvp, &pvx, &pvy, &pvz) && pvp) {
+                if (g_preview_path != pvp) {
+                    preview_drop(doc, sync);              // a different file: start over
+                    size_t pl2 = std::strlen(pvp);
+                    bool is_prefab = pl2 > 9 && std::strcmp(pvp + pl2 - 9, ".daidalos") == 0;
+                    dai_node made = DAI_INVALID_NODE;
+                    if (is_prefab) {
+                        char perr2[256] = { 0 };
+                        made = dai_doc_prefab_instantiate(doc, pvp, DAI_INVALID_NODE,
+                                                          g_assets_dir, perr2, sizeof(perr2));
+                    } else if (dai_assets_model_blocking(assets, pvp)) {
+                        made = dai_assets_instantiate(assets, doc, pvp, 0);
+                    }
+                    if (made) {
+                        g_preview_node = made;
+                        g_preview_path = pvp;
+                        // The undo step the instantiate just pushed is the one
+                        // preview_drop() will pop if the drag is abandoned.
+                        g_preview_undo = dai_doc_undo_depth(doc);
+                    }
+                }
+                if (g_preview_node != DAI_INVALID_NODE) {
+                    dai_node_desc pv{};
+                    if (dai_doc_get(doc, g_preview_node, &pv) == DAI_OK) {
+                        dai_vec3 want{ pvx, pvy, pvz };
+                        if (pv.position.x != want.x || pv.position.y != want.y ||
+                            pv.position.z != want.z) {
+                            // No dai_doc_begin: sixty positions a second must
+                            // not be sixty entries on the undo stack.
+                            pv.position = want;
+                            dai_doc_set(doc, g_preview_node, &pv);
+                            dai_doc_sync_apply(sync);
+                        }
+                    }
+                }
+            } else if (g_preview_node != DAI_INVALID_NODE) {
+                // The drag left the viewport, or was let go somewhere else.
+                // take_asset above already adopted it if it was a real drop.
+                preview_drop(doc, sync);
             }
         }
 

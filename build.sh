@@ -356,6 +356,10 @@ g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_hud.cpp src/dai_ui.cpp src/dai_font.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_project.cpp src/dai_project.cpp \
         -o build/test_project && ./build/test_project
     g++ $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
+    # Which files the scene can place, and which it can paint with. No window,
+    # no renderer - it links the editor UI for two functions and asks them.
+    g++ $FLAGS $ARCH -Iinclude tests/test_assetkind.cpp $VKLIBS -o build/test_assetkind && \
+        ./build/test_assetkind
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
     # Two windows on one renderer: the claim that a torn off panel can be a
     # real OS window without a second render pass. Needs a display, so it is
