@@ -42,6 +42,7 @@ test_ui_window
 test_ui_field
 test_dock
 test_project
+test_droneshow
 test_script
 test_strings
 test_hud

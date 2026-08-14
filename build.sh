@@ -77,6 +77,15 @@ g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_dock.cpp -o build/dai_dock.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_project.cpp -o build/dai_project.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_material.cpp -o build/dai_material.o
 
+# The drone show pipeline. Arithmetic on points and time: no renderer, no
+# window, no physics backend - which is why it sits in the plain archive next
+# to the engine and why build/test_droneshow runs on a machine with no GPU.
+# The panels that drive it are a different file and live with the editor UI.
+echo "-- drone show (sampling, assignment, layering, validation, export)"
+for f in dai_show dai_show_sample dai_show_assign dai_show_plan dai_show_check dai_show_export; do
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c "src/$f.cpp" -o "build/$f.o"
+done
+
 echo "-- scene document (editor truth: stable ids, generic undo)"
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc.cpp -o build/dai_doc.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_text.cpp -o build/dai_doc_text.o
@@ -94,7 +103,9 @@ rm -f build/libdaidalos.a build/libdaidalos_vk.a build/libdaidalos_assets.a
 ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o ${TALOS_OBJ} \
        build/dai_material.o \
        build/dai_audio.o build/dai_scene.o build/dai_input.o build/dai_editor.o \
-       build/dai_doc.o build/dai_doc_text.o build/dai_doc_sync.o build/dai_project.o
+       build/dai_doc.o build/dai_doc_text.o build/dai_doc_sync.o build/dai_project.o \
+       build/dai_show.o build/dai_show_sample.o build/dai_show_assign.o \
+       build/dai_show_plan.o build/dai_show_check.o build/dai_show_export.o
 
 echo "-- shaders"
 if command -v glslangValidator >/dev/null 2>&1; then
@@ -181,6 +192,10 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_ui.cpp            -o build/dai_ui.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_update.cpp       -o build/dai_update.o
     g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor_ui.cpp     -o build/dai_editor_ui.o
+    # The drone show panels. With the editor UI rather than with the pipeline,
+    # because this is the one file that knows about both dai_show and dai_ui -
+    # the same split dai_editor / dai_editor_ui exists for.
+    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_show_ui.cpp       -o build/dai_show_ui.o
     # Native (C++) behaviours: compiles a .cpp in the project to a shared
     # library and dlopen()s it. Lives with the editor because only the editor
     # has a compiler on hand and a reason to rebuild while running.
@@ -198,7 +213,7 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
            build/dai_shaders_embed.o \
            $WINDOW_OBJ build/dai_dock.o build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_jpeg.o build/dai_json.o \
            build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_svg.o build/dai_icons.o build/dai_thumb.o build/dai_ui.o build/dai_update.o \
-           build/dai_editor_ui.o build/dai_native.o build/dai_native_header.o build/dai_tr.o \
+           build/dai_editor_ui.o build/dai_show_ui.o build/dai_native.o build/dai_native_header.o build/dai_tr.o \
            build/dai_strings.o
     VK_OK=1
 else
@@ -305,6 +320,14 @@ if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
     # does not work.
     g++ $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/LampFlicker.cpp -o build/_lampflicker_check.so && rm -f build/_lampflicker_check.so
 fi
+# The drone show, end to end. Five sources into one binary (see
+# tests/droneshow_cases.hpp for why), and RUN here rather than merely built:
+# the determinism check and the scaling table are the two claims this feature
+# is sold on, and a claim that is only compiled is not a claim.
+g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_droneshow.cpp \
+    tests/droneshow_cases_sample.cpp tests/droneshow_cases_assign.cpp \
+    tests/droneshow_cases_plan.cpp tests/droneshow_cases_io.cpp \
+    $LIBS -o build/test_droneshow && ./build/test_droneshow quick
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/test_font
 # The SVG rasteriser: no renderer, no font, no window - it turns text into
 # coverage, so the test reads the coverage back.

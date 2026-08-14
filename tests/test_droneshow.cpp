@@ -1,0 +1,285 @@
+// The drone show pipeline, end to end.
+//
+//   ./build/test_droneshow            the assertions, plus the scaling table
+//   ./build/test_droneshow quick      skip the 10,000 drone row
+//
+// Two things happen here that do not happen in the four case files: the
+// DETERMINISM proof and the SCALING measurement.
+//
+// Determinism, because it is the one claim this tool sells. A show that is
+// signed off as collision free has to come out identical the second time,
+// including on the paths that run on several threads - a reduction that adds
+// its partial sums in thread arrival order is not deterministic, it is merely
+// usually the same. The test runs the whole pipeline twice into two buffers
+// and compares them with memcmp. Not "within epsilon": memcmp.
+//
+// Scaling, because "it handles 10,000 drones" is a claim and a table of
+// milliseconds is a fact. The row for 10,000 is the one that would expose an
+// O(n^2) validation tick or an O(n^3) assignment - both would take longer than
+// anyone would wait, which is exactly why they are printed rather than
+// asserted away.
+
+#include "droneshow_cases.hpp"
+
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <string>
+#include <vector>
+
+int g_show_pass = 0;
+int g_show_fail = 0;
+
+void show_section(const char *name) {
+    std::printf("\n%s\n", name);
+}
+
+// ---- shared fixtures ------------------------------------------------------
+
+// A box, a quad and a sphere, generated once into static storage. Generated
+// rather than loaded: a test that needs a file on disk is a test that fails on
+// someone else's machine for a reason that has nothing to do with the code.
+static std::vector<float>    g_pos[3], g_nrm[3], g_uv[3];
+static std::vector<uint32_t> g_idx[3];
+static int                   g_built[3] = { 0, 0, 0 };
+
+static void push_tri(int k, const float *a, const float *b, const float *c) {
+    const float *v[3] = { a, b, c };
+    float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+    float e2[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+    float n[3]  = { e1[1] * e2[2] - e1[2] * e2[1],
+                    e1[2] * e2[0] - e1[0] * e2[2],
+                    e1[0] * e2[1] - e1[1] * e2[0] };
+    float len = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+    if (len > 0.0f) {
+        len = 1.0f / std::sqrt(len);
+        n[0] *= len; n[1] *= len; n[2] *= len;
+    }
+    for (int i = 0; i < 3; ++i) {
+        g_idx[k].push_back((uint32_t)(g_pos[k].size() / 3));
+        g_pos[k].push_back(v[i][0]); g_pos[k].push_back(v[i][1]); g_pos[k].push_back(v[i][2]);
+        g_nrm[k].push_back(n[0]);    g_nrm[k].push_back(n[1]);    g_nrm[k].push_back(n[2]);
+        g_uv[k].push_back(v[i][0] + 0.5f);
+        g_uv[k].push_back(v[i][2] + 0.5f);
+    }
+}
+
+static void build_box(int k, float h) {
+    const float s[8][3] = {
+        { -h, -h, -h }, {  h, -h, -h }, {  h,  h, -h }, { -h,  h, -h },
+        { -h, -h,  h }, {  h, -h,  h }, {  h,  h,  h }, { -h,  h,  h }
+    };
+    const int f[12][3] = {
+        {0,2,1},{0,3,2}, {4,5,6},{4,6,7}, {0,1,5},{0,5,4},
+        {3,7,6},{3,6,2}, {0,4,7},{0,7,3}, {1,2,6},{1,6,5}
+    };
+    for (int i = 0; i < 12; ++i) push_tri(k, s[f[i][0]], s[f[i][1]], s[f[i][2]]);
+}
+
+static void build_quad(int k, float h) {
+    const float a[3] = { -h, 0.0f, -h }, b[3] = { h, 0.0f, -h };
+    const float c[3] = {  h, 0.0f,  h }, d[3] = { -h, 0.0f,  h };
+    push_tri(k, a, c, b);
+    push_tri(k, a, d, c);
+}
+
+static void build_sphere(int k, float r, int rings, int segs) {
+    for (int i = 0; i < rings; ++i) {
+        float p0 = (float)M_PI * (float)i / (float)rings;
+        float p1 = (float)M_PI * (float)(i + 1) / (float)rings;
+        for (int j = 0; j < segs; ++j) {
+            float t0 = 2.0f * (float)M_PI * (float)j / (float)segs;
+            float t1 = 2.0f * (float)M_PI * (float)(j + 1) / (float)segs;
+            float a[3] = { r * std::sin(p0) * std::cos(t0), r * std::cos(p0), r * std::sin(p0) * std::sin(t0) };
+            float b[3] = { r * std::sin(p1) * std::cos(t0), r * std::cos(p1), r * std::sin(p1) * std::sin(t0) };
+            float c[3] = { r * std::sin(p1) * std::cos(t1), r * std::cos(p1), r * std::sin(p1) * std::sin(t1) };
+            float d[3] = { r * std::sin(p0) * std::cos(t1), r * std::cos(p0), r * std::sin(p0) * std::sin(t1) };
+            push_tri(k, a, b, c);
+            push_tri(k, a, c, d);
+        }
+    }
+}
+
+dai_show_test_mesh show_test_mesh(int kind) {
+    int k = (kind >= 0 && kind < 3) ? kind : 0;
+    if (!g_built[k]) {
+        if (k == 0) build_box(k, 0.5f);
+        else if (k == 1) build_quad(k, 5.0f);
+        else build_sphere(k, 1.0f, 24, 32);
+        g_built[k] = 1;
+    }
+    dai_show_test_mesh m;
+    m.positions    = g_pos[k].data();
+    m.normals      = g_nrm[k].data();
+    m.uvs          = g_uv[k].data();
+    m.vertex_count = (uint32_t)(g_pos[k].size() / 3);
+    m.indices      = g_idx[k].data();
+    m.index_count  = (uint32_t)g_idx[k].size();
+    return m;
+}
+
+void show_grid_formation(dai_show_point *out, uint32_t n, float spacing, dai_vec3 centre) {
+    uint32_t side = 1;
+    while (side * side < n) ++side;
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t gx = i % side, gz = i / side;
+        out[i].x = centre.x + ((float)gx - (float)(side - 1) * 0.5f) * spacing;
+        out[i].y = centre.y;
+        out[i].z = centre.z + ((float)gz - (float)(side - 1) * 0.5f) * spacing;
+        out[i].r = (uint8_t)(gx * 255u / (side ? side : 1));
+        out[i].g = (uint8_t)(gz * 255u / (side ? side : 1));
+        out[i].b = 200;
+        out[i].w = 0;
+    }
+}
+
+// ---- the two things only this file can do ---------------------------------
+
+static double now_ms() {
+    using clock = std::chrono::steady_clock;
+    return std::chrono::duration<double, std::milli>(clock::now().time_since_epoch()).count();
+}
+
+// Builds a whole show from scratch and hands back every byte a caller could
+// observe: the plan's keyframes and the conflict list. Two calls must produce
+// two identical buffers, or the tool cannot be trusted with a safety claim.
+static void run_pipeline(uint32_t n, std::string *bytes_out, dai_show_timings *t_out) {
+    dai_show_settings s = dai_show_settings_default();
+    s.drone_count    = n;
+    s.min_distance_m = 2.0f;
+    s.seed           = 0x5ED1CE5ull;
+
+    dai_show *sh = dai_show_create(&s);
+    if (!sh) return;
+
+    dai_show_test_mesh mesh = show_test_mesh(2);
+    for (int f = 0; f < 3; ++f) {
+        dai_show_sample_desc d;
+        std::memset(&d, 0, sizeof(d));
+        d.positions    = mesh.positions;
+        d.normals      = mesh.normals;
+        d.uvs          = mesh.uvs;
+        d.vertex_count = mesh.vertex_count;
+        d.indices      = mesh.indices;
+        d.index_count  = mesh.index_count;
+        d.base_rgba    = 0xFF3080FFu;
+        d.mode         = (f == 1) ? DAI_SHOW_SAMPLE_VOLUME : DAI_SHOW_SAMPLE_SURFACE;
+        d.count        = n;
+        d.min_distance_m   = s.min_distance_m;
+        // Big enough that N points at 2 m are geometrically possible; the
+        // feasibility test in droneshow_cases_sample.cpp is where "too small"
+        // is checked on purpose.
+        d.scale        = 2.0f * std::sqrt((float)n);
+        d.centre       = dai_vec3{ 0.0f, 60.0f + 20.0f * (float)f, 0.0f };
+        d.view_dir     = dai_vec3{ 0.0f, 0.0f, 1.0f };
+        d.relax_iterations = 4;
+        d.seed         = s.seed + (uint64_t)f;
+
+        char err[256] = { 0 };
+        char name[32];
+        std::snprintf(name, sizeof(name), "figure %d", f);
+        dai_show_formation_from_mesh(sh, name, "test://sphere", &d, err, sizeof(err));
+    }
+
+    dai_show_solve(sh, nullptr, 0);
+    dai_show_validate_show(sh);
+
+    if (t_out) *t_out = dai_show_get_timings(sh);
+
+    if (bytes_out) {
+        bytes_out->clear();
+        const dai_show_plan *p = dai_show_get_plan(sh);
+        uint32_t drones = dai_show_plan_drone_count(p);
+        for (uint32_t i = 0; i < drones; ++i) {
+            uint32_t kc = dai_show_plan_keyframe_count(p, i);
+            for (uint32_t k = 0; k < kc; ++k) {
+                dai_show_key key;
+                if (!dai_show_plan_key_at(p, i, k, &key)) continue;
+                bytes_out->append((const char *)&key, sizeof(key));
+            }
+        }
+        uint32_t cn = dai_show_conflict_count(sh);
+        for (uint32_t i = 0; i < cn; ++i) {
+            dai_show_conflict c;
+            if (!dai_show_conflict_at(sh, i, &c)) continue;
+            bytes_out->append((const char *)&c, sizeof(c));
+        }
+    }
+    dai_show_destroy(sh);
+}
+
+static void determinism(void) {
+    show_section("determinism - the same input, twice, byte for byte");
+
+    std::string a, b;
+    run_pipeline(256, &a, nullptr);
+    run_pipeline(256, &b, nullptr);
+
+    CHECK(!a.empty(), "the pipeline produced nothing to compare");
+    CHECK(a.size() == b.size(), "two runs produced %zu and %zu bytes", a.size(), b.size());
+    CHECK(a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size()) == 0,
+          "two runs of the same show are not bit identical");
+
+    // And the same for the parallel path on its own: the clustered assignment
+    // splits the work across threads, and a fixed reduction order is the only
+    // thing that makes it reproducible.
+    std::vector<dai_show_point> from(4096), to(4096);
+    show_grid_formation(from.data(), 4096, 3.0f, dai_vec3{ 0, 50, 0 });
+    show_grid_formation(to.data(),   4096, 3.0f, dai_vec3{ 40, 80, 10 });
+    std::vector<uint32_t> p1(4096), p2(4096);
+    dai_show_assign_stats s1{}, s2{};
+    dai_show_assign(from.data(), to.data(), 4096, DAI_SHOW_ASSIGN_CLUSTER, p1.data(), &s1);
+    dai_show_assign(from.data(), to.data(), 4096, DAI_SHOW_ASSIGN_CLUSTER, p2.data(), &s2);
+    CHECK(std::memcmp(p1.data(), p2.data(), p1.size() * sizeof(uint32_t)) == 0,
+          "the parallel assignment is not reproducible");
+    CHECK(std::memcmp(&s1.total_cost_m, &s2.total_cost_m, sizeof(double)) == 0,
+          "the parallel cost sum depends on thread order (%.9f vs %.9f)",
+          s1.total_cost_m, s2.total_cost_m);
+}
+
+static void scaling(int with_10k) {
+    show_section("scaling - measured, not claimed (milliseconds)");
+    std::printf("  %8s %10s %10s %10s %10s %10s %10s\n",
+                "drones", "sample", "assign", "layer", "profile", "validate", "plan MB");
+
+    const uint32_t sizes[3] = { 100, 1000, 10000 };
+    for (int i = 0; i < (with_10k ? 3 : 2); ++i) {
+        dai_show_timings t{};
+        double t0 = now_ms();
+        run_pipeline(sizes[i], nullptr, &t);
+        double wall = now_ms() - t0;
+        std::printf("  %8u %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f   (%.0f ms wall)\n",
+                    sizes[i], t.sample_ms, t.assign_ms, t.layer_ms, t.profile_ms,
+                    t.validate_ms,
+                    (double)t.last_validate.peak_bytes / (1024.0 * 1024.0), wall);
+
+        // The broadphase has to actually be doing something. n^2/2 pairs per
+        // tick at 10,000 drones would be 5*10^7 per tick; anything near that
+        // means the grid was not used and the table above is a lie.
+        if (t.last_validate.ticks_checked > 0) {
+            double per_tick = (double)t.last_validate.pairs_tested /
+                              (double)t.last_validate.ticks_checked;
+            double naive    = 0.5 * (double)sizes[i] * (double)(sizes[i] - 1);
+            CHECK(per_tick < naive * 0.25,
+                  "%u drones: %.0f pairs per tick against a naive %.0f - the broadphase is not being used",
+                  sizes[i], per_tick, naive);
+        }
+    }
+}
+
+int main(int argc, char **argv) {
+    int quick = (argc > 1 && std::strcmp(argv[1], "quick") == 0);
+
+    std::printf("drone show pipeline\n");
+
+    show_cases_sample();
+    show_cases_assign();
+    show_cases_plan();
+    show_cases_io();
+    determinism();
+    scaling(!quick);
+
+    std::printf("\n%s: %d checks, %d failures\n",
+                g_show_fail ? "FAILED" : "ok", g_show_pass + g_show_fail, g_show_fail);
+    return g_show_fail ? 1 : 0;
+}
