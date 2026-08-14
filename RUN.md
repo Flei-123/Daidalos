@@ -41,17 +41,24 @@ DAI_WINDOW=win32 ./build.sh # cross compile check with mingw-w64
 ./tools/run_tests.sh -v     # and the output of each
 ```
 
-29 suites plus the screenshot tool. The run this file was written from - commit
-`6ea748e`, the tree this checkout is at:
+30 suites plus the two screenshot tools. The run this file was written from -
+the tree this checkout is at:
 
 ```
-TOTAL 2106 passed, 0 failed
+TOTAL 2178 passed, 0 failed
 all green
 ```
 
 `test_window_two` opens two real windows on an Xvfb screen the script starts
-itself, and the screenshot tool runs at the end - a picture nobody regenerates
-is a picture that is wrong by the next review.
+itself, and the screenshot tools run at the end - all three drone show sets and
+the game mode picture - because a picture nobody regenerates is a picture that
+is wrong by the next review.
+
+`test_editor_ui` is the thirtieth suite. It was on the "needs a display" list
+without needing one, and while nobody ran it the hierarchy grew a search box
+above its tree and nine of its checks had been clicking one row too high. It is
+in the list now, at 72 checks, and it carries the proof that the translate gizmo
+lands on the object it moves.
 
 The drone show suite is worth running on its own, because it prints three things
 no other suite can - the flight proof, the determinism proof and the scaling
