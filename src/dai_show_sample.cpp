@@ -696,14 +696,37 @@ void Pool::prepare(const Soup &soup, const Measure &m, float min_d, uint32_t cou
     }
 
     // An edge is on the outline when the two triangles sharing it face
-    // differently in the projection, or when nothing shares it at all.
+    // differently in the projection, or when nothing shares it at all - plus
+    // the case that costs a whole figure when it is forgotten: an edge between
+    // a facing triangle and one standing EDGE ON to the audience.
+    //
+    // A cube seen straight down an axis is the whole of that case. Its four
+    // side faces project to lines, so their signed area is zero, so neither the
+    // front nor the back face ever meets a triangle of the opposite sign and
+    // the sign-change rule finds NO outline at all - measured: 0 of 400 points
+    // placed, the mode simply refused the figure. A degenerate neighbour is not
+    // an absent neighbour; it is a face turning away exactly at this edge, and
+    // that is what a silhouette is.
+    //
+    // "Zero" is measured against the projected bounding box rather than against
+    // 0.0f, because a figure rotated by a thousandth of a degree has side faces
+    // whose area is float noise rather than exactly nothing, and the audience
+    // cannot tell those two apart either.
+    float ext_u_lo = 1e30f, ext_u_hi = -1e30f, ext_v_lo = 1e30f, ext_v_hi = -1e30f;
+    for (size_t i = 0; i < pu.size(); ++i) {
+        ext_u_lo = std::min(ext_u_lo, pu[i]); ext_u_hi = std::max(ext_u_hi, pu[i]);
+        ext_v_lo = std::min(ext_v_lo, pv[i]); ext_v_hi = std::max(ext_v_hi, pv[i]);
+    }
+    const float flat_eps = (pu.empty() ? 0.0f
+                          : 1e-6f * std::max(1e-12f, (ext_u_hi - ext_u_lo) * (ext_v_hi - ext_v_lo)));
+
     struct Edge { uint64_t key; uint32_t a, b; int sign; };
     std::vector<Edge> edges;
     edges.reserve(soup.tris * 3u);
     for (uint32_t t = 0; t < soup.tris; ++t) {
         uint32_t i0 = soup.idx[t * 3 + 0], i1 = soup.idx[t * 3 + 1], i2 = soup.idx[t * 3 + 2];
         float ar = (pu[i1] - pu[i0]) * (pv[i2] - pv[i0]) - (pu[i2] - pu[i0]) * (pv[i1] - pv[i0]);
-        int sg = (ar > 0.0f) ? 1 : (ar < 0.0f ? -1 : 0);
+        int sg = (std::fabs(ar) <= flat_eps) ? 0 : (ar > 0.0f ? 1 : -1);
         const uint32_t vi[3] = { i0, i1, i2 };
         for (int e = 0; e < 3; ++e) {
             uint32_t a = weld[vi[e]], b = weld[vi[(e + 1) % 3]];
@@ -717,17 +740,27 @@ void Pool::prepare(const Soup &soup, const Measure &m, float min_d, uint32_t cou
     std::sort(edges.begin(), edges.end(),
               [](const Edge &x, const Edge &y) { return x.key < y.key; });
 
+    // An edge that survives this is a piece of the outline as the audience
+    // sees it. Duplicates are deliberately NOT removed: a symmetrical figure
+    // hands the same projected stretch in twice - the torus's front and back
+    // halves land on one curve on the retina - and both copies are drawn from,
+    // which weights that stretch exactly as often as the geometry occupies it.
     double acc = 0.0;
     for (size_t i = 0; i < edges.size();) {
         size_t j = i;
-        int npos = 0, nneg = 0;
+        int npos = 0, nneg = 0, nflat = 0;
         while (j < edges.size() && edges[j].key == edges[i].key) {
-            if (edges[j].sign > 0) ++npos; else if (edges[j].sign < 0) ++nneg;
+            if (edges[j].sign > 0) ++npos; else if (edges[j].sign < 0) ++nneg; else ++nflat;
             ++j;
         }
         bool boundary = (j - i) == 1;
         bool turns    = (npos > 0 && nneg > 0);
-        if (boundary || turns) {
+        // Facing meets edge-on: the outline of the cube. Two edge-on triangles
+        // meeting each other are NOT an outline - that is the vertical corner
+        // of the cube, which projects to a point and would otherwise pull a
+        // pile of drones onto four spots.
+        bool grazes   = (nflat > 0 && (npos > 0 || nneg > 0));
+        if (boundary || turns || grazes) {
             float au = pu[edges[i].a], av = pv[edges[i].a];
             float bu = pu[edges[i].b], bv = pv[edges[i].b];
             seg.push_back(au); seg.push_back(av); seg.push_back(bu); seg.push_back(bv);
@@ -1018,10 +1051,21 @@ uint32_t dai_show_sample(const dai_show_sample_desc *d, dai_show_point *out, uin
 
     for (uint32_t r = 0; r < ROUNDS && acc.size() < d->count; ++r) {
         size_t base = cands.size();
-        // The silhouette band opens up a quarter at a time, and only for a
-        // round that was needed: the crispest outline the fleet fits on is the
-        // one the audience gets.
-        pool.draw(rng, round_size, round_size * 32u, 1.0f + 0.25f * (float)r, cands);
+        // The silhouette band opens up only for a round that was needed: the
+        // crispest outline the fleet fits on is the one the audience gets, so
+        // round 0 always asks for the band as computed and nothing wider.
+        //
+        // After that it opens by half again per round rather than by a quarter
+        // added. A quarter at a time reaches 2.25x after six rounds, which is a
+        // linear answer to an area problem: a band that is 2.25 times as deep
+        // holds 2.25 times the drones, and a figure short by a factor of two -
+        // a 60 m cube asked for 400 drones at 2 m - would run out of rounds
+        // while still short and be refused as impossible although it is not.
+        // Measured before and after on exactly that figure: 212 of 400, then
+        // 400 of 400.
+        float widen = 1.0f;
+        for (uint32_t k = 0; k < r; ++k) widen *= 1.5f;
+        pool.draw(rng, round_size, round_size * 32u, widen, cands);
         if (cands.size() == base) break;                    /* the figure gives nothing */
         // Round 0 walks the new material only; later rounds rescan everything,
         // because a candidate that had no room before the relaxation may have

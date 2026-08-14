@@ -15,3 +15,6 @@ build-win/
 patch*.py
 build-win-old/
 tools/history/
+
+# round scratch: hand written diagnostics that are not part of any build
+_dev_*.cpp

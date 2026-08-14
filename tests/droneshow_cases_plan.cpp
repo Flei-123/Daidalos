@@ -22,6 +22,14 @@
 //   [3f] the plan is keyframes: a 10,000 drone show reports a byte count far
 //        below the materialised alternative, and sampling at a keyframe time
 //        returns that keyframe's position exactly.
+//   [3g] the whole document, solved: the only distance conflicts the validator
+//        finds are the ones the fixture planted - on a 256 drone grid, and on
+//        the 420 drone sampled show the screenshots are taken of.
+//   [3h] a leg that crosses the whole field is not lost by the broadphase.
+//   [3i] a pair the DESTINATION formation puts closer than the minimum distance
+//        is counted as the formation fault it is (endpoint_pairs), is never
+//        allowed to close further on the way, and costs the rest of the fleet
+//        nothing - while the same fault at the START end stays unresolved.
 #include "droneshow_cases.hpp"
 
 #include <cmath>
@@ -777,6 +785,107 @@ void case_sampled_show_is_clean(void) {
 
 
 // ---------------------------------------------------------------------------
+// [3i] a fault in the formation is named as one - and still flown safely.
+//
+// Two drones the DESTINATION formation parks 0.4 m apart cannot be separated by
+// any transition: the points are given, the assignment sends two drones to
+// them, and no route, delay or stretch pulls apart what the formation puts
+// together. Counting that as a transition the separator failed to solve made it
+// report a failure it could not have fixed and hid the place the fix belongs -
+// the formation. So it is counted apart, in `endpoint_pairs`, and the promise
+// that remains is the one the separator really can keep and is checked here:
+// the pair never comes closer ON THE WAY than the 0.4 m it ends at, and every
+// other pair in the fleet keeps the full minimum distance.
+//
+// The mirror case is [3b] and stays what it was: a pair already inside the floor
+// when the transition STARTS is in violation through the whole window this stage
+// answers for, so it counts as unresolved and the transition is not signed off.
+void case_endpoint_fault(void) {
+    show_section("[3i] a fault in the formation is counted as one, not as a crossing");
+
+    dai_show_settings s = plan_settings(2.0f, 8.0f, 4.0f);
+    const uint32_t n = 36;
+    std::vector<dai_show_point> from(n), to(n);
+    std::vector<uint32_t>       perm(n);
+    for (uint32_t i = 0; i < n; ++i) perm[i] = i;
+    show_grid_formation(from.data(), n, 5.0f, dai_vec3{ 0.0f, 50.0f, 0.0f });
+    show_grid_formation(to.data(),   n, 5.0f, dai_vec3{ 12.0f, 62.0f, 0.0f });
+    // The same shape the [3g] fixture plants, in the destination: two drones
+    // 0.4 m apart, in a fleet that is otherwise five metres apart.
+    const uint32_t BAD_A = 14, BAD_B = 15;
+    to[BAD_B] = to[BAD_A];
+    to[BAD_B].x += 0.4f;
+    const float planted = dist(to[BAD_A], to[BAD_B]);
+
+    dai_show_transition tr = dai_show_transition_default();
+    tr.duration_s = 12.0f;
+
+    std::vector<dai_show_leg> legs(n);
+    dai_show_layer_stats st;
+    dai_result r = dai_show_layer(from.data(), to.data(), n, perm.data(), &tr, &s,
+                                  0.0f, legs.data(), &st);
+
+    CHECK(r == DAI_OK,
+          "a formation fault was reported as an unsolved transition (%u unresolved)",
+          (unsigned)st.unresolved);
+    CHECK(st.unresolved == 0, "%u pairs blamed on the transition, and the fault is in "
+          "the formation", (unsigned)st.unresolved);
+    CHECK(st.endpoint_pairs == 1, "the 0.40 m formation fault was counted %u times, "
+          "expected once", (unsigned)st.endpoint_pairs);
+
+    // What the separator still owes: the pair may not come closer on the way
+    // than it is standing at the end, and nobody else may lose a millimetre.
+    float worst_pair = 1e30f, worst_rest = 1e30f;
+    float t_pair = 0.0f, t_rest = 0.0f;
+    uint32_t ra = 0, rb = 0;
+    std::vector<dai_show_point> now(n);
+    const int STEPS = 4000;
+    float t0 = legs[0].t_start, t1 = legs[0].t_end;
+    for (uint32_t i = 0; i < n; ++i) {
+        t0 = std::fmin(t0, legs[i].t_start);
+        t1 = std::fmax(t1, legs[i].t_end);
+    }
+    for (int k = 0; k <= STEPS; ++k) {
+        float t = t0 + (t1 - t0) * ((float)k / (float)STEPS);
+        for (uint32_t i = 0; i < n; ++i)
+            daishow::leg_point(&legs[i], &from[i], &to[perm[i]], t, &now[i]);
+        for (uint32_t i = 0; i < n; ++i)
+            for (uint32_t j = i + 1; j < n; ++j) {
+                float d = dist(now[i], now[j]);
+                if (i == BAD_A && j == BAD_B) {
+                    if (d < worst_pair) { worst_pair = d; t_pair = t; }
+                } else if (d < worst_rest) {
+                    worst_rest = d; t_rest = t; ra = i; rb = j;
+                }
+            }
+    }
+    CHECK(worst_pair >= planted - 1e-3f,
+          "the faulted pair closes to %.3f m at t = %.2f s, and its formation only "
+          "puts it %.3f m apart - the transition made the fault worse",
+          (double)worst_pair, (double)t_pair, (double)planted);
+    CHECK(worst_rest >= s.min_distance_m - 1e-3f,
+          "%u and %u come %.3f m apart at t = %.2f s while the floor is %.3f m - a "
+          "formation fault is no excuse for the rest of the fleet",
+          (unsigned)ra, (unsigned)rb, (double)worst_rest, (double)t_rest,
+          (double)s.min_distance_m);
+
+    // And the same fault at the START end is not an endpoint pair: [3b] proves
+    // it is still reported, this proves it is not quietly renamed.
+    std::vector<dai_show_point> bad_from = from;
+    bad_from[BAD_B] = bad_from[BAD_A];
+    bad_from[BAD_B].x += 0.4f;
+    dai_show_layer_stats st2;
+    dai_show_layer(bad_from.data(), from.data(), n, perm.data(), &tr, &s,
+                   0.0f, legs.data(), &st2);
+    CHECK(st2.endpoint_pairs == 0,
+          "a pair already too close when the transition starts was filed as a "
+          "formation fault (%u) instead of being reported",
+          (unsigned)st2.endpoint_pairs);
+    CHECK(st2.unresolved > 0,
+          "a pair that flies the whole transition inside the floor was reported clean");
+}
+
+// ---------------------------------------------------------------------------
 // [3h] the leg that is longer than the grid.
 //
 // The separator indexes each leg into a uniform grid, and a grid has a limit
@@ -853,6 +962,7 @@ int show_cases_plan(void) {
     case_keyframes();
     case_solved_show_is_clean();
     case_sampled_show_is_clean();
+    case_endpoint_fault();
     case_long_leg();
     return g_show_fail - before;
 }

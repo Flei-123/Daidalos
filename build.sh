@@ -10,6 +10,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Why every "compile, then run" below is two statements and never
+# `g++ ... && ./build/x`: under `set -e` a command on the LEFT of an AND-list is
+# exempt from errexit, so that shape turns a compiler error into a silent skip -
+# the build prints "-- ok" and the test that "passed" was yesterday's binary.
+# That is exactly how this checkout spent a round with a drone show suite that
+# had not compiled since the day before. Two statements: the compile fails, the
+# build stops.
+
 JOLT_SRC=${JOLT_SRC:-/root/projects/JoltPhysics}
 JOLT_LIB=${JOLT_LIB:-/root/projects/jolt-build}
 TALOS=${TALOS:-/root/projects/talos}
@@ -299,8 +307,8 @@ g++ $FLAGS $ARCH -Iinclude tests/test_editor.cpp $LIBS -o build/test_editor
 # really". Run here rather than merely built: three of the four are measurements
 # (penetration depth, drag distance, roll distance) that a change to the physics
 # settings or the sync layer can move without breaking anything that compiles.
-g++ $FLAGS $ARCH -Iinclude tests/test_editor_live.cpp $LIBS -o build/test_editor_live && \
-    ./build/test_editor_live
+g++ $FLAGS $ARCH -Iinclude tests/test_editor_live.cpp $LIBS -o build/test_editor_live
+./build/test_editor_live
 g++ $FLAGS $ARCH -Iinclude tests/test_doc.cpp $LIBS -o build/test_doc
 g++ $FLAGS $ARCH -Iinclude tests/test_play.cpp $LIBS -o build/test_play
 g++ $FLAGS $ARCH -Iinclude tests/test_cam.cpp $LIBS -o build/test_cam
@@ -313,12 +321,14 @@ if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
     # The object model behaviours are written against - self.transform.position.x
     g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_objmodel.cpp $SCRIPT_LIB $VKLIBS -o build/test_objmodel
     # And the C++ example has to keep compiling: it is documentation that runs.
-    g++ $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/PlayerController.cpp -o build/_playercontroller_check.so && rm -f build/_playercontroller_check.so
+    g++ $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/PlayerController.cpp -o build/_playercontroller_check.so
+    rm -f build/_playercontroller_check.so
     # The component classes, compiled the way the editor compiles a behaviour:
     # against dai_native.h and nothing else. This is the C++ half of the object
     # model, and a header that only compiles inside the engine is a header that
     # does not work.
-    g++ $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/LampFlicker.cpp -o build/_lampflicker_check.so && rm -f build/_lampflicker_check.so
+    g++ $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/LampFlicker.cpp -o build/_lampflicker_check.so
+    rm -f build/_lampflicker_check.so
 fi
 # The drone show, end to end. Five sources into one binary (see
 # tests/droneshow_cases.hpp for why), and RUN here rather than merely built:
@@ -332,21 +342,25 @@ fi
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_droneshow.cpp \
     tests/droneshow_cases_sample.cpp tests/droneshow_cases_assign.cpp \
     tests/droneshow_cases_plan.cpp tests/droneshow_cases_io.cpp \
-    $LIBS -o build/test_droneshow && ./build/test_droneshow
+    $LIBS -o build/test_droneshow
+./build/test_droneshow
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/test_font
 # The SVG rasteriser: no renderer, no font, no window - it turns text into
 # coverage, so the test reads the coverage back.
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_svg.cpp src/dai_svg.cpp src/dai_icons.cpp \
-    -o build/test_svg && ./build/test_svg
+    -o build/test_svg
+./build/test_svg
 # Thumbnails are arithmetic on triangles: no renderer, no window, and the
 # checks read the pixels back. Run here rather than merely built.
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_thumb.cpp src/dai_thumb.cpp \
-    -o build/test_thumb && ./build/test_thumb
+    -o build/test_thumb
+./build/test_thumb
 if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
     # Cheap and load bearing: dai_key must stay bit identical to the X11
     # keysyms it is defined as, or the X11 backend silently stops matching.
-    g++ $FLAGS $ARCH -Iinclude tests/test_keys.cpp -o build/test_keys && ./build/test_keys
+    g++ $FLAGS $ARCH -Iinclude tests/test_keys.cpp -o build/test_keys
+    ./build/test_keys
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_strings.cpp src/dai_strings.cpp -o build/test_strings
 # The HUD, measured through the draw list: no GPU, no window, real coordinates.
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_hud.cpp src/dai_ui.cpp src/dai_font.cpp \
@@ -366,8 +380,8 @@ g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_hud.cpp src/dai_ui.cpp src/dai_font.
     g++ $FLAGS $ARCH -Iinclude tests/test_skinning.cpp $VKLIBS -o build/test_skinning
     g++ $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui
     # The world clipped into the scene window, and picking in the same pixels.
-    g++ $FLAGS $ARCH -Iinclude tests/test_viewport.cpp $VKLIBS -o build/test_viewport && \
-        DAI_SHADER_DIR=shaders ./build/test_viewport
+    g++ $FLAGS $ARCH -Iinclude tests/test_viewport.cpp $VKLIBS -o build/test_viewport
+    DAI_SHADER_DIR=shaders ./build/test_viewport
     # Windows and the solid texel every rectangle in the interface is drawn
     # with. Needs no renderer: it reads the atlas and the vertices.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_window.cpp src/dai_ui.cpp src/dai_font.cpp \
@@ -375,19 +389,22 @@ g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_hud.cpp src/dai_ui.cpp src/dai_font.
     # Text fields: selection, caret, Home/End, Escape - and the resize edges.
     # No renderer: input in, vertices out.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_field.cpp src/dai_ui.cpp src/dai_font.cpp \
-        src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp -o build/test_ui_field && ./build/test_ui_field
+        src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp -o build/test_ui_field
+    ./build/test_ui_field
     # Docked panels tile and never overlap - the property the whole layout
     # rewrite exists for.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_dock.cpp src/dai_dock.cpp src/dai_ui.cpp \
-        src/dai_font.cpp src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp -o build/test_dock && ./build/test_dock
+        src/dai_font.cpp src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp -o build/test_dock
+    ./build/test_dock
     # A folder is a project: creation, validation, settings round trip.
     g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_project.cpp src/dai_project.cpp \
-        -o build/test_project && ./build/test_project
+        -o build/test_project
+    ./build/test_project
     g++ $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
     # Which files the scene can place, and which it can paint with. No window,
     # no renderer - it links the editor UI for two functions and asks them.
-    g++ $FLAGS $ARCH -Iinclude tests/test_assetkind.cpp $VKLIBS -o build/test_assetkind && \
-        ./build/test_assetkind
+    g++ $FLAGS $ARCH -Iinclude tests/test_assetkind.cpp $VKLIBS -o build/test_assetkind
+    ./build/test_assetkind
     [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
     # Two windows on one renderer: the claim that a torn off panel can be a
     # real OS window without a second render pass. Needs a display, so it is

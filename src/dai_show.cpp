@@ -242,6 +242,7 @@ void aggregate(dai_show_timings *t, const std::vector<TrStats> &per) {
         l.resolved_by_height += pl.resolved_by_height;
         l.resolved_by_delay  += pl.resolved_by_delay;
         l.unresolved         += pl.unresolved;
+        l.endpoint_pairs     += pl.endpoint_pairs;
         if (pl.layers_used > l.layers_used) l.layers_used = pl.layers_used;
         if (pl.max_extra_height_m > l.max_extra_height_m) l.max_extra_height_m = pl.max_extra_height_m;
         l.solve_ms += pl.solve_ms;

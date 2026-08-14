@@ -17,6 +17,46 @@
 // that reports success while leaving two drones on a collision course is worse
 // than a tool that does nothing.
 //
+// ---------------------------------------------------------------------------
+// Two kinds of "too close", and why the difference is the whole of round four
+// ---------------------------------------------------------------------------
+//
+// A pair the broadphase hands over can be under the floor for two entirely
+// different reasons, and treating them as one number is what made this stage
+// report a failure it could not have fixed and give up on one it could.
+//
+// (1) A FORMATION fault. The pair's own endpoints - the two points it starts
+//     on, or the two it lands on - already stand closer than min_distance. The
+//     fixture of [3g] plants exactly this: two drones 0.4 m apart in the last
+//     formation. No route, no delay and no stretch separates that pair, because
+//     the formation is what puts it there; the transition merely carries it to
+//     a place the director has to fix. Such a pair is counted in
+//     stats->endpoint_pairs, NOT in stats->unresolved, and the validator goes
+//     on reporting it at the formation where it stands, at the time it stands
+//     there. What the separator still owes it is real and is enforced below:
+//     the pair may never come closer IN TRANSIT than its own endpoints already
+//     are, so its bar is min(min_distance, own endpoint gap) - it gets a lower
+//     floor, not no floor.
+//
+// (2) A TRANSITION fault. Both endpoints are legal, the two drones only meet on
+//     the way. This one is always solvable and is now always solved. The route
+//     list (a micro step, the delay ladder, the height layers) does the work in
+//     nearly every case; when a pair survives STUBBORN_ROUNDS of it - the
+//     measured case was two drones grazing at 1.999675 m against a 2.000 m
+//     floor, a third of a millimetre short, which no route in the list happened
+//     to fix - the last resort takes over and separates it in TIME. A ladder of
+//     offsets is walked over the leg that gives way, each candidate measured
+//     with the SAME arithmetic the round uses, and the first that clears is
+//     bisected down to the smallest offset that still clears. Both legs of that
+//     pair are then PINNED: later rounds may move everything around them, but
+//     the proof that was just computed for those two legs stays true, which is
+//     what stopped the bias walk from oscillating a solved pair back open.
+//
+// The tolerance is untouched (daishow::SEP_EPS, 1e-4 m, from
+// src/dai_show_internal.hpp), min_distance is untouched, and nothing here
+// lowers a bar to make a pair go away: a formation fault gets its own name, and
+// a transition fault gets solved.
+//
 // The profiles are the other half: v = 0 at both ends is a cubic Bezier, eased
 // at one end is the same curve with one control point moved, and the linear
 // case is what a director asks for when the figure has to arrive on a beat.
@@ -30,6 +70,9 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
+#ifdef DAI_SHOW_PLAN_DEBUG
+#include <cstdio>
+#endif
 
 // ---------------------------------------------------------------------------
 // The leg, evaluated. dai_show.cpp turns legs into keyframes and therefore has
@@ -114,6 +157,54 @@ const int MAX_ROUNDS = 32;
 // left over rather than pretending.
 const int SMALL_FLEET  = 2000;
 const int ROUNDS_LARGE = 8;
+
+// The last resort, and its price. A pair that is still open after this many
+// consecutive rounds is not going to be fixed by the next route in the list -
+// the walk has had three goes at it - so it is separated in time instead, with
+// the offset computed rather than guessed. Three is late enough that the cheap
+// routes are all tried first (they cost nothing and fix the great majority) and
+// early enough that the rounds left over can settle whatever the offset stirs
+// up. The cap per round is there because the escalation pins two legs each
+// time, and pinning the whole fleet is not a separation, it is a deadlock.
+const uint32_t STUBBORN_ROUNDS = 3;
+const uint32_t MAX_ESCALATIONS_PER_ROUND = 64;
+
+// The offset ladder: how many rungs, and how far the last one reaches as a
+// multiple of the transition. A rung is a candidate start time for the leg that
+// gives way; the last rung holds it back for a whole transition, which is the
+// fully sequential case - one drone stands still while the other flies its
+// entire leg. Between two neighbouring rungs the answer is not monotone (a leg
+// slid past another can graze on the way through), so the ladder is walked from
+// the smallest rung up and the FIRST one that clears is then bisected: the
+// result is the smallest offset on that rung's interval, and the same offset on
+// every machine.
+const int   OFFSET_RUNGS   = 32;
+const float OFFSET_REACH   = 1.0f;
+const int   OFFSET_BISECT  = 20;
+
+// How much more than the bar the escalation demands before it calls a pair
+// solved. The round measures over the whole fleet's time window and the
+// candidate is measured over the pair's own, so the two bounds differ by the
+// sampling; a fiftieth of the minimum distance - four centimetres at a two
+// metre floor - is more than that difference and small enough to be free.
+const float ESCALATE_MARGIN = 0.02f;
+
+// The stretch ladder for the leg that gives way. A pure offset costs no speed
+// at all and is tried first; a longer leg is what a pair needs when sliding it
+// only moves the graze along instead of opening it.
+const float ESCALATE_STRETCH[3] = { 1.0f, 1.5f, 2.5f };
+
+// How many separations one leg may be carrying at once. A drone that has given
+// way for four different partners and is asked for a fifth is a drone the
+// routes should have moved long ago; leaving it alone bounds the work and keeps
+// the promises it has already made.
+const uint32_t MAX_MATES = 4;
+
+// How finely a candidate is measured on its own time window. Four times the
+// round's clock, because the round spreads its 64 samples over the whole
+// fleet's window while a candidate only has to cover two legs - and the
+// escalation is run on a handful of pairs, so the samples are free.
+const int FINE = 256;
 
 // A pair is in conflict when it comes closer than the minimum distance. The
 // epsilon is there so a formation whose neighbours sit at EXACTLY min_distance
@@ -291,6 +382,46 @@ float min_separation(const dai_show_leg &la, const dai_show_point &a0, const dai
             // more than the answer is worth.
             if (best < floor_m) return best;
         }
+    }
+    return best;
+}
+
+// How close two legs ever come, measured on THEIR OWN window - the second
+// opinion the escalation asks for.
+//
+// min_separation above walks the clock the whole transition shares, because
+// every leg in the round is sampled on it once and the pairs then cost nothing.
+// A candidate offset is a different question: only two legs are involved, one
+// of them ends later than anything else in the transition, and the answer has
+// to hold on the union of the two windows rather than on the fleet's. So the
+// candidate is walked again at FINE steps over exactly that union, with the
+// same honest chord correction - an eighth of the local second difference - so
+// this is a lower bound too and never an optimistic one. Outside its own window
+// a leg evaluates to its endpoint, which is what the drone really does: it
+// waits on the spot, and then it stands in the formation.
+float fine_separation(const dai_show_leg &la, const dai_show_point &a0, const dai_show_point &a1,
+                      const dai_show_leg &lb, const dai_show_point &b0, const dai_show_point &b1) {
+    float t0 = std::min(la.t_start, lb.t_start);
+    float t1 = std::max(la.t_end,   lb.t_end);
+    if (!(t1 > t0)) return len3(Vec3{ a0.x - b0.x, a0.y - b0.y, a0.z - b0.z });
+    Vec3 rel[FINE + 1];
+    for (int i = 0; i <= FINE; ++i) {
+        float t = t0 + (t1 - t0) * ((float)i / (float)FINE);
+        rel[i] = sub3(leg_pos(la, a0, a1, t), leg_pos(lb, b0, b1, t));
+    }
+    float best = len3(rel[0]);
+    for (int i = 0; i < FINE; ++i) {
+        float d = dist_origin_segment(rel[i], rel[i + 1]);
+        int im = (i > 0) ? i - 1 : 0;
+        int ip = (i + 2 <= FINE) ? i + 2 : FINE;
+        Vec3 s1{ rel[i + 1].x - 2.0f * rel[i].x + rel[im].x,
+                 rel[i + 1].y - 2.0f * rel[i].y + rel[im].y,
+                 rel[i + 1].z - 2.0f * rel[i].z + rel[im].z };
+        Vec3 s2{ rel[ip].x - 2.0f * rel[i + 1].x + rel[i].x,
+                 rel[ip].y - 2.0f * rel[i + 1].y + rel[i].y,
+                 rel[ip].z - 2.0f * rel[i + 1].z + rel[i].z };
+        d -= 0.125f * std::max(len3(s1), len3(s2));
+        if (d < best) best = d;
     }
     return best;
 }
@@ -558,10 +689,11 @@ struct Config {
 void fill_stats(dai_show_layer_stats *stats, uint32_t n, const dai_show_leg *legs,
                 const std::vector<dai_show_point> &src, const std::vector<dai_show_point> &dst,
                 const std::vector<uint32_t> &colour, const std::vector<float> &base_delay,
-                float t_start, size_t edge_count, size_t open_count) {
+                float t_start, size_t edge_count, size_t open_count, size_t endpoint_count) {
     if (!stats) return;
     stats->crossings_found    = (uint32_t)edge_count;
     stats->unresolved         = (uint32_t)open_count;
+    stats->endpoint_pairs     = (uint32_t)endpoint_count;
     uint32_t heights = 0, delays = 0, layers = 1;
     float extra = 0.0f;
     for (uint32_t i = 0; i < n; ++i) {
@@ -763,6 +895,28 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
     std::vector<uint8_t>      moved(n, 1);
     std::vector<uint64_t>     was_found;
     std::vector<uint64_t>     found;
+    // The pairs that are only too close because their own endpoints are - the
+    // formation faults of the comment at the top of this file. Kept apart from
+    // `found` so no round tries to route them and no report blames the
+    // transition for them, and carried over the same way so the number in the
+    // stats is the one the last round really measured.
+    std::vector<uint64_t>     was_endpoint;
+    std::vector<uint64_t>     endpoint;
+    // How long each open pair has been open, in rounds, in the order of
+    // `found`. Three rounds of the route walk and the last resort takes over.
+    std::vector<uint64_t>     age_key;
+    std::vector<uint32_t>     age_val;
+    // The legs the last resort computed and proved. A pinned leg ignores its
+    // colour and its bias from then on: the proof was made for exactly these
+    // two curves, and a recolouring that quietly moves one of them is a proof
+    // about a show that is no longer being flown.
+    std::vector<dai_show_leg> pin_leg(n);
+    std::vector<uint8_t>      pinned(n, 0);
+    // Who each pinned drone owes its separation to. A drone that gives way a
+    // second time has to keep clearing everybody it gave way for the first
+    // time, or the last resort would trade one solved pair for another.
+    std::vector<uint32_t>     mates((size_t)n * MAX_MATES, 0u);
+    std::vector<uint8_t>      mate_n(n, 0);
     std::vector<uint32_t>     bias(n, 0);
     // How high the last round says this drone would have had to be to clear
     // whatever it came too close to: the deficit, turned into a height, which
@@ -791,9 +945,15 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
     size_t      edge_total   = 0;
     size_t      best_open    = (size_t)-1;
     size_t      best_edges   = 0;
+    size_t      best_endpoint = 0;
     std::vector<dai_show_leg> best_legs(n);
     std::vector<uint32_t>     best_colour(n, 0);
     std::vector<uint64_t>     best_found;
+    // The window the round samples every leg on. Kept out here because the last
+    // resort measures its candidates on the same clock the round measured the
+    // pair on - a candidate proven against a different clock is a candidate
+    // proven against a different show.
+    float gt0 = t_start, gt1 = t_start + asked_duration;
 
     const int  round_budget = deep ? MAX_ROUNDS : ROUNDS_LARGE;
     const int  attempts     = deep ? MAX_ATTEMPTS : 1;
@@ -874,15 +1034,279 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
         return took;
     };
 
+    // The bar a pair has to clear, and where that bar comes from.
+    //
+    // For an ordinary pair it is min_distance. For a pair that LANDS closer
+    // than min_distance - the deliberate 0.4 m fault of [3g], and every real
+    // formation a director ever built two points too close in - it is the gap
+    // the destination formation itself gives them: they cannot be asked for two
+    // metres in transit when the formation parks them at forty centimetres, but
+    // they can be - and are - held to those forty centimetres, so the transition
+    // never makes a formation fault worse than the formation already is. That
+    // pair is a formation fault, counted in stats->endpoint_pairs and reported
+    // by the validator in the formation where it stands.
+    //
+    // The source end is NOT treated the same way, and the difference is not a
+    // convenience: a pair that is already inside the floor when the transition
+    // STARTS is in violation through the whole window this stage is responsible
+    // for, from its first instant. There is nothing to hand over and nothing to
+    // guarantee - the two drones are in collision while this transition flies
+    // them - so it stays an ordinary conflict, is searched like one, and if it
+    // cannot be separated it is counted as unresolved and dai_show_layer
+    // refuses to sign the transition off. Four drones a metre apart told to
+    // keep five ([3b]) is exactly that case, and reporting it as a mere naming
+    // problem would be the separator excusing itself.
+    //
+    // The chord reserve of both legs is added on top of whichever bar applies,
+    // because what flies is the polyline the plan stores, not the curve.
+    auto pair_goal = [&](uint32_t a, uint32_t b) -> float {
+        float s_gap = len3(Vec3{ src[a].x - src[b].x, src[a].y - src[b].y, src[a].z - src[b].z });
+        if (s_gap < min_d - SEP_EPS) return min_d;
+        float d_gap = len3(Vec3{ dst[a].x - dst[b].x, dst[a].y - dst[b].y, dst[a].z - dst[b].z });
+        return (d_gap < min_d) ? d_gap : min_d;
+    };
+
+    // The last resort: separate one pair in TIME, with the offset computed.
+    //
+    // Called only for a pair whose endpoints are both legal and that has
+    // survived STUBBORN_ROUNDS of the route walk. The leg that gives way is the
+    // higher-numbered drone first - the same tie break the walk uses, so the
+    // choice does not depend on the order the grid produced - and it is offered
+    // a ladder of start times, each with the pure offset first and a longer leg
+    // after it. Every candidate is measured twice: once with the round's own
+    // arithmetic on the round's clock, once at FINE steps on the pair's own
+    // window, and the smaller of the two answers decides, so the escalation can
+    // only ever be more careful than the round that will judge it next.
+    //
+    // The first rung that clears is bisected down to the smallest offset on its
+    // interval - twenty halvings, which lands inside a thousandth of a second -
+    // and then BOTH legs are pinned, so no later recolouring can undo the proof.
+    //
+    // A drone that already carries a promise may still give way - it just has to
+    // keep the promise. Every pair the last resort has solved is remembered on
+    // both of its drones (`mates`), and a candidate leg has to clear the new
+    // partner AND every mate the mover already has, measured the same way. That
+    // is what lets one drone sitting in two conflicts at once - which is exactly
+    // what the [3g] fixture produces - be solved for both of them instead of
+    // being locked by the first. A drone whose promise list is full is left
+    // alone: four is past anything measured, and a mover with an unbounded list
+    // is a search that never ends.
+    auto escalate = [&](uint32_t a, uint32_t b) -> bool {
+        const uint32_t hi = (a > b) ? a : b, lo = (a > b) ? b : a;
+        const uint32_t order[2] = { hi, lo };
+
+        // Does this candidate leg for `m`, against `o` as it stands, clear?
+        //
+        // The margin asked for on top of the bar is deliberately not a fixed
+        // number. A pair whose formations only give it five millimetres over the
+        // floor cannot be asked for four centimetres anywhere - the requirement
+        // would be unsatisfiable at the arrival point itself, and the last
+        // resort would report "impossible" for a pair it can in fact separate,
+        // which is precisely how this stage used to fail. So the margin is a
+        // quarter of the room the endpoints really leave, capped at the fixed
+        // one: generous where there is room, and never more than exists.
+        //
+        // The bound is taken on two windows, the one the next round is expected
+        // to sample on and a half longer one, because a leg the escalation
+        // lengthens moves the fleet's clock and the round's samples land
+        // elsewhere. The smaller of the two answers, and the FINE walk on the
+        // pair's own window, all have to clear.
+        auto pair_bar = [&](uint32_t m, const dai_show_leg &cand,
+                            uint32_t o, const dai_show_leg &fixed) -> float {
+            const float floor_gap = pair_goal(m, o);
+            float room = len3(Vec3{ src[m].x - src[o].x, src[m].y - src[o].y,
+                                    src[m].z - src[o].z });
+            float droom = len3(Vec3{ dst[m].x - dst[o].x, dst[m].y - dst[o].y,
+                                     dst[m].z - dst[o].z });
+            room = std::min(room, droom) - floor_gap;
+            if (!(room > 0.0f)) room = 0.0f;
+            const float goal = floor_gap + std::min(min_d * ESCALATE_MARGIN, 0.25f * room);
+            return goal - SEP_EPS
+                 + chord_reserve(cand,  src[m], dst[m], *s)
+                 + chord_reserve(fixed, src[o], dst[o], *s);
+        };
+
+        // The bound itself, so the caller can compare a candidate with the leg
+        // it would replace as well as with the bar.
+        auto pair_sep = [&](uint32_t m, const dai_show_leg &cand,
+                            uint32_t o, const dai_show_leg &fixed) -> float {
+            const dai_show_leg &la = (m < o) ? cand : fixed;
+            const dai_show_leg &lb = (m < o) ? fixed : cand;
+            const uint32_t ia = (m < o) ? m : o, ib = (m < o) ? o : m;
+            float w1 = std::max(gt1, std::max(cand.t_end, fixed.t_end));
+            float w0 = std::min(gt0, std::min(cand.t_start, fixed.t_start));
+            std::vector<Vec3> pa((size_t)SAMPLES + 1), pb((size_t)SAMPLES + 1);
+            float worst = fine_separation(la, src[ia], dst[ia], lb, src[ib], dst[ib]);
+            for (int pass = 0; pass < 2; ++pass) {
+                float wend = (pass == 0) ? w1 : w0 + 1.5f * (w1 - w0);
+                sample_leg(la, src[ia], dst[ia], w0, wend, pa.data());
+                sample_leg(lb, src[ib], dst[ib], w0, wend, pb.data());
+                worst = std::min(worst,
+                                 min_separation(la, src[ia], dst[ia], lb, src[ib], dst[ib],
+                                                pa.data(), pb.data(), -1e30f));
+            }
+            return worst;
+        };
+
+        auto clears = [&](uint32_t m, const dai_show_leg &cand,
+                          uint32_t o, const dai_show_leg &fixed) -> bool {
+            if (!leg_within_limits(cand, src[m], dst[m], *s)) return false;
+            return pair_sep(m, cand, o, fixed) >= pair_bar(m, cand, o, fixed);
+        };
+
+        // A box around everything a leg touches, endpoints and cruise height,
+        // grown by the floor. Two legs whose boxes miss each other cannot come
+        // within the minimum distance, which is what makes the check below
+        // affordable: the fleet is scanned, but only a handful of it is
+        // measured.
+        auto leg_box = [&](uint32_t i, const dai_show_leg &g, float grow) -> Box {
+            Box r;
+            r.lo[0] = std::min(src[i].x, dst[i].x); r.hi[0] = std::max(src[i].x, dst[i].x);
+            r.lo[1] = std::min(src[i].y, dst[i].y); r.hi[1] = std::max(src[i].y, dst[i].y);
+            r.lo[2] = std::min(src[i].z, dst[i].z); r.hi[2] = std::max(src[i].z, dst[i].z);
+            if (g.rise_frac > 0.0f) {
+                r.lo[1] = std::min(r.lo[1], g.layer_y);
+                r.hi[1] = std::max(r.hi[1], g.layer_y);
+            }
+            for (int k = 0; k < 3; ++k) { r.lo[k] -= grow; r.hi[k] += grow; }
+            return r;
+        };
+
+        // The candidate against everything `m` has already promised, and then
+        // against the partner it is being moved for.
+        auto keeps_promises = [&](uint32_t m, const dai_show_leg &cand, uint32_t o) -> bool {
+            for (uint32_t q = 0; q < mate_n[m]; ++q) {
+                uint32_t mate = mates[(size_t)m * MAX_MATES + q];
+                if (mate == o) continue;
+                if (!clears(m, cand, mate, out_legs[mate])) return false;
+            }
+            return clears(m, cand, o, out_legs[o]);
+        };
+
+        // ...and against the rest of the fleet. A leg that is moved to solve one
+        // pair and lands on a third drone has not solved anything, and because
+        // the last resort PINS what it proves, a mistake here cannot be undone
+        // by the rounds that follow - the pinned leg no longer listens to its
+        // colour. So the candidate that is about to be pinned is measured
+        // against every other drone as it currently stands, with the boxes doing
+        // the rejecting: on the measured shows that is a few dozen real
+        // measurements out of four hundred drones.
+        auto disturbs_fleet = [&](uint32_t m, const dai_show_leg &cand, uint32_t o) -> bool {
+            const float rm = chord_reserve(cand, src[m], dst[m], *s);
+            const Box bm = leg_box(m, cand, min_d + rm);
+            for (uint32_t j = 0; j < n; ++j) {
+                if (j == m || j == o) continue;
+                bool skip = false;
+                for (uint32_t q = 0; q < mate_n[m]; ++q)
+                    if (mates[(size_t)m * MAX_MATES + q] == j) skip = true;   // already measured
+                if (skip) continue;
+                const dai_show_leg &lj = out_legs[j];
+                if (!boxes_overlap(bm, leg_box(j, lj, reserve[j]))) continue;
+                float sep_new = pair_sep(m, cand, j, lj);
+                if (sep_new >= pair_bar(m, cand, j, lj)) continue;
+                // Under the bar - but was it the candidate that put it there?
+                // A formation packed AT the minimum distance has neighbours
+                // that read a whisker under it whatever this leg does, and
+                // refusing every candidate because of a conflict that is not
+                // its doing is how the last resort ends up unable to move at
+                // all. What is forbidden is making it WORSE.
+                if (sep_new < pair_sep(m, out_legs[m], j, lj) - SEP_EPS) return true;
+            }
+            return false;
+        };
+
+        // The families of candidate legs, and the one number each is searched
+        // over. A family maps x in (0, 1] to a start time for the drone that
+        // gives way: its own duration left alone, then half again, then two and
+        // a half times, for the case where sliding a leg only moves the graze
+        // along instead of opening it. Larger x is a bigger intervention, which
+        // is why the walk goes up from the smallest rung and stops at the first
+        // one that clears.
+        //
+        // Time, and not height, on purpose. A vertical step was tried here and
+        // measured: it solves the pair in front of it and puts the leg into a
+        // lane the colouring has already handed out, and because the last resort
+        // PINS what it proves, that trade cannot be undone by the rounds that
+        // follow. A fleet packed to the minimum distance has far more room in
+        // its clock than in its sky - the height layers are the route walk's
+        // business, and it has already had its go by the time this runs.
+        for (int e = 0; e < 2; ++e) {
+            const uint32_t m = order[e], o = (order[e] == a) ? b : a;
+            if (mate_n[m] >= MAX_MATES) continue;      // its promise list is full
+            const dai_show_leg mover = out_legs[m], fixed = out_legs[o];
+            const float T = mover.t_end - mover.t_start;
+            if (!(T > 0.0f)) continue;
+            const float reach = duration * OFFSET_REACH;
+
+            // x -> a candidate leg of this family, or "this family cannot".
+            auto build = [&](int family, float x, dai_show_leg *out) -> bool {
+                dai_show_leg c = mover;
+                float Ts = T * ESCALATE_STRETCH[family];
+                if (Ts > duration * MAX_LEG_STRETCH) return false;
+                c.t_start = mover.t_start + reach * x;
+                c.t_end   = c.t_start + Ts;
+                *out = c;
+                return leg_within_limits(c, src[m], dst[m], *s);
+            };
+
+            // Twice through the families: the first pass will only take a
+            // candidate that leaves the rest of the fleet exactly as it found
+            // it, the second takes the smallest one that solves the pair at
+            // all. Both matter. Refusing every candidate that touches anything
+            // leaves the pair unsolved, which is the failure this mechanism
+            // exists to end; taking the first that fits without looking is how
+            // a leg lands on a third drone. A candidate that does trade one
+            // pair for another is still progress, because only the two legs
+            // proved here are pinned and the rounds that follow can work on the
+            // rest.
+            for (int strict = 1; strict >= 0; --strict)
+            for (int family = 0; family < 3; ++family) {
+                for (int k = 1; k <= OFFSET_RUNGS; ++k) {
+                    const float x_hi = (float)k / (float)OFFSET_RUNGS;
+                    dai_show_leg cand;
+                    if (!build(family, x_hi, &cand)) continue;
+                    if (!keeps_promises(m, cand, o)) continue;
+                    if (strict && disturbs_fleet(m, cand, o)) continue;
+                    // A rung that works; now the smallest intervention on it.
+                    float xlo = (float)(k - 1) / (float)OFFSET_RUNGS, xhi = x_hi;
+                    dai_show_leg best = cand;
+                    for (int it = 0; it < OFFSET_BISECT; ++it) {
+                        float mid = 0.5f * (xlo + xhi);
+                        dai_show_leg probe;
+                        if (build(family, mid, &probe) && keeps_promises(m, probe, o) &&
+                            !(strict && disturbs_fleet(m, probe, o))) {
+                            xhi = mid; best = probe;
+                        } else {
+                            xlo = mid;
+                        }
+                    }
+                    pin_leg[m] = best;   pinned[m] = 1;   out_legs[m] = best;
+                    pin_leg[o] = fixed;  pinned[o] = 1;   out_legs[o] = fixed;
+                    // Both now owe each other the separation just proved.
+                    if (mate_n[m] < MAX_MATES) mates[(size_t)m * MAX_MATES + mate_n[m]++] = o;
+                    if (mate_n[o] < MAX_MATES) mates[(size_t)o * MAX_MATES + mate_n[o]++] = m;
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
     for (int attempt = 0; ; ++attempt) {
     const float delay_step = DELAY_FRACTION * duration;
     colour.assign(n, 0);
     moved.assign(n, 1);
     bias.assign(n, 0);
     lift_need.assign(n, 0.0f);
+    pinned.assign(n, 0);
+    mate_n.assign(n, 0);
     edges.clear();
     was_found.clear();
     found.clear();
+    was_endpoint.clear();
+    endpoint.clear();
+    age_key.clear();
+    age_val.clear();
     edge_total = 0;
 
     // One round: lay the current colouring down as legs, then look again. The
@@ -891,6 +1315,10 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
     for (int round = 0; ; ++round) {
         for (uint32_t i = 0; i < n; ++i) {
             dai_show_leg &g = out_legs[i];
+            // A leg the last resort proved keeps exactly the shape it was
+            // proved in. Rebuilding it from the colouring would throw the proof
+            // away and put the pair straight back where it was.
+            if (pinned[i]) { g = pin_leg[i]; continue; }
             g.t_start   = t_start + base_delay[i];
             g.t_end     = g.t_start + duration;
             g.layer_y   = 0.0f;
@@ -924,7 +1352,7 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
             if (route_leg(i, r, g, delay_step, &lifted) || !base_ok) g = lifted;
         }
 
-        float gt0 = out_legs[0].t_start, gt1 = out_legs[0].t_end;
+        gt0 = out_legs[0].t_start; gt1 = out_legs[0].t_end;
         for (uint32_t i = 0; i < n; ++i) {
             gt0 = std::min(gt0, out_legs[i].t_start);
             gt1 = std::max(gt1, out_legs[i].t_end);
@@ -949,12 +1377,15 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
         // the recolouring actually touched. Worth an order of magnitude on a
         // dense figure, where nine tenths of the fleet keeps its route.
         found.clear();
+        endpoint.clear();
         found.reserve(pairs.size() / 4 + 4);
         for (size_t k = 0; k < pairs.size(); ++k) {
             uint32_t a = (uint32_t)(pairs[k] >> 32), b = (uint32_t)(pairs[k] & 0xFFFFFFFFu);
             if (!moved[a] && !moved[b]) {
                 if (std::binary_search(was_found.begin(), was_found.end(), pairs[k]))
                     found.push_back(pairs[k]);
+                if (std::binary_search(was_endpoint.begin(), was_endpoint.end(), pairs[k]))
+                    endpoint.push_back(pairs[k]);
                 continue;
             }
             // The bar this pair has to clear is the minimum distance PLUS what
@@ -963,7 +1394,18 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
             // than that on the polyline, and the validator - which reads the
             // polyline - would report the pair the separator had just signed
             // off. One number, computed the same way on both sides.
-            const float bar = min_d - SEP_EPS + reserve[a] + reserve[b];
+            //
+            // ...unless the pair's own endpoints are closer together than the
+            // minimum distance, and then min_distance is not a bar the
+            // transition can clear at all: the FORMATION is what puts those two
+            // drones there. Its bar is its own endpoint gap - it must not come
+            // closer on the way than it already is standing still - and the
+            // pair is reported as the formation fault it is instead of as a
+            // transition the separator failed to solve. See the top of the file.
+            const float goal = pair_goal(a, b);
+            const float slack = reserve[a] + reserve[b];
+            const float bar  = goal  - SEP_EPS + slack;
+            const float full = min_d - SEP_EPS + slack;
             float sep = min_separation(out_legs[a], src[a], dst[a],
                                        out_legs[b], src[b], dst[b],
                                        &samples[(size_t)a * (SAMPLES + 1)],
@@ -976,9 +1418,29 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
                 clear += min_d * 0.1f;                     // and a little over
                 lift_need[a] = std::max(lift_need[a], clear);
                 lift_need[b] = std::max(lift_need[b], clear);
+            } else if (goal < min_d && sep < full) {
+                // Clears what it can clear, and is under the floor only because
+                // its formation puts it there.
+                endpoint.push_back(pairs[k]);
             }
         }
-        was_found = found;
+        was_found    = found;
+        was_endpoint = endpoint;
+
+        // How long each of these has been open. A pair the route walk has had
+        // three goes at is handed to the last resort below; one that has just
+        // appeared gets the cheap routes first.
+        {
+            std::vector<uint32_t> next_age(found.size(), 1u);
+            for (size_t k = 0; k < found.size(); ++k) {
+                std::vector<uint64_t>::const_iterator it =
+                    std::lower_bound(age_key.begin(), age_key.end(), found[k]);
+                if (it != age_key.end() && *it == found[k])
+                    next_age[k] = age_val[(size_t)(it - age_key.begin())] + 1u;
+            }
+            age_key = found;
+            age_val = next_age;
+        }
 
 #ifdef DAI_SHOW_PLAN_DEBUG
         if (n > 300) {
@@ -1000,11 +1462,35 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
             break;
         }
 
+        // The last resort, for the pairs the route walk has demonstrably failed
+        // on. Both of the pair's legs come out of it pinned, so the two lines
+        // below - which move a drone one route along - leave them alone from
+        // here on: a pair whose separation has been computed exactly is not a
+        // pair that should keep searching.
+        {
+            uint32_t done = 0;
+            for (size_t k = 0; deep && k < found.size(); ++k) {
+                if (age_val[k] < STUBBORN_ROUNDS) continue;
+                if (done >= MAX_ESCALATIONS_PER_ROUND) break;
+                uint32_t a = (uint32_t)(found[k] >> 32), b = (uint32_t)(found[k] & 0xFFFFFFFFu);
+                if (mate_n[a] >= MAX_MATES && mate_n[b] >= MAX_MATES) continue;
+                bool ok = escalate(a, b);
+#ifdef DAI_SHOW_PLAN_DEBUG
+                if (n > 300)
+                    std::fprintf(stderr, "  ESC %u/%u age=%u -> %s\n",
+                                 a, b, age_val[k], ok ? "pinned" : "FAILED");
+#endif
+                if (ok) { ++done; age_val[k] = 0; }
+            }
+        }
+
         // A pair that is STILL too close although both its drones were routed
         // gets one of them moved along: the routing that was tried is known not
         // to work, so trying it again is the definition of a stuck loop.
         for (size_t k = 0; deep && k < found.size(); ++k) {
             if (!std::binary_search(edges.begin(), edges.end(), found[k])) continue;
+            if (pinned[(uint32_t)(found[k] >> 32)] &&
+                pinned[(uint32_t)(found[k] & 0xFFFFFFFFu)]) continue;
             // ONE of them - the higher-numbered first, so the choice does not
             // depend on the order the pairs came out of the grid, and
             // measurably better than moving both: two drones stepping aside in
@@ -1045,8 +1531,9 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
     // last would make a bigger search budget produce a worse show, which is not
     // a trade anybody would take.
     if (found.size() < best_open) {
-        best_open   = found.size();
-        best_edges  = edge_total;
+        best_open     = found.size();
+        best_edges    = edge_total;
+        best_endpoint = endpoint.size();
         best_legs.assign(out_legs, out_legs + n);
         best_colour = colour;
         best_found  = found;
@@ -1083,6 +1570,8 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
         colour     = best_colour;
         edge_total = best_edges;
         found      = best_found;
+    } else {
+        best_endpoint = endpoint.size();
     }
 #ifdef DAI_SHOW_PLAN_DEBUG
     for (size_t k = 0; k < found.size(); ++k) {
@@ -1104,7 +1593,7 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
     }
 #endif
     fill_stats(stats, n, out_legs, src, dst, colour, base_delay, t_start,
-               edge_total, std::min(best_open, found.size()));
+               edge_total, std::min(best_open, found.size()), best_endpoint);
     return (std::min(best_open, found.size()) == 0) ? DAI_OK : DAI_ERR_STATE;
 }
 

@@ -294,6 +294,17 @@ typedef struct dai_show_layer_stats {
     uint32_t layers_used;
     float    max_extra_height_m;
     double   solve_ms;
+    /* Pairs whose own start or destination points stand closer together than
+     * min_distance. That is a FORMATION fault, not a transition the separator
+     * failed to solve: no route, no delay and no stretch can pull two drones
+     * apart that the formation itself puts 0.4 m apart, and blaming the
+     * transition for it hides the place the fault has to be fixed. Such a pair
+     * is counted here instead of in `unresolved`, the validator still reports
+     * it at the formation where it stands, and the separator still guarantees
+     * that the pair never comes closer IN TRANSIT than its own endpoints
+     * already are. Appended at the end of the struct on purpose - every field
+     * above keeps its offset. */
+    uint32_t endpoint_pairs;
 } dai_show_layer_stats;
 
 /* Turns an assignment into legs that do not collide with each other.

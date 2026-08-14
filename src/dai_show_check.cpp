@@ -49,36 +49,118 @@ namespace {
 // closer than that cannot be more than one cell apart in any axis - 27 cells
 // is the whole search, whatever the fleet size. The table is rebuilt per tick
 // into the same arrays; nothing here grows with the length of the show.
+//
+// It is a counting sort into hash buckets rather than a chain of `next`
+// pointers, and the difference is measurable rather than cosmetic. A chain
+// walk is one random load per member, into three different arrays, and at
+// 10,000 drones over a few thousand ticks the check spent most of its time
+// waiting for memory that a bucket of two drones did not deserve. Sorted, a
+// bucket is a RANGE: its members' ids, cell coordinates and positions lie next
+// to each other, one cache line usually covers the lot, and the drones are
+// then visited in that same order - so consecutive drones probe the same
+// buckets and find them in L1. Same buckets, same pairs, same answers.
 struct Grid {
-    std::vector<int32_t>  head;    // hash bucket -> first drone, -1 = empty
-    std::vector<int32_t>  next;    // drone -> next drone in the same bucket
-    std::vector<int32_t>  cell;    // drone -> cx, cy, cz (3 per drone)
-    uint32_t              mask = 0;
+    std::vector<uint32_t>       start;   // bucket -> first slot; size + 1 long
+    std::vector<uint32_t>       fill;    // bucket cursor while placing
+    std::vector<uint32_t>       bucket;  // drone -> its bucket
+    std::vector<uint32_t>       id;      // slot -> drone
+    std::vector<int32_t>        cell;    // drone -> cx, cy, cz (3 per drone)
+    std::vector<int32_t>        scell;   // slot  -> cx, cy, cz (3 per slot)
+    std::vector<dai_show_point> spos;    // slot  -> position at this tick
+    uint32_t                    mask = 0;
+    uint32_t                    bits = 0;
+    // How a cell coordinate becomes a bucket, and why it is not a hash.
+    //
+    // A multiplicative hash spreads cells evenly and therefore spreads the
+    // NEIGHBOURS of a cell evenly too - so the fourteen probes a drone makes
+    // land on fourteen unrelated cache lines, and at 10,000 drones a tick that
+    // waiting for memory was most of the check. The index below is the fleet's
+    // own bounding box folded into the table: a step of one cell in x is a step
+    // of one bucket, a step in y is `1 << bx` buckets, and consecutive drones
+    // (which are visited in bucket order) probe the same few lines. The fold is
+    // a wrap, so two cells far apart can share a bucket - which is why the cell
+    // coordinates are compared at every candidate, exactly as they were under
+    // the hash. The answers do not change; the memory traffic does.
+    uint32_t                    bx = 0, by = 0;
+    int32_t                     ox = 0, oy = 0, oz = 0;
 
     void reset(uint32_t n) {
         uint32_t size = 16;
-        while (size < n * 2u) size <<= 1;
+        while (size < n * 4u) size <<= 1;
         mask = size - 1;
-        head.assign(size, -1);
-        next.assign(n, -1);
+        bits = 0;
+        for (uint32_t t = size; t > 1u; t >>= 1) ++bits;
+        start.assign((size_t)size + 1u, 0u);
+        fill.assign(size, 0u);
+        bucket.assign(n, 0u);
+        id.assign(n, 0u);
         cell.assign((size_t)n * 3u, 0);
+        scell.assign((size_t)n * 3u, 0);
+        spos.assign(n, dai_show_point{});
     }
+
+    // The axis extents of this tick, in cells, decide how many bits each axis
+    // gets. A fleet that is wide and flat spends its bits on x and z; only when
+    // the box needs more cells than the table has buckets does an axis wrap
+    // onto itself, and then it wraps evenly rather than piling one region of
+    // the field into one bucket.
+    void frame(const int32_t lo[3], const int32_t hi[3]) {
+        auto bits_for = [](int64_t span) {
+            uint32_t b = 0;
+            while ((int64_t)1 << b < span && b < 30u) ++b;
+            return b;
+        };
+        ox = lo[0]; oy = lo[1]; oz = lo[2];
+        uint32_t want[3] = { bits_for((int64_t)hi[0] - lo[0] + 1),
+                             bits_for((int64_t)hi[1] - lo[1] + 1),
+                             bits_for((int64_t)hi[2] - lo[2] + 1) };
+        // A box that needs more cells than the table has buckets has to wrap
+        // somewhere, and where it wraps decides how much scanning the wrap
+        // costs. The bits come off the axis that has most of them, one at a
+        // time, so the fold stays as even as the box allows instead of
+        // starving whichever axis is named last.
+        while (want[0] + want[1] + want[2] > bits) {
+            int worst = 0;
+            if (want[1] > want[worst]) worst = 1;
+            if (want[2] > want[worst]) worst = 2;
+            if (want[worst] == 0) break;
+            --want[worst];
+        }
+        bx = want[0];
+        by = want[1];
+    }
+
+    uint32_t term_x(int32_t x) const { return (uint32_t)(x - ox); }
+    uint32_t term_y(int32_t y) const { return (uint32_t)(y - oy) << bx; }
+    uint32_t term_z(int32_t z) const { return (uint32_t)(z - oz) << (bx + by); }
+    uint32_t index(int32_t x, int32_t y, int32_t z) const {
+        return (term_x(x) + term_y(y) + term_z(z)) & mask;
+    }
+
     size_t bytes() const {
-        return head.size() * sizeof(int32_t) + next.size() * sizeof(int32_t) +
-               cell.size() * sizeof(int32_t);
+        return (start.size() + fill.size() + bucket.size() + id.size()) * sizeof(uint32_t) +
+               (cell.size() + scell.size()) * sizeof(int32_t) +
+               spos.size() * sizeof(dai_show_point);
     }
 };
 
-// A hash that mixes all three axes. Multiplicative with odd constants, because
-// the alternative - packing coordinates into bit fields - buckets a whole
-// vertical column together the moment a figure is taller than the field is
-// wide, which is every figure.
-inline uint32_t cell_hash(int32_t x, int32_t y, int32_t z, uint32_t mask) {
-    uint32_t h = (uint32_t)x * 0x8DA6B343u ^ (uint32_t)y * 0xD8163841u ^
-                 (uint32_t)z * 0xCB1AB31Fu;
-    h ^= h >> 15;
-    return h & mask;
-}
+// Half of the 3x3x3 block, and which half.
+//
+// With the whole fleet in the table before the first query, a pair that shares
+// a cell can be tested from the lower of the two indices, and a pair in
+// neighbouring cells can be tested from whichever of the two sees the other
+// through a POSITIVE offset - "positive" meaning lexicographically after
+// (0,0,0). Every unordered pair is then still looked at exactly once, in the
+// same arithmetic as before, off thirteen bucket probes per drone instead of
+// twenty-seven. The pair list is identical; only the cost of finding it halves.
+struct Offset { int8_t dx, dy, dz; };
+const Offset HALF_BLOCK[13] = {
+    { 0, 0, 1 },
+    { 0, 1, -1 }, { 0, 1, 0 }, { 0, 1, 1 },
+    { 1, -1, -1 }, { 1, -1, 0 }, { 1, -1, 1 },
+    { 1, 0, -1 },  { 1, 0, 0 },  { 1, 0, 1 },
+    { 1, 1, -1 },  { 1, 1, 0 },  { 1, 1, 1 }
+};
 
 inline int32_t cell_of(float v, float inv_cell) {
     return (int32_t)std::floor(v * inv_cell);
@@ -109,13 +191,50 @@ inline bool worse(int kind, float value, float previous) {
 }
 
 struct Recorder {
-    std::unordered_map<uint64_t, Episode> live;
+    std::unordered_map<uint64_t, Episode> live;      // pairs: sparse, hashed
+    // The four rules a drone breaks on its own have exactly one episode per
+    // drone and kind, so they are indexed rather than hashed: a fleet flying a
+    // whole figure too fast is thousands of live episodes touched every tick,
+    // and a hash lookup for each of them costs more than the rule it records.
+    // `self_live` keeps the open ones so closing a tick is a walk over what is
+    // open rather than over the fleet.
+    std::vector<Episode>                  self_ep;
+    std::vector<uint8_t>                  self_on;
+    std::vector<uint32_t>                 self_live;
     std::vector<dai_show_conflict>        done;
+    uint32_t                              drones = 0;
     uint32_t                              total = 0;
 
-    void hit(uint32_t a, uint32_t b, int kind, float value, float limit,
-             float t, uint32_t tick) {
-        uint64_t k = episode_key(a, b, kind);
+    void reset(uint32_t n) {
+        drones = n;
+        self_ep.assign((size_t)n * 4u, Episode{ 0.0f, 0.0f, 0.0f, 0u });
+        self_on.assign((size_t)n * 4u, 0);
+        self_live.clear();
+    }
+
+    // kind is one of VMAX, AMAX, FENCE, GROUND - the rules whose "pair" is one
+    // drone with itself.
+    void hit_self(uint32_t d, int kind, float value, float limit,
+                  float t, uint32_t tick) {
+        const size_t slot = (size_t)d * 4u + (size_t)(kind - 1);
+        Episode &e = self_ep[slot];
+        if (!self_on[slot]) {
+            e.worst_value = value; e.worst_time = t; e.limit = limit;
+            e.last_tick = tick;
+            self_on[slot] = 1;
+            self_live.push_back((uint32_t)slot);
+            return;
+        }
+        if (worse(kind, value, e.worst_value)) {
+            e.worst_value = value;
+            e.worst_time  = t;
+        }
+        e.last_tick = tick;
+    }
+
+    void hit_pair(uint32_t a, uint32_t b, float value, float limit,
+                  float t, uint32_t tick) {
+        uint64_t k = episode_key(a, b, DAI_SHOW_CONFLICT_DISTANCE);
         auto it = live.find(k);
         if (it == live.end()) {
             Episode e; e.worst_value = value; e.worst_time = t; e.limit = limit;
@@ -123,40 +242,66 @@ struct Recorder {
             live.emplace(k, e);
             return;
         }
-        if (worse(kind, value, it->second.worst_value)) {
+        if (worse(DAI_SHOW_CONFLICT_DISTANCE, value, it->second.worst_value)) {
             it->second.worst_value = value;
             it->second.worst_time  = t;
         }
         it->second.last_tick = tick;
     }
 
-    void emit(uint64_t key, const Episode &e) {
+    void emit(uint32_t a, uint32_t b, int kind, const Episode &e) {
         dai_show_conflict c;
         c.time_s = e.worst_time;
-        c.a      = (uint32_t)((key >> 34) & 0x3FFFFFFFu);
-        c.b      = (uint32_t)((key >> 4)  & 0x3FFFFFFFu);
-        c.kind   = (int)(key & 15u);
+        c.a      = a;
+        c.b      = b;
+        c.kind   = kind;
         c.value  = e.worst_value;
         c.limit  = e.limit;
         done.push_back(c);
         ++total;
     }
+    void emit_key(uint64_t key, const Episode &e) {
+        emit((uint32_t)((key >> 34) & 0x3FFFFFFFu),
+             (uint32_t)((key >> 4)  & 0x3FFFFFFFu), (int)(key & 15u), e);
+    }
+    void emit_slot(uint32_t slot, const Episode &e) {
+        emit(slot / 4u, slot / 4u, (int)(slot & 3u) + 1, e);
+    }
 
-    // Everything that was not touched this tick has ended. Iteration order of
-    // the map does not leak into the answer: the finished list is sorted once,
-    // at the end, on (time, a, b, kind).
+    // Everything that was not touched this tick has ended. Neither the
+    // iteration order of the map nor the order of the open list leaks into the
+    // answer: the finished list is sorted once, at the end, on
+    // (time, a, b, kind) and the two numbers behind them.
     void close_stale(uint32_t tick) {
         for (auto it = live.begin(); it != live.end(); ) {
-            if (it->second.last_tick != tick) { emit(it->first, it->second); it = live.erase(it); }
+            if (it->second.last_tick != tick) { emit_key(it->first, it->second); it = live.erase(it); }
             else ++it;
         }
+        size_t keep = 0;
+        for (size_t i = 0; i < self_live.size(); ++i) {
+            const uint32_t slot = self_live[i];
+            if (self_ep[slot].last_tick != tick) {
+                emit_slot(slot, self_ep[slot]);
+                self_on[slot] = 0;
+            } else {
+                self_live[keep++] = slot;
+            }
+        }
+        self_live.resize(keep);
     }
     void close_all() {
-        for (auto &kv : live) emit(kv.first, kv.second);
+        for (auto &kv : live) emit_key(kv.first, kv.second);
         live.clear();
+        for (size_t i = 0; i < self_live.size(); ++i) {
+            emit_slot(self_live[i], self_ep[self_live[i]]);
+            self_on[self_live[i]] = 0;
+        }
+        self_live.clear();
     }
     size_t bytes() const {
         return live.size() * (sizeof(Episode) + sizeof(uint64_t) + 3 * sizeof(void *)) +
+               self_ep.capacity() * sizeof(Episode) + self_on.capacity() +
+               self_live.capacity() * sizeof(uint32_t) +
                done.capacity() * sizeof(dai_show_conflict);
     }
 };
@@ -359,6 +504,7 @@ uint32_t dai_show_validate(const dai_show_plan *p, const dai_show_settings *s,
     Grid     grid;
     Recorder rec;
     grid.reset(n);
+    rec.reset(n);
 
     const uint32_t ticks = (uint32_t)std::floor((double)dur * (double)fps) + 1u;
 
@@ -375,8 +521,19 @@ uint32_t dai_show_validate(const dai_show_plan *p, const dai_show_settings *s,
         // enough that a pair which meets ANYWHERE inside the interval is still
         // neighbouring cells at the end of it.
         float reach_max = 0.0f;
+        // The box the fleet occupies at this instant, which is what tells the
+        // grid how to spend its bits. Free: the loop reads every position
+        // anyway.
+        float bb_lo[3] = {  3.4e38f,  3.4e38f,  3.4e38f };
+        float bb_hi[3] = { -3.4e38f, -3.4e38f, -3.4e38f };
         for (uint32_t i = 0; i < n; ++i) {
             const dai_show_point &pi = cur[i];
+            if (pi.x < bb_lo[0]) bb_lo[0] = pi.x;
+            if (pi.x > bb_hi[0]) bb_hi[0] = pi.x;
+            if (pi.y < bb_lo[1]) bb_lo[1] = pi.y;
+            if (pi.y > bb_hi[1]) bb_hi[1] = pi.y;
+            if (pi.z < bb_lo[2]) bb_lo[2] = pi.z;
+            if (pi.z > bb_hi[2]) bb_hi[2] = pi.z;
 
             if (fenced) {
                 float ox = std::fabs(pi.x) - s->fence_half_x;
@@ -386,10 +543,10 @@ uint32_t dai_show_validate(const dai_show_plan *p, const dai_show_settings *s,
                 if (oz > worst_over) { worst_over = oz; limit = s->fence_half_z; value = std::fabs(pi.z); }
                 if (oy > worst_over) { worst_over = oy; limit = s->fence_top_m;  value = pi.y; }
                 if (worst_over > 0.0f)
-                    rec.hit(i, i, DAI_SHOW_CONFLICT_FENCE, value, limit, t, tick);
+                    rec.hit_self(i, DAI_SHOW_CONFLICT_FENCE, value, limit, t, tick);
             }
             if (s->min_ground_m > 0.0f && pi.y < s->min_ground_m)
-                rec.hit(i, i, DAI_SHOW_CONFLICT_GROUND, pi.y, s->min_ground_m, t, tick);
+                rec.hit_self(i, DAI_SHOW_CONFLICT_GROUND, pi.y, s->min_ground_m, t, tick);
 
             if (tick > 0) {
                 float dx = pi.x - prev[i].x, dy = pi.y - prev[i].y, dz = pi.z - prev[i].z;
@@ -397,7 +554,7 @@ uint32_t dai_show_validate(const dai_show_plan *p, const dai_show_settings *s,
                 float sp = std::sqrt(vx * vx + vy * vy + vz * vz);
                 if (sp > st.max_speed_ms) st.max_speed_ms = sp;
                 if (s->v_max_ms > 0.0f && sp > s->v_max_ms)
-                    rec.hit(i, i, DAI_SHOW_CONFLICT_VMAX, sp, s->v_max_ms, t, tick);
+                    rec.hit_self(i, DAI_SHOW_CONFLICT_VMAX, sp, s->v_max_ms, t, tick);
                 if (have_vel[i]) {
                     float ax = (vx - vel[i * 3 + 0]) / dt;
                     float ay = (vy - vel[i * 3 + 1]) / dt;
@@ -405,7 +562,7 @@ uint32_t dai_show_validate(const dai_show_plan *p, const dai_show_settings *s,
                     float acc = std::sqrt(ax * ax + ay * ay + az * az);
                     if (acc > st.max_accel_ms2) st.max_accel_ms2 = acc;
                     if (s->a_max_ms2 > 0.0f && acc > s->a_max_ms2)
-                        rec.hit(i, i, DAI_SHOW_CONFLICT_AMAX, acc, s->a_max_ms2, t, tick);
+                        rec.hit_self(i, DAI_SHOW_CONFLICT_AMAX, acc, s->a_max_ms2, t, tick);
                 }
                 vel[i * 3 + 0] = vx; vel[i * 3 + 1] = vy; vel[i * 3 + 2] = vz;
                 have_vel[i] = 1;
@@ -440,56 +597,136 @@ uint32_t dai_show_validate(const dai_show_plan *p, const dai_show_settings *s,
         // The broadphase. The cell edge is the minimum distance plus twice the
         // furthest any drone travelled in this interval, so two drones that
         // touch at any instant inside it are at most one cell apart at the end
-        // of it - which is where they are indexed. Drone i is compared with
-        // what is already in the table, exactly the drones below it in index
-        // order, so every pair is tested once, in a fixed order, and never n^2.
+        // of it - which is where they are indexed.
+        //
+        // The fleet goes in first and is queried afterwards, which is what buys
+        // the half block: with everybody in the table, a pair sharing a cell is
+        // found from the lower index and a pair in adjacent cells from the one
+        // that sees the other through a positive offset. Every unordered pair
+        // is still tested exactly once - the list is the same list - off
+        // thirteen probes and one own-cell walk per drone instead of
+        // twenty-seven probes. Never n^2, at either count.
         float cell = min_d + 2.0f * reach_max;
         if (!(cell > 0.0f)) cell = 1.0f;
         const float inv_cell = 1.0f / cell;
 
-        std::fill(grid.head.begin(), grid.head.end(), -1);
-
+        // Count, prefix sum, place: the fleet ends up grouped by bucket, and a
+        // bucket is then a pair of offsets rather than a walk through pointers.
+        const uint32_t buckets = grid.mask + 1u;
+        {
+            const int32_t lo[3] = { cell_of(bb_lo[0], inv_cell), cell_of(bb_lo[1], inv_cell),
+                                    cell_of(bb_lo[2], inv_cell) };
+            const int32_t hi[3] = { cell_of(bb_hi[0], inv_cell), cell_of(bb_hi[1], inv_cell),
+                                    cell_of(bb_hi[2], inv_cell) };
+            grid.frame(lo, hi);
+        }
+        std::fill(grid.fill.begin(), grid.fill.end(), 0u);
         for (uint32_t i = 0; i < n; ++i) {
             const dai_show_point &pi = cur[i];
-            int32_t cx = cell_of(pi.x, inv_cell);
-            int32_t cy = cell_of(pi.y, inv_cell);
-            int32_t cz = cell_of(pi.z, inv_cell);
-            for (int ddx = -1; ddx <= 1; ++ddx)
-            for (int ddy = -1; ddy <= 1; ++ddy)
-            for (int ddz = -1; ddz <= 1; ++ddz) {
-                int32_t nx = cx + ddx, ny = cy + ddy, nz = cz + ddz;
-                uint32_t h = cell_hash(nx, ny, nz, grid.mask);
-                for (int32_t jj = grid.head[h]; jj >= 0; jj = grid.next[jj]) {
-                    // The bucket can hold foreign cells - a hash is not a cell.
-                    if (grid.cell[jj * 3 + 0] != nx || grid.cell[jj * 3 + 1] != ny ||
-                        grid.cell[jj * 3 + 2] != nz) continue;
-                    const uint32_t j = (uint32_t)jj;
-                    ++st.pairs_tested;
-                    // The cheap rejection first. The cells are as wide as the
-                    // furthest ANY drone moved this interval, so most of what
-                    // lands in them is a pair that was never going to touch:
-                    // if the two are further apart at the end of the interval
-                    // than the limit plus what the two of them could possibly
-                    // have travelled, no instant inside it can be closer.
-                    const dai_show_point &pj = cur[j];
-                    float ex = pi.x - pj.x, ey = pi.y - pj.y, ez = pi.z - pj.z;
-                    float end_d = std::sqrt(ex * ex + ey * ey + ez * ez);
-                    if (end_d < st.min_distance_m) st.min_distance_m = end_d;
-                    if (end_d > min_d + reach[i] + reach[j]) continue;
-                    Sep sep = swept_pair(p, i, j, t0, t, prev[i], pi, prev[j], cur[j],
-                                         kfirst.data(), kend.data(), bow.data(), floor_m);
-                    if (sep.hi < st.min_distance_m) st.min_distance_m = sep.hi;
-                    if (sep.lo < floor_m) {
-                        float value = sep.lo < 0.0f ? 0.0f : sep.lo;
-                        rec.hit(j < i ? j : i, j < i ? i : j,
-                                DAI_SHOW_CONFLICT_DISTANCE, value, min_d, t, tick);
-                    }
+            const int32_t cx = cell_of(pi.x, inv_cell);
+            const int32_t cy = cell_of(pi.y, inv_cell);
+            const int32_t cz = cell_of(pi.z, inv_cell);
+            const uint32_t h = grid.index(cx, cy, cz);
+            grid.cell[i * 3 + 0] = cx; grid.cell[i * 3 + 1] = cy; grid.cell[i * 3 + 2] = cz;
+            grid.bucket[i] = h;
+            ++grid.fill[h];
+        }
+        {
+            uint32_t run = 0;
+            for (uint32_t h = 0; h < buckets; ++h) {
+                grid.start[h] = run;
+                run += grid.fill[h];
+                grid.fill[h] = grid.start[h];
+            }
+            grid.start[buckets] = run;
+        }
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t slot = grid.fill[grid.bucket[i]]++;
+            grid.id[slot]         = i;
+            grid.scell[slot * 3 + 0] = grid.cell[i * 3 + 0];
+            grid.scell[slot * 3 + 1] = grid.cell[i * 3 + 1];
+            grid.scell[slot * 3 + 2] = grid.cell[i * 3 + 2];
+            grid.spos[slot]       = cur[i];
+        }
+
+        // One pair, measured. Everything above decides WHICH pairs get here;
+        // this decides what the answer is, and it is the only place a distance
+        // conflict is born.
+        auto test_pair = [&](uint32_t i, uint32_t j, const dai_show_point &pj) {
+            ++st.pairs_tested;
+            // The cheap rejection first. The cells are as wide as the furthest
+            // ANY drone moved this interval, so most of what lands in them is a
+            // pair that was never going to touch: if the two are further apart
+            // at the end of the interval than the limit plus what the two of
+            // them could possibly have travelled, no instant inside it can be
+            // closer.
+            const dai_show_point &pi = cur[i];
+            float ex = pi.x - pj.x, ey = pi.y - pj.y, ez = pi.z - pj.z;
+            float end_d = std::sqrt(ex * ex + ey * ey + ez * ez);
+            if (end_d < st.min_distance_m) st.min_distance_m = end_d;
+            if (end_d > min_d + reach[i] + reach[j]) return;
+            // The second rejection, and the one that pays: the same
+            // parallelogram bound the refinement starts from, computed straight
+            // off the two chords with the bow of each polyline as slack. A pair
+            // that clears the floor by that bound cannot break the rule
+            // anywhere inside the interval, whatever the two profiles do with
+            // the timing - so it needs neither the keyframe split list nor a
+            // single extra plan sample. Only pairs that are genuinely near the
+            // limit pay for the refinement below.
+            const Vec3 c  = vsub(vof(prev[i]), vof(prev[j]));
+            const Vec3 e1 = vsub(vof(pi), vof(prev[i]));
+            const Vec3 e2 = vsub(vof(prev[j]), vof(pj));
+            if (dist_origin_parallelogram(c, e1, e2) - (bow[i] + bow[j]) >= floor_m) return;
+            Sep sep = swept_pair(p, i, j, t0, t, prev[i], pi, prev[j], pj,
+                                 kfirst.data(), kend.data(), bow.data(), floor_m);
+            if (sep.hi < st.min_distance_m) st.min_distance_m = sep.hi;
+            if (sep.lo < floor_m) {
+                float value = sep.lo < 0.0f ? 0.0f : sep.lo;
+                rec.hit_pair(j < i ? j : i, j < i ? i : j, value, min_d, t, tick);
+            }
+        };
+
+        // The drones are walked in bucket order, not in index order. Two drones
+        // that stand in one cell then probe the same fourteen buckets one after
+        // the other, so the second one finds them in the first level of cache -
+        // which is what a broadphase spends its time on once the arithmetic is
+        // this cheap. The pairs, and therefore every conflict below, do not
+        // depend on the order: each is keyed on the lower index of the two and
+        // the finished list is sorted before it leaves this function.
+        for (uint32_t k = 0; k < n; ++k) {
+            const uint32_t i  = grid.id[k];
+            const int32_t  cx = grid.scell[k * 3 + 0];
+            const int32_t  cy = grid.scell[k * 3 + 1];
+            const int32_t  cz = grid.scell[k * 3 + 2];
+            const uint32_t tx[3] = { grid.term_x(cx - 1), grid.term_x(cx), grid.term_x(cx + 1) };
+            const uint32_t ty[3] = { grid.term_y(cy - 1), grid.term_y(cy), grid.term_y(cy + 1) };
+            const uint32_t tz[3] = { grid.term_z(cz - 1), grid.term_z(cz), grid.term_z(cz + 1) };
+
+            // The own cell, from the lower index up.
+            {
+                const uint32_t h = grid.bucket[i];
+                for (uint32_t m = grid.start[h], e = grid.start[h + 1]; m < e; ++m) {
+                    if (grid.id[m] <= i) continue;
+                    if (grid.scell[m * 3 + 0] != cx || grid.scell[m * 3 + 1] != cy ||
+                        grid.scell[m * 3 + 2] != cz) continue;
+                    test_pair(i, grid.id[m], grid.spos[m]);
                 }
             }
-            uint32_t hi = cell_hash(cx, cy, cz, grid.mask);
-            grid.cell[i * 3 + 0] = cx; grid.cell[i * 3 + 1] = cy; grid.cell[i * 3 + 2] = cz;
-            grid.next[i] = grid.head[hi];
-            grid.head[hi] = (int32_t)i;
+            // And the thirteen cells on the positive side of it.
+            for (int o = 0; o < 13; ++o) {
+                const int32_t nx = cx + HALF_BLOCK[o].dx;
+                const int32_t ny = cy + HALF_BLOCK[o].dy;
+                const int32_t nz = cz + HALF_BLOCK[o].dz;
+                const uint32_t h = (tx[HALF_BLOCK[o].dx + 1] +
+                                    ty[HALF_BLOCK[o].dy + 1] +
+                                    tz[HALF_BLOCK[o].dz + 1]) & grid.mask;
+                for (uint32_t m = grid.start[h], e = grid.start[h + 1]; m < e; ++m) {
+                    // A bucket can hold foreign cells - a hash is not a cell.
+                    if (grid.scell[m * 3 + 0] != nx || grid.scell[m * 3 + 1] != ny ||
+                        grid.scell[m * 3 + 2] != nz) continue;
+                    test_pair(i, grid.id[m], grid.spos[m]);
+                }
+            }
         }
 
         rec.close_stale(tick);
@@ -504,7 +741,14 @@ uint32_t dai_show_validate(const dai_show_plan *p, const dai_show_settings *s,
                   if (x.time_s != y.time_s) return x.time_s < y.time_s;
                   if (x.a != y.a) return x.a < y.a;
                   if (x.b != y.b) return x.b < y.b;
-                  return x.kind < y.kind;
+                  if (x.kind != y.kind) return x.kind < y.kind;
+                  // Two episodes of one pair and one rule can in principle
+                  // share a worst instant. The order is settled on the numbers
+                  // themselves rather than left to the sort, because a sort
+                  // that is free to choose is a list that can differ between
+                  // two runs - which is the one thing this file may not do.
+                  if (x.value != y.value) return x.value < y.value;
+                  return x.limit < y.limit;
               });
 
     st.conflicts  = rec.total;
