@@ -50,11 +50,19 @@ test_objmodel
 test_assets
 test_thumb
 test_assetkind
+test_editor_ui
 test_window_two
 "
 # Deliberately NOT here (each needs a GPU or a display):
 #   test_render_visual test_ui_text test_gltf test_particles test_skinning
-#   test_ui test_viewport test_editor_ui test_window
+#   test_ui test_viewport test_window
+#
+# test_editor_ui was on that list too and did not belong there either: it
+# creates no renderer and opens no window, it feeds the panels a pointer and
+# reads the vertices back. Excluded, it rotted - the hierarchy grew a search
+# box above its tree and nine checks had been clicking one row too high for
+# months. It runs here now, and it carries the check that the gizmo lands on
+# the object it moves.
 #
 # test_assets USED to be on that list and does not belong there: it mounts a
 # folder and reads geometry, and the only thing it ever wanted a renderer for
@@ -154,19 +162,49 @@ done
 SHOTS=${DAI_SHOTS_DIR:-.gauntlet-shots}
 if [ -x build/droneshow_shot ]; then
     mkdir -p "$SHOTS"
+    # All three sets, exactly as build.sh makes them: the plain names at
+    # 1600x900, `narrow-` at 1100x700 where a panel that guesses its layout
+    # collides with itself, `wide-` at 1920x1080. One size refreshed and two
+    # left from last month is worse than none, because the stale two look
+    # current.
+    for SET in 1600x900: 1100x700:narrow- 1920x1080:wide-; do
+        DIM=${SET%%:*}; TAG=${SET#*:}
+        SW=${DIM%%x*}; SH=${DIM##*x}
+        OUT=$(DAI_SHADER_DIR=shaders DISPLAY="$DAI_TEST_DISPLAY" timeout 300 \
+              ./build/droneshow_shot "$SHOTS" "$SW" "$SH" "$TAG" 2>&1)
+        RC=$?
+        NAME="droneshow_shot ${TAG:-plain}"
+        if [ "$RC" = "0" ]; then
+            printf '%-20s %3s/%-3s  ok  (%s %sx%s)\n' "$NAME" "-" "-" "$SHOTS" "$SW" "$SH"
+            [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+        else
+            FAILED="$FAILED droneshow_shot(${SW}x${SH})"
+            printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "$NAME" "-" "-" "$RC"
+            printf '%s\n' "$OUT" | tail -8 | sed 's/^/    /'
+        fi
+    done
+else
+    MISSING="$MISSING droneshow_shot"
+fi
+
+# The game-mode picture that sits beside the show sets, from the tool that
+# makes the editor's own shots. Same reason: a picture nobody can regenerate is
+# a picture that is wrong by the next review.
+if [ -x build/editor_shot ]; then
+    mkdir -p "$SHOTS" build/editor_shots
     OUT=$(DAI_SHADER_DIR=shaders DISPLAY="$DAI_TEST_DISPLAY" timeout 300 \
-          ./build/droneshow_shot "$SHOTS" 1600 900 2>&1)
+          ./build/editor_shot build/editor_shots 1600 900 "$SHOTS" 2>&1)
     RC=$?
     if [ "$RC" = "0" ]; then
-        printf '%-20s %3s/%-3s  ok  (%s)\n' "droneshow_shot" "-" "-" "$SHOTS"
+        printf '%-20s %3s/%-3s  ok  (%s/09-game-mode-editor.png)\n' "editor_shot" "-" "-" "$SHOTS"
         [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
     else
-        FAILED="$FAILED droneshow_shot"
-        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "droneshow_shot" "-" "-" "$RC"
+        FAILED="$FAILED editor_shot"
+        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "editor_shot" "-" "-" "$RC"
         printf '%s\n' "$OUT" | tail -8 | sed 's/^/    /'
     fi
 else
-    MISSING="$MISSING droneshow_shot"
+    MISSING="$MISSING editor_shot"
 fi
 
 echo "-------------------------------------------"

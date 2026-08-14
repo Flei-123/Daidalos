@@ -2,7 +2,11 @@
 // timeline - to PNGs, so the panels can be looked at instead of only asserted
 // about.
 //
-//   DAI_SHADER_DIR=shaders ./build/editor_shot /tmp/out
+//   DAI_SHADER_DIR=shaders ./build/editor_shot /tmp/out [W] [H] [GAUNTLET_DIR]
+//
+// The working shots are `editor_*.png` in the output folder. With a fifth
+// argument it also writes `09-game-mode-editor.png` into that folder - the
+// game-mode picture the review shows next to the drone show panels.
 
 #include "dai_editor_ui.h"
 #include "dai_render.h"
@@ -15,6 +19,10 @@
 
 int main(int argc, char **argv) {
     std::string outdir = argc > 1 ? argv[1] : "/tmp";
+    // Where the one picture the review looks at goes, under the name the
+    // review knows it by: `09-game-mode-editor.png`. Empty means "only the
+    // editor_*.png working shots".
+    std::string gauntlet = argc > 4 ? argv[4] : "";
 
     dai_config cfg{};
     cfg.tick_hz = 60; cfg.max_bodies = 256; cfg.physics_threads = 1;
@@ -110,12 +118,32 @@ int main(int argc, char **argv) {
     dai_editor_select(ed, target, 0);
     dai_editor_ui *panels = dai_editor_ui_create(ed, ui);
 
-    auto shot = [&](const char *name, float mx, float my) {
+    // `file` is the picture's name; the ordinary shots write editor_<name>.png
+    // into outdir, and the one the gauntlet collects writes its own name.
+    auto shot_to = [&](const char *name, const std::string &path, float mx, float my) {
         std::vector<dai_render_instance> inst(256);
         uint32_t n = dai_scene_instances(sc, inst.data(), (uint32_t)inst.size(), 1.0f);
 
         dai_ui_input in{};
         in.mouse_x = mx; in.mouse_y = my;
+
+        // The world is not drawn over the whole frame - it is drawn into the
+        // Scene panel's body rect, with that rect's aspect. The gizmo is UI,
+        // in surface pixels, so the editor's camera has to know the same
+        // rectangle or the handles land next to the body they move (measured
+        // at 92 px here before this pass existed; tests/test_editor_ui.cpp
+        // holds the < 5 px check). The rect only exists once the dock has laid
+        // itself out, so the layout frame comes first and the photographed
+        // frame second - which is what examples/editor_demo.cpp does too.
+        dai_ui_begin(ui, (float)W, (float)H, &in);
+        dai_editor_ui_frame(panels, (float)W, (float)H);
+        dai_ui_end(ui);
+        {
+            float lx = 0, ly = 0, lw = (float)W, lh = (float)H;
+            dai_editor_ui_viewport_rect(panels, &lx, &ly, &lw, &lh);
+            dai_editor_camera_viewport_rect(ed, lx, ly, lw, lh);
+        }
+
         dai_ui_begin(ui, (float)W, (float)H, &in);
         dai_editor_ui_frame(panels, (float)W, (float)H);
         dai_ui_end(ui);
@@ -142,11 +170,27 @@ int main(int argc, char **argv) {
             dai_render_lines(r, grid_xyz, gn, 0.35f, 0.38f, 0.42f, 0.75f);
         }
         dai_render_frame(r, inst.data(), n);
-        std::string path = outdir + "/editor_" + name + ".png";
         dai_render_write_png(r, path.c_str());
         std::printf("%-10s %u instances, %u ui verts -> %s\n", name, n,
                     (uint32_t)verts.size(), path.c_str());
     };
+    auto shot = [&](const char *name, float mx, float my) {
+        shot_to(name, outdir + "/editor_" + std::string(name) + ".png", mx, my);
+    };
+
+    // The Project panel gets the files a game project of this checkout really
+    // has, so the bottom of the picture shows a browser with content instead
+    // of the empty "nothing mounted" placeholder.
+    {
+        // Leaf names, not paths: the browser turns a path into a folder to
+        // open, and a photograph of a closed folder shows nothing. These are
+        // the files of assets/test in this checkout.
+        static const char *const ASSETS[] = {
+            "blender_scene.glb", "parented.gltf", "skinned.glb",
+            "Grid.png",          "ui.png",        "bindings.cfg"
+        };
+        dai_editor_ui_asset_list(panels, ASSETS, (uint32_t)(sizeof(ASSETS) / sizeof(ASSETS[0])));
+    }
 
     shot("edit", 640, 360);
 
@@ -197,6 +241,19 @@ int main(int argc, char **argv) {
                           dai_vec3{ 0, 1, 0 }, 55.0f, 0.1f, 200.0f);
     }
     shot("focus", 640, 360);
+
+    // The picture the gauntlet collects: the SAME binary in game mode, so the
+    // drone show set next to it is visibly one editor with two panel sets and
+    // not two programs. It is written from here rather than by hand, because a
+    // screenshot no tool produces is a screenshot nobody can reproduce.
+    if (!gauntlet.empty()) {
+        dai_editor_camera(ed, eye, look, up, 55.0f, 0.1f, 200.0f, (float)W, (float)H);
+        dai_render_camera(r, eye, look, up, 55.0f, 0.1f, 200.0f);
+        dai_editor_select(ed, target, 0);
+        dai_editor_gizmo_mode(ed, DAI_GIZMO_TRANSLATE);
+        dai_editor_gizmo_hover(ed, -1000.0f, -1000.0f);
+        shot_to("game-mode", gauntlet + "/09-game-mode-editor.png", (float)W * 0.5f, (float)H * 0.5f);
+    }
 
     dai_editor_ui_destroy(panels);
     dai_editor_destroy(ed);

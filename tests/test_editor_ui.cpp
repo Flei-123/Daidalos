@@ -121,9 +121,28 @@ int main() {
     uint32_t rows_open = dai_editor_ui_visible_rows(panels);
     CHECK(rows_open == 4, "hierarchy shows %u rows, expected 4", rows_open);
 
-    // click the fold arrow of the parent row. Rows start below the panel title.
+    // Click the fold arrow of the parent row. The tree no longer starts one
+    // row under the panel title - there is a search box above it now, and
+    // whatever goes in there next moves the rows again - so the arrow is
+    // FOUND rather than computed: walk down the arrow column until a click
+    // folds the only foldable row in the fixture, which is the parent. The
+    // assertions below are unchanged; only the way the row is located is.
     float row_x = PANEL_X + PAD + 6.0f;              // panel x + arrow column
-    float row_y = FIRST_ROW_Y + ROW_H * 0.5f;
+    float row_y = -1.0f;
+    for (float ty = PANEL_Y + PAD; ty < PANEL_Y + 8.0f * ROW_H && row_y < 0.0f; ty += 2.0f) {
+        frame(row_x, ty, 0);
+        frame(row_x, ty, 1);
+        frame(row_x, ty, 0);
+        if (dai_editor_ui_visible_rows(panels) == 2) row_y = ty;
+    }
+    CHECK(row_y >= 0.0f, "no row in the hierarchy's arrow column folds the parent");
+    if (row_y < 0.0f) row_y = FIRST_ROW_Y + ROW_H * 0.5f;
+    // Back open, nothing selected, and then the click the check is about - so
+    // "the fold did not select anything" is a statement about that click and
+    // not about the search above it.
+    frame(row_x, row_y, 1);
+    frame(row_x, row_y, 0);
+    dai_editor_deselect_all(ed);
     frame(row_x, row_y, 0);
     frame(row_x, row_y, 1);
     frame(row_x, row_y, 0);
@@ -138,11 +157,37 @@ int main() {
     CHECK(dai_editor_ui_visible_rows(panels) == 4, "unfolding did not restore the rows");
 
     // ---- 3. clicking a row selects it -------------------------------------
-    float label_x = PANEL_X + PAD + 30.0f;           // past the arrow column
-    frame(label_x, row_y, 1);
-    frame(label_x, row_y, 0);
-    CHECK(dai_editor_selection_count(ed) == 1, "clicking a row did not select it");
-    CHECK(dai_editor_selected(ed, 0) == parent, "the wrong row got selected");
+    // Selecting is a FRAME level gesture: the hierarchy records the press, and
+    // dai_editor_ui_frame turns it into a selection when the button comes up
+    // without a drag - that difference is what makes a row draggable at all.
+    // So this one goes through the real frame function, and finds the row by
+    // walking down the hierarchy column of the built in layout.
+    auto full_frame = [&](float mx, float my, int down) {
+        dai_ui_input in{};
+        in.mouse_x = mx; in.mouse_y = my; in.mouse_down = down;
+        dai_ui_begin(ui, 1280, 720, &in);
+        dai_editor_ui_frame(panels, 1280, 720);
+        dai_ui_end(ui);
+    };
+    dai_editor_deselect_all(ed);
+    full_frame(-100, -100, 0);
+    full_frame(-100, -100, 0);
+    {
+        float lvx = 0, lvy = 0, lvw = 0, lvh = 0;
+        dai_editor_ui_viewport_rect(panels, &lvx, &lvy, &lvw, &lvh);
+        float label_x = lvx * 0.45f;                 // inside the hierarchy, past its arrows
+        int picked = 0;
+        for (float ty = lvy; ty < lvy + 12.0f * ROW_H && !picked; ty += 3.0f) {
+            full_frame(label_x, ty, 0);
+            full_frame(label_x, ty, 1);
+            full_frame(label_x, ty, 0);
+            full_frame(label_x, ty, 0);
+            if (dai_editor_selection_count(ed) == 1 && dai_editor_selected(ed, 0) == parent)
+                picked = 1;
+        }
+        CHECK(dai_editor_selection_count(ed) == 1, "clicking a row did not select it");
+        CHECK(dai_editor_selected(ed, 0) == parent, "the wrong row got selected");
+    }
 
     // ---- 4. the inspector edits the document ------------------------------
     std::printf("inspector\n");
@@ -274,11 +319,19 @@ int main() {
     dai_editor_ui_viewport_input(panels, ax + 40.0f, ay, 0);
     CHECK(!dai_editor_dragging(ed), "the drag did not end on release");
 
-    // Clicking empty space clears the selection.
-    frame(1000, 690, 0);
-    dai_editor_ui_viewport_input(panels, 20, 700, 1);
-    dai_editor_ui_viewport_input(panels, 20, 700, 0);
-    CHECK(dai_editor_selection_count(ed) == 0, "clicking empty space did not clear the selection");
+    // Clicking empty space clears the selection - empty space INSIDE the scene
+    // view, because a press on a tab bar or a splitter is not a scene click at
+    // all and deliberately keeps the selection.
+    {
+        float evx = 0, evy = 0, evw = 1280.0f, evh = 720.0f;
+        dai_editor_ui_viewport_rect(panels, &evx, &evy, &evw, &evh);
+        float ex = evx + 12.0f, ey = evy + evh - 12.0f;    // bottom left of the view
+        frame(ex, ey, 0);
+        dai_editor_ui_viewport_input(panels, ex, ey, 1);
+        dai_editor_ui_viewport_input(panels, ex, ey, 0);
+        CHECK(dai_editor_selection_count(ed) == 0,
+              "clicking empty space at %.0f,%.0f did not clear the selection", (double)ex, (double)ey);
+    }
 
     // ---- asset browser -----------------------------------------------------
     // The panel does not know where its list comes from - the host fills it,
@@ -521,6 +574,134 @@ int main() {
               "the game camera's look point is not one unit ahead of it");
         dai_doc_remove(doc, cam);
         dai_doc_sync_apply(sync);
+    }
+
+    // ---- 11. the gizmo stands ON the selected object ----------------------
+    // The world is not drawn over the whole frame: the renderer puts it in the
+    // Scene panel's body rect, with THAT rectangle's aspect. The gizmo is UI,
+    // drawn in surface pixels, so it only lands on the object if the editor's
+    // camera knows the same rectangle. A host that forgets
+    // dai_editor_camera_viewport_rect gets a gizmo a hundred pixels down and
+    // to the right of the body it is supposed to move - which is exactly what
+    // .gauntlet-shots/09-game-mode-editor.png showed before this check existed.
+    //
+    // The reference position below is computed the way src/rhi_vulkan_frame.cpp
+    // does it - look-at, perspective with the RECT's aspect, then the viewport
+    // transform onto the rect - and not with dai_editor_project, or the check
+    // would only prove the editor agrees with itself.
+    {
+        dai_node_desc bd = dai_node_desc_default();
+        std::snprintf(bd.name, sizeof(bd.name), "GizmoTarget");
+        bd.motion = DAI_KINEMATIC;
+        bd.position = { 1.6f, 0.9f, -0.7f };
+        dai_node target = dai_doc_add(doc, &bd);
+        dai_doc_sync_apply(sync);
+        dai_step(w);
+
+        const dai_vec3 eye{ 5.4f, 4.0f, 8.6f }, look{ 0.0f, 1.1f, 0.0f }, up{ 0, 1, 0 };
+        const float FOV = 55.0f, FW = 1600.0f, FH = 900.0f;
+        dai_editor_camera(ed, eye, look, up, FOV, 0.1f, 200.0f, FW, FH);
+        dai_editor_select(ed, target, 0);
+        dai_editor_gizmo_mode(ed, DAI_GIZMO_TRANSLATE);
+
+        // One frame to lay the dock out, then the rect it produced - the same
+        // two steps examples/editor_demo.cpp takes every frame.
+        dai_ui_input gin{};
+        gin.mouse_x = -100; gin.mouse_y = -100;
+        dai_ui_begin(ui, FW, FH, &gin);
+        dai_editor_ui_frame(panels, FW, FH);
+        dai_ui_end(ui);
+        float vx = 0, vy = 0, vw = 0, vh = 0;
+        dai_editor_ui_viewport_rect(panels, &vx, &vy, &vw, &vh);
+        CHECK(vw > 100.0f && vh > 100.0f && (vx > 1.0f || vy > 1.0f),
+              "the scene body rect is not a sub-rectangle of the frame: %.0f,%.0f %.0fx%.0f",
+              (double)vx, (double)vy, (double)vw, (double)vh);
+        dai_editor_camera_viewport_rect(ed, vx, vy, vw, vh);
+
+        // Where the RENDERER puts the object's centre, in surface pixels.
+        auto ref_project = [&](dai_vec3 p, float *sx, float *sy) {
+            dai_vec3 f{ look.x - eye.x, look.y - eye.y, look.z - eye.z };
+            float fl = std::sqrt(f.x*f.x + f.y*f.y + f.z*f.z);
+            f = { f.x/fl, f.y/fl, f.z/fl };
+            dai_vec3 rgt{ f.y*up.z - f.z*up.y, f.z*up.x - f.x*up.z, f.x*up.y - f.y*up.x };
+            float rl = std::sqrt(rgt.x*rgt.x + rgt.y*rgt.y + rgt.z*rgt.z);
+            rgt = { rgt.x/rl, rgt.y/rl, rgt.z/rl };
+            dai_vec3 u2{ rgt.y*f.z - rgt.z*f.y, rgt.z*f.x - rgt.x*f.z, rgt.x*f.y - rgt.y*f.x };
+            dai_vec3 v{ p.x - eye.x, p.y - eye.y, p.z - eye.z };
+            float z = v.x*f.x + v.y*f.y + v.z*f.z;
+            float t = std::tan(FOV * 3.14159265358979323846f / 360.0f);
+            float aspect = vw / vh;                       // the RECT's aspect
+            float ndc_x = (v.x*rgt.x + v.y*rgt.y + v.z*rgt.z) / (z * t * aspect);
+            float ndc_y = (v.x*u2.x + v.y*u2.y + v.z*u2.z) / (z * t);
+            *sx = vx + (ndc_x + 1.0f) * 0.5f * vw;        // the viewport transform
+            *sy = vy + (1.0f - ndc_y) * 0.5f * vh;
+        };
+        dai_vec3 wp{}, ws{ 1, 1, 1 };
+        dai_quat wr{ 0, 0, 0, 1 };
+        dai_doc_world_transform(doc, target, &wp, &wr, &ws);
+        float ox = 0, oy = 0;
+        ref_project(wp, &ox, &oy);
+        CHECK(ox > vx && ox < vx + vw && oy > vy && oy < vy + vh,
+              "the fixture object is not inside the scene rect (%.1f,%.1f)", (double)ox, (double)oy);
+
+        // 1. the anchor the gizmo model uses: the point its arms share.
+        uint32_t gn = dai_editor_gizmo_lines(ed, nullptr, 0);
+        CHECK(gn >= 3, "the translate gizmo produced %u lines", gn);
+        std::vector<dai_gizmo_line> gl(gn ? gn : 1);
+        dai_editor_gizmo_lines(ed, gl.data(), gn);
+        // The anchor is the one point all three ARMS meet at - the arrow tips
+        // are shared by four lines each, so counting endpoints is not enough:
+        // what identifies the centre is that lines of three DIFFERENT axes
+        // touch it.
+        dai_vec3 anchor{ 0, 0, 0 };
+        int anchor_hits = 0;
+        for (uint32_t i = 0; i < gn * 2; ++i) {
+            dai_vec3 p = (i & 1u) ? gl[i / 2].b : gl[i / 2].a;
+            int axes = 0;
+            for (int ax = DAI_AXIS_X; ax <= DAI_AXIS_Z; ++ax) {
+                for (uint32_t j = 0; j < gn; ++j) {
+                    if (gl[j].axis != ax) continue;
+                    float dax = gl[j].a.x - p.x, day = gl[j].a.y - p.y, daz = gl[j].a.z - p.z;
+                    float dbx = gl[j].b.x - p.x, dby = gl[j].b.y - p.y, dbz = gl[j].b.z - p.z;
+                    if (std::sqrt(dax*dax + day*day + daz*daz) < 1e-4f ||
+                        std::sqrt(dbx*dbx + dby*dby + dbz*dbz) < 1e-4f) { ++axes; break; }
+                }
+            }
+            if (axes > anchor_hits) { anchor_hits = axes; anchor = p; }
+        }
+        CHECK(anchor_hits == 3, "no point is shared by all three gizmo arms (best %d)", anchor_hits);
+        float gax = 0, gay = 0;
+        CHECK(dai_editor_project(ed, anchor, &gax, &gay) == 1, "the gizmo anchor does not project");
+        float d_anchor = std::sqrt((gax - ox)*(gax - ox) + (gay - oy)*(gay - oy));
+        CHECK(d_anchor < 5.0f,
+              "the gizmo anchor is %.1f px off the object: gizmo at %.1f,%.1f, object at %.1f,%.1f",
+              (double)d_anchor, (double)gax, (double)gay, (double)ox, (double)oy);
+
+        // 2. what dai_editor_ui_gizmo really DRAWS. The rotate gizmo is three
+        //    rings around the anchor, so the centre of the ink it puts down is
+        //    the anchor - a check on the pixels, not on the model behind them.
+        dai_editor_gizmo_mode(ed, DAI_GIZMO_ROTATE);
+        dai_ui_begin(ui, FW, FH, &gin);
+        dai_editor_ui_gizmo(panels);
+        dai_ui_end(ui);
+        float bx0, by0, bx1, by1;
+        vert_bounds(ui, &bx0, &by0, &bx1, &by1);
+        CHECK(total_verts(ui) > 0, "the gizmo drew nothing at all");
+        float cx = (bx0 + bx1) * 0.5f, cy = (by0 + by1) * 0.5f;
+        float d_drawn = std::sqrt((cx - ox)*(cx - ox) + (cy - oy)*(cy - oy));
+        CHECK(d_drawn < 5.0f,
+              "the drawn gizmo's centre is %.1f px off the object: %.1f,%.1f vs %.1f,%.1f",
+              (double)d_drawn, (double)cx, (double)cy, (double)ox, (double)oy);
+        std::printf("  gizmo anchor %.1f px, drawn centre %.1f px from the object centre\n",
+                    (double)d_anchor, (double)d_drawn);
+        dai_editor_gizmo_mode(ed, DAI_GIZMO_TRANSLATE);
+
+        dai_editor_deselect_all(ed);
+        dai_doc_remove(doc, target);
+        dai_doc_sync_apply(sync);
+        dai_editor_camera(ed, dai_vec3{ 0, 3, 10 }, dai_vec3{ 0, 0, 0 }, dai_vec3{ 0, 1, 0 },
+                          55.0f, 0.1f, 200.0f, 1280.0f, 720.0f);
+        dai_editor_camera_viewport_rect(ed, 0.0f, 0.0f, 1280.0f, 720.0f);
     }
 
     dai_editor_ui_destroy(panels);

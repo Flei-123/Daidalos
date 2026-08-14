@@ -425,6 +425,13 @@ if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc tools/daifracture.cpp src/dai_fracture.cpp src/dai_gltf_geom.cpp \
         src/dai_gltf_write.cpp src/dai_json.cpp -o build/daifracture
     g++ $FLAGS $ARCH -Iinclude tools/editor_shot.cpp $VKLIBS -o build/editor_shot
+    # The game-mode editor, photographed by the same tool and under the name
+    # the review knows it by. The working shots go to build/editor_shots, the
+    # one picture the drone show set is compared against goes next to it in
+    # .gauntlet-shots - so nothing in that folder is a leftover nobody can
+    # regenerate.
+    mkdir -p build/editor_shots .gauntlet-shots
+    DAI_SHADER_DIR=shaders ./build/editor_shot build/editor_shots 1600 900 .gauntlet-shots
     # The show panels, photographed. Next to editor_shot because it is the same
     # kind of tool, and RUN here rather than by hand: a screenshot somebody has
     # to remember to regenerate is a screenshot that is wrong by the second
@@ -433,7 +440,14 @@ if [ "$VK_OK" = "1" ]; then
     # into an image and writes the PNG.
     g++ $FLAGS $ARCH -Iinclude tools/droneshow_shot.cpp $VKLIBS -o build/droneshow_shot
     mkdir -p .gauntlet-shots
+    # All three window sizes, from one command: the plain names are the
+    # default 1600x900, `narrow-` is where a panel that guesses its layout
+    # collides with itself, `wide-` is the projector in the control tent.
+    # A set that only one person knows the incantation for is a set nobody
+    # regenerates.
     DAI_SHADER_DIR=shaders ./build/droneshow_shot .gauntlet-shots 1600 900
+    DAI_SHADER_DIR=shaders ./build/droneshow_shot .gauntlet-shots 1100 700  narrow-
+    DAI_SHADER_DIR=shaders ./build/droneshow_shot .gauntlet-shots 1920 1080 wide-
 fi
 
 echo "-- examples"
