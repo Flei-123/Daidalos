@@ -1301,6 +1301,109 @@ void case_transition_pair_is_never_endpoint(void) {
 }
 
 // ---------------------------------------------------------------------------
+// [3m] a formation fault whose partner has to fly a DETOUR.
+//
+// [3i] proves a formation fault is named rather than blamed on the transition -
+// with two straight legs. This is the same fault where it used to be fatal: one
+// of the two drones is forced onto a lifted route by the traffic around it, and
+// a lifted route carries a chord reserve, because the plan stores a curve as a
+// polyline and the polyline cuts the corners.
+//
+// The separator used to add that reserve on top of every bar, INCLUDING the bar
+// of a pair whose bar is its own arrival gap - so the pair was asked to stay
+// "1.2 m plus the reserve" apart while its formation parks it at exactly 1.2 m.
+// No route can do that. The pair stayed open, every round escalated it, and the
+// stage finally answered "transition conflicts could not be separated" for a
+// fault it could never have separated. Measured on the shot fixture: drones 20
+// and 76, 1.200 m apart by the figure, still open after 32 rounds - and closing
+// to 1.108 m on the way, so the transition was also making the fault WORSE.
+//
+// The fix is to measure such a pair on the line the plan really stores instead
+// of on a bound with a reserve in it, and to hold it to the gap itself. What
+// this case asserts is the whole of that: the partner really is detoured (or
+// the fixture proves nothing), the pair is counted as one formation fault and
+// zero unresolved transitions, and the flown distance never falls below the
+// 1.2 m the formation gives it.
+void case_endpoint_fault_with_detour(void) {
+    show_section("[3m] a formation fault next to a detour is still not the transition's");
+
+    dai_show_settings s = plan_settings(2.0f, 8.0f, 4.0f);
+    const uint32_t n = 6;
+    std::vector<dai_show_point> from(n), to(n);
+    std::vector<uint32_t>       perm(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        perm[i] = i;
+        from[i] = pt(6.0f * (float)i, 50.0f, 0.0f, 200, 200, 200);
+        to[i]   = from[i];                          // four of them stay put
+    }
+    // Two travellers along the line the other four are parked on: each has to
+    // get past three standing drones, which is what buys them a lifted route.
+    to[0] = from[5];
+    // ...and the fault: the traveller coming the other way lands 1.2 m from the
+    // drone parked at x = 6, inside the 2 m floor. The formation's doing.
+    const float PLANTED = 1.2f;
+    to[5] = pt(from[1].x + PLANTED, 50.0f, 0.0f, 200, 200, 200);
+
+    dai_show_transition tr = dai_show_transition_default();
+    tr.duration_s = 12.0f;
+
+    std::vector<dai_show_leg> legs(n);
+    dai_show_layer_stats st;
+    dai_result r = dai_show_layer(from.data(), to.data(), n, perm.data(), &tr, &s,
+                                  0.0f, legs.data(), &st);
+
+    // The fixture checks itself: without a lift on one of the two faulted legs
+    // this case is [3i] again and proves nothing about the reserve.
+    CHECK(legs[5].rise_frac > 0.0f || legs[1].rise_frac > 0.0f,
+          "neither leg of the faulted pair was lifted (rise %.2f / %.2f) - this "
+          "case only bites when the pair carries a chord reserve",
+          (double)legs[5].rise_frac, (double)legs[1].rise_frac);
+    CHECK(std::fabs(dist(to[1], to[5]) - PLANTED) < 1e-3f,
+          "the fixture plants %.3f m and its own formation says %.3f m",
+          (double)PLANTED, (double)dist(to[1], to[5]));
+
+    CHECK(st.unresolved == 0,
+          "%u pairs blamed on the transition - a formation fault beside a detour "
+          "is still the formation's", (unsigned)st.unresolved);
+    CHECK(st.endpoint_pairs == 1,
+          "the %.2f m formation fault was counted %u times, expected once",
+          (double)PLANTED, (unsigned)st.endpoint_pairs);
+    CHECK(r == DAI_SHOW_LAYER_FORMATION_FAULT,
+          "the separator answered %d instead of naming the formation fault", (int)r);
+
+    // And the promise it can keep: the pair never closes below the gap the
+    // formation itself leaves, and the rest of the fleet keeps the full floor.
+    float worst_pair = 1e30f, worst_rest = 1e30f, t_pair = 0.0f, t_rest = 0.0f;
+    uint32_t ra = 0, rb = 0;
+    std::vector<dai_show_point> now(n);
+    const int STEPS = 4000;
+    float t0 = legs[0].t_start, t1 = legs[0].t_end;
+    for (uint32_t i = 0; i < n; ++i) {
+        t0 = std::fmin(t0, legs[i].t_start);
+        t1 = std::fmax(t1, legs[i].t_end);
+    }
+    for (int k = 0; k <= STEPS; ++k) {
+        float t = t0 + (t1 - t0) * ((float)k / (float)STEPS);
+        for (uint32_t i = 0; i < n; ++i)
+            daishow::leg_point(&legs[i], &from[i], &to[perm[i]], t, &now[i]);
+        for (uint32_t i = 0; i < n; ++i)
+            for (uint32_t j = i + 1; j < n; ++j) {
+                float d = dist(now[i], now[j]);
+                if (i == 1 && j == 5) { if (d < worst_pair) { worst_pair = d; t_pair = t; } }
+                else if (d < worst_rest) { worst_rest = d; t_rest = t; ra = i; rb = j; }
+            }
+    }
+    CHECK(worst_pair >= PLANTED - 1e-3f,
+          "the faulted pair closes to %.3f m at t = %.2f s and its formation only "
+          "puts it %.3f m apart - the transition made the fault worse",
+          (double)worst_pair, (double)t_pair, (double)PLANTED);
+    CHECK(worst_rest >= s.min_distance_m - 1e-3f,
+          "%u and %u come %.3f m apart at t = %.2f s while the floor is %.3f m",
+          (unsigned)ra, (unsigned)rb, (double)worst_rest, (double)t_rest,
+          (double)s.min_distance_m);
+}
+
+// ---------------------------------------------------------------------------
 // [3h] the leg that is longer than the grid.
 //
 // The separator indexes each leg into a uniform grid, and a grid has a limit
@@ -1381,6 +1484,7 @@ int show_cases_plan(void) {
     case_dense_formation();
     case_many_formation_faults();
     case_transition_pair_is_never_endpoint();
+    case_endpoint_fault_with_detour();
     case_long_leg();
     return g_show_fail - before;
 }

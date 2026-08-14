@@ -853,7 +853,39 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
         if (report_h < pitch * 3.0f) report_h = pitch * 3.0f;
     }
     const float settings_h = avail - report_h;
+    // The lower edge of the settings region, in the coordinates the layout
+    // cursor uses. Every row below is measured against it and is drawn only if
+    // the WHOLE of it fits: a number box sliced lengthwise by the edge of its
+    // own region is the defect this panel was rebuilt for, and it is worse on a
+    // field than on a label - half a value box still looks editable. A row that
+    // does not fit keeps its place in the layout, so the wheel brings it in
+    // whole and the region's scroll extent stays right.
+    const float settings_bottom = view_y + settings_h;
     dai_ui_scroll_begin(ui, "showparams", settings_h);
+    auto num_row = [&](const char *label, float *v, float step, float lo, float hi,
+                       const char *id) -> int {
+        float rh = widget_row(ui);
+        if (!fits(ui, settings_bottom, rh)) {
+            dai_ui_advance(ui, dai_ui_panel_width(ui), rh);
+            return 0;
+        }
+        return dai_ui_num_field(ui, label, v, step, lo, hi, id);
+    };
+    auto section_row = [&](const char *title) {
+        float rh = dai_ui_text_height(ui) + 12.0f;
+        if (!fits(ui, settings_bottom, rh)) { dai_ui_advance(ui, 0.0f, rh); return; }
+        dai_ui_section(ui, title);
+    };
+    auto choice_row = [&](const char *label, int *value, const char *const *items,
+                          int count, int as_strip) {
+        float rh = widget_row(ui);
+        if (!fits(ui, settings_bottom, rh)) {
+            dai_ui_advance(ui, dai_ui_panel_width(ui), rh);
+            return;
+        }
+        if (as_strip) seg_row(ui, label, value, items, count);
+        else          dai_ui_option(ui, label, value, items, count);
+    };
     // One column for the whole panel rather than one per section: a label
     // column that changes width halfway down reads as two panels stacked.
     const char *const LABELS[] = { "Drones", "Min dist (m)", "v max (m/s)", "a max (m/s2)",
@@ -861,30 +893,32 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
                                    "Fence Z (m)", "Ceiling (m)", "Ground (m)", "Take-off (m)" };
     float label_was = fit_labels(ui, LABELS, 12);
 
-    dai_ui_section(ui, "Fleet");
+    section_row("Fleet");
     float count = (float)u->s.drone_count;
     int changed = 0;
-    changed |= dai_ui_num_field(ui, "Drones", &count, 1.0f, 1.0f, 100000.0f, "showcount");
+    changed |= num_row("Drones", &count, 1.0f, 1.0f, 100000.0f, "showcount");
     u->s.drone_count = (uint32_t)(count + 0.5f);
-    changed |= dai_ui_num_field(ui, "Min dist (m)", &u->s.min_distance_m, 0.1f, 0.5f, 100.0f, "showmind");
-    changed |= dai_ui_num_field(ui, "v max (m/s)", &u->s.v_max_ms, 0.25f, 0.5f, 60.0f, "showvmax");
-    changed |= dai_ui_num_field(ui, "a max (m/s2)", &u->s.a_max_ms2, 0.25f, 0.25f, 40.0f, "showamax");
+    changed |= num_row("Min dist (m)", &u->s.min_distance_m, 0.1f, 0.5f, 100.0f, "showmind");
+    changed |= num_row("v max (m/s)", &u->s.v_max_ms, 0.25f, 0.5f, 60.0f, "showvmax");
+    changed |= num_row("a max (m/s2)", &u->s.a_max_ms2, 0.25f, 0.25f, 40.0f, "showamax");
     float fps = (float)u->s.fps;
-    changed |= dai_ui_num_field(ui, "Export fps", &fps, 1.0f, 1.0f, 120.0f, "showfps");
+    changed |= num_row("Export fps", &fps, 1.0f, 1.0f, 120.0f, "showfps");
     u->s.fps = (int)(fps + 0.5f);
 
-    dai_ui_section(ui, "Pipeline");
-    seg_row(ui, "Sampling", &u->sample_mode, SAMPLE_MODES, 3);
-    dai_ui_option(ui, "Assignment", &u->assign_method, ASSIGN_METHODS, 4);
+    section_row("Pipeline");
+    choice_row("Sampling", &u->sample_mode, SAMPLE_MODES, 3, 1);
+    choice_row("Assignment", &u->assign_method, ASSIGN_METHODS, 4, 0);
+    // A hover tooltip, not a row: it takes no space in the layout, so it needs
+    // no room made for it and cannot be cut by the edge of the region.
     dai_ui_help(ui, "Auto solves exactly up to 2000 drones and switches to the "
                     "clustered auction above - the storyboard shows what ran.");
 
-    dai_ui_section(ui, "Safety volume");
-    changed |= dai_ui_num_field(ui, "Fence X (m)", &u->s.fence_half_x, 1.0f, 0.0f, 5000.0f, "showfx");
-    changed |= dai_ui_num_field(ui, "Fence Z (m)", &u->s.fence_half_z, 1.0f, 0.0f, 5000.0f, "showfz");
-    changed |= dai_ui_num_field(ui, "Ceiling (m)", &u->s.fence_top_m, 1.0f, 0.0f, 3000.0f, "showftop");
-    changed |= dai_ui_num_field(ui, "Ground (m)", &u->s.min_ground_m, 0.5f, 0.0f, 200.0f, "showgnd");
-    changed |= dai_ui_num_field(ui, "Take-off (m)", &u->s.takeoff_alt_m, 1.0f, 0.0f, 500.0f, "showtoff");
+    section_row("Safety volume");
+    changed |= num_row("Fence X (m)", &u->s.fence_half_x, 1.0f, 0.0f, 5000.0f, "showfx");
+    changed |= num_row("Fence Z (m)", &u->s.fence_half_z, 1.0f, 0.0f, 5000.0f, "showfz");
+    changed |= num_row("Ceiling (m)", &u->s.fence_top_m, 1.0f, 0.0f, 3000.0f, "showftop");
+    changed |= num_row("Ground (m)", &u->s.min_ground_m, 0.5f, 0.0f, 200.0f, "showgnd");
+    changed |= num_row("Take-off (m)", &u->s.takeoff_alt_m, 1.0f, 0.0f, 500.0f, "showtoff");
 
     if (changed) dai_show_set_settings(u->sh, &u->s);
 

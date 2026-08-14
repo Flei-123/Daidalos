@@ -426,6 +426,83 @@ float fine_separation(const dai_show_leg &la, const dai_show_point &a0, const da
     return best;
 }
 
+// How close two legs come ON THE LINE THE PLAN REALLY STORES - the flown path,
+// not a bound around it.
+//
+// Everywhere else in this file a pair is judged by min_separation: a lower
+// bound on the CURVE, with the minimum distance plus a chord reserve as its
+// bar, so that the polyline the plan writes out - which cuts the corners of the
+// curve - still clears the floor. That is right for a floor, and it is wrong -
+// unsatisfiable, in fact - for a pair whose bar is its own arrival gap.
+//
+// Two drones that land 1.2 m apart are exactly 1.2 m apart at t_end. Their
+// closest approach IS the arrival. Asking a lower bound to come out above
+// "1.2 m plus the reserve of a detour" is asking for something no route can
+// deliver, and the separator then reports the pair open for ever, escalates it
+// every round and finally hands the show over as unsolvable - for a fault that
+// lives in the formation and that it was never able to fix. Measured on the
+// shot fixture: drones 20 and 76, parked 1.200 m apart by the figure, still
+// open after 32 rounds with the route walk moving them further every time.
+//
+// So an endpoint-limited pair is measured on the thing that flies:
+//
+//   * a leg the plan writes as ONE key keeps its profile, so the flown path is
+//     the curve itself - leg_point is exact for it;
+//   * a leg cut into k keys is flown as straight lines between those keys, and
+//     that is what is interpolated here.
+//
+// Breakpoints of both legs go into the walk, plus POLY_SUB steps in between, so
+// the two eased time laws of a straight pair cannot hide a dip between samples.
+// No slack is added and none is subtracted: this is a measurement of the flown
+// polyline, and the bar it is compared against is the arrival gap itself.
+const int POLY_SUB      = 8;                  // sub-steps between two breakpoints
+const int POLY_MAX_STEP = 2048;               // and the ceiling on the whole walk
+
+Vec3 plan_pos(const dai_show_leg &leg, const dai_show_point &a, const dai_show_point &b,
+              uint32_t keys, float t) {
+    if (t <= leg.t_start) return Vec3{ a.x, a.y, a.z };
+    if (t >= leg.t_end)   return Vec3{ b.x, b.y, b.z };
+    if (keys <= 1) return leg_pos(leg, a, b, t);      // one key: the profile IS the flight
+    const float T = leg.t_end - leg.t_start;
+    const float u = (t - leg.t_start) / T * (float)keys;
+    int   i = (int)u;
+    if (i < 0) i = 0;
+    if (i > (int)keys - 1) i = (int)keys - 1;
+    const float f  = u - (float)i;
+    const float ta = leg.t_start + T * ((float)i / (float)keys);
+    const float tb = leg.t_start + T * ((float)(i + 1) / (float)keys);
+    Vec3 pa = (i == 0) ? Vec3{ a.x, a.y, a.z } : leg_pos(leg, a, b, ta);
+    Vec3 pb = ((uint32_t)(i + 1) >= keys) ? Vec3{ b.x, b.y, b.z } : leg_pos(leg, a, b, tb);
+    return Vec3{ pa.x + (pb.x - pa.x) * f, pa.y + (pb.y - pa.y) * f, pa.z + (pb.z - pa.z) * f };
+}
+
+float flown_separation(const dai_show_leg &la, const dai_show_point &a0, const dai_show_point &a1,
+                       const dai_show_leg &lb, const dai_show_point &b0, const dai_show_point &b1,
+                       const dai_show_settings &s) {
+    const float t0 = std::min(la.t_start, lb.t_start);
+    const float t1 = std::max(la.t_end,   lb.t_end);
+    if (!(t1 > t0)) return len3(Vec3{ a0.x - b0.x, a0.y - b0.y, a0.z - b0.z });
+    const uint32_t ka = daishow::leg_key_count(&la, &s);
+    const uint32_t kb = daishow::leg_key_count(&lb, &s);
+    // One step per key of the denser leg, sub-divided, and never more than the
+    // ceiling: the walk has to be the same on every machine, so the count is a
+    // function of the two legs and of nothing else.
+    uint32_t breaks = (ka > kb ? ka : kb) + 2u;
+    int steps = (int)breaks * POLY_SUB;
+    if (steps > POLY_MAX_STEP) steps = POLY_MAX_STEP;
+    if (steps < 64) steps = 64;
+    float best = 1e30f;
+    Vec3 prev = sub3(plan_pos(la, a0, a1, ka, t0), plan_pos(lb, b0, b1, kb, t0));
+    for (int i = 1; i <= steps; ++i) {
+        float t = t0 + (t1 - t0) * ((float)i / (float)steps);
+        Vec3 cur = sub3(plan_pos(la, a0, a1, ka, t), plan_pos(lb, b0, b1, kb, t));
+        float d = dist_origin_segment(prev, cur);
+        if (d < best) best = d;
+        prev = cur;
+    }
+    return best;
+}
+
 // What a leg really costs in speed and in acceleration.
 //
 // Straight legs have a closed form - the profile says how much faster than the
@@ -1121,6 +1198,13 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
             room = std::min(room, droom) - floor_gap;
             if (!(room > 0.0f)) room = 0.0f;
             const float goal = floor_gap + std::min(min_d * ESCALATE_MARGIN, 0.25f * room);
+            // An endpoint-limited pair - one the formation itself parks inside
+            // the floor - is measured on the flown polyline by pair_sep below,
+            // so it neither needs nor can afford the curve-to-polyline reserve:
+            // its bar is the arrival gap it is already at when it lands. Adding
+            // the reserve here is what made such a pair unsolvable by
+            // construction; the round's classification carries the same rule.
+            if (floor_gap < min_d) return goal - SEP_EPS;
             return goal - SEP_EPS
                  + chord_reserve(cand,  src[m], dst[m], *s)
                  + chord_reserve(fixed, src[o], dst[o], *s);
@@ -1133,6 +1217,12 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
             const dai_show_leg &la = (m < o) ? cand : fixed;
             const dai_show_leg &lb = (m < o) ? fixed : cand;
             const uint32_t ia = (m < o) ? m : o, ib = (m < o) ? o : m;
+            // The endpoint-limited pair is judged on the line the plan stores,
+            // for the reason given at flown_separation: its closest approach is
+            // its own arrival, and a bound with a reserve in it can never come
+            // out above that.
+            if (pair_goal(m, o) < min_d)
+                return flown_separation(la, src[ia], dst[ia], lb, src[ib], dst[ib], *s);
             float w1 = std::max(gt1, std::max(cand.t_end, fixed.t_end));
             float w0 = std::min(gt0, std::min(cand.t_start, fixed.t_start));
             std::vector<Vec3> pa((size_t)SAMPLES + 1), pb((size_t)SAMPLES + 1);
@@ -1402,11 +1492,25 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
             // closer on the way than it already is standing still - and the
             // pair is reported as the formation fault it is instead of as a
             // transition the separator failed to solve. See the top of the file.
+            //
+            // ...and the reserve is NOT added on top of an endpoint gap. The
+            // reserve pays for the difference between the curve this stage
+            // measures and the polyline the plan stores; a pair whose bar is
+            // its own arrival gap is at that gap AT the arrival, so "gap plus
+            // reserve" is a requirement no route can meet, and demanding it
+            // kept such a pair open for ever (see flown_separation above). The
+            // endpoint pair is therefore measured on the flown polyline itself
+            // and held to exactly what it promises: never closer on the way
+            // than it is standing still.
             const float goal = pair_goal(a, b);
             const float slack = reserve[a] + reserve[b];
-            const float bar  = goal  - SEP_EPS + slack;
+            const bool  endpoint_limited = (goal < min_d);
+            const float bar  = endpoint_limited ? (goal - SEP_EPS) : (goal - SEP_EPS + slack);
             const float full = min_d - SEP_EPS + slack;
-            float sep = min_separation(out_legs[a], src[a], dst[a],
+            float sep = endpoint_limited
+                      ? flown_separation(out_legs[a], src[a], dst[a],
+                                         out_legs[b], src[b], dst[b], *s)
+                      : min_separation(out_legs[a], src[a], dst[a],
                                        out_legs[b], src[b], dst[b],
                                        &samples[(size_t)a * (SAMPLES + 1)],
                                        &samples[(size_t)b * (SAMPLES + 1)],
