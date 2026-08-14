@@ -387,9 +387,13 @@ static void scaling(int with_10k) {
     // bite. The time is divided by the number of ticks the show actually has,
     // so the ten thousand row is compared at the same amount of work rather
     // than at ten times the drones AND nine times the length; and the bound is
-    // fifteen, against a measured 3.2 (the table in RUN.md, with the date and
-    // the machine, so the next reader can tell a regression from a slower
-    // laptop). A quadratic tick would put ten in that ratio all by itself and a
+    // fifteen, against a measured 4.3 - (9326/2437) / (842/946) at commit
+    // 6ea748e on the machine and date named in RUN.md, which is where that
+    // table comes from, so the next reader can tell a regression from a slower
+    // laptop. The same run under no load has come out at 3.8; three builds
+    // sharing eight cores is what the spread between those two numbers is, and
+    // it is why the bound is three times the measurement rather than a whisker
+    // above it. A quadratic tick would put ten in that ratio all by itself and a
     // cubic assignment a hundred. The absolute ceiling of thirty seconds is the
     // second half of the same claim: a ratio is meaningless if both rows are
     // already too slow to sell.
