@@ -60,6 +60,15 @@ above its tree and nine of its checks had been clicking one row too high. It is
 in the list now, at 72 checks, and it carries the proof that the translate gizmo
 lands on the object it moves.
 
+Two more suites live outside `run_tests.sh` and are honest about it:
+`tools/build_runtime.sh` builds the packer and the standalone runtime and runs
+`tests/test_vfs.cpp` on the way (`ok: 89 checks, 0 failures`, measured here),
+and `build_web.sh` is the emscripten path. What is in `tests/` but in NO build
+script - `test_anim.cpp`, `test_audio.cpp`, `test_drift.cpp`,
+`test_shadow_contact.cpp`, `probe_spherebox.cpp`, `probe_settings.cpp` - are
+older probes; five of them still compile, `probe_settings.cpp` does not. None of
+them is counted in the total above, and this line is here so nobody counts them.
+
 The drone show suite is worth running on its own, because it prints three things
 no other suite can - the flight proof, the determinism proof and the scaling
 table:
@@ -69,7 +78,7 @@ table:
 ./build/test_droneshow quick    # the same, without the 10,000 drone row (~8 s faster)
 ```
 
-It ends in `ok: 332 checks, 0 failures` (commit `6ea748e`), and on the way it
+It ends in `ok: 332 checks, 0 failures` (tree at `3f786a8`), and on the way it
 prints the audit of the show the screenshots are
 taken of, read back out of the exported `.skyc` and
 flown at 40 Hz between the exported frames:
@@ -95,27 +104,28 @@ machine:
 
 | when | commit | machine |
 |---|---|---|
-| 2026-08-14 | `6ea748e` | AMD EPYC 7571, 8 cores, 12 GB, Debian 12, g++ 12.2, `-O3`, and other builds running next to it |
+| 2026-08-14 | `3f786a8` | AMD EPYC 7571, 8 cores, 12 GB, Debian 12, g++ 12.2, `-O3`, and other builds running next to it |
 
 | drones | sample | assign | layer | profile | validate | plan MB | check MB | ticks | wall |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 100 | 20.38 ms | 2.44 ms | 1.59 ms | 0.01 ms | 12.40 ms | 0.01 | 0.02 | 701 | 37 ms |
-| 1 000 | 112.49 ms | 521.94 ms | 15.52 ms | 0.08 ms | 192.22 ms | 0.14 | 0.21 | 946 | 842 ms |
-| 10 000 | 1 294.13 ms | 413.87 ms | 2 542.73 ms | 1.27 ms | 5 072.35 ms | 1.87 | 2.44 | 2 437 | 9 326 ms |
+| 100 | 18.38 ms | 2.31 ms | 1.40 ms | 0.01 ms | 12.05 ms | 0.01 | 0.02 | 701 | 34 ms |
+| 1 000 | 104.04 ms | 484.93 ms | 14.49 ms | 0.08 ms | 189.58 ms | 0.14 | 0.21 | 946 | 793 ms |
+| 10 000 | 1 288.96 ms | 270.74 ms | 2 419.42 ms | 1.55 ms | 4 784.70 ms | 1.87 | 2.44 | 2 437 | 8 767 ms |
 
 Read it with the tick column in hand: the fixture's figures grow with the fleet,
 so the 10,000 drone show is also longer than the 1,000 drone one, and part of
 the wall clock difference is show length rather than fleet size. The test
-therefore compares the two rows PER TICK - (9326/2437) / (842/946) = **4.30 x**
-for ten times the drones, at commit `6ea748e` - and fails the build above 15 x,
-or above 30 s of wall clock for the big row. A quadratic tick would put ten in
-that ratio on its own; a cubic assignment a hundred. The same table measured on
-an idle machine came out at 3.79 x (8243 ms for the big row instead of 9326);
+therefore compares the two rows PER TICK - (8767/2437) / (793/946) = **4.29 x**
+for ten times the drones, on the tree at `3f786a8` - and fails the build above
+15 x, or above 30 s of wall clock for the big row (`tests/test_droneshow.cpp`,
+the two CHECKs after the table). A quadratic tick would put ten in that ratio on
+its own; a cubic assignment a hundred. The same table measured on an idle
+machine came out at 3.79 x (8243 ms for the big row instead of 8767);
 the spread between those two numbers is three builds sharing eight cores, and it
 is the reason the bound is three times the measurement rather than a whisker
 above it.
 
-`assign` falling from 525 ms to 393 ms between the two big rows is not a typo:
+`assign` falling from 485 ms to 271 ms between the two big rows is not a typo:
 above 2,000 drones the solver switches from the exact Jonker-Volgenant to the
 clustered auction, and the storyboard says so in the panel.
 
@@ -173,7 +183,7 @@ The projects land in `build/shot_projects/`, the exports in that project's
 `assets/`. It prints what it photographed, including the conflict it clicked:
 
 ```
-solve 1 formation fault: drones 172 and 173 stand 0.40 m apart in 'Sphere (near miss)' - the floor is 2.00 m: assign 111.7 ms, layer 1233.8 ms, validate 83.5 ms, 1 conflicts
+solve 1 formation fault: drones 172 and 173 stand 0.40 m apart in 'Sphere (near miss)' - the floor is 2.00 m: assign 99.2 ms, layer 1119.4 ms, validate 77.9 ms, 1 conflicts
   conflict  0  t   80.60s  drones 172+216  kind 0  0.400 of 2.000 m
 mesh assets/test/blender_scene.glb 2004 triangles -> selected in the storyboard
 clicked validation row at 120,747 -> conflict 0, t=80.60, drone 172

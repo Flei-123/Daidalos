@@ -4,7 +4,13 @@
 // tools/editor_shot.cpp, and it exists for the same reason: a panel that is
 // green in a test and unreadable on screen is still broken.
 //
-//   DAI_SHADER_DIR=shaders ./build/droneshow_shot .gauntlet-shots [W] [H]
+//   DAI_SHADER_DIR=shaders ./build/droneshow_shot .gauntlet-shots [W] [H] [SET]
+//
+// SET names the picture set. Without a dash it is a PREFIX - `narrow-` writes
+// `narrow-03-viewport-conflict.png` - and with a leading dash it is a suffix,
+// which is how the first runs of this tool named their files. Either way the
+// 1600x900 run with no SET owns the plain names, so a reviewer opening
+// `03-viewport-conflict.png` always gets the default window size.
 //
 // The show it builds is a real one: three figures sampled off triangle soup
 // through the ordinary pipeline, solved, validated - plus one figure with a
@@ -21,11 +27,13 @@
 // window.
 
 #include "dai_editor_ui.h"
+#include "dai_gltf.h"
 #include "dai_project.h"
 #include "dai_render.h"
 #include "dai_show.h"
 #include "dai_show_ui.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -130,8 +138,15 @@ int main(int argc, char **argv) {
     const uint32_t H = argc > 3 ? (uint32_t)atoi(argv[3]) : 900;
     // A tag in the file names, so the same tool can photograph the same show at
     // a second window size without overwriting the first run. Narrow is where
-    // labels collide, so the narrow run is the one worth keeping.
-    std::string tag = argc > 4 ? argv[4] : "";
+    // labels collide, so the narrow run is the one worth keeping. `narrow-`
+    // goes in front of the name, `-narrow` behind it; the empty set keeps the
+    // plain names.
+    std::string set = argc > 4 ? argv[4] : "";
+    const bool  set_is_suffix = !set.empty() && set[0] == '-';
+    auto shot_path = [&](const char *name) {
+        return set_is_suffix ? outdir + "/" + name + set + ".png"
+                             : outdir + "/" + set + name + ".png";
+    };
 
     // ---- the project ------------------------------------------------------
     // One of each kind, side by side: the droneshow the panels belong to, and
@@ -280,6 +295,93 @@ int main(int argc, char **argv) {
 
     dai_show_ui *show = dai_show_ui_create(sh);
 
+    // ---- the mesh the storyboard samples from -----------------------------
+    // A photograph of a storyboard saying "no mesh selected - pick one in the
+    // Project panel" documents a dead end, not a feature. So the tool does
+    // what an operator does: it imports a real mesh off disk into the project,
+    // where the Project panel below the viewport lists it, and hands the same
+    // triangle soup to the panels. "From selected mesh" is then a button that
+    // works in the state that was photographed.
+    std::vector<float>    mesh_pos;
+    std::vector<uint32_t> mesh_idx;
+    std::string           mesh_asset;                 // the name in the project
+    {
+        const char *src = "assets/test/blender_scene.glb";
+        std::vector<uint8_t> bytes;
+        if (FILE *f = std::fopen(src, "rb")) {
+            std::fseek(f, 0, SEEK_END);
+            long n = std::ftell(f);
+            std::fseek(f, 0, SEEK_SET);
+            if (n > 0) {
+                bytes.resize((size_t)n);
+                if (std::fread(bytes.data(), 1, bytes.size(), f) != bytes.size()) bytes.clear();
+            }
+            std::fclose(f);
+        }
+        dai_mesh_data md[16];
+        uint32_t np = bytes.empty() ? 0u
+                                    : dai_gltf_read_geometry(bytes.data(), bytes.size(), md, 16,
+                                                             err, sizeof(err));
+        uint32_t got = np < 16u ? np : 16u;
+        for (uint32_t p = 0; p < got; ++p) {
+            uint32_t base = (uint32_t)(mesh_pos.size() / 3);
+            for (uint32_t v = 0; v < md[p].vertex_count; ++v) {
+                mesh_pos.push_back(md[p].vertices[v].position.x);
+                mesh_pos.push_back(md[p].vertices[v].position.y);
+                mesh_pos.push_back(md[p].vertices[v].position.z);
+            }
+            for (uint32_t i = 0; i < md[p].index_count; ++i)
+                mesh_idx.push_back(base + md[p].indices[i]);
+        }
+        if (got) dai_gltf_free_geometry(md, got);
+
+        if (!mesh_pos.empty() && !mesh_idx.empty()) {
+            // Into the mesh's own unit box, so `scale` really is "mesh units
+            // to metres" and Size (m) in the panel means what it says whatever
+            // the modeller worked in.
+            float lo[3] = { mesh_pos[0], mesh_pos[1], mesh_pos[2] }, hi[3] = { lo[0], lo[1], lo[2] };
+            for (size_t v = 0; v + 2 < mesh_pos.size(); v += 3)
+                for (int k = 0; k < 3; ++k) {
+                    lo[k] = std::min(lo[k], mesh_pos[v + (size_t)k]);
+                    hi[k] = std::max(hi[k], mesh_pos[v + (size_t)k]);
+                }
+            float ext = std::max(hi[0] - lo[0], std::max(hi[1] - lo[1], hi[2] - lo[2]));
+            float inv = ext > 1e-6f ? 2.0f / ext : 1.0f;
+            for (size_t v = 0; v + 2 < mesh_pos.size(); v += 3)
+                for (int k = 0; k < 3; ++k)
+                    mesh_pos[v + (size_t)k] = (mesh_pos[v + (size_t)k] - 0.5f * (lo[k] + hi[k])) * inv;
+
+            // The import an operator would do: the file lands in the project's
+            // assets folder, which is what the Project panel reads.
+            char dst[640];
+            std::snprintf(dst, sizeof(dst), "%s/figure.glb", dai_project_asset_dir(proj));
+            if (FILE *o = std::fopen(dst, "wb")) {
+                std::fwrite(bytes.data(), 1, bytes.size(), o);
+                std::fclose(o);
+                mesh_asset = "figure.glb";
+                asset_names.push_back(mesh_asset);
+            }
+
+            dai_show_sample_desc md_desc;
+            std::memset(&md_desc, 0, sizeof(md_desc));
+            md_desc.positions      = mesh_pos.data();
+            md_desc.vertex_count   = (uint32_t)(mesh_pos.size() / 3);
+            md_desc.indices        = mesh_idx.data();
+            md_desc.index_count    = (uint32_t)mesh_idx.size();
+            md_desc.base_rgba      = 0xFFFFC080u;
+            md_desc.mode           = DAI_SHOW_SAMPLE_SURFACE;
+            md_desc.scale          = 0.0f;            // the panel's Size (m) decides
+            md_desc.centre         = dai_vec3{ 0.0f, s.takeoff_alt_m + 40.0f, 0.0f };
+            md_desc.view_dir       = dai_vec3{ 0.0f, 0.0f, 1.0f };
+            dai_show_ui_mesh(show, &md_desc,
+                             mesh_asset.empty() ? src : (std::string("assets/") + mesh_asset).c_str());
+            std::printf("mesh %-28s %u triangles -> selected in the storyboard\n",
+                        src, (uint32_t)(mesh_idx.size() / 3));
+        } else {
+            std::printf("mesh %s not readable (%s) - the storyboard stays without one\n", src, err);
+        }
+    }
+
     // ---- the editor around it --------------------------------------------
     dai_config cfg{};
     cfg.tick_hz = 60; cfg.max_bodies = 64; cfg.physics_threads = 1;
@@ -376,7 +478,7 @@ int main(int argc, char **argv) {
         // frame later. The picture wanted is the settled one.
         frame(mx, my, down);
         frame(mx, my, down);
-        std::string path = outdir + "/" + name + tag + ".png";
+        std::string path = shot_path(name);
         flush(path.c_str());
     };
 
@@ -403,24 +505,66 @@ int main(int argc, char **argv) {
     shot("03-viewport-conflict", (float)W * 0.5f, (float)H * 0.5f, 0);
 
     // ---- the panels on their own -----------------------------------------
-    // Same functions the dock calls, given the whole frame, so a reviewer can
-    // read the rows instead of squinting at a docked column.
-    auto panel_shot = [&](const char *name, void (*fn)(dai_show_ui *, dai_ui *, float, float, float, float)) {
+    // Same functions the dock calls, at the size the DOCK gives them, with the
+    // tab head above them - a column stays a column, a strip stays a strip.
+    // Blowing a 380 px panel up to the whole frame used to produce a picture
+    // that was nine tenths empty background with a button stretched across it,
+    // which says nothing about the panel a director actually sees.
+    const float TABH = 26.0f;
+    // One panel in its dock frame: the tab head, the accent line under the
+    // active tab and the border the dock draws, then the panel itself in the
+    // rectangle below. `focus` is the tab that is open; an unfocused frame is
+    // drawn dimmer, which is how the picture says which panel it is about.
+    auto tab_panel = [&](const char *title, float px, float py, float pw, float ph, int focus,
+                         void (*fn)(dai_show_ui *, dai_ui *, float, float, float, float)) {
+        const dai_ui_style *st = dai_ui_style_of(ui);
+        dai_ui_rect(ui, px, py, pw, TABH, st->chrome);
+        float tw = dai_ui_text_width(ui, title) + 24.0f;
+        dai_ui_rect(ui, px, py, tw, TABH, focus ? st->panel : st->button);
+        if (focus) dai_ui_rect(ui, px, py, tw, 2.0f, st->accent);
+        dai_ui_text(ui, px + 12.0f, py + (TABH - dai_ui_text_height(ui)) * 0.5f,
+                    title, focus ? st->text : st->text_dim);
+        dai_ui_rect(ui, px, py + TABH - 1.0f, pw, 1.0f, st->panel_border);
+        fn(show, ui, px, py + TABH, pw, ph - TABH);
+    };
+    // The panel that is being photographed, at the size the DOCK gives it -
+    // and the preview beside it, because the rest of the frame is a dock too.
+    // Blowing a 380 px column up to the whole window used to produce a picture
+    // that was nine tenths background with one button stretched across it,
+    // which says nothing about the panel a director actually uses.
+    const float M = 20.0f;                              // the frame's margin
+    const float COLW = std::min(380.0f, (float)W * 0.34f);
+    const float BOT  = 30.0f;                           // the status line
+    auto panel_shot = [&](const char *name, int which) {
         for (int pass = 0; pass < 2; ++pass) {
             dai_ui_input in{};
             in.mouse_x = -100; in.mouse_y = -100;
             dai_ui_begin(ui, (float)W, (float)H, &in);
-            fn(show, ui, 20.0f, 20.0f, (float)W - 40.0f, (float)H - 100.0f);
-            dai_show_ui_status(show, ui, 0.0f, (float)H - 30.0f, (float)W, 30.0f);
+            const dai_ui_style *st = dai_ui_style_of(ui);
+            dai_ui_rect(ui, 0.0f, 0.0f, (float)W, (float)H, st->chrome);
+            float ax = M, ay = M, aw = (float)W - 2.0f * M, ah = (float)H - M - BOT - 10.0f;
+            if (which == 0)
+                tab_panel("Storyboard", ax, ay, COLW, ah, 1, dai_show_ui_storyboard);
+            else if (which == 1)
+                tab_panel("Show Parameters", ax, ay, COLW, ah, 1, dai_show_ui_parameters);
+            if (which == 0 || which == 1)
+                tab_panel("Preview", ax + COLW + 8.0f, ay, aw - COLW - 8.0f, ah, 0,
+                          dai_show_ui_viewport);
+            else if (which == 2) {
+                float strip = std::min(320.0f, ah * 0.42f);
+                tab_panel("Preview", ax, ay, aw, ah - strip - 8.0f, 0, dai_show_ui_viewport);
+                tab_panel("Validation", ax, ay + ah - strip, aw, strip, 1, dai_show_ui_validation);
+            } else if (which == 3)
+                tab_panel("Preview", ax, ay, aw, ah, 1, dai_show_ui_viewport);
+            dai_show_ui_status(show, ui, 0.0f, (float)H - BOT, (float)W, BOT);
             dai_ui_end(ui);
         }
-        std::string path = outdir + "/" + name + tag + ".png";
-        flush(path.c_str());
+        flush(shot_path(name).c_str());
     };
-    panel_shot("04-storyboard", dai_show_ui_storyboard);
-    panel_shot("05-parameters", dai_show_ui_parameters);
-    panel_shot("06-validation", dai_show_ui_validation);
-    panel_shot("07-preview-full", dai_show_ui_viewport);
+    panel_shot("04-storyboard",   0);
+    panel_shot("05-parameters",   1);
+    panel_shot("06-validation",   2);
+    panel_shot("07-preview-full", 3);
 
     // 8  the click the validation panel promises: a row is pressed, the
     //    timeline jumps to it and the two drones go red in the preview. Done
@@ -443,7 +587,7 @@ int main(int argc, char **argv) {
             frame(rx, ry, 0);
             if (dai_show_ui_selected_conflict(show) >= 0) {
                 hit = 1;
-                std::string path = outdir + "/08-conflict-clicked" + tag + ".png";
+                std::string path = shot_path("08-conflict-clicked");
                 flush(path.c_str());
                 std::printf("clicked validation row at %.0f,%.0f -> conflict %d, t=%.2f, drone %u\n",
                             rx, ry, dai_show_ui_selected_conflict(show),
