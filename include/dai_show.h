@@ -307,13 +307,27 @@ typedef struct dai_show_layer_stats {
     uint32_t endpoint_pairs;
 } dai_show_layer_stats;
 
+/* The third answer dai_show_layer can give, and the reason it is not DAI_OK:
+ * the transition itself came out clean (`unresolved` is zero) but at least one
+ * pair STANDS closer than min_distance in one of the two formations, so the
+ * show that would be exported is not flyable even though the separator has
+ * nothing left to fix. Positive on purpose - it is a warning, not a failure:
+ * the legs are complete and usable, `stats->endpoint_pairs` says how many pairs
+ * are meant, and a caller that only tests `r < 0` keeps working. A caller that
+ * tests `r == DAI_OK` - which is what a sign-off must do - stops, and a
+ * formation packed under the floor from end to end can no longer pass as solved
+ * on the strength of `unresolved == 0`. */
+#define DAI_SHOW_LAYER_FORMATION_FAULT ((dai_result)1)
+
 /* Turns an assignment into legs that do not collide with each other.
  *
  * `from`/`to` are the two formations, `perm` the assignment, `tr` the shape and
  * duration asked for. Writes n legs. Returns DAI_OK when the result is provably
  * free of drone-drone conflict inside the transition, DAI_ERR_STATE when some
  * pairs are left over - and in that case the legs are still written (a director
- * needs to see the near miss to fix it) and stats->unresolved says how many.
+ * needs to see the near miss to fix it) and stats->unresolved says how many -
+ * and DAI_SHOW_LAYER_FORMATION_FAULT when nothing is left over but the
+ * formations themselves put `stats->endpoint_pairs` pairs inside min_distance.
  *
  * The separation is deterministic: crossing pairs are found through the same
  * uniform grid the validator uses, sorted by (lower index, higher index), and
@@ -503,6 +517,14 @@ DAI_API int      dai_show_formation_move(dai_show *sh, uint32_t i, int delta);
 DAI_API int      dai_show_formation_rename(dai_show *sh, uint32_t i, const char *name);
 DAI_API int      dai_show_formation_set_hold(dai_show *sh, uint32_t i, float hold_s);
 
+/* Which formation a moment on the timeline belongs to: the one being flown into
+ * while a transition runs, and the one standing still while it holds. This is
+ * how the validation panel turns "0.40 m at 108.30 s" into "in 3. Sphere" -
+ * a conflict a director cannot place in the storyboard is a conflict he cannot
+ * fix. Needs a solved plan (the t_start values come from it); returns
+ * UINT32_MAX before the first solve. */
+DAI_API uint32_t dai_show_formation_at_time(const dai_show *sh, float t);
+
 /* The transition INTO formation i (i >= 1). Formation 0 is the take-off grid
  * and has none. */
 DAI_API int dai_show_transition_get(const dai_show *sh, uint32_t i, dai_show_transition *out);
@@ -511,7 +533,11 @@ DAI_API int dai_show_transition_set(dai_show *sh, uint32_t i, const dai_show_tra
 /* Runs stages 2, 3 and 4 over the whole storyboard and leaves a plan behind.
  * Returns DAI_OK when every transition came out provably clean, DAI_ERR_STATE
  * when some did not - the plan is built either way, because a show that cannot
- * be looked at cannot be fixed. Timings land in dai_show_timings. */
+ * be looked at cannot be fixed - and DAI_SHOW_LAYER_FORMATION_FAULT when the
+ * transitions are clean but a formation parks pairs closer than min_distance:
+ * `err` then names the first such pair and the formation it stands in, and
+ * timings.last_layer.endpoint_pairs counts them. Timings land in
+ * dai_show_timings. */
 DAI_API dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len);
 DAI_API const dai_show_plan *dai_show_get_plan(const dai_show *sh);
 

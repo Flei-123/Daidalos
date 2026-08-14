@@ -1592,9 +1592,19 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
                      src[b].x, src[b].y, src[b].z, dst[b].x, dst[b].y, dst[b].z);
     }
 #endif
+    const size_t open_left = std::min(best_open, found.size());
     fill_stats(stats, n, out_legs, src, dst, colour, base_delay, t_start,
-               edge_total, std::min(best_open, found.size()), best_endpoint);
-    return (std::min(best_open, found.size()) == 0) ? DAI_OK : DAI_ERR_STATE;
+               edge_total, open_left, best_endpoint);
+    // Three answers, in the order of how bad they are. A pair the separator
+    // could not untangle is a failure of this stage and stays DAI_ERR_STATE.
+    // A pair the FORMATION puts inside the floor is not this stage's failure -
+    // but it is still a show that must not be signed off, and reporting it only
+    // in a statistics field let a formation that is under min_distance from end
+    // to end pass on `unresolved == 0`. So it gets its own answer, positive,
+    // because the legs it comes with are complete.
+    if (open_left > 0)      return DAI_ERR_STATE;
+    if (best_endpoint > 0)  return DAI_SHOW_LAYER_FORMATION_FAULT;
+    return DAI_OK;
 }
 
 } // extern "C"

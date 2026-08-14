@@ -31,6 +31,7 @@
 #include <windows.h>
 #endif
 #include "dai_show.h"
+#include "dai_show_internal.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -40,6 +41,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // Implemented in src/dai_show_plan.cpp. The plan has to reconstruct exactly the
@@ -253,6 +255,53 @@ void aggregate(dai_show_timings *t, const std::vector<TrStats> &per) {
     t->last_layer  = l;
 }
 
+// The first pair of a formation that stands closer than min_distance, in
+// (lower index, higher index) order so two runs name the same one. Called only
+// when dai_show_layer has already said such a pair exists, and through the same
+// uniform grid the rest of the pipeline uses, so naming it costs O(n) rather
+// than the O(n^2) a fleet of ten thousand cannot pay. Returns 0 when the
+// formation is clean after all.
+int first_endpoint_pair(const dai_show_point *p, uint32_t n, float min_d,
+                        uint32_t *out_a, uint32_t *out_b, float *out_gap) {
+    if (!p || n < 2 || !(min_d > 0.0f)) return 0;
+    const float cell = min_d;
+    std::unordered_map<int64_t, std::vector<uint32_t> > grid;
+    grid.reserve(n * 2);
+    auto key = [&](int cx, int cy, int cz) -> int64_t {
+        return ((int64_t)(cx & 0x1FFFFF) << 42) | ((int64_t)(cy & 0x1FFFFF) << 21) |
+                (int64_t)(cz & 0x1FFFFF);
+    };
+    auto cell_of = [&](float v) -> int { return (int)std::floor(v / cell); };
+    for (uint32_t i = 0; i < n; ++i)
+        grid[key(cell_of(p[i].x), cell_of(p[i].y), cell_of(p[i].z))].push_back(i);
+
+    uint32_t ba = 0, bb = 0; float bgap = 0.0f; int found = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        int cx = cell_of(p[i].x), cy = cell_of(p[i].y), cz = cell_of(p[i].z);
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dz = -1; dz <= 1; ++dz) {
+                    auto it = grid.find(key(cx + dx, cy + dy, cz + dz));
+                    if (it == grid.end()) continue;
+                    for (size_t k = 0; k < it->second.size(); ++k) {
+                        uint32_t j = it->second[k];
+                        if (j <= i) continue;
+                        float ex = p[i].x - p[j].x, ey = p[i].y - p[j].y, ez = p[i].z - p[j].z;
+                        float d = std::sqrt(ex * ex + ey * ey + ez * ez);
+                        if (!(d < min_d - daishow::SEP_EPS)) continue;
+                        if (!found || i < ba || (i == ba && j < bb)) {
+                            ba = i; bb = j; bgap = d; found = 1;
+                        }
+                    }
+                }
+    }
+    if (!found) return 0;
+    if (out_a) *out_a = ba;
+    if (out_b) *out_b = bb;
+    if (out_gap) *out_gap = bgap;
+    return 1;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -460,6 +509,18 @@ int dai_show_formation_get(const dai_show *sh, uint32_t i, dai_show_formation_in
     return 1;
 }
 
+uint32_t dai_show_formation_at_time(const dai_show *sh, float t) {
+    if (!sh || sh->forms.empty() || !sh->plan) return UINT32_MAX;
+    // A moment belongs to the formation it is going TO: the transition into a
+    // figure and the hold of that figure are one entry in the storyboard, and
+    // that is the entry a director opens when the validator complains. The last
+    // formation keeps everything after it, so a conflict at the very end of the
+    // show is never left without a place.
+    for (size_t i = 0; i < sh->forms.size(); ++i)
+        if (t <= sh->forms[i].t_start + sh->forms[i].hold_s + 1e-4f) return (uint32_t)i;
+    return (uint32_t)(sh->forms.size() - 1);
+}
+
 const dai_show_point *dai_show_formation_points(const dai_show *sh, uint32_t i) {
     if (!sh || i >= sh->forms.size() || sh->forms[i].pts.empty()) return nullptr;
     return sh->forms[i].pts.data();
@@ -573,7 +634,9 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         }
     }
 
-    uint32_t unresolved_total = 0;
+    uint32_t unresolved_total = 0, endpoint_total = 0;
+    int      endpoint_named   = 0;
+    char     endpoint_note[192] = { 0 };
     for (size_t i = 1; i < sh->forms.size(); ++i) {
         Formation &f = sh->forms[i];
         for (uint32_t d = 0; d < n; ++d) nxt[d] = f.pts[d];
@@ -623,7 +686,24 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         sh->timings.layer_ms += t1 - t0;
         lstats.solve_ms = t1 - t0;
         sh->tr_stats[i].layer = lstats;
-        if (lr != DAI_OK) unresolved_total += lstats.unresolved;
+        if (lr == DAI_ERR_STATE) unresolved_total += lstats.unresolved;
+        // A formation that parks pairs inside min_distance is not a transition
+        // the separator failed at - but it is a show that must not go out, so
+        // it is carried up to the caller as its own answer with the place it
+        // has to be fixed named: the formation, and the first pair in it.
+        if (lstats.endpoint_pairs > 0) {
+            endpoint_total += lstats.endpoint_pairs;
+            if (!endpoint_named) {
+                uint32_t a = 0, b = 0; float gap = 0.0f;
+                if (first_endpoint_pair(nxt.data(), n, sh->s.min_distance_m, &a, &b, &gap)) {
+                    endpoint_named = 1;
+                    std::snprintf(endpoint_note, sizeof(endpoint_note),
+                                  "drones %u and %u stand %.2f m apart in '%s' - the floor is "
+                                  "%.2f m", (unsigned)a, (unsigned)b, (double)gap,
+                                  f.name.c_str(), (double)sh->s.min_distance_m);
+                }
+            }
+        }
 
         // Stage 4 turns the legs into keyframes. The detour is a curve, so it
         // is cut into pieces small enough that the line the plan interpolates
@@ -678,6 +758,12 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
     if (unresolved_total > 0) {
         fail(err, err_len, "%u transition conflicts could not be separated", (unsigned)unresolved_total);
         return DAI_ERR_STATE;
+    }
+    if (endpoint_total > 0) {
+        fail(err, err_len, "%u formation fault%s: %s", (unsigned)endpoint_total,
+             (endpoint_total == 1) ? "" : "s",
+             endpoint_named ? endpoint_note : "a formation stands inside min_distance");
+        return DAI_SHOW_LAYER_FORMATION_FAULT;
     }
     return DAI_OK;
 }

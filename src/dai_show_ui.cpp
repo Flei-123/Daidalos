@@ -629,7 +629,13 @@ void dai_show_ui_storyboard(dai_show_ui *u, dai_ui *ui, float x, float y, float 
     dai_ui_row(ui, 0.0f);
     if (dai_ui_button(ui, "Add figure")) add_builtin(u);
     if (u->have_mesh) {
-        if (dai_ui_button(ui, "From selected mesh")) {
+        // Two buttons in one row, in a column that is a fifth of the frame:
+        // the long caption is the first thing the panel edge cuts in half, so
+        // below a certain width the button says the short version of the same
+        // sentence instead of "From selecte".
+        const char *from_label = dai_ui_panel_width(ui) < 260.0f ? "From mesh"
+                                                                 : "From selected mesh";
+        if (dai_ui_button(ui, from_label)) {
             dai_show_sample_desc d = u->mesh;
             d.mode             = u->sample_mode;
             d.count            = u->s.drone_count;
@@ -780,9 +786,16 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
             stat_line(ui, report_bottom, "  worst move %.2f%% over the exact optimum",
                       (double)t.last_assign.gap_percent);
         stat_line(ui, report_bottom, "layer    %8.1f ms", t.layer_ms);
-        stat_line(ui, report_bottom, "  %u crossings: %u lifted, %u delayed, %u left over",
+        // The fourth number belongs next to the other three: a formation fault
+        // is not a crossing the separator lost, but it is a reason the show
+        // does not fly, and a panel that reports "0 left over" and nothing else
+        // reads as a sign-off. The Validation panel names the figure it stands
+        // in; here it is counted.
+        stat_line(ui, report_bottom, "  %u crossings: %u lifted, %u delayed, %u left over, "
+                  "%u formation fault%s",
                   t.last_layer.crossings_found, t.last_layer.resolved_by_height,
-                  t.last_layer.resolved_by_delay, t.last_layer.unresolved);
+                  t.last_layer.resolved_by_delay, t.last_layer.unresolved,
+                  t.last_layer.endpoint_pairs, (t.last_layer.endpoint_pairs == 1) ? "" : "s");
         stat_line(ui, report_bottom, "validate %8.1f ms", t.validate_ms);
         stat_line(ui, report_bottom, "  %u pairs over %u ticks",
                   t.last_validate.pairs_tested, t.last_validate.ticks_checked);
@@ -812,9 +825,14 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
                 stat_line(ui, report_bottom, "  %.2f%% over the exact optimum", (double)sa.gap_percent);
             stat_line(ui, report_bottom, "  %.0f m flown in total", sa.total_cost_m);
             stat_line(ui, report_bottom, "layer    %8.1f ms", sl.solve_ms);
-            stat_line(ui, report_bottom, "  %u crossings: %u lifted, %u delayed, %u left over",
+            stat_line(ui, report_bottom, "  %u crossings: %u lifted, %u delayed, %u left over, "
+                      "%u formation fault%s",
                       sl.crossings_found, sl.resolved_by_height,
-                      sl.resolved_by_delay, sl.unresolved);
+                      sl.resolved_by_delay, sl.unresolved,
+                      sl.endpoint_pairs, (sl.endpoint_pairs == 1) ? "" : "s");
+            if (sl.endpoint_pairs)
+                wrapped_label(ui, "  the fault stands IN this figure - two points are "
+                                  "closer than the minimum distance, no transition can fix that");
             stat_line(ui, report_bottom, "  %u layers, up to %.1f m of detour",
                       sl.layers_used, (double)sl.max_extra_height_m);
         }
@@ -897,6 +915,17 @@ void dai_show_ui_validation(dai_show_ui *u, dai_ui *ui, float x, float y, float 
             std::snprintf(row, sizeof(row), "%7.2fs  drones %u+%u %s  %.2f m (-%.2f)",
                           (double)c.time_s, c.a, c.b, conflict_word(c.kind),
                           (double)c.value, (double)(c.limit - c.value));
+        // Which figure the moment belongs to, on the row itself. A time stamp
+        // says WHEN, and a director fixes a show by opening the figure it
+        // happens in - so the row carries the place too, and clicking it
+        // selects that figure in the Storyboard as well as the drones.
+        uint32_t where = dai_show_formation_at_time(u->sh, c.time_s);
+        dai_show_formation_info wi;
+        if (where != 0xFFFFFFFFu && dai_show_formation_get(u->sh, where, &wi)) {
+            size_t used = std::strlen(row);
+            std::snprintf(row + used, sizeof(row) - used, "   in %u. %s",
+                          (unsigned)(where + 1u), wi.name);
+        }
         ellide(ui, row, row_text_width(ui));
         float rx = 0.0f, ry = 0.0f;
         dai_ui_cursor_pos(ui, &rx, &ry);
@@ -913,6 +942,10 @@ void dai_show_ui_validation(dai_show_ui *u, dai_ui *ui, float x, float y, float 
             u->sel_drone_b  = (c.b == c.a) ? 0xFFFFFFFFu : c.b;
             u->time         = c.time_s;
             u->playing      = 0;
+            // ...and the figure it happens in, so the Show Parameters panel
+            // shows the move that produced it and the Storyboard highlights
+            // the row the fix belongs to.
+            if (where != 0xFFFFFFFFu) u->sel_formation = (int)where;
         }
     }
     dai_ui_scroll_end(ui);
@@ -1039,22 +1072,73 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
             std::snprintf(tag, sizeof(tag), "%u  %.1f m/s2", c.a, (double)c.value);
         else
             std::snprintf(tag, sizeof(tag), "%u  %.2f m", c.a, (double)c.value);
+        // The label sits BESIDE the marker, not on it. Written centred over
+        // the ring it covered the drones it was about with its own plate; a
+        // reader could see that something was wrong there but not what the
+        // figure looked like at the moment it went wrong. So: a fixed 20 px
+        // offset out of the cloud, a leader line back to the ring - the line
+        // is what keeps the offset honest - and on a narrow window, where 20 px
+        // still lands in the middle of the same cloud, the label folds all the
+        // way out to the near edge of the view and the leader gets longer.
+        const float OFF   = 20.0f;      // marker centre -> label box
+        const float PAD_X = 5.0f, PAD_Y = 3.0f;
+        const float EDGE  = 4.0f;
+        float anchor_x = pair ? 0.5f * (ax + bx2) : ax;
+        float anchor_y = pair ? 0.5f * (ay + by2) : ay;
+        float anchor_r = (pair && gap <= 2.2f * RING_R) ? RING_R + gap * 0.5f : RING_R;
+
         float lw = dai_ui_text_width(ui, tag), lh = dai_ui_text_height(ui);
-        float lx = (pair ? 0.5f * (ax + bx2) : ax) - lw * 0.5f;
-        float ly = (pair ? std::fmin(ay, by2) : ay) - RING_R - lh - 3.0f;
-        lx = std::max(x + 2.0f, std::min(lx, x + w - lw - 2.0f));
-        ly = std::max(y + 2.0f, std::min(ly, y + vh - lh - 2.0f));
-        LabelBox box{ lx - 3.0f, ly - 2.0f, lx + lw + 3.0f, ly + lh + 2.0f };
+        // The WINDOW's width, not the panel's: the viewport is drawn straight
+        // onto the frame, so this is the number the rule is about.
+        float frame_w = dai_ui_panel_width(ui);
+        if (frame_w < w) frame_w = w;
+        const int narrow = (frame_w < 1200.0f);
+        float lx, ly;
+        if (narrow) {
+            int right = (anchor_x > x + w * 0.5f);
+            lx = right ? x + w - lw - PAD_X - EDGE : x + PAD_X + EDGE;
+            ly = anchor_y - lh * 0.5f;
+        } else {
+            lx = anchor_x + OFF;
+            ly = anchor_y - OFF - lh;
+            if (lx + lw + PAD_X > x + w - EDGE) lx = anchor_x - OFF - lw;  // fold left
+            if (ly - PAD_Y < y + EDGE)          ly = anchor_y + OFF;       // fold down
+        }
+        lx = std::max(x + PAD_X + EDGE, std::min(lx, x + w - lw - PAD_X - EDGE));
+        ly = std::max(y + PAD_Y + EDGE, std::min(ly, y + vh - lh - PAD_Y - EDGE));
+        LabelBox box{ lx - PAD_X, ly - PAD_Y, lx + lw + PAD_X, ly + lh + PAD_Y };
         bool clash = false;
         for (size_t k = 0; k < taken.size() && !clash; ++k)
             clash = !(box.x1 < taken[k].x0 || taken[k].x1 < box.x0 ||
                       box.y1 < taken[k].y0 || taken[k].y1 < box.y0);
         if (clash) continue;
         taken.push_back(box);
+
+        // The leader, drawn first so the plate covers its last pixel: from the
+        // edge of the box towards the marker, stopping at the ring rather than
+        // inside it.
+        float bcx = 0.5f * (box.x0 + box.x1), bcy = 0.5f * (box.y0 + box.y1);
+        float dx = anchor_x - bcx, dy = anchor_y - bcy;
+        float len = std::sqrt(dx * dx + dy * dy);
+        if (len > anchor_r + 4.0f) {
+            float ux = dx / len, uy = dy / len;
+            float tx = (std::fabs(ux) > 1e-4f)
+                           ? ((ux > 0.0f ? box.x1 : box.x0) - bcx) / ux : 1e9f;
+            float ty = (std::fabs(uy) > 1e-4f)
+                           ? ((uy > 0.0f ? box.y1 : box.y0) - bcy) / uy : 1e9f;
+            float te = std::min(tx, ty);
+            float sx0 = bcx + ux * te, sy0 = bcy + uy * te;
+            float ex  = anchor_x - ux * (anchor_r + 2.0f);
+            float ey  = anchor_y - uy * (anchor_r + 2.0f);
+            if ((ex - sx0) * ux + (ey - sy0) * uy > 1.0f)
+                dai_ui_line(ui, sx0, sy0, ex, ey, 1.0f, rgba(0xFF, 0x3B, 0x30, 170));
+        }
         // A plate under the text: the sky behind a marker is whatever colour
         // the figure happens to be, and red on cyan is not a readable label.
         dai_ui_rect(ui, box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0,
-                    rgba(0x10, 0x10, 0x14, 220));
+                    rgba(0x10, 0x10, 0x14, 225));
+        dai_ui_rect_outline(ui, box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0,
+                            1.0f, rgba(0xFF, 0x3B, 0x30, 140));
         dai_ui_text(ui, lx, ly, tag, COL_CONFLICT);
     }
     dai_ui_clip_end(ui);
@@ -1385,7 +1469,22 @@ void dai_show_ui_status(dai_show_ui *u, dai_ui *ui, float x, float y, float w, f
                   u->s.drone_count, dai_show_formation_count(u->sh),
                   (double)t.last_validate.min_distance_m, (double)t.last_validate.max_speed_ms,
                   t.sample_ms + t.assign_ms + t.layer_ms + t.validate_ms);
-    dai_ui_text(ui, x + 8.0f, ty, left, st->text_dim);
+
+    // What the separation cost, in the one line that is always on screen:
+    // "16 crossings: 11 lifted, 7 delayed, 0 left over, 1 formation fault".
+    // The last number is the one this line used to leave out, and leaving it
+    // out is how a figure with two points inside the minimum distance passed as
+    // solved - nothing was left over, because the fault was never a crossing.
+    // Appended only while it fits beside the verdict, which is the one thing
+    // here that may never be pushed off the end.
+    char layer_note[160] = { 0 };
+    if (dai_show_get_plan(u->sh) && t.formations)
+        std::snprintf(layer_note, sizeof(layer_note),
+                      "   %u crossings: %u lifted, %u delayed, %u left over, %u formation fault%s",
+                      t.last_layer.crossings_found, t.last_layer.resolved_by_height,
+                      t.last_layer.resolved_by_delay, t.last_layer.unresolved,
+                      t.last_layer.endpoint_pairs,
+                      (t.last_layer.endpoint_pairs == 1) ? "" : "s");
 
     // The verdict is DERIVED, every frame, from the document - never a string
     // frozen when the panel was created. A status line that still says "add a
@@ -1405,12 +1504,28 @@ void dai_show_ui_status(dai_show_ui *u, dai_ui *ui, float x, float y, float w, f
     } else if (t.last_validate.conflicts) {
         std::snprintf(verdict, sizeof(verdict), "%u conflicts", t.last_validate.conflicts);
         verdict_col = COL_CONFLICT;
+    } else if (t.last_layer.endpoint_pairs) {
+        // The validator normally finds these too - but if a fault stands
+        // between two ticks it would not, and "no conflicts" over a figure the
+        // separator has already named as faulted is the one lie this line must
+        // not tell.
+        std::snprintf(verdict, sizeof(verdict), "%u formation fault%s",
+                      t.last_layer.endpoint_pairs,
+                      (t.last_layer.endpoint_pairs == 1) ? "" : "s");
+        verdict_col = COL_CONFLICT;
     } else {
         std::snprintf(verdict, sizeof(verdict), "no conflicts");
         verdict_col = COL_OK;
     }
     float vw = dai_ui_text_width(ui, verdict);
     dai_ui_text(ui, x + w - vw - 10.0f, ty, verdict, verdict_col);
+
+    if (layer_note[0] &&
+        dai_ui_text_width(ui, left) + dai_ui_text_width(ui, layer_note) + vw + 40.0f <= w) {
+        size_t used = std::strlen(left);
+        std::snprintf(left + used, sizeof(left) - used, "%s", layer_note);
+    }
+    dai_ui_text(ui, x + 8.0f, ty, left, st->text_dim);
 
     // What just happened, to the left of the verdict and only while it fits:
     // an event ("formation added", "the figure could not be sampled") is news,

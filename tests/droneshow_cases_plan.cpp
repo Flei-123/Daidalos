@@ -30,6 +30,11 @@
 //        is counted as the formation fault it is (endpoint_pairs), is never
 //        allowed to close further on the way, and costs the rest of the fleet
 //        nothing - while the same fault at the START end stays unresolved.
+//   [3j] a formation that is packed under the floor EVERYWHERE - 20 drones on a
+//        half metre lattice - is not signed off just because the separator has
+//        nothing left to do: dai_show_layer answers
+//        DAI_SHOW_LAYER_FORMATION_FAULT, dai_show_solve passes that on and
+//        names the figure, and every conflict in it is placed in that figure.
 #include "droneshow_cases.hpp"
 
 #include <cmath>
@@ -825,9 +830,10 @@ void case_endpoint_fault(void) {
     dai_result r = dai_show_layer(from.data(), to.data(), n, perm.data(), &tr, &s,
                                   0.0f, legs.data(), &st);
 
-    CHECK(r == DAI_OK,
-          "a formation fault was reported as an unsolved transition (%u unresolved)",
-          (unsigned)st.unresolved);
+    CHECK(r == DAI_SHOW_LAYER_FORMATION_FAULT,
+          "a formation fault came back as %d: it is neither a clean sign-off (the show "
+          "does not fly) nor an unsolved transition (%u unresolved)",
+          (int)r, (unsigned)st.unresolved);
     CHECK(st.unresolved == 0, "%u pairs blamed on the transition, and the fault is in "
           "the formation", (unsigned)st.unresolved);
     CHECK(st.endpoint_pairs == 1, "the 0.40 m formation fault was counted %u times, "
@@ -883,6 +889,131 @@ void case_endpoint_fault(void) {
           (unsigned)st2.endpoint_pairs);
     CHECK(st2.unresolved > 0,
           "a pair that flies the whole transition inside the floor was reported clean");
+}
+
+// ---------------------------------------------------------------------------
+// [3j] a formation that is too dense EVERYWHERE does not pass as solved.
+//
+// [3i] plants one faulted pair; here the whole destination is the fault - 20
+// drones parked on a half metre lattice with a two metre floor, so every drone
+// has neighbours inside the minimum. The separator has nothing it could fix:
+// the points are given and no route separates them, so `unresolved` comes back
+// zero. Reporting that as DAI_OK was the hole this case closes - a show whose
+// last figure is a solid block of drones would have been signed off on the
+// strength of a counter that was never about the formation in the first place.
+// So `dai_show_layer` answers DAI_SHOW_LAYER_FORMATION_FAULT, the document
+// level `dai_show_solve` passes that answer on and names the figure it stands
+// in, and `dai_show_formation_at_time` puts the validator's conflicts in that
+// same figure - which is what makes the row in the validation panel clickable.
+void case_dense_formation(void) {
+    show_section("[3j] a formation packed under the floor is reported, not signed off");
+
+    dai_show_settings s = plan_settings(2.0f, 8.0f, 4.0f);
+    const uint32_t n = 20;
+    s.drone_count = n;
+    s.fps         = 20;
+
+    std::vector<dai_show_point> from(n), to(n);
+    std::vector<uint32_t>       perm(n);
+    show_grid_formation(from.data(), n, 6.0f, dai_vec3{ 0.0f, 60.0f, 0.0f });
+    // The block: 5 x 4 points, 0.5 m apart, a quarter of the floor.
+    for (uint32_t i = 0; i < n; ++i) {
+        perm[i] = i;
+        to[i]   = from[i];
+        to[i].x = 30.0f + 0.5f * (float)(i % 5);
+        to[i].y = 60.0f;
+        to[i].z = 0.5f * (float)(i / 5);
+    }
+
+    uint32_t packed_pairs = 0;
+    for (uint32_t i = 0; i < n; ++i)
+        for (uint32_t j = i + 1; j < n; ++j)
+            if (dist(to[i], to[j]) < s.min_distance_m) ++packed_pairs;
+
+    dai_show_transition tr = dai_show_transition_default();
+    tr.duration_s = 12.0f;
+
+    std::vector<dai_show_leg> legs(n);
+    dai_show_layer_stats st;
+    dai_result r = dai_show_layer(from.data(), to.data(), n, perm.data(), &tr, &s,
+                                  0.0f, legs.data(), &st);
+
+    CHECK(r != DAI_OK,
+          "a formation with %u pairs inside the floor was signed off as clean",
+          (unsigned)packed_pairs);
+    CHECK(r == DAI_SHOW_LAYER_FORMATION_FAULT,
+          "the dense formation answered %d, expected the formation-fault warning",
+          (int)r);
+    CHECK(st.endpoint_pairs >= packed_pairs,
+          "%u of the %u pairs the formation itself packs inside %.1f m were counted",
+          (unsigned)st.endpoint_pairs, (unsigned)packed_pairs, (double)s.min_distance_m);
+    CHECK(st.unresolved == 0,
+          "%u pairs were blamed on a transition that cannot be at fault",
+          (unsigned)st.unresolved);
+
+    // And the promise that still stands: no pair may close further ON THE WAY
+    // than the formation itself parks it - the block may be illegal, the flight
+    // into it may not make it worse.
+    std::vector<dai_show_point> now(n);
+    const int STEPS = 3000;
+    float t0 = legs[0].t_start, t1 = legs[0].t_end;
+    for (uint32_t i = 0; i < n; ++i) {
+        t0 = std::fmin(t0, legs[i].t_start);
+        t1 = std::fmax(t1, legs[i].t_end);
+    }
+    float worst_slack = 1e30f, worst_t = 0.0f;
+    uint32_t wa = 0, wb = 0;
+    for (int k = 0; k <= STEPS; ++k) {
+        float t = t0 + (t1 - t0) * ((float)k / (float)STEPS);
+        for (uint32_t i = 0; i < n; ++i)
+            daishow::leg_point(&legs[i], &from[i], &to[perm[i]], t, &now[i]);
+        for (uint32_t i = 0; i < n; ++i)
+            for (uint32_t j = i + 1; j < n; ++j) {
+                float goal  = std::fmin(s.min_distance_m, dist(to[i], to[j]));
+                float slack = dist(now[i], now[j]) - goal;
+                if (slack < worst_slack) { worst_slack = slack; worst_t = t; wa = i; wb = j; }
+            }
+    }
+    CHECK(worst_slack >= -1e-3f,
+          "%u and %u close to %.3f m under their own goal at t = %.2f s - the flight "
+          "into the block made the block worse", (unsigned)wa, (unsigned)wb,
+          (double)-worst_slack, (double)worst_t);
+
+    // The document says the same thing, and says WHERE.
+    dai_show *sh = dai_show_create(&s);
+    CHECK(sh != nullptr, "the document could not be created");
+    if (!sh) return;
+    dai_show_formation_add(sh, "start", "test://grid", from.data(), n, 2.0f);
+    dai_show_formation_add(sh, "block", "test://grid", to.data(),   n, 2.0f);
+    char err[256] = { 0 };
+    dai_result sr = dai_show_solve(sh, err, sizeof(err));
+    CHECK(sr == DAI_SHOW_LAYER_FORMATION_FAULT,
+          "dai_show_solve answered %d for a show whose second figure is a solid block",
+          (int)sr);
+    CHECK(std::strstr(err, "block") != nullptr,
+          "the report does not name the figure the fault stands in: \"%s\"", err);
+    dai_show_timings tm = dai_show_get_timings(sh);
+    CHECK(tm.last_layer.endpoint_pairs >= packed_pairs,
+          "the show total reports %u formation faults, the block has %u pairs",
+          (unsigned)tm.last_layer.endpoint_pairs, (unsigned)packed_pairs);
+
+    // And every distance conflict the validator finds in that block is filed
+    // under the block: that mapping is what the validation panel clicks on.
+    dai_show_validate_show(sh);
+    uint32_t cn = dai_show_conflict_count(sh), placed = 0, distance_conflicts = 0;
+    for (uint32_t i = 0; i < cn; ++i) {
+        dai_show_conflict c;
+        if (!dai_show_conflict_at(sh, i, &c)) continue;
+        if (c.kind != DAI_SHOW_CONFLICT_DISTANCE) continue;
+        ++distance_conflicts;
+        if (dai_show_formation_at_time(sh, c.time_s) == 1) ++placed;
+    }
+    CHECK(distance_conflicts > 0, "the validator found no distance conflict in a block "
+          "of 20 drones half a metre apart");
+    CHECK(placed == distance_conflicts,
+          "%u of %u conflicts could not be placed in the figure they happen in",
+          (unsigned)(distance_conflicts - placed), (unsigned)distance_conflicts);
+    dai_show_destroy(sh);
 }
 
 // ---------------------------------------------------------------------------
@@ -963,6 +1094,7 @@ int show_cases_plan(void) {
     case_solved_show_is_clean();
     case_sampled_show_is_clean();
     case_endpoint_fault();
+    case_dense_formation();
     case_long_leg();
     return g_show_fail - before;
 }
