@@ -324,10 +324,15 @@ fi
 # tests/droneshow_cases.hpp for why), and RUN here rather than merely built:
 # the determinism check and the scaling table are the two claims this feature
 # is sold on, and a claim that is only compiled is not a claim.
+#
+# The full run, WITHOUT "quick": the 10,000 drone row is the one that would
+# expose an O(n^2) tick or an O(n^3) assignment, it asserts its own growth
+# against the 1,000 drone row, and it costs about ten seconds. A scaling
+# promise that the build skips is a scaling promise nobody is keeping.
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_droneshow.cpp \
     tests/droneshow_cases_sample.cpp tests/droneshow_cases_assign.cpp \
     tests/droneshow_cases_plan.cpp tests/droneshow_cases_io.cpp \
-    $LIBS -o build/test_droneshow && ./build/test_droneshow quick
+    $LIBS -o build/test_droneshow && ./build/test_droneshow
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/test_font
 # The SVG rasteriser: no renderer, no font, no window - it turns text into
 # coverage, so the test reads the coverage back.
@@ -403,6 +408,15 @@ if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc tools/daifracture.cpp src/dai_fracture.cpp src/dai_gltf_geom.cpp \
         src/dai_gltf_write.cpp src/dai_json.cpp -o build/daifracture
     g++ $FLAGS $ARCH -Iinclude tools/editor_shot.cpp $VKLIBS -o build/editor_shot
+    # The show panels, photographed. Next to editor_shot because it is the same
+    # kind of tool, and RUN here rather than by hand: a screenshot somebody has
+    # to remember to regenerate is a screenshot that is wrong by the second
+    # review. It opens a real droneshow project, so the pictures also carry the
+    # claim that the project type works. No display needed - the renderer draws
+    # into an image and writes the PNG.
+    g++ $FLAGS $ARCH -Iinclude tools/droneshow_shot.cpp $VKLIBS -o build/droneshow_shot
+    mkdir -p .gauntlet-shots
+    DAI_SHADER_DIR=shaders ./build/droneshow_shot .gauntlet-shots 1600 900
 fi
 
 echo "-- examples"

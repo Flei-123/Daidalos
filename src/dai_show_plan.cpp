@@ -24,6 +24,7 @@
 // shortest time that does not break v_max or a_max.
 
 #include "dai_show.h"
+#include "dai_show_internal.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -69,8 +70,11 @@ const int MAX_ROUNDS = 8;
 // A pair is in conflict when it comes closer than the minimum distance. The
 // epsilon is there so a formation whose neighbours sit at EXACTLY min_distance
 // - a grid built to the limit, which is the normal case - is not reported as
-// conflicting with itself at the moment it stands still.
-const float SEP_EPS = 1e-4f;
+// conflicting with itself at the moment it stands still. The number comes from
+// src/dai_show_internal.hpp rather than from here: the validator judges by the
+// same bound this stage separates to, and a tolerance that lives twice ends up
+// with two values and a list of phantom conflicts.
+const float SEP_EPS = daishow::SEP_EPS;
 
 inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -332,16 +336,37 @@ void candidate_pairs(const std::vector<Box> &slices, uint32_t n, float min_d,
         cell *= 2.0f;
     }
 
+    // A slice that spans more cells than this in one axis is not indexed. NOT
+    // clipped to the first 63 cells, which is what stood here and is exactly
+    // the bug tests/droneshow_cases_plan.cpp [3h] was written for: a drone
+    // crossing 1.6 km of field at half a metre spacing spans three thousand
+    // cells, the range was cut at sixty-three, and everything past the first
+    // thirty metres of that flight was invisible to the broadphase. A pair the
+    // separator never sees is a collision nobody separates.
+    //
+    // Such a slice is handed to the narrow phase against the whole fleet in its
+    // own time slot instead. That is O(n) for ONE slice, and the cell size above
+    // was already doubled until the index fits its budget, so a slice is only
+    // wide when it really is an outlier - the traveller, not the fleet. Paying
+    // n box tests for it is a hundred microseconds; missing it is a crash.
+    const int64_t WIDE_CELLS = 63;
     std::vector<Entry> entries;
+    std::vector<Entry> wide;              // (slot, slice) that skipped the grid
     entries.reserve(slices.size() * 2);
     for (size_t i = 0; i < slices.size(); ++i) {
         const uint64_t slot = (uint64_t)(i % (size_t)COARSE);
         int64_t c0[3], c1[3];
+        bool too_wide = false;
         for (int k = 0; k < 3; ++k) {
             c0[k] = (int64_t)std::floor((slices[i].lo[k] - lo[k]) / cell);
             c1[k] = (int64_t)std::floor((slices[i].hi[k] - lo[k]) / cell);
-            if (c1[k] - c0[k] > 63) c1[k] = c0[k] + 63;   // a slice this long is
-        }                                                  // already everyone's
+            if (c1[k] - c0[k] > WIDE_CELLS) too_wide = true;
+        }
+        if (too_wide) {
+            Entry w; w.cell = slot; w.leg = (uint32_t)(i / (size_t)COARSE);
+            wide.push_back(w);
+            continue;
+        }
         for (int64_t x = c0[0]; x <= c1[0]; ++x)
             for (int64_t y = c0[1]; y <= c1[1]; ++y)
                 for (int64_t z = c0[2]; z <= c1[2]; ++z) {
@@ -374,6 +399,23 @@ void candidate_pairs(const std::vector<Box> &slices, uint32_t n, float min_d,
             }
         i = j;
     }
+
+    // The wide slices, against everyone in the same slot. The box test is the
+    // same one the grid path ends on, so a pair reaches the narrow phase for
+    // the same reason either way, and the loop runs over drone indices in
+    // order, so the pair list stays independent of how the grid was built.
+    for (size_t w = 0; w < wide.size(); ++w) {
+        const uint32_t sl = (uint32_t)wide[w].cell;
+        const uint32_t x  = wide[w].leg;
+        const Box &bx = slices[(size_t)x * COARSE + sl];
+        for (uint32_t y = 0; y < n; ++y) {
+            if (y == x) continue;
+            if (!boxes_overlap(bx, slices[(size_t)y * COARSE + sl])) continue;
+            uint32_t a = x < y ? x : y, b = x < y ? y : x;
+            out.push_back(((uint64_t)a << 32) | (uint64_t)b);
+        }
+    }
+
     // One pair, once, in a fixed order - the order the layers are then handed
     // out in, and the reason two runs produce the same heights.
     std::sort(out.begin(), out.end());

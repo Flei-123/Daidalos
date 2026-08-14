@@ -534,6 +534,145 @@ void case_keyframes(void) {
     dai_show_plan_destroy(p);
 }
 
+// ---------------------------------------------------------------------------
+// [3g] the whole document, solved: what the separator promised is what the
+// validator measures.
+//
+// The two stages look at the same show through different windows - one at the
+// curve it routes, the other at the keyframes the plan stores, sampled at the
+// export rate - and the gap between those windows is the only place a promise
+// can be lost. So the show here is built with ONE deliberate fault in it, a
+// pair of drones planted 0.4 m apart inside a formation, and the assertion is
+// not "no conflicts" but the sharper one: the conflicts the validator finds
+// are the fault that was planted and nothing else. A single extra pair would
+// mean the layering signed off on something the plan does not fly.
+void case_solved_show_is_clean(void) {
+    show_section("[3g] a solved show reports the planted conflict, and only that");
+
+    dai_show_settings s = plan_settings(2.0f, 8.0f, 4.0f);
+    s.drone_count = 256;
+    s.fps         = 20;
+    dai_show *sh = dai_show_create(&s);
+    CHECK(sh != nullptr, "the document could not be created");
+    if (!sh) return;
+
+    // Three sparse formations, a translation and a rotation apart: enough
+    // crossing for the separator to have work, sparse enough that it can win.
+    const uint32_t n = s.drone_count;
+    std::vector<dai_show_point> a(n), b(n), c(n);
+    show_grid_formation(a.data(), n, 5.0f, dai_vec3{ 0.0f, 60.0f, 0.0f });
+    show_grid_formation(b.data(), n, 5.0f, dai_vec3{ 0.0f, 60.0f, 0.0f });
+    show_grid_formation(c.data(), n, 5.0f, dai_vec3{ 40.0f, 90.0f, 0.0f });
+    // b is a on its head: every path crosses the middle.
+    for (uint32_t i = 0; i < n; ++i) {
+        b[i].x = -b[i].x;
+        b[i].z = -b[i].z;
+    }
+    // The planted fault, in the last formation so it is a formation conflict
+    // and not a transition one: two drones that stand 0.4 m apart.
+    const uint32_t BAD_A = 100, BAD_B = 101;
+    c[BAD_B] = c[BAD_A];
+    c[BAD_B].x += 0.4f;
+
+    dai_show_formation_add(sh, "start", "test://grid", a.data(), n, 3.0f);
+    dai_show_formation_add(sh, "flip",  "test://grid", b.data(), n, 3.0f);
+    dai_show_formation_add(sh, "fault", "test://grid", c.data(), n, 3.0f);
+
+    dai_show_solve(sh, nullptr, 0);
+    dai_show_validate_show(sh);
+
+    uint32_t cn = dai_show_conflict_count(sh);
+    uint32_t planted = 0, other = 0;
+    float worst_other = 0.0f;
+    uint32_t other_a = 0, other_b = 0;
+    float other_t = 0.0f;
+    for (uint32_t i = 0; i < cn; ++i) {
+        dai_show_conflict k;
+        if (!dai_show_conflict_at(sh, i, &k)) continue;
+        if (k.kind != DAI_SHOW_CONFLICT_DISTANCE) continue;
+        int is_planted = (k.a == BAD_A && k.b == BAD_B) || (k.a == BAD_B && k.b == BAD_A);
+        if (is_planted) { ++planted; continue; }
+        ++other;
+        if (k.limit - k.value > worst_other) {
+            worst_other = k.limit - k.value;
+            other_a = k.a; other_b = k.b; other_t = k.time_s;
+        }
+    }
+    CHECK(planted > 0, "the planted 0.40 m pair was not reported at all");
+    CHECK(other == 0,
+          "%u distance conflicts beyond the planted pair - worst is %u+%u at %.2fs, "
+          "%.3f m inside the limit: the separator proved a curve the plan does not fly",
+          other, other_a, other_b, (double)other_t, (double)worst_other);
+
+    dai_show_destroy(sh);
+}
+
+
+// ---------------------------------------------------------------------------
+// [3h] the leg that is longer than the grid.
+//
+// The separator indexes each leg into a uniform grid, and a grid has a limit
+// on how many cells one entry may span. The tempting way to respect that limit
+// is to cut the range short - which quietly deletes the far end of the leg
+// from the broadphase, and a leg that crosses the whole field is then invisible
+// to everything it flies through. The construction here is that exact case: one
+// drone travels 1.6 km past sixty-four drones parked on its line. Every one of
+// those pairs is a real crossing, so the separator has to report all of them,
+// not the fraction that happened to fall inside the first sixty-three cells.
+void case_long_leg(void) {
+    show_section("[3h] a leg across the whole field is not lost by the broadphase");
+
+    // Half a metre apart, which is what puts the grid cell at a metre and makes
+    // a kilometre-long leg span a thousand of them - a micro-drone show indoors
+    // has these numbers, and so does any show whose field is large next to its
+    // spacing.
+    dai_show_settings s = plan_settings(0.5f, 60.0f, 5.0f);
+
+    const uint32_t PARKED = 64;
+    const uint32_t n = PARKED + 1;
+    std::vector<dai_show_point> from(n), to(n);
+    std::vector<uint32_t>       perm(n);
+    for (uint32_t i = 0; i < n; ++i) perm[i] = i;
+
+    // The traveller, and the line of drones it has to get past.
+    from[0] = pt(-800.0f, 50.0f, 0.0f, 255, 255, 255);
+    to[0]   = pt( 800.0f, 50.0f, 0.0f, 255, 255, 255);
+    // The line sits in the middle third of the route, where the traveller is
+    // already at cruise: a drone that is still climbing out of its formation is
+    // a different test, and [3a] is where that one lives.
+    for (uint32_t i = 1; i <= PARKED; ++i) {
+        float x = -200.0f + 400.0f * (float)(i - 1) / (float)(PARKED - 1);
+        from[i] = pt(x, 50.0f, 0.0f, 80, 160, 255);
+        to[i]   = from[i];                     // parked: same point, both ends
+    }
+
+    dai_show_transition tr = dai_show_transition_default();
+    tr.duration_s = 60.0f;
+
+    std::vector<dai_show_leg> legs(n);
+    dai_show_layer_stats st;
+    dai_result r = dai_show_layer(from.data(), to.data(), n, perm.data(), &tr, &s,
+                                  0.0f, legs.data(), &st);
+
+    // Every parked drone is on the traveller's line, so every one of them is a
+    // crossing. Finding fewer means legs left the broadphase somewhere between
+    // the first cell and the last.
+    CHECK(st.crossings_found >= PARKED,
+          "the separator found %u crossings on a line of %u - the far end of the "
+          "long leg is missing from the broadphase",
+          (unsigned)st.crossings_found, (unsigned)PARKED);
+    CHECK(r == DAI_OK, "the long leg was not separated (%u pairs left)",
+          (unsigned)st.unresolved);
+
+    float t_hit = 0.0f;
+    uint32_t ha = 0, hb = 0;
+    float sep = sweep_min_separation(from, to, perm, legs, 4000, &t_hit, &ha, &hb);
+    CHECK(sep >= s.min_distance_m - 1e-3f,
+          "the traveller passes %u at %.3f m (t = %.2f s), the floor is %.3f m",
+          (unsigned)(ha == 0 ? hb : ha), (double)sep, (double)t_hit,
+          (double)s.min_distance_m);
+}
+
 } // namespace
 
 int show_cases_plan(void) {
@@ -544,5 +683,7 @@ int show_cases_plan(void) {
     case_limits();
     case_stagger();
     case_keyframes();
+    case_solved_show_is_clean();
+    case_long_leg();
     return g_show_fail - before;
 }

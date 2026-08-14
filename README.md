@@ -544,6 +544,96 @@ boxes and a radius for spheres.
 
 ---
 
+## Drone shows - `include/dai_show.h`, `include/dai_show_ui.h`
+
+A project has a `kind`, and the second one is `droneshow`. A project file
+without the line is a game, so every scene made before this existed opens
+exactly as it did. What changes on open is the panel set - not the engine, not
+the renderer, not the dock. There is one binary and one editor.
+
+The reason this fits here at all is the rule at the top of this file. A drone
+show is `state(n+1) = step(state(n), input(n))` with the stakes raised: if a
+tool says *collision free*, that answer has to come out the same on the
+operator's laptop, on the show director's workstation and in the accident
+report. So every random draw comes from a seed in the input, every parallel
+section reduces in a fixed index order, and nothing in the solve path reads a
+clock. `build/test_droneshow` runs the whole pipeline twice and compares the
+result with `memcmp` - not "within epsilon".
+
+Six stages, and each one exists because the naive version of it does not scale
+or does not tell the truth:
+
+```
+  sample     mesh -> exactly N points, Poisson disk + Lloyd, surface / volume /
+             silhouette. Says NO before it works when N drones do not fit into
+             the figure at min_distance, and names the size that would.
+  assign     drone -> point as a linear sum assignment. Exact (Jonker-Volgenant)
+             while it is affordable, a spatially decomposed auction when it is
+             not, and the panel says which one ran and what it cost in metres.
+  layer      optimal assignment still crosses. Legs are lifted onto height
+             layers and delayed until the crossings are gone; what cannot be
+             separated is ITEMISED, and the stage returns an error rather than
+             a clean bill.
+  profile    linear, smooth (v = 0 at both ends), smooth from one end.
+             Synchronised or staggered. v_max and a_max are refused, not hoped
+             for: a duration that breaks them comes back with the shortest one
+             that does not.
+  validate   distance, speed, acceleration, geofence, ground clearance over the
+             whole timeline, through a uniform grid and streamed over time.
+  export     .skyc (Skybrush's container, implemented from the format
+             description - no GPL code was copied, this is MIT), plus CSV and
+             JSON for anyone who wants to check the numbers themselves.
+```
+
+The two numbers that decide whether this is a tool or a demo are memory and
+time. A show is keyframes and never materialised ticks - 10,000 drones through
+the test show is **1.87 MB** of plan where a tick array would be 3.4 GB - and
+the validator walks time in windows rather than building that array. Measured
+by `build/test_droneshow`, which prints the table rather than claiming it:
+
+| drones | sample | assign | layer | profile | validate | plan | check peak |
+|--------|--------|--------|-------|---------|----------|------|------------|
+| 100 | 17 ms | 2 ms | 1 ms | 0.0 ms | 14 ms | 0.01 MB | 0.01 MB |
+| 1,000 | 98 ms | 452 ms | 18 ms | 0.1 ms | 221 ms | 0.14 MB | 0.09 MB |
+| 10,000 | 1167 ms | 268 ms | 979 ms | 1.2 ms | 7016 ms | 1.87 MB | 1.08 MB |
+
+Ten times the drones cost about twelve times the seconds, which is the shape of
+a broadphase; a quadratic tick would have cost a hundred times and a cubic
+assignment a thousand. The test asserts that shape, so the day one of the two
+paths comes back the build goes red instead of merely printing an ugly number.
+
+```bash
+./build/test_droneshow            # 235 assertions, the determinism proof, the table
+./build/test_droneshow quick      # the same without the 10,000 drone row
+DAI_SHADER_DIR=shaders ./build/droneshow_shot .gauntlet-shots 1600 900
+```
+
+The panels are ordinary dock panels: **Storyboard** (figures in order, hold and
+transition times, "make a formation from the selected mesh"), **Parameters**
+(fleet, minimum distance, v_max, a_max, sampling mode, assignment method,
+Solve), **Validation** (the conflict list, and a click jumps the timeline to
+the moment and selects the two drones), and the **preview**, which draws the
+fleet as coloured points in their real LED colour with the conflicting pairs in
+red and a line between them. The preview goes through `dai_ui`, not through the
+renderer: a show at this stage is points, lines and text, and routing them
+through the 2D canvas is why a second project type needed no new pipeline, no
+new shader and no branch in `dai_render`.
+
+What this stage cannot do yet is on the screenshots rather than hidden in a
+comment. A detour has to cruise above BOTH formations - that is where the
+guarantee comes from, a lifted leg cannot meet a drone parked in either of them
+- and on a figure that is tall next to the seconds its transition was given,
+that climb breaks v_max. A detour that breaks a limit is not a fix, it is a
+different violation, so the leg stays where it is and the pair is listed. The
+demo show under `.gauntlet-shots` is that case: `11 crossings: 0 lifted, 0
+delayed, 11 left over`, ten of them reported rather than hidden and one near
+miss put there on purpose. The panel says which, when, and by how many
+centimetres; the seconds a move is given are the director's to change, and
+guessing on the operator's behalf is the one thing a tool with this claim on it
+may not do.
+
+---
+
 ## Looking at the output
 
 A renderer that runs is not a renderer that is correct. Two tools exist for

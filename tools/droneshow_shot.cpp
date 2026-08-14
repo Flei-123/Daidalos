@@ -11,8 +11,17 @@
 // pair of drones deliberately placed inside the minimum distance, because a
 // validation panel photographed with an empty list proves nothing about the
 // panel that has to show a conflict.
+//
+// And a real PROJECT around it. The show panels only appear because a project
+// of kind droneshow is open, so the tool creates one on disk (and a game
+// project beside it, which must keep opening exactly as it always did), opens
+// it, exports the solved show into its assets folder and hands the editor the
+// same three callbacks examples/editor_demo.cpp hands it. What the pictures
+// then show is the editor with a project in it, not a panel set floating in a
+// window.
 
 #include "dai_editor_ui.h"
+#include "dai_project.h"
 #include "dai_render.h"
 #include "dai_show.h"
 #include "dai_show_ui.h"
@@ -89,6 +98,32 @@ static void figure_ring(Soup &s, int segs, float thick) {
     }
 }
 
+// Opens the project if this tool has run before, creates it otherwise. Both
+// paths end with a project of the kind asked for: dai_project_create_kind
+// refuses to overwrite, which is the behaviour that matters in an editor and
+// the reason a shot tool has to ask first.
+static dai_project *project_here(const char *root, const char *name, int kind) {
+    char path[512], err[256] = { 0 };
+    std::snprintf(path, sizeof(path), "%s/%s", root, name);
+    dai_project *p = dai_project_is_valid(path) ? dai_project_open(path, err, sizeof(err))
+                                                : dai_project_create_kind(root, name, kind,
+                                                                          err, sizeof(err));
+    if (!p) std::printf("project %s: %s\n", name, err);
+    return p;
+}
+
+// The picker's feed. The editor does not know where projects live, so the tool
+// that made them says so - the same contract examples/editor_demo.cpp honours.
+static std::vector<std::string> g_project_names;
+
+static const char *project_list_cb(uint32_t index, void *) {
+    return index < g_project_names.size() ? g_project_names[index].c_str() : nullptr;
+}
+
+static const char *kind_word(int kind) {
+    return kind == DAI_PROJECT_DRONESHOW ? "droneshow" : "game";
+}
+
 int main(int argc, char **argv) {
     std::string outdir = argc > 1 ? argv[1] : ".gauntlet-shots";
     const uint32_t W = argc > 2 ? (uint32_t)atoi(argv[2]) : 1600;
@@ -98,15 +133,57 @@ int main(int argc, char **argv) {
     // labels collide, so the narrow run is the one worth keeping.
     std::string tag = argc > 4 ? argv[4] : "";
 
+    // ---- the project ------------------------------------------------------
+    // One of each kind, side by side: the droneshow the panels belong to, and
+    // a game project that has to keep opening the way it always did. The kinds
+    // are read back off disk rather than remembered, because that read is the
+    // thing the feature claims works.
+    const char *proot = "build/shot_projects";
+    dai_project *game = project_here(proot, "Fixture Game", DAI_PROJECT_GAME);
+    dai_project *proj = project_here(proot, "Drone Show Demo", DAI_PROJECT_DRONESHOW);
+    if (!proj) return 1;
+    if (game) std::printf("project %-16s kind %s\n", dai_project_name(game),
+                          kind_word(dai_project_kind(game)));
+    std::printf("project %-16s kind %s\n", dai_project_name(proj),
+                kind_word(dai_project_kind(proj)));
+    if (dai_project_kind(proj) != DAI_PROJECT_DRONESHOW) {
+        std::printf("the droneshow project did not come back as one\n");
+        return 1;
+    }
+
     // ---- the show ---------------------------------------------------------
+    // The safety numbers go through settings/project.txt and come back out of
+    // it, exactly as the editor does it: what is photographed is what a second
+    // operator would read off the file, not what this tool had in mind.
+    dai_project_settings ps = dai_project_settings_default();
+    dai_project_settings_load(proj, &ps);
+    ps.drone_count    = 420;
+    ps.min_distance_m = 2.0f;
+    ps.v_max_ms       = 8.0f;
+    ps.a_max_ms2      = 4.0f;
+    ps.takeoff_alt_m  = 30.0f;
+    ps.fps            = 10;                // a shot tool, not a flight review
+    ps.show_seed      = 20260814ull;
+    dai_project_settings_save(proj, &ps);
+    ps = dai_project_settings_default();
+    dai_project_settings_load(proj, &ps);
+
     dai_show_settings s = dai_show_settings_default();
-    s.drone_count    = 420;
-    s.min_distance_m = 2.0f;
-    s.v_max_ms       = 8.0f;
-    s.a_max_ms2      = 4.0f;
-    s.takeoff_alt_m  = 30.0f;
-    s.fps            = 10;                 // a shot tool, not a flight review
-    s.seed           = 20260814ull;
+    s.min_distance_m       = ps.min_distance_m;
+    s.v_max_ms             = ps.v_max_ms;
+    s.a_max_ms2            = ps.a_max_ms2;
+    s.drone_count          = ps.drone_count;
+    s.show_origin_lat      = ps.show_origin_lat;
+    s.show_origin_lon      = ps.show_origin_lon;
+    s.show_origin_amsl     = ps.show_origin_amsl;
+    s.show_orientation_deg = ps.show_orientation_deg;
+    s.takeoff_alt_m        = ps.takeoff_alt_m;
+    s.fps                  = ps.fps;
+    s.fence_half_x         = ps.fence_half_x;
+    s.fence_half_z         = ps.fence_half_z;
+    s.fence_top_m          = ps.fence_top_m;
+    s.min_ground_m         = ps.min_ground_m;
+    s.seed                 = ps.show_seed;
 
     dai_show *sh = dai_show_create(&s);
     if (!sh) { std::printf("show failed\n"); return 1; }
@@ -168,6 +245,39 @@ int main(int argc, char **argv) {
                 sr == DAI_OK ? "ok" : err, tm.assign_ms, tm.layer_ms, tm.validate_ms,
                 dai_show_conflict_count(sh));
 
+    for (uint32_t i = 0; i < dai_show_conflict_count(sh) && i < 12u; ++i) {
+        dai_show_conflict cf;
+        if (!dai_show_conflict_at(sh, i, &cf)) continue;
+        std::printf("  conflict %2u  t %7.2fs  drones %u+%u  kind %d  %.3f of %.3f m\n",
+                    i, cf.time_s, cf.a, cf.b, cf.kind, cf.value, cf.limit);
+    }
+
+    // The show and its exports, written into the project they belong to, so
+    // the Project panel under the viewport lists files this run really made.
+    std::vector<std::string> asset_names;
+    {
+        char path[640];
+        std::snprintf(path, sizeof(path), "%s/scenes/show.dshow", dai_project_path(proj));
+        if (dai_show_save(sh, path, err, sizeof(err)) != DAI_OK)
+            std::printf("save show: %s\n", err);
+        const dai_show_plan *plan = dai_show_get_plan(sh);
+        struct Out { const char *name; dai_result (*fn)(const dai_show_plan *,
+                                                        const dai_show_settings *,
+                                                        const char *, char *, size_t); };
+        const Out outs[3] = { { "show.json", dai_show_export_json },
+                              { "show.csv",  dai_show_export_csv },
+                              { "show.skyc", dai_show_export_skyc } };
+        for (int i = 0; plan && i < 3; ++i) {
+            std::snprintf(path, sizeof(path), "%s/%s", dai_project_asset_dir(proj), outs[i].name);
+            if (outs[i].fn(plan, &s, path, err, sizeof(err)) == DAI_OK)
+                asset_names.push_back(outs[i].name);
+            else
+                std::printf("export %s: %s\n", outs[i].name, err);
+        }
+        std::printf("exported into %s: %u files\n", dai_project_asset_dir(proj),
+                    (uint32_t)asset_names.size());
+    }
+
     dai_show_ui *show = dai_show_ui_create(sh);
 
     // ---- the editor around it --------------------------------------------
@@ -219,6 +329,20 @@ int main(int argc, char **argv) {
     dai_editor_camera(ed, eye, look, up, 55.0f, 0.1f, 800.0f, (float)W, (float)H);
     dai_editor_ui *panels = dai_editor_ui_create(ed, ui);
     dai_editor_ui_show_host(panels, show);
+
+    // The project half of the editor, fed exactly as the demo feeds it: the
+    // picker lists what is on disk and the browser lists what the show wrote.
+    {
+        char names[16][DAI_PROJECT_NAME_MAX];
+        uint32_t pn = dai_project_list(proot, names[0], 16, DAI_PROJECT_NAME_MAX);
+        g_project_names.clear();
+        for (uint32_t i = 0; i < pn && i < 16u; ++i) g_project_names.push_back(names[i]);
+        dai_editor_ui_project_host(panels, project_list_cb, nullptr, nullptr, nullptr);
+        dai_editor_ui_projects_refresh(panels);
+    }
+    std::vector<const char *> asset_ptrs;
+    for (size_t i = 0; i < asset_names.size(); ++i) asset_ptrs.push_back(asset_names[i].c_str());
+    dai_editor_ui_asset_list(panels, asset_ptrs.data(), (uint32_t)asset_ptrs.size());
 
     // One frame of the whole editor. `mx/my/down` are the pointer, so a hover
     // or a click can be photographed as well as a resting screen.
@@ -330,6 +454,8 @@ int main(int argc, char **argv) {
     }
 
     dai_editor_ui_destroy(panels);
+    if (game) dai_project_close(game);
+    dai_project_close(proj);
     dai_editor_destroy(ed);
     dai_show_ui_destroy(show);
     dai_show_destroy(sh);

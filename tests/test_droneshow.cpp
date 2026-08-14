@@ -143,7 +143,8 @@ static double now_ms() {
 // Builds a whole show from scratch and hands back every byte a caller could
 // observe: the plan's keyframes and the conflict list. Two calls must produce
 // two identical buffers, or the tool cannot be trusted with a safety claim.
-static void run_pipeline(uint32_t n, std::string *bytes_out, dai_show_timings *t_out) {
+static void run_pipeline(uint32_t n, std::string *bytes_out, dai_show_timings *t_out,
+                         size_t *plan_bytes_out = nullptr) {
     dai_show_settings s = dai_show_settings_default();
     s.drone_count    = n;
     s.min_distance_m = 2.0f;
@@ -185,6 +186,7 @@ static void run_pipeline(uint32_t n, std::string *bytes_out, dai_show_timings *t
     dai_show_validate_show(sh);
 
     if (t_out) *t_out = dai_show_get_timings(sh);
+    if (plan_bytes_out) *plan_bytes_out = dai_show_plan_bytes(dai_show_get_plan(sh));
 
     if (bytes_out) {
         bytes_out->clear();
@@ -237,21 +239,116 @@ static void determinism(void) {
           s1.total_cost_m, s2.total_cost_m);
 }
 
+// The timings a panel prints are the WHOLE show, and this is what "whole"
+// means: counts summed over every transition, the gap at its worst case. The
+// bug this stands against shipped once - the document kept only the last
+// transition's numbers, so a storyboard with twenty moves printed the crossing
+// count of move twenty next to the conflict count of all twenty.
+static void aggregation(void) {
+    show_section("timings - the show total is the sum of its transitions");
+
+    const uint32_t n = 64;
+    dai_show_settings s = dai_show_settings_default();
+    s.drone_count    = n;
+    s.min_distance_m = 2.0f;
+    s.seed           = 0xA66E6ull;
+
+    dai_show *sh = dai_show_create(&s);
+    CHECK(sh != nullptr, "the document could not be created");
+    if (!sh) return;
+
+    // Four grids, offset against each other so the assignment has real work to
+    // do and the separator has real crossings to find.
+    std::vector<dai_show_point> pts(n);
+    for (int f = 0; f < 4; ++f) {
+        float d = (float)f;
+        show_grid_formation(pts.data(), n, 4.0f,
+                            dai_vec3{ 6.0f * d, 40.0f + 5.0f * d, ((f & 1) ? 8.0f : -8.0f) });
+        char name[32];
+        std::snprintf(name, sizeof(name), "grid %d", f);
+        CHECK(dai_show_formation_add(sh, name, "test://grid", pts.data(), n, 2.0f) != UINT32_MAX,
+              "formation %d was refused", f);
+    }
+    dai_show_solve(sh, nullptr, 0);
+    dai_show_timings t = dai_show_get_timings(sh);
+
+    uint32_t crossings = 0, lifted = 0, delayed = 0, unresolved = 0;
+    double   cost = 0.0;
+    float    gap = -1.0f;
+    int      moves = 0;
+    for (uint32_t i = 1; i < 4; ++i) {
+        dai_show_assign_stats a;
+        dai_show_layer_stats  l;
+        std::memset(&a, 0, sizeof(a));
+        std::memset(&l, 0, sizeof(l));
+        CHECK(dai_show_transition_stats(sh, i, &a, &l) == 1,
+              "transition %u kept no stats of its own", i);
+        crossings  += l.crossings_found;
+        lifted     += l.resolved_by_height;
+        delayed    += l.resolved_by_delay;
+        unresolved += l.unresolved;
+        cost       += a.total_cost_m;
+        if (a.gap_percent > gap) gap = a.gap_percent;
+        ++moves;
+    }
+    CHECK(moves == 3, "three transitions were solved, %d reported stats", moves);
+    CHECK(t.last_layer.crossings_found == crossings,
+          "the show total says %u crossings, the transitions add up to %u",
+          t.last_layer.crossings_found, crossings);
+    CHECK(t.last_layer.resolved_by_height == lifted,
+          "the show total says %u lifted, the transitions add up to %u",
+          t.last_layer.resolved_by_height, lifted);
+    CHECK(t.last_layer.resolved_by_delay == delayed,
+          "the show total says %u delayed, the transitions add up to %u",
+          t.last_layer.resolved_by_delay, delayed);
+    CHECK(t.last_layer.unresolved == unresolved,
+          "the show total says %u unresolved, the transitions add up to %u",
+          t.last_layer.unresolved, unresolved);
+    CHECK(std::fabs(t.last_assign.total_cost_m - cost) < 1e-6 * (1.0 + cost),
+          "the show total flew %.3f m, the transitions add up to %.3f m",
+          t.last_assign.total_cost_m, cost);
+    CHECK(t.last_assign.gap_percent == gap,
+          "the show total reports a %.4f%% gap, the worst transition %.4f%%",
+          (double)t.last_assign.gap_percent, (double)gap);
+    // And the breakdown goes away with the plan it belongs to: a per transition
+    // row that outlives the solve is the stale badge this document forbids.
+    dai_show_formation_remove(sh, 3);
+    dai_show_assign_stats a2;
+    dai_show_layer_stats  l2;
+    CHECK(dai_show_transition_stats(sh, 1, &a2, &l2) == 0,
+          "the transition stats survived the edit that invalidated the plan");
+    dai_show_destroy(sh);
+}
+
 static void scaling(int with_10k) {
     show_section("scaling - measured, not claimed (milliseconds)");
-    std::printf("  %8s %10s %10s %10s %10s %10s %10s\n",
-                "drones", "sample", "assign", "layer", "profile", "validate", "plan MB");
+    std::printf("  %8s %10s %10s %10s %10s %10s %10s %10s\n",
+                "drones", "sample", "assign", "layer", "profile", "validate",
+                "plan MB", "check MB");
 
     const uint32_t sizes[3] = { 100, 1000, 10000 };
+    double wall_of[3] = { 0.0, 0.0, 0.0 };
     for (int i = 0; i < (with_10k ? 3 : 2); ++i) {
         dai_show_timings t{};
+        size_t plan_bytes = 0;
         double t0 = now_ms();
-        run_pipeline(sizes[i], nullptr, &t);
+        run_pipeline(sizes[i], nullptr, &t, &plan_bytes);
         double wall = now_ms() - t0;
-        std::printf("  %8u %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f   (%.0f ms wall)\n",
+        wall_of[i] = wall;
+        // Two memory columns, because they answer two questions: "plan MB" is
+        // what the show COSTS to keep (dai_show_plan_bytes - keyframes, the
+        // number this design exists to make small) and "check MB" is what the
+        // validator borrowed while streaming over it. Materialised ticks would
+        // put gigabytes in the first column and there would be no argument.
+        std::printf("  %8u %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f   (%.0f ms wall)\n",
                     sizes[i], t.sample_ms, t.assign_ms, t.layer_ms, t.profile_ms,
                     t.validate_ms,
+                    (double)plan_bytes / (1024.0 * 1024.0),
                     (double)t.last_validate.peak_bytes / (1024.0 * 1024.0), wall);
+
+        CHECK((double)plan_bytes < 64.0 * 1024.0 * 1024.0,
+              "%u drones: the plan is %.1f MB - that is materialised ticks, not keyframes",
+              sizes[i], (double)plan_bytes / (1024.0 * 1024.0));
 
         // The broadphase has to actually be doing something. n^2/2 pairs per
         // tick at 10,000 drones would be 5*10^7 per tick; anything near that
@@ -265,6 +362,25 @@ static void scaling(int with_10k) {
                   sizes[i], per_tick, naive);
         }
     }
+
+    // And a hard bound on the ten thousand row, so an O(n^2) tick or an O(n^3)
+    // assignment that finds its way back in turns the BUILD red instead of
+    // merely printing an ugly number nobody reads. The test is the growth, not
+    // the absolute time: ten times the drones cost about eleven times the
+    // seconds here, a quadratic path would cost a hundred and a cubic one a
+    // thousand. Sixty is far above the measurement noise of a loaded machine
+    // and far below either of the two things this is looking for. The absolute
+    // ceiling on top of it is for the case where BOTH rows are already slow.
+    if (with_10k && wall_of[1] > 0.0) {
+        double growth = wall_of[2] / wall_of[1];
+        CHECK(growth < 60.0,
+              "10,000 drones took %.0f x the 1,000 drone time (%.0f ms vs %.0f ms) - "
+              "that is the shape of an O(n^2) or O(n^3) path, not of the broadphase",
+              growth, wall_of[2], wall_of[1]);
+        CHECK(wall_of[2] < 180000.0,
+              "the 10,000 drone show took %.0f ms end to end - too slow to be the "
+              "scaling this feature is sold on", wall_of[2]);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -277,6 +393,7 @@ int main(int argc, char **argv) {
     show_cases_plan();
     show_cases_io();
     determinism();
+    aggregation();
     scaling(!quick);
 
     std::printf("\n%s: %d checks, %d failures\n",

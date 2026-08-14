@@ -516,6 +516,16 @@ typedef struct dai_show_timings {
 } dai_show_timings;
 DAI_API dai_show_timings dai_show_get_timings(const dai_show *sh);
 
+/* The same numbers for ONE transition - the one leading into formation i.
+ * dai_show_timings aggregates the whole show (counts summed, gap and extra
+ * height at their worst case, the least exact method that ran), which is what
+ * a status line has to say; this is the breakdown a director needs when one
+ * move out of twenty is the ugly one. Returns 0 when i names no solved
+ * transition, and then leaves the outputs alone. */
+DAI_API int dai_show_transition_stats(const dai_show *sh, uint32_t i,
+                                      dai_show_assign_stats *assign,
+                                      dai_show_layer_stats *layer);
+
 /* The conflict list from the last dai_show_validate_show. Kept on the document
  * so the panel can be redrawn without solving again. */
 DAI_API dai_result dai_show_validate_show(dai_show *sh);

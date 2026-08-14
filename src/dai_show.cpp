@@ -82,6 +82,19 @@ struct Formation {
     dai_show_transition         tr;                // the move INTO this one
 };
 
+// What one transition cost. Kept per transition as well as summed, because the
+// two questions a director asks are different ones: "what did this show cost"
+// is a sum over every move, and "why is THIS move ugly" is one row of it. A
+// panel that shows only the last transition answers neither - it prints the
+// numbers of whichever move happened to be solved last next to the conflict
+// count of all of them, which is how "0 lifted, 0 delayed" ended up standing
+// beside eleven conflicts.
+struct TrStats {
+    dai_show_assign_stats assign;
+    dai_show_layer_stats  layer;
+    int                   valid;   // 0 until this transition has been solved
+};
+
 double now_ms() {
     using clock = std::chrono::steady_clock;
     return std::chrono::duration<double, std::milli>(clock::now().time_since_epoch()).count();
@@ -191,8 +204,55 @@ struct dai_show {
     dai_show_plan                 *plan = nullptr;
     dai_show_timings               timings;
     std::vector<dai_show_conflict> conflicts;
+    std::vector<TrStats>           tr_stats;          // one per formation, [0] unused
     double                         sample_ms = 0.0;   // accumulated over the mesh samples
 };
+
+namespace {
+
+// The show total. Counts add up (a lifted leg is a lifted leg wherever it
+// happened), heights and gaps take the worst case - a 3% detour on one move is
+// not made acceptable by twenty exact ones - and the method reported is the
+// least exact one that ran, so a single clustered transition cannot hide behind
+// nineteen exact ones.
+void aggregate(dai_show_timings *t, const std::vector<TrStats> &per) {
+    dai_show_assign_stats a;
+    dai_show_layer_stats  l;
+    std::memset(&a, 0, sizeof(a));
+    std::memset(&l, 0, sizeof(l));
+    a.method_used = DAI_SHOW_ASSIGN_EXACT;
+    a.exact_cost_m = 0.0;
+    a.gap_percent  = -1.0f;
+    int any = 0, any_exact_cost = 1;
+    for (size_t i = 0; i < per.size(); ++i) {
+        if (!per[i].valid) continue;
+        const dai_show_assign_stats &pa = per[i].assign;
+        const dai_show_layer_stats  &pl = per[i].layer;
+        any = 1;
+        a.total_cost_m += pa.total_cost_m;
+        if (pa.exact_cost_m >= 0.0) a.exact_cost_m += pa.exact_cost_m;
+        else                        any_exact_cost = 0;
+        if (pa.gap_percent > a.gap_percent) a.gap_percent = pa.gap_percent;
+        if (pa.method_used > a.method_used) a.method_used = pa.method_used;
+        a.clusters   += pa.clusters;
+        a.iterations += pa.iterations;
+        a.solve_ms   += pa.solve_ms;
+
+        l.crossings_found    += pl.crossings_found;
+        l.resolved_by_height += pl.resolved_by_height;
+        l.resolved_by_delay  += pl.resolved_by_delay;
+        l.unresolved         += pl.unresolved;
+        if (pl.layers_used > l.layers_used) l.layers_used = pl.layers_used;
+        if (pl.max_extra_height_m > l.max_extra_height_m) l.max_extra_height_m = pl.max_extra_height_m;
+        l.solve_ms += pl.solve_ms;
+    }
+    if (!any) { a.method_used = DAI_SHOW_ASSIGN_AUTO; a.exact_cost_m = -1.0; }
+    else if (!any_exact_cost) a.exact_cost_m = -1.0;
+    t->last_assign = a;
+    t->last_layer  = l;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 extern "C" {
@@ -333,6 +393,7 @@ void dai_show_set_settings(dai_show *sh, const dai_show_settings *s) {
     dai_show_plan_destroy(sh->plan);
     sh->plan = nullptr;
     sh->conflicts.clear();
+    sh->tr_stats.clear();
     std::memset(&sh->timings, 0, sizeof(sh->timings));
     sh->timings.sample_ms = sh->sample_ms;
 }
@@ -351,6 +412,7 @@ uint32_t dai_show_formation_add(dai_show *sh, const char *name, const char *sour
     dai_show_plan_destroy(sh->plan);
     sh->plan = nullptr;
     sh->conflicts.clear();
+    sh->tr_stats.clear();
     return (uint32_t)(sh->forms.size() - 1);
 }
 
@@ -408,6 +470,7 @@ int dai_show_formation_remove(dai_show *sh, uint32_t i) {
     dai_show_plan_destroy(sh->plan);
     sh->plan = nullptr;
     sh->conflicts.clear();
+    sh->tr_stats.clear();
     return 1;
 }
 
@@ -423,6 +486,7 @@ int dai_show_formation_move(dai_show *sh, uint32_t i, int delta) {
     dai_show_plan_destroy(sh->plan);
     sh->plan = nullptr;
     sh->conflicts.clear();
+    sh->tr_stats.clear();
     return 1;
 }
 
@@ -438,6 +502,7 @@ int dai_show_formation_set_hold(dai_show *sh, uint32_t i, float hold_s) {
     dai_show_plan_destroy(sh->plan);
     sh->plan = nullptr;
     sh->conflicts.clear();
+    sh->tr_stats.clear();
     return 1;
 }
 
@@ -453,6 +518,7 @@ int dai_show_transition_set(dai_show *sh, uint32_t i, const dai_show_transition 
     dai_show_plan_destroy(sh->plan);
     sh->plan = nullptr;
     sh->conflicts.clear();
+    sh->tr_stats.clear();
     return 1;
 }
 
@@ -465,11 +531,13 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
     dai_show_plan_destroy(sh->plan);
     sh->plan = nullptr;
     sh->conflicts.clear();
+    sh->tr_stats.clear();
     double keep_sample = sh->sample_ms;
     std::memset(&sh->timings, 0, sizeof(sh->timings));
     sh->timings.sample_ms  = keep_sample;
     sh->timings.drones     = sh->s.drone_count;
     sh->timings.formations = (uint32_t)sh->forms.size();
+    sh->tr_stats.assign(sh->forms.size(), TrStats{});
 
     const uint32_t n = sh->s.drone_count;
     if (n == 0)             { fail(err, err_len, "the fleet is empty"); return DAI_ERR_STATE; }
@@ -520,10 +588,12 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         sh->timings.assign_ms += t1 - t0;
         if (ar != DAI_OK) {
             fail(err, err_len, "assignment failed for formation %u", (unsigned)i);
+            aggregate(&sh->timings, sh->tr_stats);   // what got as far as failing
             return DAI_ERR_STATE;
         }
         astats.solve_ms = t1 - t0;
-        sh->timings.last_assign = astats;
+        sh->tr_stats[i].assign = astats;
+        sh->tr_stats[i].valid  = 1;
 
         // v_max and a_max are limits, not preferences: a duration that cannot
         // hold them is raised to the one that can, and the caller is told which
@@ -551,7 +621,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         t1 = now_ms();
         sh->timings.layer_ms += t1 - t0;
         lstats.solve_ms = t1 - t0;
-        sh->timings.last_layer = lstats;
+        sh->tr_stats[i].layer = lstats;
         if (lr != DAI_OK) unresolved_total += lstats.unresolved;
 
         // Stage 4 turns the legs into keyframes. The detour is a curve, so it
@@ -594,6 +664,8 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         t_cursor  = t_arrive + f.hold_s;
     }
 
+    aggregate(&sh->timings, sh->tr_stats);
+
     std::vector<uint32_t>      counts(n);
     std::vector<dai_show_key>  flat;
     size_t total = 0;
@@ -610,6 +682,16 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
 }
 
 const dai_show_plan *dai_show_get_plan(const dai_show *sh) { return sh ? sh->plan : nullptr; }
+
+int dai_show_transition_stats(const dai_show *sh, uint32_t i,
+                              dai_show_assign_stats *assign,
+                              dai_show_layer_stats *layer) {
+    if (!sh || i >= sh->tr_stats.size()) return 0;
+    if (!sh->tr_stats[i].valid) return 0;
+    if (assign) *assign = sh->tr_stats[i].assign;
+    if (layer)  *layer  = sh->tr_stats[i].layer;
+    return 1;
+}
 
 dai_show_timings dai_show_get_timings(const dai_show *sh) {
     if (sh) return sh->timings;

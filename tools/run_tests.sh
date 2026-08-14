@@ -146,6 +146,29 @@ for s in $SUITES; do
     fi
 done
 
+# The drone show panels, photographed. Not a suite - it asserts nothing - but
+# the pictures are half of what the show mode is judged on, and a picture that
+# somebody has to remember to regenerate is a picture that is wrong by the next
+# review. It needs a renderer, so it runs on the virtual screen the two-window
+# test already brought up, and a non-zero exit turns the run red like any suite.
+SHOTS=${DAI_SHOTS_DIR:-.gauntlet-shots}
+if [ -x build/droneshow_shot ]; then
+    mkdir -p "$SHOTS"
+    OUT=$(DAI_SHADER_DIR=shaders DISPLAY="$DAI_TEST_DISPLAY" timeout 300 \
+          ./build/droneshow_shot "$SHOTS" 1600 900 2>&1)
+    RC=$?
+    if [ "$RC" = "0" ]; then
+        printf '%-20s %3s/%-3s  ok  (%s)\n' "droneshow_shot" "-" "-" "$SHOTS"
+        [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+    else
+        FAILED="$FAILED droneshow_shot"
+        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "droneshow_shot" "-" "-" "$RC"
+        printf '%s\n' "$OUT" | tail -8 | sed 's/^/    /'
+    fi
+else
+    MISSING="$MISSING droneshow_shot"
+fi
+
 echo "-------------------------------------------"
 printf 'TOTAL %d passed, %d failed\n' "$TOTAL_PASS" "$TOTAL_FAIL"
 [ -n "$MISSING" ] && echo "not built:$MISSING"

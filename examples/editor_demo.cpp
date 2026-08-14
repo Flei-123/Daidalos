@@ -4642,9 +4642,9 @@ int main(int argc, char **argv) {
                         for (uint32_t m = 0; m < mn; ++m) {
                             uint32_t base = (uint32_t)(g_show_mesh_pos.size() / 3);
                             for (uint32_t v = 0; v < md[m].vertex_count; ++v) {
-                                g_show_mesh_pos.push_back(md[m].vertices[v].x);
-                                g_show_mesh_pos.push_back(md[m].vertices[v].y);
-                                g_show_mesh_pos.push_back(md[m].vertices[v].z);
+                                g_show_mesh_pos.push_back(md[m].vertices[v].position.x);
+                                g_show_mesh_pos.push_back(md[m].vertices[v].position.y);
+                                g_show_mesh_pos.push_back(md[m].vertices[v].position.z);
                             }
                             for (uint32_t i2 = 0; i2 < md[m].index_count; ++i2)
                                 g_show_mesh_idx.push_back(base + md[m].indices[i2]);
