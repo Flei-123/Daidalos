@@ -790,12 +790,14 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
         // is not a crossing the separator lost, but it is a reason the show
         // does not fly, and a panel that reports "0 left over" and nothing else
         // reads as a sign-off. The Validation panel names the figure it stands
-        // in; here it is counted.
-        stat_line(ui, report_bottom, "  %u crossings: %u lifted, %u delayed, %u left over, "
-                  "%u formation fault%s",
+        // in; here it is counted - on a line of its own, because this panel is
+        // a fifth of the window wide and a number that wraps is a number that
+        // gets read as part of the line above it.
+        stat_line(ui, report_bottom, "  %u crossings: %u lifted, %u delayed, %u left over",
                   t.last_layer.crossings_found, t.last_layer.resolved_by_height,
-                  t.last_layer.resolved_by_delay, t.last_layer.unresolved,
-                  t.last_layer.endpoint_pairs, (t.last_layer.endpoint_pairs == 1) ? "" : "s");
+                  t.last_layer.resolved_by_delay, t.last_layer.unresolved);
+        stat_line(ui, report_bottom, "  %u formation fault%s", t.last_layer.endpoint_pairs,
+                  (t.last_layer.endpoint_pairs == 1) ? "" : "s");
         stat_line(ui, report_bottom, "validate %8.1f ms", t.validate_ms);
         stat_line(ui, report_bottom, "  %u pairs over %u ticks",
                   t.last_validate.pairs_tested, t.last_validate.ticks_checked);
@@ -825,11 +827,11 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
                 stat_line(ui, report_bottom, "  %.2f%% over the exact optimum", (double)sa.gap_percent);
             stat_line(ui, report_bottom, "  %.0f m flown in total", sa.total_cost_m);
             stat_line(ui, report_bottom, "layer    %8.1f ms", sl.solve_ms);
-            stat_line(ui, report_bottom, "  %u crossings: %u lifted, %u delayed, %u left over, "
-                      "%u formation fault%s",
+            stat_line(ui, report_bottom, "  %u crossings: %u lifted, %u delayed, %u left over",
                       sl.crossings_found, sl.resolved_by_height,
-                      sl.resolved_by_delay, sl.unresolved,
-                      sl.endpoint_pairs, (sl.endpoint_pairs == 1) ? "" : "s");
+                      sl.resolved_by_delay, sl.unresolved);
+            stat_line(ui, report_bottom, "  %u formation fault%s", sl.endpoint_pairs,
+                      (sl.endpoint_pairs == 1) ? "" : "s");
             if (sl.endpoint_pairs)
                 wrapped_label(ui, "  the fault stands IN this figure - two points are "
                                   "closer than the minimum distance, no transition can fix that");
