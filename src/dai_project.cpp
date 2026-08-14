@@ -19,6 +19,14 @@
 // bug. The lines we did not understand are kept and written back out, so the
 // older editor does not erode the file just by opening it.
 //
+// The marker gained one line, "kind game|droneshow", and the settings gained a
+// block of show numbers. Both are additive on purpose: a marker without a kind
+// line is a game, and a settings file without a show line is a project on the
+// defaults, so every project that existed before either of them opens exactly
+// as it did. That is the only compatibility promise this format makes, and it
+// is enough because the file is a set of independent lines rather than a
+// structure with a shape.
+//
 // Comments in the file do NOT survive a save. Preserving them would mean either
 // re-emitting our own explanatory header every time (it grows) or tracking
 // which comment belonged to which key (it does not, once a key is deleted).
@@ -68,6 +76,28 @@ const char ENGINE_STAMP[] = "0.2.0";
 // included for the same reason as ENGINE_STAMP, and it is safe to pin at 1: the
 // scene loader accepts anything at or below its own version.
 const char EMPTY_SCENE[] = "daidalos-scene 1\n";
+
+// The show settings' defaults, duplicated from dai_show_settings_default() in
+// include/dai_show.h and kept bit identical with it on purpose. Including that
+// header here would make the project layer depend on the show pipeline, and
+// build.sh links tests/test_project against this object file ALONE to prove it
+// does not - so the numbers are copied and named instead, which is the same
+// trade ENGINE_STAMP and EMPTY_SCENE already make above.
+const float    SHOW_MIN_DISTANCE_M  = 3.0f;      // the industry's safety floor
+const float    SHOW_V_MAX_MS        = 8.0f;
+const float    SHOW_A_MAX_MS2       = 4.0f;
+const uint32_t SHOW_DRONE_COUNT     = 100u;
+const double   SHOW_ORIGIN_LAT      = 0.0;
+const double   SHOW_ORIGIN_LON      = 0.0;
+const float    SHOW_ORIGIN_AMSL     = 0.0f;
+const float    SHOW_ORIENTATION_DEG = 0.0f;
+const float    SHOW_TAKEOFF_ALT_M   = 6.0f;
+const int      SHOW_FPS             = 30;
+const float    SHOW_FENCE_HALF_X    = 250.0f;
+const float    SHOW_FENCE_HALF_Z    = 250.0f;
+const float    SHOW_FENCE_TOP_M     = 120.0f;    // the EU open category ceiling
+const float    SHOW_MIN_GROUND_M    = 2.0f;
+const uint64_t SHOW_SEED            = 0xDA1DA105ull;
 
 const char *DEFAULT_TAGS[]   = { "Untagged", "Player", "MainCamera", "EditorOnly" };
 const char *DEFAULT_LAYERS[] = { "Default", "IgnoreRaycast", "Water", "UI" };
@@ -292,6 +322,21 @@ std::string fstr(float v) {
     return buf;
 }
 
+// The same for a double, and it exists for one field: a show origin in WGS84
+// degrees. The seventh decimal place is a centimetre on the ground, so a float
+// there would move the whole show by a metre and %g at six digits would move it
+// by ten - the shortest form that reads back bit identical is the only one that
+// keeps a saved show over the same field it was flown on.
+std::string dstr(double v) {
+    char buf[48];
+    for (int prec = 15; prec < 17; ++prec) {
+        std::snprintf(buf, sizeof(buf), "%.*g", prec, v);
+        if (std::strtod(buf, nullptr) == v) return buf;
+    }
+    std::snprintf(buf, sizeof(buf), "%.17g", v);
+    return buf;
+}
+
 // A value is the rest of its line, so anything that could end a line early or
 // grow whitespace has to go before it is written. Doing it here rather than at
 // the API boundary keeps the guarantee simple: what is saved is what loads back.
@@ -362,6 +407,40 @@ bool parse_int(const char *p, int *out) {
     return true;
 }
 
+// NaN and infinity are refused here as well: a fence of infinity is a show with
+// no fence, and a NaN minimum distance would make every pair comparison false -
+// the one failure mode this file must never hand to the validator.
+bool parse_double(const char *p, double *out) {
+    p = skip_ws(p);
+    char *endp = nullptr;
+    double v = std::strtod(p, &endp);
+    if (endp == p) return false;
+    if (v != v || v > 1.0e308 || v < -1.0e308) return false;
+    *out = v;
+    return true;
+}
+
+// Unsigned, and clamped rather than wrapped: a drone count that arrived as -1
+// must not become four billion drones on the way in.
+bool parse_u32(const char *p, uint32_t *out) {
+    p = skip_ws(p);
+    char *endp = nullptr;
+    long long v = std::strtoll(p, &endp, 10);
+    if (endp == p || v < 0) return false;
+    *out = v > 0xffffffffll ? 0xffffffffu : (uint32_t)v;
+    return true;
+}
+
+bool parse_u64(const char *p, uint64_t *out) {
+    p = skip_ws(p);
+    if (*p == '-') return false;              // strtoull wraps a negative
+    char *endp = nullptr;
+    unsigned long long v = std::strtoull(p, &endp, 10);
+    if (endp == p) return false;
+    *out = (uint64_t)v;
+    return true;
+}
+
 // Splits text into lines without copying the whole thing twice.
 std::vector<std::string> split_lines(const std::string &text) {
     std::vector<std::string> out;
@@ -409,6 +488,7 @@ struct dai_project {
     std::string cache;
     std::string settings_dir;
     std::string settings_file;
+    int kind = DAI_PROJECT_GAME;   // from the marker; no line means game
     // Settings lines this build did not recognise. Kept so saving from an older
     // editor hands a newer one its own keys back untouched.
     std::vector<std::string> unknown;
@@ -419,6 +499,20 @@ namespace {
 // The three directories that make a folder a project, in one place so
 // is_valid, create and open cannot drift apart.
 const char *REQUIRED_DIRS[] = { "assets", "scenes", "settings" };
+
+// The kind travels as a WORD, not as a number: project.daidalos is read by
+// humans in a diff far more often than by this parser, and "kind 1" tells the
+// person merging it nothing. Anything else, including a kind a newer build
+// invented, reads back as a game - the panels for it do not exist here, and a
+// project that refuses to open is worse than one that opens plainly.
+const char *kind_name(int kind) {
+    return kind == DAI_PROJECT_DRONESHOW ? "droneshow" : "game";
+}
+
+int kind_from_name(const std::string &word) {
+    if (word == "droneshow") return DAI_PROJECT_DRONESHOW;
+    return DAI_PROJECT_GAME;
+}
 
 void fill_paths(dai_project *p) {
     p->assets        = join(p->path, "assets");
@@ -496,7 +590,15 @@ int dai_project_is_valid(const char *path) {
 
 dai_project *dai_project_create(const char *root_dir, const char *name,
                                 char *err, size_t err_len) {
+    // The old entry point, unchanged for every caller that only ever wanted a
+    // game - which is the editor, the tests and every project on disk today.
+    return dai_project_create_kind(root_dir, name, DAI_PROJECT_GAME, err, err_len);
+}
+
+dai_project *dai_project_create_kind(const char *root_dir, const char *name,
+                                     int kind, char *err, size_t err_len) {
     if (err && err_len) err[0] = 0;
+    if (kind != DAI_PROJECT_DRONESHOW) kind = DAI_PROJECT_GAME;
     if (!root_dir || !root_dir[0]) {
         set_err(err, err_len, "no directory to create the project in");
         return nullptr;
@@ -580,6 +682,7 @@ dai_project *dai_project_create(const char *root_dir, const char *name,
     dai_project *p = new dai_project();
     p->path = path;
     p->name = name;
+    p->kind = kind;
     fill_paths(p);
 
     // The product name starts out as the project name, the way Unity's does:
@@ -598,6 +701,9 @@ dai_project *dai_project_create(const char *root_dir, const char *name,
     std::string text;
     put(text, "%s %d\n", MARKER_MAGIC, FORMAT_VERSION);
     put(text, "name %s\n", sanitise(name).c_str());
+    // Written for both kinds, including the one that is the default: a marker
+    // that says what it is costs one line and saves the next reader a guess.
+    put(text, "kind %s\n", kind_name(kind));
     put(text, "engine %s\n", ENGINE_STAMP);
     put(text, "created %s\n", iso_utc_now().c_str());
     if (!write_file_atomic(marker, text)) {
@@ -647,13 +753,15 @@ dai_project *dai_project_open(const char *path, char *err, size_t err_len) {
             if (key == "name") {
                 std::string v = rest_of_line(after);
                 if (!v.empty()) p->name = v;
-                break;
+            } else if (key == "kind") {
+                p->kind = kind_from_name(rest_of_line(after));
             }
         }
     }
     // A missing or nameless marker is not fatal: the directory name is a fine
     // display name, and a project that will not open because a merge ate one
-    // line would be a bad trade.
+    // line would be a bad trade. A marker with no kind line is a game, which is
+    // exactly what every project written before this field existed is.
 
     dai_project_settings s{};
     dai_project_settings_load(p, &s);   // also collects the unknown keys
@@ -668,6 +776,7 @@ const char *dai_project_name(const dai_project *p)       { return p ? p->name.c_
 const char *dai_project_scene_path(const dai_project *p) { return p ? p->scene.c_str() : nullptr; }
 const char *dai_project_asset_dir(const dai_project *p)  { return p ? p->assets.c_str() : nullptr; }
 const char *dai_project_cache_dir(const dai_project *p)  { return p ? p->cache.c_str() : nullptr; }
+int         dai_project_kind(const dai_project *p)       { return p ? p->kind : DAI_PROJECT_GAME; }
 
 uint32_t dai_project_list(const char *root_dir, char *out, uint32_t max, uint32_t stride) {
     if (!root_dir || !root_dir[0]) return 0;
@@ -714,6 +823,26 @@ dai_project_settings dai_project_settings_default(void) {
         copy_str(s.tags[i], DAI_PROJECT_TAG_MAX, DEFAULT_TAGS[i]);
     for (size_t i = 0; i < sizeof(DEFAULT_LAYERS) / sizeof(DEFAULT_LAYERS[0]); ++i)
         copy_str(s.layers[i], DAI_PROJECT_TAG_MAX, DEFAULT_LAYERS[i]);
+
+    // The show half. Bit identical with dai_show_settings_default() - see the
+    // constants at the top of this file for why the numbers live here twice.
+    // A game project carries them too and never writes a line of them, because
+    // only values that differ from the default reach the file.
+    s.min_distance_m       = SHOW_MIN_DISTANCE_M;
+    s.v_max_ms             = SHOW_V_MAX_MS;
+    s.a_max_ms2            = SHOW_A_MAX_MS2;
+    s.drone_count          = SHOW_DRONE_COUNT;
+    s.show_origin_lat      = SHOW_ORIGIN_LAT;
+    s.show_origin_lon      = SHOW_ORIGIN_LON;
+    s.show_origin_amsl     = SHOW_ORIGIN_AMSL;
+    s.show_orientation_deg = SHOW_ORIENTATION_DEG;
+    s.takeoff_alt_m        = SHOW_TAKEOFF_ALT_M;
+    s.fps                  = SHOW_FPS;
+    s.fence_half_x         = SHOW_FENCE_HALF_X;
+    s.fence_half_z         = SHOW_FENCE_HALF_Z;
+    s.fence_top_m          = SHOW_FENCE_TOP_M;
+    s.min_ground_m         = SHOW_MIN_GROUND_M;
+    s.show_seed            = SHOW_SEED;
     return s;
 }
 
@@ -766,6 +895,24 @@ dai_result dai_project_settings_load(dai_project *p, dai_project_settings *out) 
         else if (key == "app-name")    copy_str(out->app_name, sizeof(out->app_name), rest_of_line(after));
         else if (key == "language")    copy_str(out->language, sizeof(out->language), rest_of_line(after));
         else if (key == "default-scene") copy_str(out->default_scene, sizeof(out->default_scene), rest_of_line(after));
+        // The show half. Prefixed "show-" throughout, including the three that
+        // could have gone without it: a settings file is read next to a game's
+        // and "v-max" alone would not say whose limit it is.
+        else if (key == "show-min-distance")  ok = parse_floats(after, &out->min_distance_m, 1);
+        else if (key == "show-v-max")         ok = parse_floats(after, &out->v_max_ms, 1);
+        else if (key == "show-a-max")         ok = parse_floats(after, &out->a_max_ms2, 1);
+        else if (key == "show-drone-count")   ok = parse_u32(after, &out->drone_count);
+        else if (key == "show-origin-lat")    ok = parse_double(after, &out->show_origin_lat);
+        else if (key == "show-origin-lon")    ok = parse_double(after, &out->show_origin_lon);
+        else if (key == "show-origin-amsl")   ok = parse_floats(after, &out->show_origin_amsl, 1);
+        else if (key == "show-orientation")   ok = parse_floats(after, &out->show_orientation_deg, 1);
+        else if (key == "show-takeoff-alt")   ok = parse_floats(after, &out->takeoff_alt_m, 1);
+        else if (key == "show-fps")           ok = parse_int(after, &out->fps);
+        else if (key == "show-fence-half-x")  ok = parse_floats(after, &out->fence_half_x, 1);
+        else if (key == "show-fence-half-z")  ok = parse_floats(after, &out->fence_half_z, 1);
+        else if (key == "show-fence-top")     ok = parse_floats(after, &out->fence_top_m, 1);
+        else if (key == "show-min-ground")    ok = parse_floats(after, &out->min_ground_m, 1);
+        else if (key == "show-seed")          ok = parse_u64(after, &out->show_seed);
         else if (key == "tag" || key == "layer") {
             int idx = 0;
             const char *rest = skip_ws(after);
@@ -826,6 +973,38 @@ dai_result dai_project_settings_save(dai_project *p, const dai_project_settings 
         put(t, "language %s\n", sanitise(s->language).c_str());
     if (std::strncmp(s->default_scene, d.default_scene, sizeof(d.default_scene)) != 0)
         put(t, "default-scene %s\n", sanitise(s->default_scene).c_str());
+
+    // The show half, same rule: a game project never grows one of these lines,
+    // and a droneshow project's file names only the numbers its director
+    // actually moved - which is what makes "why did this show change" a diff
+    // somebody can read out loud.
+    if (s->min_distance_m != d.min_distance_m)
+        put(t, "show-min-distance %s\n", fstr(s->min_distance_m).c_str());
+    if (s->v_max_ms != d.v_max_ms)     put(t, "show-v-max %s\n", fstr(s->v_max_ms).c_str());
+    if (s->a_max_ms2 != d.a_max_ms2)   put(t, "show-a-max %s\n", fstr(s->a_max_ms2).c_str());
+    if (s->drone_count != d.drone_count)
+        put(t, "show-drone-count %lu\n", (unsigned long)s->drone_count);
+    if (s->show_origin_lat != d.show_origin_lat)
+        put(t, "show-origin-lat %s\n", dstr(s->show_origin_lat).c_str());
+    if (s->show_origin_lon != d.show_origin_lon)
+        put(t, "show-origin-lon %s\n", dstr(s->show_origin_lon).c_str());
+    if (s->show_origin_amsl != d.show_origin_amsl)
+        put(t, "show-origin-amsl %s\n", fstr(s->show_origin_amsl).c_str());
+    if (s->show_orientation_deg != d.show_orientation_deg)
+        put(t, "show-orientation %s\n", fstr(s->show_orientation_deg).c_str());
+    if (s->takeoff_alt_m != d.takeoff_alt_m)
+        put(t, "show-takeoff-alt %s\n", fstr(s->takeoff_alt_m).c_str());
+    if (s->fps != d.fps)               put(t, "show-fps %d\n", s->fps);
+    if (s->fence_half_x != d.fence_half_x)
+        put(t, "show-fence-half-x %s\n", fstr(s->fence_half_x).c_str());
+    if (s->fence_half_z != d.fence_half_z)
+        put(t, "show-fence-half-z %s\n", fstr(s->fence_half_z).c_str());
+    if (s->fence_top_m != d.fence_top_m)
+        put(t, "show-fence-top %s\n", fstr(s->fence_top_m).c_str());
+    if (s->min_ground_m != d.min_ground_m)
+        put(t, "show-min-ground %s\n", fstr(s->min_ground_m).c_str());
+    if (s->show_seed != d.show_seed)
+        put(t, "show-seed %llu\n", (unsigned long long)s->show_seed);
 
     for (int i = 0; i < DAI_PROJECT_TAGS; ++i)
         if (std::strncmp(s->tags[i], d.tags[i], DAI_PROJECT_TAG_MAX) != 0)

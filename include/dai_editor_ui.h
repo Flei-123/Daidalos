@@ -125,6 +125,26 @@ DAI_API void dai_editor_ui_rename(dai_editor_ui *p, dai_node n);
  * belongs to the menu. */
 DAI_API int  dai_editor_ui_menu_open(const dai_editor_ui *p);
 
+/* ---- the drone show project type -----------------------------------------
+ *
+ * A droneshow project is the same editor with a different panel set, which is
+ * why this is one pointer and not a second binary. When a show panel set is
+ * attached, dai_editor_ui_frame registers Storyboard, Show Parameters and
+ * Validation in the dock it already owns and draws the show preview into the
+ * Scene panel's rectangle. Attach nothing (the default, and what every game
+ * project does) and not one pixel of this editor changes.
+ *
+ * The panels are created by the host, because the host is what opened the
+ * project and knows whether it is a show at all. */
+struct dai_show_ui;
+DAI_API void dai_editor_ui_show_host(dai_editor_ui *p, struct dai_show_ui *show);
+DAI_API struct dai_show_ui *dai_editor_ui_show(const dai_editor_ui *p);
+
+/* Which type the project picker is set to create - a dai_project_kind. The
+ * create callback takes a name and nothing else, and it stays that way: the
+ * kind is a property of the picker's state, not of the name typed into it. */
+DAI_API int dai_editor_ui_project_new_kind(const dai_editor_ui *p);
+
 DAI_API dai_editor_ui *dai_editor_ui_create(dai_editor *editor, dai_ui *ui);
 DAI_API void           dai_editor_ui_destroy(dai_editor_ui *p);
 

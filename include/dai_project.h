@@ -68,6 +68,27 @@ typedef struct dai_project dai_project;
 #define DAI_PROJECT_TAG_MAX   32
 #define DAI_PROJECT_MARKER    "project.daidalos"
 
+/* What the project is FOR. The directories, the settings file and the scene
+ * format are the same either way - this is not a second engine, it is which
+ * question the editor asks first. A game project opens the game panels; a
+ * droneshow project opens the storyboard, the show parameters and the
+ * validation list, and reads the show settings below.
+ *
+ * The marker line is "kind game" or "kind droneshow". A marker with NO kind
+ * line is a game, which is what every project written before this existed is,
+ * and why they all keep opening untouched. The numbers are part of the file
+ * format now: append, never renumber.
+ *
+ * Deliberately NOT typedef'd to the bare name: dai_project_kind is also the
+ * function that answers the question, and C++ - which is what the editor is
+ * written in - keeps types and functions in one namespace, so the two would
+ * collide. The values are what callers actually use, and they are plain ints
+ * everywhere they travel. */
+enum dai_project_kind {
+    DAI_PROJECT_GAME      = 0,
+    DAI_PROJECT_DRONESHOW = 1
+};
+
 /* ---- opening and making projects ---------------------------------------- */
 
 /* Creates <root_dir>/<name> with the layout above and opens it.
@@ -85,6 +106,21 @@ typedef struct dai_project dai_project;
  * Returns NULL on failure with the reason in `err`. */
 DAI_API dai_project *dai_project_create(const char *root_dir, const char *name,
                                         char *err, size_t err_len);
+
+/* The same, for a project that is not a game. `kind` is a dai_project_kind;
+ * anything this build does not know becomes DAI_PROJECT_GAME rather than an
+ * error, for the same reason a missing kind line does.
+ *
+ * dai_project_create is this function with DAI_PROJECT_GAME - it stays because
+ * a new parameter on an existing entry point is a break for every caller that
+ * only ever wanted a game, and there are more of those than of these. */
+DAI_API dai_project *dai_project_create_kind(const char *root_dir, const char *name,
+                                             int kind, char *err, size_t err_len);
+
+/* dai_project_kind of the open project. This is what the editor branches on
+ * when it decides which panel set to register, so it answers for a project
+ * whose marker is missing or damaged too: DAI_PROJECT_GAME. */
+DAI_API int dai_project_kind(const dai_project *p);
 
 /* Opens an existing project directory. Recreates cache/ if it is missing,
  * because cache/ is allowed to be missing - that is what makes it a cache.
@@ -158,6 +194,43 @@ typedef struct dai_project_settings {
     char  language[16];
     char  tags[DAI_PROJECT_TAGS][DAI_PROJECT_TAG_MAX];
     char  layers[DAI_PROJECT_TAGS][DAI_PROJECT_TAG_MAX];
+
+    /* ---- the drone show half --------------------------------------------
+     *
+     * Read by the show panels, mirrored into dai_show_settings before anything
+     * is solved, and versioned WITH the project on purpose: min_distance_m is
+     * the number the safety case rests on and v_max_ms is what the airframe was
+     * signed off for. Two operators who disagree about either are not flying
+     * the same show, which is the same argument that put tick_hz up there.
+     *
+     * They live in dai_project_settings rather than in a second file because a
+     * project has one settings file, and a second one would only be the place
+     * the two copies drift apart. A game project writes none of these lines -
+     * only values that differ from the default reach the file - so nothing here
+     * grows a game's settings/project.txt by a single byte.
+     *
+     * The defaults are bit for bit those of dai_show_settings_default(); this
+     * header does not include dai_show.h, because the project layer is on
+     * screen before the show layer exists and must keep linking on its own. */
+    float    min_distance_m;       /* pairwise floor between two drones, metres */
+    float    v_max_ms;             /* speed ceiling the validator enforces      */
+    float    a_max_ms2;            /* acceleration ceiling, likewise            */
+    uint32_t drone_count;          /* the fleet; every formation has exactly N  */
+    double   show_origin_lat;      /* WGS84 degrees - where local (0,0,0) sits  */
+    double   show_origin_lon;      /* double, because 1e-7 deg is 11 mm         */
+    float    show_origin_amsl;     /* metres above mean sea level               */
+    float    show_orientation_deg; /* local +Z rotated off true north           */
+    float    takeoff_alt_m;        /* the height the fleet forms up at          */
+    int      fps;                  /* export and validation sampling rate       */
+    /* The box the show may not leave: half extents around the origin in X/Z,
+     * ceiling in Y, floor clearance below. All zero means "not fenced", and
+     * then the check is SKIPPED rather than silently passed. */
+    float    fence_half_x, fence_half_z, fence_top_m, min_ground_m;
+    /* Every random draw in the pipeline comes from here, so a show that
+     * validated clean on one machine solves to the same bytes on the next. A
+     * seed in version control is the difference between reproducible and
+     * merely repeatable. */
+    uint64_t show_seed;
 } dai_project_settings;
 
 DAI_API dai_project_settings dai_project_settings_default(void);

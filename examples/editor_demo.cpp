@@ -27,6 +27,8 @@
 #include <map>
 #include "dai_material.h"
 #include "dai_project.h"
+#include "dai_show_ui.h"
+#include "dai_gltf.h"
 #include "dai_update.h"
 #ifdef DAI_WITH_SCRIPT
 #include "dai_script.h"
@@ -157,6 +159,39 @@ static std::vector<std::string> &strings_langs();
 // instead of only onto a stdout nobody is looking at.
 static dai_editor_ui *g_panels_for_log = nullptr;
 
+// ---- the drone show half of the editor ------------------------------------
+//
+// A droneshow project is the same binary with a different panel set. The
+// document lives here, next to the scene document, for the same reason: the
+// host is what opens a project, so the host is what knows which kind it is.
+static dai_show          *g_show = nullptr;
+static dai_show_ui       *g_show_ui = nullptr;
+// The mesh the storyboard samples from: the selected asset, repacked into the
+// plain arrays the pipeline takes. Kept alive between frames because the
+// sample descriptor holds pointers into it.
+static std::vector<float>    g_show_mesh_pos;
+static std::vector<uint32_t> g_show_mesh_idx;
+static std::string           g_show_mesh_src;
+// The asset list as the Project panel last saw it, so the show can turn a
+// selected row back into a file name. The panel is fed pointers, not names.
+static char     g_asset_paths[256][96];
+static uint32_t g_asset_count = 0;
+
+static int show_read_file(const char *path, std::vector<uint8_t> &out) {
+    FILE *f = std::fopen(path, "rb");
+    if (!f) return 0;
+    std::fseek(f, 0, SEEK_END);
+    long n = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (n <= 0) { std::fclose(f); return 0; }
+    out.resize((size_t)n);
+    size_t got = std::fread(out.data(), 1, (size_t)n, f);
+    std::fclose(f);
+    out.resize(got);
+    return got > 0;
+}
+
+
 // Defined further down, used by open_project_path right below: where scenes
 // live, how old projects get theirs moved, and the two file questions the
 // migration asks.
@@ -190,6 +225,61 @@ static const char *project_list(uint32_t index, void *) {
     }
     if (index >= names.size()) return nullptr;
     return names[index].c_str();
+}
+
+// Where a show is kept: one file per project, next to the scenes, because a
+// show IS the project in a droneshow project - there is no second one.
+static std::string show_path(void) {
+    if (!g_project) return std::string();
+    return std::string(dai_project_path(g_project)) + "/scenes/show.dshow";
+}
+
+// Closes whatever show was open and, if the project that is now open is a
+// droneshow, builds the document and the panel set for it. A game project
+// leaves both null, and then the editor is byte for byte the editor it was.
+static void show_open_for_project(void) {
+    if (g_show_ui) { dai_show_ui_destroy(g_show_ui); g_show_ui = nullptr; }
+    if (g_show)    { dai_show_destroy(g_show);       g_show    = nullptr; }
+    g_show_mesh_src.clear();
+    if (g_panels_for_log) dai_editor_ui_show_host(g_panels_for_log, nullptr);
+    if (!g_project || dai_project_kind(g_project) != DAI_PROJECT_DRONESHOW) return;
+
+    // The safety numbers come out of settings/project.txt, which is where they
+    // are versioned. The show document never invents them.
+    dai_project_settings ps = dai_project_settings_default();
+    dai_project_settings_load(g_project, &ps);
+    dai_show_settings ss = dai_show_settings_default();
+    ss.min_distance_m       = ps.min_distance_m;
+    ss.v_max_ms             = ps.v_max_ms;
+    ss.a_max_ms2            = ps.a_max_ms2;
+    ss.drone_count          = ps.drone_count;
+    ss.show_origin_lat      = ps.show_origin_lat;
+    ss.show_origin_lon      = ps.show_origin_lon;
+    ss.show_origin_amsl     = ps.show_origin_amsl;
+    ss.show_orientation_deg = ps.show_orientation_deg;
+    ss.takeoff_alt_m        = ps.takeoff_alt_m;
+    ss.fps                  = ps.fps;
+    ss.fence_half_x         = ps.fence_half_x;
+    ss.fence_half_z         = ps.fence_half_z;
+    ss.fence_top_m          = ps.fence_top_m;
+    ss.min_ground_m         = ps.min_ground_m;
+    ss.seed                 = ps.show_seed;
+
+    char err[256] = { 0 };
+    std::string sp = show_path();
+    g_show = path_exists(sp.c_str()) ? dai_show_load(sp.c_str(), err, sizeof(err)) : nullptr;
+    if (!g_show) g_show = dai_show_create(&ss);
+    else         dai_show_set_settings(g_show, &ss);
+    g_show_ui = g_show ? dai_show_ui_create(g_show) : nullptr;
+    if (g_panels_for_log) dai_editor_ui_show_host(g_panels_for_log, g_show_ui);
+}
+
+static void show_save(void) {
+    if (!g_show) return;
+    char err[256] = { 0 };
+    std::string sp = show_path();
+    if (dai_show_save(g_show, sp.c_str(), err, sizeof(err)) != DAI_OK && g_panels_for_log)
+        dai_editor_ui_log(g_panels_for_log, 2, err);
 }
 
 // Opening a project is the ONE thing that decides where everything else comes
@@ -239,12 +329,17 @@ static int open_project_path(const char *path) {
     dai_prefs_load(&pr);
     std::snprintf(pr.last_project, sizeof(pr.last_project), "%s", dai_project_path(g_project));
     dai_prefs_save(&pr);
+    show_open_for_project();
     return 1;
 }
 
 static int project_create(const char *name, void *) {
     char err[256] = { 0 };
-    dai_project *np = dai_project_create(g_projects_root, name, err, sizeof(err));
+    // Game or drone show - the picker's toggle, read at the moment of the
+    // click. Everything else about creating a project is identical.
+    int kind = g_panels_for_log ? dai_editor_ui_project_new_kind(g_panels_for_log)
+                                : DAI_PROJECT_GAME;
+    dai_project *np = dai_project_create_kind(g_projects_root, name, kind, err, sizeof(err));
     if (!np) { std::printf("project: %s\n", err); return 0; }
     std::string path = dai_project_path(np);
     dai_project_close(np);
@@ -3413,6 +3508,9 @@ int main(int argc, char **argv) {
     dai_editor_ui_layout_host(panels, layout_save_file, layout_load_file, nullptr);
     g_prefab_doc = doc;
     g_panels_for_log = panels;
+    // The project was opened before the panels existed, so the show - if this
+    // is one - gets attached now.
+    show_open_for_project();
     dai_editor_ui_log(panels, 0, dai_version());
     dai_editor_ui_scene_host(panels, scene_list, scene_open, scene_save_as, nullptr);
 #ifdef DAI_WITH_SCRIPT
@@ -3798,6 +3896,10 @@ int main(int argc, char **argv) {
         }
 
         if (dai_editor_ui_take_save(panels)) {
+            // In a droneshow project Ctrl+S means the show. There is no scene
+            // to write, and writing an empty one instead would be a save that
+            // silently threw the work away.
+            if (g_show) show_save();
             const char *sp = scene_path ? scene_path : (g_scene_path[0] ? g_scene_path : nullptr);
             if (!sp) {
                 // Nowhere to put it. Silence here is what made "Save first"
@@ -3847,11 +3949,11 @@ int main(int argc, char **argv) {
             uint32_t rev = dai_assets_revision(assets);
             if (rev != fed_rev) {
                 fed_rev = rev;
-                static char paths[256][96];
                 static const char *ptrs[256];
-                uint32_t n2 = dai_assets_list(assets, paths[0], 256, 96);
+                uint32_t n2 = dai_assets_list(assets, g_asset_paths[0], 256, 96);
                 if (n2 > 256) n2 = 256;
-                for (uint32_t i = 0; i < n2; ++i) ptrs[i] = paths[i];
+                for (uint32_t i = 0; i < n2; ++i) ptrs[i] = g_asset_paths[i];
+                g_asset_count = n2;
                 dai_editor_ui_asset_list(panels, ptrs, n2);
                 // Folders too - the browser cannot see an empty one otherwise.
                 if (g_assets_dir[0]) {
@@ -4505,6 +4607,62 @@ int main(int argc, char **argv) {
             if (chrome != last_chrome) {
                 last_chrome = chrome;
                 dai_window_caption_color(win, chrome);
+            }
+        }
+
+        // The show's clock. It reaches the preview and nothing else: what the
+        // solver produced is a function of a time value, never of the frame
+        // rate of the machine it is being watched on.
+        if (g_show_ui) {
+            dai_show_ui_advance(g_show_ui, dt);
+            // The selected asset, offered to the storyboard as a figure. A
+            // .glb is read into the same plain arrays the pipeline takes, so
+            // nothing about the asset layer reaches dai_show.
+            int sel = dai_editor_ui_asset_selected(panels);
+            const char *rel = (sel >= 0 && (uint32_t)sel < g_asset_count)
+                            ? g_asset_paths[sel] : nullptr;
+            std::string want = rel ? rel : "";
+            size_t dot = want.find_last_of('.');
+            std::string ext = (dot == std::string::npos) ? "" : want.substr(dot);
+            if (ext != ".glb" && ext != ".gltf") want.clear();
+            if (want != g_show_mesh_src) {
+                g_show_mesh_src = want;
+                g_show_mesh_pos.clear();
+                g_show_mesh_idx.clear();
+                dai_show_ui_mesh(g_show_ui, nullptr, nullptr);
+                if (!want.empty() && g_assets_dir[0]) {
+                    std::string full = std::string(g_assets_dir) + "/" + want;
+                    std::vector<uint8_t> bytes;
+                    if (show_read_file(full.c_str(), bytes)) {
+                        dai_mesh_data md[16];
+                        char merr[256] = { 0 };
+                        uint32_t mn = dai_gltf_read_geometry(bytes.data(), bytes.size(),
+                                                             md, 16, merr, sizeof(merr));
+                        if (mn > 16) mn = 16;
+                        for (uint32_t m = 0; m < mn; ++m) {
+                            uint32_t base = (uint32_t)(g_show_mesh_pos.size() / 3);
+                            for (uint32_t v = 0; v < md[m].vertex_count; ++v) {
+                                g_show_mesh_pos.push_back(md[m].vertices[v].x);
+                                g_show_mesh_pos.push_back(md[m].vertices[v].y);
+                                g_show_mesh_pos.push_back(md[m].vertices[v].z);
+                            }
+                            for (uint32_t i2 = 0; i2 < md[m].index_count; ++i2)
+                                g_show_mesh_idx.push_back(base + md[m].indices[i2]);
+                        }
+                        dai_gltf_free_geometry(md, mn);
+                    }
+                }
+                if (!g_show_mesh_idx.empty()) {
+                    dai_show_sample_desc d;
+                    std::memset(&d, 0, sizeof(d));
+                    d.positions    = g_show_mesh_pos.data();
+                    d.vertex_count = (uint32_t)(g_show_mesh_pos.size() / 3);
+                    d.indices      = g_show_mesh_idx.data();
+                    d.index_count  = (uint32_t)g_show_mesh_idx.size();
+                    d.base_rgba    = 0xFFFFFFFFu;
+                    d.view_dir     = dai_vec3{ 0.0f, 0.0f, 1.0f };
+                    dai_show_ui_mesh(g_show_ui, &d, g_show_mesh_src.c_str());
+                }
             }
         }
 

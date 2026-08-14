@@ -57,6 +57,9 @@ static bool has(const std::string &hay, const char *needle) {
 // Bit exact, not "close enough": a settings round trip that drifts by one ulp
 // per save is a game whose physics changes because someone opened a dialog.
 static bool same_bits(float a, float b) { return std::memcmp(&a, &b, sizeof(float)) == 0; }
+// The same for the show origin, which is a double because the seventh decimal
+// of a degree is a centimetre and a show is flown over a real field.
+static bool same_double_bits(double a, double b) { return std::memcmp(&a, &b, sizeof(double)) == 0; }
 // Writes a string the way a caller should: zero the field first. snprintf alone
 // leaves the tail of a shorter replacement behind ("Player" overwritten with
 // "Enemy" keeps the 'r'), and the whole point below is comparing structs byte
@@ -187,6 +190,25 @@ int main() {
     set_str(s.tags[7], sizeof(s.tags[7]), "Pickup Item");
     set_str(s.tags[2], sizeof(s.tags[2]), "");   // cleared on purpose: must stay cleared
     set_str(s.layers[9], sizeof(s.layers[9]), "Water Surface");
+    // The show half, with the values that actually break: a minimum distance
+    // that needs seven digits, a latitude no float can hold, a seed that fills
+    // 64 bits and a drone count past the point where a signed int stops being
+    // enough to think with.
+    s.min_distance_m       = 2.7182817f;
+    s.v_max_ms             = 11.5f;
+    s.a_max_ms2            = 3.25f;
+    s.drone_count          = 10000u;
+    s.show_origin_lat      = 47.4979123456789;   // Budapest, to the centimetre
+    s.show_origin_lon      = -19.0402198765432;  // and west of Greenwich
+    s.show_origin_amsl     = 102.75f;
+    s.show_orientation_deg = 137.5f;
+    s.takeoff_alt_m        = 12.5f;
+    s.fps                  = 25;
+    s.fence_half_x         = 333.5f;
+    s.fence_half_z         = 444.25f;
+    s.fence_top_m          = 119.5f;
+    s.min_ground_m         = 1.5f;
+    s.show_seed            = 0xFEEDFACECAFEBEEFull;
 
     CHECK(dai_project_settings_save(p, &s) == DAI_OK, "settings save failed");
     CHECK(file_exists(path + "/settings/project.txt"), "settings file vanished");
@@ -209,6 +231,29 @@ int main() {
     CHECK(std::strcmp(back.tags[7], "Pickup Item") == 0, "tag 7 with a space: '%s'", back.tags[7]);
     CHECK(back.tags[2][0] == 0, "a cleared tag came back as '%s'", back.tags[2]);
     CHECK(std::strcmp(back.layers[9], "Water Surface") == 0, "layer 9 '%s'", back.layers[9]);
+    // The show settings are the ones a safety case rests on, so "close enough"
+    // is not a result: a minimum distance that drifts by an ulp per save is a
+    // number nobody can be held to.
+    CHECK(same_bits(back.min_distance_m, s.min_distance_m),
+          "min_distance_m %.9g != %.9g", back.min_distance_m, s.min_distance_m);
+    CHECK(same_bits(back.v_max_ms, s.v_max_ms), "v_max_ms %.9g", back.v_max_ms);
+    CHECK(same_bits(back.a_max_ms2, s.a_max_ms2), "a_max_ms2 %.9g", back.a_max_ms2);
+    CHECK(back.drone_count == s.drone_count, "drone_count %u", back.drone_count);
+    CHECK(same_double_bits(back.show_origin_lat, s.show_origin_lat),
+          "show_origin_lat %.17g != %.17g", back.show_origin_lat, s.show_origin_lat);
+    CHECK(same_double_bits(back.show_origin_lon, s.show_origin_lon),
+          "show_origin_lon %.17g != %.17g", back.show_origin_lon, s.show_origin_lon);
+    CHECK(same_bits(back.show_origin_amsl, s.show_origin_amsl), "show_origin_amsl %.9g", back.show_origin_amsl);
+    CHECK(same_bits(back.show_orientation_deg, s.show_orientation_deg),
+          "show_orientation_deg %.9g", back.show_orientation_deg);
+    CHECK(same_bits(back.takeoff_alt_m, s.takeoff_alt_m), "takeoff_alt_m %.9g", back.takeoff_alt_m);
+    CHECK(back.fps == s.fps, "fps %d", back.fps);
+    CHECK(same_bits(back.fence_half_x, s.fence_half_x), "fence_half_x %.9g", back.fence_half_x);
+    CHECK(same_bits(back.fence_half_z, s.fence_half_z), "fence_half_z %.9g", back.fence_half_z);
+    CHECK(same_bits(back.fence_top_m, s.fence_top_m), "fence_top_m %.9g", back.fence_top_m);
+    CHECK(same_bits(back.min_ground_m, s.min_ground_m), "min_ground_m %.9g", back.min_ground_m);
+    CHECK(back.show_seed == s.show_seed, "show_seed %llu != %llu",
+          (unsigned long long)back.show_seed, (unsigned long long)s.show_seed);
     {   // ...and everything else byte for byte. The backend is compared above:
         // it is the one field that is deliberately not preserved.
         dai_project_settings expect = s;
@@ -230,6 +275,10 @@ int main() {
         CHECK(has(text, "tag 1 Enemy"), "the changed tag is not in the file");
         CHECK(!has(text, "layer 0 "), "an unchanged layer was written anyway");
         CHECK(!has(text, "tag 3 "), "an unchanged tag was written anyway");
+        CHECK(has(text, "show-drone-count 10000"), "the fleet size is not in the file");
+        CHECK(has(text, "show-origin-lat 47.4979123456789"),
+              "the show origin lost precision on the way to the file: %s", text.c_str());
+        CHECK(has(text, "show-seed 18369614221190020847"), "the seed is not in the file");
 
         // And the other direction: pure defaults produce a file with no values,
         // which is what keeps a diff about the one thing that actually changed.
@@ -237,6 +286,10 @@ int main() {
         std::string bare = slurp(path + "/settings/project.txt");
         CHECK(!has(bare, "tick-hz"), "a default value was written: %s", bare.c_str());
         CHECK(!has(bare, "gravity"), "a default gravity was written");
+        // The point of the whole "only differences" rule, restated for the new
+        // half: adding a second project type must not add a single line to a
+        // game's settings file.
+        CHECK(!has(bare, "show-"), "a game project grew a drone show setting: %s", bare.c_str());
         CHECK(dai_project_settings_save(p, &s) == DAI_OK, "restoring the settings failed");
         std::printf("  only non default values reach the file\n");
     }
@@ -416,6 +469,123 @@ int main() {
         CHECK(dai_prefs_save(&w) == DAI_OK, "could not save into a config dir that did not exist");
         CHECK(file_exists(home + "/.config/daidalos/prefs.txt"), "the config directory was not created");
         std::printf("  prefs path: $DAI_PREFS_DIR > $XDG_CONFIG_HOME > ~/.config\n");
+    }
+
+    // ---- 13. the second project type --------------------------------------
+    {
+        char e2[256] = { 0 };
+        dai_project *g = dai_project_open(path.c_str(), e2, sizeof(e2));
+        CHECK(g != nullptr, "reopen for the kind check failed: %s", e2);
+        if (g) {
+            CHECK(dai_project_kind(g) == DAI_PROJECT_GAME,
+                  "a project made by dai_project_create is not a game: %d", dai_project_kind(g));
+            dai_project_close(g);
+        }
+        CHECK(dai_project_kind(nullptr) == DAI_PROJECT_GAME, "NULL must answer, not crash");
+
+        const std::string show_path = root + "/Night Show";
+        dai_project *ds = dai_project_create_kind(root.c_str(), "Night Show",
+                                                  DAI_PROJECT_DRONESHOW, e2, sizeof(e2));
+        CHECK(ds != nullptr, "creating a droneshow project failed: %s", e2);
+        if (ds) {
+            CHECK(dai_project_kind(ds) == DAI_PROJECT_DRONESHOW,
+                  "the kind did not come back from create: %d", dai_project_kind(ds));
+            CHECK(std::string(dai_project_path(ds)) == show_path, "path is '%s'", dai_project_path(ds));
+            // Same layout, same engine, same everything else - this is a second
+            // question, not a second program.
+            CHECK(dir_exists(show_path + "/assets") && dir_exists(show_path + "/scenes") &&
+                  dir_exists(show_path + "/settings"), "a droneshow project has a different layout");
+            dai_project_close(ds);
+        }
+        // The word, not a number: project.daidalos is read in a diff far more
+        // often than by the parser.
+        CHECK(has(slurp(show_path + "/project.daidalos"), "kind droneshow"),
+              "the marker does not say what kind of project this is");
+
+        dai_project *re = dai_project_open(show_path.c_str(), e2, sizeof(e2));
+        CHECK(re != nullptr, "reopening the droneshow project failed: %s", e2);
+        if (re) {
+            CHECK(dai_project_kind(re) == DAI_PROJECT_DRONESHOW,
+                  "the kind did not survive being closed and reopened: %d", dai_project_kind(re));
+            // A fresh show project starts on the documented defaults, and the
+            // one number the safety case rests on is checked by name.
+            dai_project_settings ss{};
+            CHECK(dai_project_settings_load(re, &ss) == DAI_OK, "show settings load failed");
+            CHECK(same_bits(ss.min_distance_m, dai_project_settings_default().min_distance_m),
+                  "a new show project does not start on the default spacing: %.9g", ss.min_distance_m);
+            dai_project_close(re);
+        }
+
+        // ---- and the whole point: a marker written before this field existed.
+        // Every project on disk today looks like this, and every one of them
+        // has to keep opening as exactly what it was.
+        FILE *f = std::fopen((show_path + "/project.daidalos").c_str(), "wb");
+        CHECK(f != nullptr, "could not write the legacy marker fixture");
+        if (f) {
+            std::fputs("daidalos-project 1\nname Night Show\nengine 0.1.0\n"
+                       "created 2024-01-01T00:00:00Z\n", f);
+            std::fclose(f);
+        }
+        dai_project *old = dai_project_open(show_path.c_str(), e2, sizeof(e2));
+        CHECK(old != nullptr, "a marker without a kind line must still open: %s", e2);
+        if (old) {
+            CHECK(dai_project_kind(old) == DAI_PROJECT_GAME,
+                  "a missing kind line must mean game, got %d", dai_project_kind(old));
+            CHECK(std::strcmp(dai_project_name(old), "Night Show") == 0,
+                  "the legacy marker lost the name: '%s'", dai_project_name(old));
+            dai_project_close(old);
+        }
+
+        // A kind this build has never heard of is not an error either: the
+        // project opens plainly rather than not at all.
+        f = std::fopen((show_path + "/project.daidalos").c_str(), "wb");
+        if (f) {
+            std::fputs("daidalos-project 1\nname Night Show\nkind hologram\n", f);
+            std::fclose(f);
+        }
+        dai_project *fut = dai_project_open(show_path.c_str(), e2, sizeof(e2));
+        CHECK(fut != nullptr, "an unknown kind must not stop a project opening: %s", e2);
+        if (fut) {
+            CHECK(dai_project_kind(fut) == DAI_PROJECT_GAME,
+                  "an unknown kind must fall back to game, got %d", dai_project_kind(fut));
+            dai_project_close(fut);
+        }
+        std::printf("  kinds: droneshow round trips, no kind line means game\n");
+    }
+
+    // ---- 14. show settings from a newer build survive an older one ---------
+    {
+        // The forward compatibility rule again, aimed at the field that will
+        // grow next: a show setting this build does not know must come back out
+        // of the file untouched, or a colleague's newer editor loses the number
+        // the moment somebody opens the project here.
+        char e2[256] = { 0 };
+        dai_project *sp = dai_project_open((root + "/Night Show").c_str(), e2, sizeof(e2));
+        CHECK(sp != nullptr, "could not reopen the show project: %s", e2);
+        if (sp) {
+            dai_project_settings ss = dai_project_settings_default();
+            ss.drone_count    = 2400u;
+            ss.min_distance_m = 2.5f;
+            ss.show_seed      = 7ull;
+            CHECK(dai_project_settings_save(sp, &ss) == DAI_OK, "show settings save failed");
+            CHECK(append(root + "/Night Show/settings/project.txt",
+                         "show-wind-limit-ms 9.5\n"), "append failed");
+
+            dai_project_settings rd{};
+            CHECK(dai_project_settings_load(sp, &rd) == DAI_OK, "load past an unknown show key failed");
+            CHECK(std::memcmp(&rd, &ss, sizeof(ss)) == 0,
+                  "an unknown show key disturbed the known values");
+            CHECK(dai_project_settings_save(sp, &rd) == DAI_OK, "save after the unknown key failed");
+
+            std::string text = slurp(root + "/Night Show/settings/project.txt");
+            CHECK(has(text, "show-wind-limit-ms 9.5"),
+                  "this build deleted a newer build's show setting");
+            CHECK(has(text, "show-drone-count 2400"), "the fleet size did not survive");
+            CHECK(has(text, "show-seed 7"), "the seed did not survive");
+            CHECK(!has(text, "show-fps"), "a default show value was written anyway");
+            dai_project_close(sp);
+        }
+        std::printf("  show settings: only what changed, unknown keys handed back\n");
     }
 
     if (std::system(rm.c_str()) != 0) std::printf("  (could not clean %s)\n", root.c_str());

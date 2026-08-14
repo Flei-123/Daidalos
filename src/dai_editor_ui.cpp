@@ -7,6 +7,7 @@
 #include "dai_editor_ui.h"
 #include "dai_tr.h"
 #include "dai_dock.h"
+#include "dai_show_ui.h"
 
 #include <algorithm>
 #include <cctype>
@@ -117,6 +118,15 @@ struct dai_matfile_view {
 struct dai_editor_ui {
     dai_editor *ed = nullptr;
     dai_ui     *ui = nullptr;
+
+    // The drone show panel set, or nothing. A game project never has one, and
+    // then every branch that mentions it is a null check that costs nothing -
+    // which is the whole point of adding a project type this way instead of
+    // forking the editor.
+    dai_show_ui *show = nullptr;
+    // Which type the project picker would create. Read by the host through
+    // dai_editor_ui_project_new_kind when its create callback fires.
+    int proj_new_kind = 0;
 
     // The hierarchy's filter. A scene of four hundred objects is a scene you
     // scroll, and scrolling is not finding.
@@ -7164,6 +7174,26 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
         }
         dai_ui_text(ui, pright_x + 6.0f, ry2, "New project", st->text_dim);
         ry2 += 18.0f;
+        // Which kind. A project's type is decided once, when it is made: the
+        // panel set, the settings file and the whole pipeline follow from it,
+        // and a switch that turned a finished show into a game would be a
+        // button whose only use is losing work.
+        {
+            const char *kinds[2] = { "Game", "Drone show" };
+            for (int k = 0; k < 2; ++k) {
+                float kx = pright_x + 6.0f + (float)k * 92.0f;
+                int on = (p->proj_new_kind == k);
+                dai_ui_rect(ui, kx, ry2, 88.0f, 22.0f, on ? st->accent : st->button);
+                dai_ui_text(ui, kx + (88.0f - dai_ui_text_width(ui, kinds[k])) * 0.5f,
+                            ry2 + 4.0f, kinds[k], on ? st->panel : st->text);
+                float mkx = 0.0f, mky = 0.0f;
+                int kpressed = 0;
+                dai_ui_mouse(ui, &mkx, &mky, nullptr, &kpressed);
+                if (kpressed && mkx >= kx && mkx < kx + 88.0f && mky >= ry2 && mky < ry2 + 22.0f)
+                    p->proj_new_kind = k;
+            }
+            ry2 += 28.0f;
+        }
         dai_ui_text_field(ui, "projname", pright_x + 6.0f, ry2, 150.0f, 22.0f,
                           p->proj_name_buf, sizeof(p->proj_name_buf), nullptr);
         if (browser_button(p, pright_x + 162.0f, ry2, 110.0f, 22.0f, "Create + open") &&
@@ -7597,6 +7627,15 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     dai_dock_add_tab(p->dock, "Audio", "Project");
     dai_dock_add_tab(p->dock, "Script", "Scene");
 
+    // A droneshow project brings three more panels and nothing else: same dock,
+    // same tree, same splitters. Registered BEFORE the layout runs so they have
+    // a rectangle on the very first frame rather than on the second.
+    if (p->show) {
+        dai_dock_add(p->dock, "Storyboard", DAI_DOCK_LEFT, 0.22f);
+        dai_dock_add(p->dock, "Show Parameters", DAI_DOCK_RIGHT, 0.22f);
+        dai_dock_add(p->dock, "Validation", DAI_DOCK_BOTTOM, 0.26f);
+    }
+
     dai_dock_begin(p->dock, ui, 0.0f, TOP, vw, vh - TOP - BOTTOM);
 
     float px, py, pw, ph;
@@ -7817,6 +7856,15 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
                     p->game_y + p->game_h * 0.5f, msg, st->text_dim);
     }
 
+    // The show, in the panels and in the view. Drawn last inside the dock so it
+    // sits over the 3D rectangle the host rendered the world into - a show
+    // preview is points and lines, and the renderer never learns about it.
+    if (p->show) {
+        dai_show_ui_panels(p->show, ui, p->dock);
+        if (have_view && p->view_w > 40.0f && p->view_h > 60.0f)
+            dai_show_ui_viewport(p->show, ui, p->view_x, p->view_y, p->view_w, p->view_h);
+    }
+
     dai_dock_end(p->dock);
 
     // A rename row whose file vanished (deleted, refreshed away, folder left)
@@ -7830,8 +7878,14 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     p->rename_drawn = 0;
     if (p->toast_left > 0.0f) p->toast_left -= 1.0f / 60.0f;
 
-    dai_editor_ui_timeline(p, p->view_x + 8.0f, vh - BOTTOM - 50.0f, p->view_w - 16.0f);
-    dai_editor_ui_status(p, 0.0f, vh - BOTTOM, vw, BOTTOM);
+    // A show has its own timeline (under the preview) and its own numbers, so
+    // the animation timeline and the scene status line stay out of its way.
+    if (p->show) {
+        dai_show_ui_status(p->show, ui, 0.0f, vh - BOTTOM, vw, BOTTOM);
+    } else {
+        dai_editor_ui_timeline(p, p->view_x + 8.0f, vh - BOTTOM - 50.0f, p->view_w - 16.0f);
+        dai_editor_ui_status(p, 0.0f, vh - BOTTOM, vw, BOTTOM);
+    }
     if (p->view == DAI_VIEW_SCENE && have_view) {
         // Scene view toolbar, top right, the way Unity does it: a Gizmos
         // dropdown (what overlays the view) and a camera dropdown (how the
@@ -8364,6 +8418,14 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     p->reopen_menu = 0;
     run_context_menus(p);
 }
+
+void dai_editor_ui_show_host(dai_editor_ui *p, struct dai_show_ui *show) {
+    if (!p) return;
+    p->show = show;
+}
+struct dai_show_ui *dai_editor_ui_show(const dai_editor_ui *p) { return p ? p->show : nullptr; }
+
+int dai_editor_ui_project_new_kind(const dai_editor_ui *p) { return p ? p->proj_new_kind : 0; }
 
 void dai_editor_ui_status(dai_editor_ui *p, float x, float y, float w, float h) {
     if (!p) return;
