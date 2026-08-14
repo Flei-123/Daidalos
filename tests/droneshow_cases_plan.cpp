@@ -607,6 +607,174 @@ void case_solved_show_is_clean(void) {
     dai_show_destroy(sh);
 }
 
+// A ring, as a triangle soup. The shared fixtures hand out a box, a quad and a
+// sphere; the show the screenshots photograph has a ring in the middle of it,
+// and a ring is the shape that puts every drone on a thin closed curve - the
+// case where a transition has nowhere to lift to. Generated here rather than
+// added to the fixture header, because one case needs it and a fixture nobody
+// else calls is a fixture that rots.
+void ring_soup(std::vector<float> &pos, std::vector<uint32_t> &idx, int segs, float thick) {
+    auto tri = [&](const float *a, const float *b, const float *c) {
+        const float *v[3] = { a, b, c };
+        for (int i = 0; i < 3; ++i) {
+            idx.push_back((uint32_t)(pos.size() / 3));
+            pos.push_back(v[i][0]); pos.push_back(v[i][1]); pos.push_back(v[i][2]);
+        }
+    };
+    for (int j = 0; j < segs; ++j) {
+        float t0 = 6.28318530718f * (float)j / (float)segs;
+        float t1 = 6.28318530718f * (float)(j + 1) / (float)segs;
+        for (int k = 0; k < 12; ++k) {
+            float u0 = 6.28318530718f * (float)k / 12.0f;
+            float u1 = 6.28318530718f * (float)(k + 1) / 12.0f;
+            auto at = [&](float t, float u, float *o) {
+                float rr = 1.0f + thick * std::cos(u);
+                o[0] = rr * std::cos(t); o[1] = thick * std::sin(u); o[2] = rr * std::sin(t);
+            };
+            float a[3], b[3], c[3], d[3];
+            at(t0, u0, a); at(t1, u0, b); at(t1, u1, c); at(t0, u1, d);
+            tri(a, b, c); tri(a, c, d);
+        }
+    }
+}
+
+// [3g], second half: the show the screenshots are taken of.
+//
+// The grid case above is built out of formations the test wrote itself, and a
+// grid is kind to a separator - every drone has room over its head. The show in
+// tools/droneshow_shot.cpp is not: 420 drones sampled off a sphere, a ring and
+// a cube at 8 m/s and 4 m/s2, which is a fleet whose legs already run near
+// v_max, so a lift costs speed the transition does not have. That is the
+// configuration that showed ten conflicts the 256 drone grid never saw, and it
+// is the reason this case exists in the size it does rather than in a smaller
+// one that passes.
+//
+// It also runs the UI's own path: dai_show_formation_from_mesh is what the
+// storyboard button calls, so a regression in sampling-into-the-document shows
+// up here rather than only in a screenshot.
+void case_sampled_show_is_clean(void) {
+    show_section("[3g] the sampled show - the one on the screenshots - is clean too");
+
+    dai_show_settings s = plan_settings(2.0f, 8.0f, 4.0f);
+    s.drone_count   = 420;
+    s.fps           = 10;
+    s.takeoff_alt_m = 30.0f;
+    s.seed          = 20260814ull;
+
+    dai_show *sh = dai_show_create(&s);
+    CHECK(sh != nullptr, "the document could not be created");
+    if (!sh) return;
+
+    struct Fig { int kind; const char *name; float size; int mode; };
+    const Fig figs[3] = {
+        { 2, "Sphere", 70.0f, DAI_SHOW_SAMPLE_SURFACE    },
+        { 3, "Ring",   90.0f, DAI_SHOW_SAMPLE_SILHOUETTE },
+        { 0, "Cube",   70.0f, DAI_SHOW_SAMPLE_SURFACE    }
+    };
+    std::vector<float>    ring_pos;
+    std::vector<uint32_t> ring_idx;
+    ring_soup(ring_pos, ring_idx, 48, 0.28f);
+
+    for (int i = 0; i < 3; ++i) {
+        dai_show_sample_desc d;
+        std::memset(&d, 0, sizeof(d));
+        if (figs[i].kind == 3) {
+            d.positions    = ring_pos.data();
+            d.vertex_count = (uint32_t)(ring_pos.size() / 3);
+            d.indices      = ring_idx.data();
+            d.index_count  = (uint32_t)ring_idx.size();
+        } else {
+            dai_show_test_mesh m = show_test_mesh(figs[i].kind);
+            d.positions    = m.positions;
+            d.normals      = m.normals;
+            d.uvs          = m.uvs;
+            d.vertex_count = m.vertex_count;
+            d.indices      = m.indices;
+            d.index_count  = m.index_count;
+        }
+        d.base_rgba        = (i == 0) ? 0xFF40C0FFu : (i == 1) ? 0xFF60FF90u : 0xFFFF80D0u;
+        d.mode             = figs[i].mode;
+        d.count            = s.drone_count;
+        d.min_distance_m   = s.min_distance_m;
+        // The fixture box measures one metre across, the sphere and the ring
+        // two, and `size` is the figure the show is meant to fly - so the
+        // scale is divided by what the source shape already is. Getting this
+        // wrong makes the cube half the size of the sphere it swaps with, and
+        // a transition into a figure of the wrong size is a different test.
+        d.scale            = figs[i].size * 0.5f / ((figs[i].kind == 0) ? 0.5f : 1.0f);
+        d.centre           = dai_vec3{ 0.0f, s.takeoff_alt_m + figs[i].size * 0.6f, 0.0f };
+        d.view_dir         = dai_vec3{ 0.0f, 0.0f, 1.0f };
+        d.relax_iterations = 6;
+        d.seed             = s.seed + (uint64_t)i * 7919ull;
+
+        char err[256] = { 0 };
+        uint32_t idx = dai_show_formation_from_mesh(sh, figs[i].name, "test://figure",
+                                                    &d, err, sizeof(err));
+        CHECK(idx != 0xFFFFFFFFu, "%s could not be sampled: %s", figs[i].name, err);
+        if (idx == 0xFFFFFFFFu) { dai_show_destroy(sh); return; }
+        dai_show_formation_set_hold(sh, idx, 4.0f);
+    }
+
+    // And the same deliberate fault the shot tool plants, for the same reason:
+    // a case whose expected answer is "nothing" cannot tell a working validator
+    // from a silent one.
+    const uint32_t BAD_A = 172, BAD_B = 173;
+    {
+        const dai_show_point *base = dai_show_formation_points(sh, 0);
+        CHECK(base != nullptr, "the first formation has no points");
+        if (!base) { dai_show_destroy(sh); return; }
+        std::vector<dai_show_point> pts(base, base + s.drone_count);
+        pts[BAD_B] = pts[BAD_A];
+        pts[BAD_B].x += 0.4f;
+        dai_show_formation_add(sh, "Sphere (near miss)", "test://figure",
+                               pts.data(), (uint32_t)pts.size(), 5.0f);
+    }
+
+    dai_show_solve(sh, nullptr, 0);
+    dai_show_validate_show(sh);
+
+    // The planted pair travels: assignment renumbers who flies where, so the
+    // two drones that end up 0.4 m apart are the ones standing at those two
+    // POINTS, whichever drones those turned out to be. Recognised by the gap
+    // rather than by the index, which is what the validator reports anyway.
+    uint32_t cn = dai_show_conflict_count(sh);
+    uint32_t planted = 0, other = 0;
+    float worst_other = 0.0f;
+    uint32_t other_a = 0, other_b = 0;
+    float other_t = 0.0f;
+    for (uint32_t i = 0; i < cn; ++i) {
+        dai_show_conflict k;
+        if (!dai_show_conflict_at(sh, i, &k)) continue;
+        if (k.kind != DAI_SHOW_CONFLICT_DISTANCE) continue;
+        if (std::fabs(k.value - 0.4f) < 0.02f) { ++planted; continue; }
+        ++other;
+        if (k.limit - k.value > worst_other) {
+            worst_other = k.limit - k.value;
+            other_a = k.a; other_b = k.b; other_t = k.time_s;
+        }
+    }
+    CHECK(planted > 0, "the planted 0.40 m pair was not reported at all");
+    CHECK(other == 0,
+          "%u distance conflicts beyond the planted pair - worst is %u+%u at %.2fs, "
+          "%.3f m inside the limit: the show on the screenshots does not fly",
+          other, other_a, other_b, (double)other_t, (double)worst_other);
+
+    // What the separator says it did has to add up to what it found. A stage
+    // that reports "eleven crossings, none resolved, none left" would pass the
+    // count above only by hiding the arithmetic.
+    dai_show_timings tm = dai_show_get_timings(sh);
+    CHECK(tm.last_layer.unresolved == 0,
+          "%u transition pairs left unresolved in the sampled show",
+          tm.last_layer.unresolved);
+    CHECK(tm.last_layer.crossings_found == 0 ||
+          tm.last_layer.resolved_by_height + tm.last_layer.resolved_by_delay > 0,
+          "%u crossings found and not one leg was lifted or delayed - the routes "
+          "were refused and the report does not say so",
+          tm.last_layer.crossings_found);
+
+    dai_show_destroy(sh);
+}
+
 
 // ---------------------------------------------------------------------------
 // [3h] the leg that is longer than the grid.
@@ -684,6 +852,7 @@ int show_cases_plan(void) {
     case_stagger();
     case_keyframes();
     case_solved_show_is_clean();
+    case_sampled_show_is_clean();
     case_long_leg();
     return g_show_fail - before;
 }

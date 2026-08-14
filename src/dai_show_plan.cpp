@@ -43,18 +43,36 @@ namespace daishow {
 float    ease_profile(int profile, float u);
 void     leg_point(const dai_show_leg *leg, const dai_show_point *a,
                    const dai_show_point *b, float t, dai_show_point *out);
-uint32_t leg_key_count(const dai_show_leg *leg);
+uint32_t leg_key_count(const dai_show_leg *leg, const dai_show_settings *s);
 
 } // namespace daishow
 
 namespace {
 
-// How many straight pieces a detour is cut into when it becomes keyframes. A
-// detour is a curve; keyframes are lines between samples. Twelve pieces keep
-// the reconstruction inside a couple of centimetres of the curve that was
-// checked, which is why the separation test below keeps a margin of the same
-// order rather than working to the last millimetre.
-const uint32_t DETOUR_KEYS = 12;
+// How many straight pieces a detour is cut into when it becomes keyframes.
+//
+// A detour is a curve; keyframes are lines between samples, and the validator
+// differences those lines at the EXPORT TICK. That is the whole reason this is
+// not a constant: a corner of the polyline turns the drone in one tick, so a
+// key spacing of h seconds shows up as roughly h/dt times the acceleration the
+// curve really has. Twelve pieces across a nineteen second leg at ten frames
+// per second is a corner every one and a half seconds and an acceleration
+// reading fifteen times too high - a detour that flies perfectly and validates
+// as a violation. So the pieces are cut at the tick rate the show is exported
+// at, one key per tick, and bounded at both ends: below by twelve (a short leg
+// still gets a recognisable curve), above by 256 (a five minute transition at
+// 60 fps must not turn the plan back into the array of ticks this design
+// exists to avoid).
+const uint32_t DETOUR_KEYS_MIN = 12;
+const uint32_t DETOUR_KEYS_MAX = 256;
+const float    DETOUR_KEYS_PER_TICK = 1.0f;
+
+// What a detour has to leave on the table. Even at one key per tick the
+// polyline corners slightly harder than the curve, so a lift is only accepted
+// when the CURVE stays this far inside the limits - the thing that flies is
+// the polyline, and it is the polyline the validator judges.
+const float DETOUR_V_MARGIN = 0.90f;
+const float DETOUR_A_MARGIN = 0.60f;
 
 // Height layers, and time slots on top of them. 64 x 4 is 256 mutually
 // separated ways to route a leg - more than any real transition needs, and a
@@ -62,10 +80,40 @@ const uint32_t DETOUR_KEYS = 12;
 const uint32_t MAX_LAYERS = 64;
 const uint32_t MAX_SLOTS  = 4;
 
+// How much longer than the transition ONE lifted leg may take. The detour over
+// a ninety metre figure is a hundred and sixty metres of extra path, and no
+// stretch of the whole transition pays for that without turning a six second
+// move into a minute for four hundred drones that never needed it. So the leg
+// that climbs gets its own clock and the formation waits for it - which is what
+// dai_show.cpp already does, because it holds every arrived drone until the
+// last one lands.
+const float MAX_LEG_STRETCH = 8.0f;
+
+// The delay ladder: how many steps, and how long a step is as a fraction of the
+// transition. A tenth is enough to break a leaning pair apart and small enough
+// that the drone is still inside the fleet's own movement rather than arriving
+// into a formation everyone else is already standing in.
+const uint32_t DELAY_SLOTS = 6;
+
+// How many multiples of the measured deficit a micro step may climb before the
+// fleet-wide ladder takes over.
+const uint32_t MICRO_STEPS = 8;
+const float    DELAY_FRACTION = 0.10f;
+
 // How often the separator looks again. Lifting a leg changes the geometry and
 // can create a crossing that was not there before, so the rounds run until the
 // picture stops changing - eight is far past what any measured case needed.
-const int MAX_ROUNDS = 8;
+const int MAX_ROUNDS = 32;
+// ...and how much of that a big fleet may afford. A round is a broadphase over
+// every leg, so at ten thousand drones it costs a hundred times what it costs
+// at four hundred, and the deep search - micro steps, the route bias, three
+// durations - turns a ten second solve into most of a minute. So the SEARCH is
+// a function of the fleet size and of nothing else: under two thousand drones
+// it is run to the end, above it the separator does the one pass it has always
+// done. Same answer on every machine either way, and the report says what was
+// left over rather than pretending.
+const int SMALL_FLEET  = 2000;
+const int ROUNDS_LARGE = 8;
 
 // A pair is in conflict when it comes closer than the minimum distance. The
 // epsilon is there so a formation whose neighbours sit at EXACTLY min_distance
@@ -75,6 +123,7 @@ const int MAX_ROUNDS = 8;
 // same bound this stage separates to, and a tolerance that lives twice ends up
 // with two values and a list of phantom conflicts.
 const float SEP_EPS = daishow::SEP_EPS;
+
 
 inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -246,21 +295,24 @@ float min_separation(const dai_show_leg &la, const dai_show_point &a0, const dai
     return best;
 }
 
-// Does this leg stay inside v_max and a_max? Straight legs have a closed form;
-// a detour is measured on the curve, by differencing it at a fixed step count
-// so two machines get the same verdict.
-bool leg_within_limits(const dai_show_leg &leg, const dai_show_point &a,
-                       const dai_show_point &b, const dai_show_settings &s) {
+// What a leg really costs in speed and in acceleration.
+//
+// Straight legs have a closed form - the profile says how much faster than the
+// average the drone gets, and how hard it turns to do it. A detour has no such
+// form, so it is differenced on the curve at a FIXED step count: two machines
+// that walk the same 64 steps read the same two numbers, which is what a
+// verdict has to be.
+void leg_peaks(const dai_show_leg &leg, const dai_show_point &a, const dai_show_point &b,
+               float *v_peak, float *a_peak) {
     float T = leg.t_end - leg.t_start;
-    if (!(T > 0.0f)) return false;
     float kv, ka;
     profile_factors(leg.profile, &kv, &ka);
-    Vec3 d{ b.x - a.x, b.y - a.y, b.z - a.z };
-    float L = len3(d);
+    float L = len3(Vec3{ b.x - a.x, b.y - a.y, b.z - a.z });
+    if (!(T > 0.0f)) { *v_peak = 1e30f; *a_peak = 1e30f; return; }
     if (leg.rise_frac <= 0.0f) {
-        if (s.v_max_ms > 0.0f && L * kv / T > s.v_max_ms) return false;
-        if (s.a_max_ms2 > 0.0f && ka > 0.0f && L * ka / (T * T) > s.a_max_ms2) return false;
-        return true;
+        *v_peak = L * kv / T;
+        *a_peak = L * ka / (T * T);
+        return;
     }
     const int K = 64;
     Vec3 p[K + 1];
@@ -276,8 +328,55 @@ bool leg_within_limits(const dai_show_leg &leg, const dai_show_point &a,
                   (p[i + 1].z - 2.0f * p[i].z + p[i - 1].z) / (dt * dt) };
         amax = std::max(amax, len3(acc));
     }
-    if (s.v_max_ms  > 0.0f && vmax > s.v_max_ms)  return false;
-    if (s.a_max_ms2 > 0.0f && amax > s.a_max_ms2) return false;
+    *v_peak = vmax;
+    *a_peak = amax;
+}
+
+// What the plan loses when the curve becomes a polyline, in metres.
+//
+// The separator proves a claim about the CURVE it routes; the plan stores that
+// curve as the keyframes stage 4 cuts it into, and the validator - like the
+// ground station, like the drone - flies the straight lines between them. The
+// two differ by the sag of a chord, and a guarantee that ignores it is a
+// guarantee about a trajectory nobody flies. That difference is what produced
+// a list of conflicts, all of them a couple of centimetres deep, in a
+// transition this stage had just declared clean.
+//
+// The bound is the classical one: a curve deviates from its chord over an
+// interval h by at most |f''| h^2 / 8. What |f''| is filled in with matters
+// more than it looks: a_max - the ceiling the leg was merely ALLOWED to use -
+// makes the reserve three centimetres on a detour that in truth curves a
+// hundredth of that, and three centimetres is wider than the margin a formation
+// packed at the minimum distance has to give. The separator then declares a
+// pair unsolvable because of slack it invented, and no route can ever win. So
+// the number used here is the acceleration this leg REALLY has, measured on the
+// curve, doubled: the second difference reads the curvature at 64 steps rather
+// than at its peak, and twice the measured value is the margin that costs
+// nothing anywhere it is not needed. Zero for a straight leg, which the plan
+// stores as one key with the leg's own profile and therefore reproduces exactly.
+float chord_reserve(const dai_show_leg &leg, const dai_show_point &a,
+                    const dai_show_point &b, const dai_show_settings &s) {
+    if (!(leg.rise_frac > 0.0f)) return 0.0f;
+    uint32_t k = daishow::leg_key_count(&leg, &s);
+    if (!k) return 0.0f;
+    float h = (leg.t_end - leg.t_start) / (float)k;
+    float vp = 0.0f, ap = 0.0f;
+    leg_peaks(leg, a, b, &vp, &ap);
+    if (s.a_max_ms2 > 0.0f && ap > s.a_max_ms2) ap = s.a_max_ms2;
+    return 0.125f * (2.0f * ap) * h * h;
+}
+
+// Does this leg stay inside v_max and a_max?
+bool leg_within_limits(const dai_show_leg &leg, const dai_show_point &a,
+                       const dai_show_point &b, const dai_show_settings &s) {
+    float T = leg.t_end - leg.t_start;
+    if (!(T > 0.0f)) return false;
+    float vmax = 0.0f, amax = 0.0f;
+    leg_peaks(leg, a, b, &vmax, &amax);
+    const float vm = (leg.rise_frac > 0.0f) ? DETOUR_V_MARGIN : 1.0f;
+    const float am = (leg.rise_frac > 0.0f) ? DETOUR_A_MARGIN : 1.0f;
+    if (s.v_max_ms  > 0.0f && vmax > s.v_max_ms  * vm) return false;
+    if (s.a_max_ms2 > 0.0f && amax > s.a_max_ms2 * am) return false;
     return true;
 }
 
@@ -447,8 +546,10 @@ void colour_graph(const std::vector<std::vector<uint32_t> > &adj, std::vector<ui
 }
 
 struct Config {
-    int   layer;      // -1 = stay at the base height, only wait
+    float height_y;   // the absolute cruise height of the detour
     int   slot;       // how many delay steps
+    int   routed;     // 0 = stay at the base height, only wait
+    int   micro;      // > 0: a step of the height the pair itself asked for
 };
 
 // The report, written from whatever the last round left behind. Separate
@@ -517,9 +618,15 @@ void leg_point(const dai_show_leg *leg, const dai_show_point *a,
     out->w = lerp_u8(a->w, b->w, s);
 }
 
-uint32_t leg_key_count(const dai_show_leg *leg) {
+uint32_t leg_key_count(const dai_show_leg *leg, const dai_show_settings *s) {
     if (!leg) return 0;
-    return (leg->rise_frac > 0.0f) ? DETOUR_KEYS : 1u;   // keys AFTER the start
+    if (!(leg->rise_frac > 0.0f)) return 1u;             // a straight leg is one line
+    float fps = (s && s->fps > 0) ? (float)s->fps : 30.0f;
+    float T   = leg->t_end - leg->t_start;
+    float k   = std::ceil(T * fps * DETOUR_KEYS_PER_TICK);   // keys AFTER the start
+    if (!(k > (float)DETOUR_KEYS_MIN)) return DETOUR_KEYS_MIN;
+    if (k > (float)DETOUR_KEYS_MAX)    return DETOUR_KEYS_MAX;
+    return (uint32_t)k;
 }
 
 } // namespace daishow
@@ -559,8 +666,8 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
     for (uint32_t i = 0; i < n; ++i)
         if (perm[i] >= n) return DAI_ERR_INVALID_ARG;
 
-    const float duration = (tr->duration_s > 0.0f) ? tr->duration_s : 0.001f;
-    const float min_d    = (s->min_distance_m > 0.0f) ? s->min_distance_m : 0.0f;
+    const float asked_duration = (tr->duration_s > 0.0f) ? tr->duration_s : 0.001f;
+    const float min_d          = (s->min_distance_m > 0.0f) ? s->min_distance_m : 0.0f;
 
     // The drone's own two endpoints. Everything below works on these, never on
     // `to` through the permutation again - one indirection, resolved once.
@@ -576,12 +683,16 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
             base_delay[i] = tr->stagger_s * ((float)i / (float)(n - 1));
     }
 
-    // Every detour cruises above BOTH formations, so a lifted leg cannot meet a
-    // drone that is standing still in either of them.
-    float ceil_y = src[0].y;
+    // Every detour flies clear of BOTH formations - over the top of them or
+    // under the bottom - so a routed leg cannot meet a drone that is standing
+    // still in either. Both ends of that envelope are worth having: on a
+    // ninety metre figure the ceiling is eighty metres above a drone in the
+    // middle and the floor is fifteen below it, and the floor route is the one
+    // that fits inside v_max.
+    float ceil_y = src[0].y, floor_y = src[0].y;
     for (uint32_t i = 0; i < n; ++i) {
-        ceil_y = std::max(ceil_y, src[i].y);
-        ceil_y = std::max(ceil_y, dst[i].y);
+        ceil_y  = std::max(ceil_y,  std::max(src[i].y, dst[i].y));
+        floor_y = std::min(floor_y, std::min(src[i].y, dst[i].y));
     }
     const float gap = std::max(min_d * 1.5f, 1.0f);
 
@@ -590,22 +701,56 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
     // and the mapping does not depend on which drone asked first. A route the
     // geofence forbids is left out of the list rather than silently clamped
     // onto the one below it, which would put two colours at the same height.
+    //
+    // How hard this transition is searched - see SMALL_FLEET.
+    const bool deep = (n <= (uint32_t)SMALL_FLEET);
+
     std::vector<Config> routes;
     const bool fenced = (s->fence_top_m > 0.0f);
+    // The cheapest route of all comes first: leave a moment later, on the same
+    // line, at the same speed. Most of what the broadphase reports on a real
+    // figure is not an X of two paths, it is two neighbours a whisker over the
+    // minimum whose straight lines lean together in the middle - and a tenth of
+    // the transition of delay bends the RELATIVE path away from the origin
+    // without costing a metre of climb or a metre per second.
+    // The cheapest route of all is a STEP as high as the pair that complained
+    // needs and no higher. Most of what the broadphase reports on a real figure
+    // is not an X of two paths: it is two neighbours a whisker over the minimum
+    // whose straight lines lean together in the middle, one metre ninety of a
+    // two metre floor. Eleven centimetres of height puts them right, and eleven
+    // centimetres is a detour nobody else in a fleet spaced metres apart ever
+    // notices. The fleet-wide ladder further down costs three metres a rung and
+    // lands the drone in somebody else's lane; this step is measured from the
+    // deficit the previous round reported.
+    for (uint32_t step = 1; deep && step <= MICRO_STEPS; ++step) {
+        Config c; c.height_y = 0.0f; c.slot = 0; c.routed = 1; c.micro = (int)step;
+        routes.push_back(c);
+    }
+    for (uint32_t slot = 1; slot <= DELAY_SLOTS; ++slot) {
+        Config c; c.height_y = 0.0f; c.slot = (int)slot; c.routed = 0; c.micro = 0;
+        routes.push_back(c);
+    }
     for (uint32_t slot = 0; slot < MAX_SLOTS; ++slot) {
-        for (int layer = -1; layer < (int)MAX_LAYERS; ++layer) {
-            if (slot == 0 && layer < 0) continue;             // that is the base route
-            if (layer >= 0) {
-                float ly = ceil_y + gap * (float)(layer + 1);
-                if (fenced && ly > s->fence_top_m) continue;
-            }
-            Config c; c.layer = layer; c.slot = (int)slot;
+        // Under the fleet first, because it is nearer: the drone that has to
+        // move sits somewhere inside the figure, and the floor is always closer
+        // to it than the ceiling. Ground clearance is a limit, not a
+        // preference, so a rung below it is left out rather than clamped onto
+        // the one above - two colours at the same height are not two routes.
+        for (uint32_t k = 0; k < MAX_LAYERS; ++k) {
+            float ly = floor_y - gap * (float)(k + 1);
+            if (ly < s->min_ground_m + gap * 0.5f) break;
+            Config c; c.height_y = ly; c.slot = (int)slot; c.routed = 1; c.micro = 0;
+            routes.push_back(c);
+        }
+        for (uint32_t k = 0; k < MAX_LAYERS; ++k) {
+            float ly = ceil_y + gap * (float)(k + 1);
+            if (fenced && ly > s->fence_top_m) break;
+            Config c; c.height_y = ly; c.slot = (int)slot; c.routed = 1; c.micro = 0;
             routes.push_back(c);
         }
     }
-    const float delay_step = 0.35f * duration;
-
     std::vector<uint32_t>               colour(n, 0);
+    std::vector<float>                  reserve(n, 0.0f);  // chord sag, per leg
     std::vector<Box>                    slices;
     std::vector<Vec3>                   samples;
     std::vector<uint64_t>               pairs;
@@ -617,7 +762,128 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
     std::vector<dai_show_leg> was(n);
     std::vector<uint8_t>      moved(n, 1);
     std::vector<uint64_t>     was_found;
-    size_t                    prev_found = (size_t)-1;
+    std::vector<uint64_t>     found;
+    std::vector<uint32_t>     bias(n, 0);
+    // How high the last round says this drone would have had to be to clear
+    // whatever it came too close to: the deficit, turned into a height, which
+    // is what a micro step is built from.
+    std::vector<float>        lift_need(n, 0.0f);
+
+    // The way out when the sky is full and the clock is not.
+    //
+    // A transition whose legs already run at v_max has no room for a detour:
+    // every lift is refused, every route falls back to the base one, and the
+    // separator used to hand back the whole crossing set as "unresolved" - a
+    // correct report of a solvable problem, which is the worst kind. What was
+    // missing is that the DURATION is a parameter too. Stretching it lowers the
+    // speed of every leg and buys exactly the headroom the detour needs, and
+    // dai_show_min_duration says how much is needed for the detour that was
+    // refused: length of the leg plus twice the height it would have to climb.
+    //
+    // The stretch is bounded (three attempts, at most triple the asked
+    // duration) because a separator that silently turns a six second move into
+    // a minute has solved a different show than the one on the storyboard. What
+    // was really used is in the legs - t_end - t_start - and dai_show_solve
+    // reads it back off them and says so.
+    const int   MAX_ATTEMPTS = 5;
+    const float MAX_STRETCH  = 5.0f;
+    float       duration     = asked_duration;
+    size_t      edge_total   = 0;
+    size_t      best_open    = (size_t)-1;
+    size_t      best_edges   = 0;
+    std::vector<dai_show_leg> best_legs(n);
+    std::vector<uint32_t>     best_colour(n, 0);
+    std::vector<uint64_t>     best_found;
+
+    const int  round_budget = deep ? MAX_ROUNDS : ROUNDS_LARGE;
+    const int  attempts     = deep ? MAX_ATTEMPTS : 1;
+
+    // One route, laid on one drone: what the leg becomes, and whether the
+    // limits allow it. Both the colouring above and the rescue below route a
+    // leg, and they have to route it the SAME way - two copies of this
+    // arithmetic would be two different sets of legs proven by one broadphase.
+    auto route_leg = [&](uint32_t i, uint32_t r, const dai_show_leg &base,
+                         float step, dai_show_leg *out) -> bool {
+        dai_show_leg lifted = base;
+        if (routes[r].slot > 0) {
+            lifted.t_start += step * (float)routes[r].slot;
+            lifted.t_end   += step * (float)routes[r].slot;
+        }
+        // The rise is stretched over more of the leg until it fits - a higher
+        // layer needs a gentler ramp, and the gentlest one this shape allows is
+        // rising for the whole first half. Only when even that is too much is
+        // the lift refused, and then the pair stays in the report rather than
+        // in the sky.
+        const float ramps[3] = { 0.34f, 0.42f, 0.5f };
+        if (!routes[r].routed) {
+            *out = lifted;
+            return leg_within_limits(lifted, src[i], dst[i], *s);
+        }
+        if (routes[r].micro > 0) {
+            // Odd steps go up, even steps go down, and each pair of steps is
+            // three quarters of a minimum distance further out than the last.
+            // Both halves matter: the drone this one is about to touch may be
+            // ABOVE it, and then climbing by the deficit is the one move that
+            // makes it worse. And the steps have to differ by more than the
+            // deficit, or two drones of the same pair take steps one and two,
+            // rise eleven centimetres apart, and arrive at the same problem.
+            int   k    = routes[r].micro - 1;
+            float mag  = std::max(lift_need[i], min_d * 0.25f)
+                       + (float)(k / 2) * min_d * 0.75f;
+            float sign = (k % 2 == 0) ? 1.0f : -1.0f;
+            lifted.layer_y = ((sign > 0.0f) ? std::max(src[i].y, dst[i].y)
+                                            : std::min(src[i].y, dst[i].y))
+                           + sign * mag;
+            if (lifted.layer_y < s->min_ground_m + min_d) {   // the ground wins
+                *out = base;
+                return false;
+            }
+        } else {
+            lifted.layer_y = routes[r].height_y;
+        }
+        bool took = false;
+        for (int k = 0; k < 3 && !took; ++k) {
+            lifted.rise_frac = ramps[k];
+            took = leg_within_limits(lifted, src[i], dst[i], *s);
+        }
+        // Still refused: it is not the shape that is wrong, it is the clock. A
+        // climb to the fleet ceiling and back is the leg plus twice the height,
+        // and dai_show_min_duration says what that costs; the leg takes that
+        // long and the formation waits for it. Bounded, and only for the drones
+        // that have to move - the alternative measured here was stretching the
+        // whole transition, which slowed four hundred drones to fix six.
+        if (!took) {
+            float L     = len3(sub3(Vec3{ dst[i].x, dst[i].y, dst[i].z },
+                                    Vec3{ src[i].x, src[i].y, src[i].z }));
+            float climb = std::fabs(lifted.layer_y - std::max(src[i].y, dst[i].y));
+            float dive  = std::fabs(lifted.layer_y - std::min(src[i].y, dst[i].y));
+            climb = std::max(climb, dive);
+            float need = dai_show_min_duration((L + 2.0f * climb) / DETOUR_V_MARGIN,
+                                               lifted.profile, s);
+            float cap  = duration * MAX_LEG_STRETCH;
+            if (need > cap) need = cap;
+            if (need > duration) {
+                lifted.t_end = lifted.t_start + need;
+                for (int k = 0; k < 3 && !took; ++k) {
+                    lifted.rise_frac = ramps[k];
+                    took = leg_within_limits(lifted, src[i], dst[i], *s);
+                }
+            }
+        }
+        *out = lifted;
+        return took;
+    };
+
+    for (int attempt = 0; ; ++attempt) {
+    const float delay_step = DELAY_FRACTION * duration;
+    colour.assign(n, 0);
+    moved.assign(n, 1);
+    bias.assign(n, 0);
+    lift_need.assign(n, 0.0f);
+    edges.clear();
+    was_found.clear();
+    found.clear();
+    edge_total = 0;
 
     // One round: lay the current colouring down as legs, then look again. The
     // legs are rebuilt from scratch every time, so a route that was tried and
@@ -631,33 +897,31 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
             g.rise_frac = 0.0f;
             g.profile   = tr->profile;
             g.pad       = 0;
-            if (colour[i] == 0) continue;
-            uint32_t r = colour[i] - 1;
-            if (r >= routes.size()) continue;      // out of routes: base, and unresolved
-            dai_show_leg lifted = g;
-            if (routes[r].slot > 0) {
-                lifted.t_start += delay_step * (float)routes[r].slot;
-                lifted.t_end   += delay_step * (float)routes[r].slot;
-            }
-            // A detour that would break v_max or a_max is not a fix, it is a
-            // different violation. The rise is stretched over more of the leg
-            // until it fits - a higher layer needs a gentler ramp, and the
-            // gentlest one this shape allows is rising for the whole first
-            // half. Only when even that is too much is the lift refused, and
-            // then the pair stays in the report rather than in the sky.
-            const float ramps[3] = { 0.34f, 0.42f, 0.5f };
+            if (colour[i] == 0 && bias[i] == 0) continue;
+            // The colour picks a route; the bias says how far along the list to
+            // start looking. Without the bias the loop is a fixed point: the
+            // same conflict graph is coloured the same way, so a pair that is
+            // still too close after both drones were routed gets exactly the
+            // same two routes on the next round and the separator gives up on a
+            // problem it never really searched. The bias is what turns that
+            // into a search - the higher-numbered drone of a pair that survived
+            // its routing steps one route further along, in index order, so the
+            // walk is the same on every machine.
+            uint32_t r = colour[i] + bias[i];
+            if (r == 0) continue;                             // the base route
+            // Past the end of the list the walk starts over rather than
+            // falling off it: the cheap routes at the front are worth trying
+            // again once the OTHER drone of the pair has moved, and a bias that
+            // runs off the end is a drone that stopped searching while the
+            // report still says it has a problem.
+            r = (r - 1) % (uint32_t)routes.size();
             const bool base_ok = leg_within_limits(g, src[i], dst[i], *s);
-            if (routes[r].layer >= 0) {
-                lifted.layer_y = ceil_y + gap * (float)(routes[r].layer + 1);
-                bool took = false;
-                for (int k = 0; k < 3 && !took; ++k) {
-                    lifted.rise_frac = ramps[k];
-                    took = leg_within_limits(lifted, src[i], dst[i], *s);
-                }
-                if (took || !base_ok) g = lifted;
-            } else if (leg_within_limits(lifted, src[i], dst[i], *s) || !base_ok) {
-                g = lifted;
-            }
+            dai_show_leg lifted;
+            // A route that breaks v_max or a_max is not a fix, it is a
+            // different violation - unless the leg was already breaking them
+            // standing still, and then the routed one is no worse and at least
+            // tries. That is the only case a refused route is flown.
+            if (route_leg(i, r, g, delay_step, &lifted) || !base_ok) g = lifted;
         }
 
         float gt0 = out_legs[0].t_start, gt1 = out_legs[0].t_end;
@@ -670,7 +934,11 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
         for (uint32_t i = 0; i < n; ++i) {
             Vec3 *p = &samples[(size_t)i * (SAMPLES + 1)];
             sample_leg(out_legs[i], src[i], dst[i], gt0, gt1, p);
-            slice_boxes(p, min_d * 0.5f, &slices[(size_t)i * COARSE]);
+            reserve[i] = chord_reserve(out_legs[i], src[i], dst[i], *s);
+            // The broadphase box grows with the reserve too, or a pair that is
+            // only a conflict once the chord sag is counted never reaches the
+            // narrow phase that would count it.
+            slice_boxes(p, min_d * 0.5f + reserve[i], &slices[(size_t)i * COARSE]);
             moved[i] = (round == 0 || std::memcmp(&was[i], &out_legs[i], sizeof(dai_show_leg)) != 0);
             was[i] = out_legs[i];
         }
@@ -680,7 +948,7 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
         // each other, so the round after a recolouring only pays for the legs
         // the recolouring actually touched. Worth an order of magnitude on a
         // dense figure, where nine tenths of the fleet keeps its route.
-        std::vector<uint64_t> found;
+        found.clear();
         found.reserve(pairs.size() / 4 + 4);
         for (size_t k = 0; k < pairs.size(); ++k) {
             uint32_t a = (uint32_t)(pairs[k] >> 32), b = (uint32_t)(pairs[k] & 0xFFFFFFFFu);
@@ -689,42 +957,74 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
                     found.push_back(pairs[k]);
                 continue;
             }
+            // The bar this pair has to clear is the minimum distance PLUS what
+            // the two legs lose when the plan cuts them into keyframes. Two
+            // drones that pass at exactly min_distance on the curve pass closer
+            // than that on the polyline, and the validator - which reads the
+            // polyline - would report the pair the separator had just signed
+            // off. One number, computed the same way on both sides.
+            const float bar = min_d - SEP_EPS + reserve[a] + reserve[b];
             float sep = min_separation(out_legs[a], src[a], dst[a],
                                        out_legs[b], src[b], dst[b],
                                        &samples[(size_t)a * (SAMPLES + 1)],
                                        &samples[(size_t)b * (SAMPLES + 1)],
-                                       min_d - SEP_EPS);
-            if (sep < min_d - SEP_EPS) found.push_back(pairs[k]);
+                                       bar);
+            if (sep < bar) {
+                found.push_back(pairs[k]);
+                float clear = (sep > 0.0f)
+                            ? std::sqrt(std::max(0.0f, bar * bar - sep * sep)) : bar;
+                clear += min_d * 0.1f;                     // and a little over
+                lift_need[a] = std::max(lift_need[a], clear);
+                lift_need[b] = std::max(lift_need[b], clear);
+            }
         }
         was_found = found;
 
-        // Three rounds that barely move the number are three rounds that are
-        // not going to move it. Stopping there and printing the remainder is
-        // the honest answer; grinding through eight of them to print the same
-        // remainder is only slower.
-        bool stalled = (round >= 3 && found.size() * 10 >= prev_found * 9);
-        prev_found = found.size();
+#ifdef DAI_SHOW_PLAN_DEBUG
+        if (n > 300) {
+            std::fprintf(stderr, "  attempt %d round %d: open=%zu dur=%.2f\n",
+                         attempt, round, found.size(), duration);
+            for (size_t k = 0; k < found.size() && k < 6; ++k) {
+                uint32_t a = (uint32_t)(found[k] >> 32), b = (uint32_t)(found[k] & 0xFFFFFFFFu);
+                std::fprintf(stderr, "    %u(c=%u,bias=%u,rise=%.2f,y=%.1f,t=%.1f) "
+                             "%u(c=%u,bias=%u,rise=%.2f,y=%.1f,t=%.1f) need=%.2f/%.2f\n",
+                             a, colour[a], bias[a], out_legs[a].rise_frac, out_legs[a].layer_y,
+                             out_legs[a].t_start,
+                             b, colour[b], bias[b], out_legs[b].rise_frac, out_legs[b].layer_y,
+                             out_legs[b].t_start, lift_need[a], lift_need[b]);
+            }
+        }
+#endif
+        if (found.empty() || round >= round_budget - 1) {
+            edge_total = std::max(edges.size(), found.size());
+            break;
+        }
 
-        if (found.empty() || round >= MAX_ROUNDS - 1 || stalled) {
-            fill_stats(stats, n, out_legs, src, dst, colour, base_delay, t_start,
-                       std::max(edges.size(), found.size()), found.size());
-            return found.empty() ? DAI_OK : DAI_ERR_STATE;
+        // A pair that is STILL too close although both its drones were routed
+        // gets one of them moved along: the routing that was tried is known not
+        // to work, so trying it again is the definition of a stuck loop.
+        for (size_t k = 0; deep && k < found.size(); ++k) {
+            if (!std::binary_search(edges.begin(), edges.end(), found[k])) continue;
+            // ONE of them - the higher-numbered first, so the choice does not
+            // depend on the order the pairs came out of the grid, and
+            // measurably better than moving both: two drones stepping aside in
+            // the same direction at the same moment have not stepped aside at
+            // all. Once that one has been round the whole list, the other takes
+            // over: sometimes the drone that has to give way is the one that
+            // was standing still, and a pair where only one side ever moves is
+            // a pair that never gets out of its own way.
+            uint32_t hi = (uint32_t)(found[k] & 0xFFFFFFFFu);
+            uint32_t lo = (uint32_t)(found[k] >> 32);
+            if (bias[hi] + 1u < (uint32_t)routes.size()) ++bias[hi];
+            else                                         ++bias[lo];
         }
 
         // The crossing set only ever grows. A pair that was separated by a lift
         // must stay separated when the next round hands out colours again, so
         // its edge stays in the graph.
-        size_t before = edges.size();
         edges.insert(edges.end(), found.begin(), found.end());
         std::sort(edges.begin(), edges.end());
         edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
-        if (edges.size() == before) {
-            // Nothing new, and the old edges are still violated: the colouring
-            // cannot help any further. Report the remainder rather than loop.
-            fill_stats(stats, n, out_legs, src, dst, colour, base_delay, t_start,
-                       edges.size(), found.size());
-            return DAI_ERR_STATE;
-        }
 
         for (uint32_t i = 0; i < n; ++i) adj[i].clear();
         for (size_t k = 0; k < edges.size(); ++k) {
@@ -737,6 +1037,75 @@ dai_result dai_show_layer(const dai_show_point *from, const dai_show_point *to, 
         // conflict is gone, which is what the accumulated edge set does.
         colour_graph(adj, colour);
     }
+
+    // Keep the best attempt, not the last one. A longer duration gives every
+    // leg more room, but it also re-colours the whole transition from scratch,
+    // and a colouring that untangles nine pairs out of ten can come back with a
+    // different tenth. Handing the caller whichever attempt happened to run
+    // last would make a bigger search budget produce a worse show, which is not
+    // a trade anybody would take.
+    if (found.size() < best_open) {
+        best_open   = found.size();
+        best_edges  = edge_total;
+        best_legs.assign(out_legs, out_legs + n);
+        best_colour = colour;
+        best_found  = found;
+    }
+    if (found.empty()) break;
+
+    // What the refused detours would have needed. The height is the lowest
+    // layer above both formations, the path is the leg plus the climb and the
+    // descent, and dai_show_min_duration turns that into the seconds v_max and
+    // a_max demand. Taking the maximum over the pairs that are still open is
+    // the smallest stretch that gives every one of them a route.
+    float want = duration;
+    for (size_t k = 0; k < found.size(); ++k) {
+        const uint32_t two[2] = { (uint32_t)(found[k] >> 32), (uint32_t)(found[k] & 0xFFFFFFFFu) };
+        for (int e = 0; e < 2; ++e) {
+            uint32_t i = two[e];
+            float L = len3(Vec3{ dst[i].x - src[i].x, dst[i].y - src[i].y, dst[i].z - src[i].z });
+            float climb = std::max(src[i].y, dst[i].y) - (floor_y - gap);
+            if (climb < 0.0f) climb = 0.0f;
+            float need = dai_show_min_duration(L + 2.0f * climb, tr->profile, s);
+            if (need > want) want = need;
+        }
+    }
+    // Never less than a fifth more than the current try: a stretch that rounds
+    // to nothing is a round that repeats itself.
+    float next = std::max(want, duration * 1.2f);
+    if (next > asked_duration * MAX_STRETCH) next = asked_duration * MAX_STRETCH;
+    if (attempt + 1 >= attempts || next <= duration * 1.001f) break;
+    duration = next;
+    }
+
+    if (best_open < found.size()) {                  // an earlier attempt did better
+        std::memcpy(out_legs, best_legs.data(), (size_t)n * sizeof(dai_show_leg));
+        colour     = best_colour;
+        edge_total = best_edges;
+        found      = best_found;
+    }
+#ifdef DAI_SHOW_PLAN_DEBUG
+    for (size_t k = 0; k < found.size(); ++k) {
+        uint32_t a = (uint32_t)(found[k] >> 32), b = (uint32_t)(found[k] & 0xFFFFFFFFu);
+        Vec3 s0{src[a].x - src[b].x, src[a].y - src[b].y, src[a].z - src[b].z};
+        Vec3 d0{dst[a].x - dst[b].x, dst[a].y - dst[b].y, dst[a].z - dst[b].z};
+        std::fprintf(stderr, "OPEN %u/%u src_gap=%.3f dst_gap=%.3f "
+                     "legA[t=%.2f..%.2f rise=%.2f y=%.1f] legB[t=%.2f..%.2f rise=%.2f y=%.1f] "
+                     "lenA=%.1f lenB=%.1f dur=%.2f\n", a, b, len3(s0), len3(d0),
+                     out_legs[a].t_start, out_legs[a].t_end, out_legs[a].rise_frac, out_legs[a].layer_y,
+                     out_legs[b].t_start, out_legs[b].t_end, out_legs[b].rise_frac, out_legs[b].layer_y,
+                     len3(sub3(Vec3{dst[a].x,dst[a].y,dst[a].z}, Vec3{src[a].x,src[a].y,src[a].z})),
+                     len3(sub3(Vec3{dst[b].x,dst[b].y,dst[b].z}, Vec3{src[b].x,src[b].y,src[b].z})),
+                     duration);
+        std::fprintf(stderr, "  PTS a src %.4f %.4f %.4f dst %.4f %.4f %.4f\n"
+                             "  PTS b src %.4f %.4f %.4f dst %.4f %.4f %.4f\n",
+                     src[a].x, src[a].y, src[a].z, dst[a].x, dst[a].y, dst[a].z,
+                     src[b].x, src[b].y, src[b].z, dst[b].x, dst[b].y, dst[b].z);
+    }
+#endif
+    fill_stats(stats, n, out_legs, src, dst, colour, base_delay, t_start,
+               edge_total, std::min(best_open, found.size()));
+    return (std::min(best_open, found.size()) == 0) ? DAI_OK : DAI_ERR_STATE;
 }
 
 } // extern "C"

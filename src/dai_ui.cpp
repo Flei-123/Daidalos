@@ -2141,6 +2141,43 @@ int dai_ui_axis_toggles(dai_ui *ui, const char *label, uint32_t *bits,
     return changed;
 }
 
+// The label of one cell of a segmented control, cut to the cell it lives in.
+//
+// A strip is laid out from the width it was given, never from the words in it,
+// so "Silhouette" in a docked 180 px panel was drawn at its full length and
+// centred - which means it left its button on both sides and ran into its
+// neighbour, and in the narrow screenshots it ran off the panel entirely.
+// Cutting at the end keeps the first letters, which is the part a reader
+// recognises ("Silh..." is still not "Surface"). When even "..." does not fit
+// there is nothing left to shorten and the cell shows its number instead: three
+// cells still read as three distinct choices, and 1/2/3 next to a selected
+// highlight is a control, where three identical stubs are not.
+static const char *fit_segment(dai_ui *ui, const char *text, int index, float cell,
+                               char *buf, size_t buf_size) {
+    std::snprintf(buf, buf_size, "%s", text ? text : "");
+    float room = cell - 6.0f;
+    if (room <= 0.0f) room = 0.0f;
+    if (dai_ui_text_width(ui, buf) <= room) return buf;
+    if (room < dai_ui_text_width(ui, "...")) {
+        std::snprintf(buf, buf_size, "%d", index + 1);
+        return buf;
+    }
+    size_t n = std::strlen(buf);
+    while (n > 1) {
+        --n;
+        char keep[160];
+        size_t k = std::min(n, sizeof(keep) - 4);
+        std::memcpy(keep, buf, k);
+        std::strcpy(keep + k, "...");
+        if (dai_ui_text_width(ui, keep) <= room) {
+            std::snprintf(buf, buf_size, "%s", keep);
+            return buf;
+        }
+    }
+    std::snprintf(buf, buf_size, "%d", index + 1);
+    return buf;
+}
+
 // A row of buttons of which exactly one is on - Unity's alignment strip.
 // A dropdown hides the choice behind a click; a strip shows all of them and
 // costs one click. For three or four short options that is simply better.
@@ -2157,9 +2194,16 @@ int dai_ui_seg_buttons(dai_ui *ui, const char *label, int *value,
         if (lw > full * 0.55f) lw = full * 0.55f;
         dai_ui_text(ui, x, y + 2.0f, label, ui->style.text_dim);
     }
+    // The strip gets what is left of the row, and never a pixel more. Widening
+    // it to a 40 px minimum was the old rule, and in a 180 px dock column it
+    // pushed the last segment past the panel's padding and out over the border
+    // - the control was legible only because the panel behind it was not. The
+    // label column gives way instead; it is the part that can be read from its
+    // first half.
+    if (lw > 0.0f && full - lw < 40.0f) lw = std::max(0.0f, full - 40.0f);
     float sx = x + lw;
     float sw = full - lw;
-    if (sw < 40.0f) sw = 40.0f;
+    if (sw < 1.0f) sw = 1.0f;
     float bw = sw / (float)count;
     float bh = h - 2.0f;
     int changed = 0;
@@ -2176,11 +2220,17 @@ int dai_ui_seg_buttons(dai_ui *ui, const char *label, int *value,
                          : (over ? ui->style.button_hover : ui->style.button);
         dai_ui_rect(ui, bx, y + 1.0f, bw - 1.0f, bh, bg);
         dai_ui_rect_outline(ui, bx, y + 1.0f, bw - 1.0f, bh, 1.0f, ui->style.panel_border);
-        const char *t = items[i] ? items[i] : "";
+        char lbl[160];
+        const char *t = fit_segment(ui, items[i], i, bw - 1.0f, lbl, sizeof(lbl));
         float tw = dai_ui_text_width(ui, t);
+        // Clipped as well as shortened: the ellipsis is measured in whole
+        // glyphs and a font can still overhang by a pixel, and a pixel over the
+        // border is what the reviewer's screenshot shows.
+        dai_ui_clip_begin(ui, bx, y + 1.0f, bw - 1.0f, bh);
         dai_ui_text(ui, bx + (bw - 1.0f - tw) * 0.5f,
                     y + (bh - dai_font_line_height(ui->font)) * 0.5f + 1.0f, t,
                     on ? 0xFFFFFFFFu : ui->style.text);
+        dai_ui_clip_end(ui);
     }
     return changed;
 }
@@ -4829,10 +4879,13 @@ int dai_ui_segmented(dai_ui *ui, const char *const *labels, int count, int *valu
         else if (over)
             dai_ui_rrect(ui, cx + 2.0f, y + 2.0f, cw - 4.0f, h - 4.0f,
                          ui->style.rounding, ui->style.button_hover);
-        const char *lbl = labels[i] ? labels[i] : "";
+        char buf[160];
+        const char *lbl = fit_segment(ui, labels[i], i, cw, buf, sizeof(buf));
         float tw = dai_ui_text_width(ui, lbl);
+        dai_ui_clip_begin(ui, cx, y, cw, h);
         dai_ui_text(ui, cx + (cw - tw) * 0.5f, y + (h - lh) * 0.5f, lbl,
                     sel ? ui->style.text : ui->style.text_dim);
+        dai_ui_clip_end(ui);
         if (over && ui->input.mouse_down && !ui->prev.mouse_down && *value != i) {
             *value = i;
             changed = 1;

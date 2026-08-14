@@ -84,6 +84,19 @@ DAI_API int      dai_show_ui_selected_conflict(const dai_show_ui *u);
 DAI_API void dai_show_ui_storyboard(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h);
 DAI_API void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h);
 DAI_API void dai_show_ui_validation(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h);
+/* The two panels the game layout already has, given the thing a show puts in
+ * them: the figures in order - click one and the preview goes to where it
+ * stands - with the number of the drone everything else is about; and the
+ * detail view of that one drone at the instant on the timeline (position, LED
+ * colour, keyframe count, nearest neighbour), under the conflict the
+ * validation list currently has open.
+ *
+ * They exist because the alternative was two empty rectangles in the default
+ * layout. A show has no scene graph, but it does have a hierarchy - the
+ * storyboard is one - and it does have exactly one thing worth inspecting, and
+ * a panel that says nothing is a panel a director stops opening. */
+DAI_API void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h);
+DAI_API void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h);
 /* The preview and the timeline under it, in one rectangle - they scrub each
  * other, so splitting them across two panels would only make it possible to
  * close half of a control. */

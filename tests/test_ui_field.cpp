@@ -397,6 +397,83 @@ int main() {
         CHECK(moves == 2, "clicking the value field moved an element");
     }
 
+    // ---- a segmented strip in a 180 px dock column -------------------------
+    //
+    // The show panels dock at 180 px, and "Sampling  Surface|Volume|Silhouette"
+    // used to be drawn wider than that: the strip claimed a 40 px minimum per
+    // row whatever was left over, so the last segment ended outside the panel
+    // and its label outside the segment. Nothing crashed, nothing asserted, and
+    // the screenshot was unreadable - which is why the geometry is measured
+    // here rather than looked at.
+    {
+        std::printf("segmented strip in a narrow panel\n");
+        const float PX = 40.0f, PY = 10.0f, PW = 180.0f;
+        static const char *const MODES[3] = { "Surface", "Volume", "Silhouette" };
+        int mode = 0;
+        in.mouse_x = -100.0f; in.mouse_y = -100.0f; in.mouse_down = 0;
+        dai_ui_begin(ui, 800, 600, &in);
+        dai_ui_panel_begin(ui, PX, PY, PW, 200.0f, nullptr);
+        dai_ui_seg_buttons(ui, "Sampling", &mode, MODES, 3);
+        dai_ui_segmented(ui, MODES, 3, &mode);
+        dai_ui_panel_end(ui);
+        dai_ui_end(ui);
+
+        // The strip's own pixels, told apart from the panel behind them by the
+        // colours only a segment uses: the two button fills, the accent of the
+        // selected one, and the white the selected label is drawn in.
+        const dai_ui_style *ss = dai_ui_style_of(ui);
+        const uint32_t MINE[5] = { ss->button, ss->button_hover, ss->button_active,
+                                   ss->accent, 0xFFFFFFFFu };
+        const dai_ui_draw *draws = nullptr;
+        uint32_t nb = dai_ui_draws(ui, &draws);
+        float maxx = 0.0f;
+        int seen = 0;
+        for (uint32_t b = 0; b < nb; ++b) {
+            for (uint32_t v = 0; v < draws[b].count; ++v) {
+                const dai_ui_vertex &vx = draws[b].vertices[v];
+                for (int m = 0; m < 5; ++m) {
+                    if (vx.color != MINE[m]) continue;
+                    if (vx.x > maxx) maxx = vx.x;
+                    ++seen;
+                    break;
+                }
+            }
+        }
+        const float limit = PX + PW - ss->padding;
+        CHECK(seen > 0, "the strip drew nothing the test can recognise");
+        CHECK(maxx <= limit + 0.5f,
+              "the segmented strip reaches x=%.1f, the panel ends at %.1f - the "
+              "last segment hangs over the panel edge", (double)maxx, (double)limit);
+
+        // And the same, squeezed: a column narrow enough that the label and
+        // three segments cannot both have their preferred width. This is the
+        // width at which the old minimum bit, so it is the width the check has
+        // to survive - the label column gives way, the strip does not grow.
+        const float NW = 90.0f;
+        mode = 1;
+        dai_ui_begin(ui, 800, 600, &in);
+        dai_ui_panel_begin(ui, PX, PY, NW, 200.0f, nullptr);
+        dai_ui_seg_buttons(ui, "Sampling", &mode, MODES, 3);
+        dai_ui_panel_end(ui);
+        dai_ui_end(ui);
+        nb = dai_ui_draws(ui, &draws);
+        float narrow_max = 0.0f;
+        for (uint32_t b = 0; b < nb; ++b) {
+            for (uint32_t v = 0; v < draws[b].count; ++v) {
+                const dai_ui_vertex &vx = draws[b].vertices[v];
+                for (int m = 0; m < 5; ++m) {
+                    if (vx.color != MINE[m]) continue;
+                    if (vx.x > narrow_max) narrow_max = vx.x;
+                    break;
+                }
+            }
+        }
+        const float narrow_limit = PX + NW - ss->padding;
+        CHECK(narrow_max <= narrow_limit + 0.5f,
+              "in a %.0f px panel the strip reaches x=%.1f, the panel ends at %.1f",
+              (double)NW, (double)narrow_max, (double)narrow_limit);
+    }
+
     dai_ui_destroy(ui);
     dai_font_free(font);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);

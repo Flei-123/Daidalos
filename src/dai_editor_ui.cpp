@@ -7561,6 +7561,19 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
     }
 }
 
+// ---- the two general panels, when the open project is a drone show ---------
+//
+// Hierarchy and Inspector are the editor's two questions - what is in this
+// document, and what is the thing I clicked - and a drone show answers both.
+// Left on the scene document they answer neither: a show project has no nodes,
+// so both panels stood in the default layout as empty rectangles, which is a
+// placeholder wearing a title bar.
+//
+// The bodies live in src/dai_show_ui.cpp with the other show panels, because
+// what goes in them is a show and this file must not learn a second document
+// format. Here there is only the branch, and it is the same branch the status
+// line and the preview already take.
+
 void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     if (!p) return;
     dai_ui *ui = p->ui;
@@ -7640,33 +7653,41 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
 
     float px, py, pw, ph;
     if (dai_dock_panel(p->dock, "Hierarchy", &px, &py, &pw, &ph)) {
-        dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
-        hierarchy_body(p, ph - 8.0f);
-        play_dim(p, px, py, pw, ph);
-        // Right click on empty space in the hierarchy: the GameObject menu.
-        float mx = 0, my = 0;
-        dai_ui_mouse(ui, &mx, &my, nullptr, nullptr);
-        // The same rule as the viewport: a second right click REPLACES the
-        // menu. Testing "no menu is open" meant the second click was thrown
-        // away and the first menu just sat there, in the place you no longer
-        // wanted it.
-        // The pointer's PLACE, not "which root is hovered". An open popup is a
-        // root of its own, so while one is up the hierarchy is never hovered -
-        // and that single word is why the second right click did nothing, in
-        // four attempts at fixing it. The panel's rectangle does not lie.
-        bool re_here = p->reopen_menu &&
-                       p->reopen_x >= px && p->reopen_x < px + pw &&
-                       p->reopen_y >= py && p->reopen_y < py + ph;
-        if (re_here) {
-            dai_ui_popup_open(&p->menu_canvas, p->reopen_x, p->reopen_y);
-            p->reopen_menu = 0;
-        } else if (dai_ui_right_pressed(ui) &&
-                   mx >= px && mx < px + pw && my >= py && my < py + ph) {
-            p->menu_node.open = 0;
-            p->menu_canvas.open = 0;
-            dai_ui_popup_open(&p->menu_canvas, mx, my);
+        // A show has figures where a scene has nodes, and the panel says so
+        // rather than standing empty over a document it cannot read. The show
+        // panel draws its own frame, so the branch is around the whole body.
+        if (p->show) {
+            dai_show_ui_figures(p->show, ui, px, py, pw, ph);
+        } else {
+            dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
+            hierarchy_body(p, ph - 8.0f);
+            play_dim(p, px, py, pw, ph);
+            // Right click on empty space in the hierarchy: the GameObject menu.
+            float mx = 0, my = 0;
+            dai_ui_mouse(ui, &mx, &my, nullptr, nullptr);
+            // The same rule as the viewport: a second right click REPLACES the
+            // menu. Testing "no menu is open" meant the second click was thrown
+            // away and the first menu just sat there, in the place you no longer
+            // wanted it.
+            // The pointer's PLACE, not "which root is hovered". An open popup is
+            // a root of its own, so while one is up the hierarchy is never
+            // hovered - and that single word is why the second right click did
+            // nothing, in four attempts at fixing it. The panel's rectangle does
+            // not lie.
+            bool re_here = p->reopen_menu &&
+                           p->reopen_x >= px && p->reopen_x < px + pw &&
+                           p->reopen_y >= py && p->reopen_y < py + ph;
+            if (re_here) {
+                dai_ui_popup_open(&p->menu_canvas, p->reopen_x, p->reopen_y);
+                p->reopen_menu = 0;
+            } else if (dai_ui_right_pressed(ui) &&
+                       mx >= px && mx < px + pw && my >= py && my < py + ph) {
+                p->menu_node.open = 0;
+                p->menu_canvas.open = 0;
+                dai_ui_popup_open(&p->menu_canvas, mx, my);
+            }
+            dai_ui_panel_end(ui);
         }
-        dai_ui_panel_end(ui);
         dai_dock_panel_end(p->dock);
     }
     if (dai_dock_panel(p->dock, "Project", &px, &py, &pw, &ph)) {
@@ -7713,6 +7734,13 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     }
     for (int inst = 0; inst < DAI_MAX_PANEL_INSTANCES &&
                        dai_dock_panel(p->dock, "Inspector", &px, &py, &pw, &ph); ++inst) {
+        if (p->show) {
+            // One drone at one instant is what a show has to inspect, and the
+            // panel that knows how to say that is the show's own.
+            dai_show_ui_inspector(p->show, ui, px, py, pw, ph);
+            dai_dock_panel_end(p->dock);
+            continue;
+        }
         dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
         char sid[24];
         std::snprintf(sid, sizeof(sid), "inspector%d", inst);
@@ -7777,7 +7805,14 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         }
         dai_dock_panel_end(p->dock);
     }
-    if (p->gizmo_fps) {
+    // A frame counter, only once there are frames to count. dai_editor_ui_fps
+    // is pushed by the host, and a host that never pushes one - a shot tool, a
+    // headless test, an embedder that has not got round to it - used to get
+    // "0 fps   0.0 ms" painted over its viewport: a measurement that was never
+    // made, printed with one decimal place to look like one that was. Nothing
+    // measured, nothing shown; the counter appears the moment the host says
+    // what a frame cost.
+    if (p->gizmo_fps && p->fps_now > 0.01f) {
         // Top left of each view. A frame counter belongs where nothing else
         // is, and it belongs in BOTH views: the scene view's number is what
         // the editor costs, the game view's is what the game costs, and with
@@ -7785,8 +7820,7 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         const dai_ui_style *fs = dai_ui_style_of(ui);
         char fb[64];
         std::snprintf(fb, sizeof(fb), "%.0f fps   %.1f ms",
-                      (double)p->fps_now,
-                      p->fps_now > 0.01f ? (double)(1000.0f / p->fps_now) : 0.0);
+                      (double)p->fps_now, (double)(1000.0f / p->fps_now));
         // Green while it is comfortable, amber when it is not, red when the
         // frame is longer than a 30 Hz budget - the number you read at a
         // glance is the colour, not the digits.

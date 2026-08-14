@@ -79,6 +79,34 @@ float fit_labels(dai_ui *ui, const char *const *labels, int count) {
     return was;
 }
 
+// A choice that shows all of its options at once - while they still fit.
+//
+// A strip is the better control for three short words: every option is visible
+// and picking one costs a single click. But the strip divides the row it is
+// given, not the words it holds, and in a docked panel of 180 px that leaves
+// forty pixels for "Silhouette". dai_ui_seg_buttons shortens what it is handed
+// so nothing escapes its button, and that is the right last line of defence -
+// but "Sil..." next to "Sur..." is a control that has stopped saying what it
+// chooses. So the width is worked out here BEFORE the strip is asked for, the
+// same way the strip works it out, and when the longest option no longer fits
+// its cell the row becomes an ordinary dropdown, which always has room for one
+// whole word.
+//
+// The scroll bar's lane is taken off the top: the parameter panel scrolls, and
+// a segment that ends under the bar has lost its last letter to it.
+int seg_row(dai_ui *ui, const char *label, int *value, const char *const *items, int count) {
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    float full = dai_ui_panel_width(ui) - st->padding * 2.0f;
+    float lw   = (label && *label) ? (st->label_w > 0.0f ? st->label_w : 62.0f) : 0.0f;
+    if (lw > full * 0.55f) lw = full * 0.55f;
+    float cell = (full - lw - 14.0f) / (float)count;
+    float need = 0.0f;
+    for (int i = 0; i < count; ++i)
+        need = std::max(need, dai_ui_text_width(ui, items[i] ? items[i] : "") + 8.0f);
+    if (cell >= need) return dai_ui_seg_buttons(ui, label, value, items, count);
+    return dai_ui_option(ui, label, value, items, count);
+}
+
 // Cuts `s` down to `avail` pixels, at the end, with an ellipsis. Written with
 // dots rather than U+2026 because the UI font is the editor's ASCII atlas and
 // a missing glyph would be a hole exactly where the text was too long.
@@ -101,10 +129,17 @@ void ellide(dai_ui *ui, char *s, float avail) {
 // A hint that is longer than the panel is wide, broken at spaces onto as many
 // label rows as it needs. The alternative - letting it run under the edge - is
 // how "no mesh selected - pick one in the Project panel" became "no mesh sele".
-void wrapped_label(dai_ui *ui, const char *text) {
+// `draw == 0` lays the text out and counts the rows without putting a single
+// vertex in the list, which is what the report block needs to know BEFORE it
+// commits to a row: how tall this line is going to be.
+int wrapped_rows(dai_ui *ui, const char *text, int draw) {
     const dai_ui_style *st = dai_ui_style_of(ui);
     float avail = dai_ui_panel_width(ui) - st->padding * 2.0f - 2.0f;
-    if (avail < 40.0f || dai_ui_text_width(ui, text) <= avail) { dai_ui_label(ui, text); return; }
+    if (avail < 40.0f || dai_ui_text_width(ui, text) <= avail) {
+        if (draw) dai_ui_label(ui, text);
+        return 1;
+    }
+    int rows = 0;
     std::string line;
     const char *p = text;
     while (*p) {
@@ -112,7 +147,8 @@ void wrapped_label(dai_ui *ui, const char *text) {
         std::string word(p, sp ? (size_t)(sp - p) : std::strlen(p));
         std::string trial = line.empty() ? word : line + " " + word;
         if (!line.empty() && dai_ui_text_width(ui, trial.c_str()) > avail) {
-            dai_ui_label(ui, line.c_str());
+            if (draw) dai_ui_label(ui, line.c_str());
+            ++rows;
             line = word;
         } else {
             line = trial;
@@ -120,7 +156,82 @@ void wrapped_label(dai_ui *ui, const char *text) {
         if (!sp) break;
         p = sp + 1;
     }
-    if (!line.empty()) dai_ui_label(ui, line.c_str());
+    if (!line.empty()) {
+        if (draw) dai_ui_label(ui, line.c_str());
+        ++rows;
+    }
+    return rows;
+}
+
+void wrapped_label(dai_ui *ui, const char *text) {
+    wrapped_rows(ui, text, 1);
+}
+
+// How tall a row with a control in it is, and whether one still fits above the
+// bottom edge of the region it is going into. Both come from the style rather
+// than from a constant, so a change of UI scale moves the cut with the text.
+float widget_row(dai_ui *ui) {
+    return dai_ui_text_height(ui) + dai_ui_style_of(ui)->row_pad;
+}
+
+bool fits(dai_ui *ui, float bottom, float row_h) {
+    if (!(bottom > 0.0f)) return true;
+    float x = 0.0f, y = 0.0f;
+    dai_ui_cursor_pos(ui, &x, &y);
+    return y + row_h <= bottom + 0.5f;
+}
+
+// A button drawn only when the whole of it fits. When it does not, the row is
+// still spent: a control that moves up into the place another one was about to
+// occupy is a click that does something the reader did not ask for.
+int row_button(dai_ui *ui, float bottom, const char *label) {
+    float hgt = widget_row(ui);
+    if (!fits(ui, bottom, hgt)) { dai_ui_advance(ui, dai_ui_panel_width(ui), hgt); return 0; }
+    return dai_ui_button(ui, label);
+}
+
+// A read-only "label   value" row, on the same label column every field in the
+// panel uses. Not a text field with editing switched off: a box that looks
+// editable and is not is the more expensive lie, and half of what an inspector
+// shows about a solved show - where a drone is, what colour it burns - is a
+// result rather than a setting.
+// `bottom` is the lower edge of the region the row lives in, and a row that
+// would be cut by it is not drawn at all - the same all-or-nothing rule the
+// report block and the conflict list follow. It still advances the layout, so
+// the wheel brings it in whole.
+void field_row(dai_ui *ui, const char *label, const char *value, float bottom) {
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    float x = 0.0f, y = 0.0f;
+    dai_ui_cursor_pos(ui, &x, &y);
+    const float lh   = dai_ui_text_height(ui);
+    const float full = dai_ui_panel_width(ui) - st->padding * 2.0f;
+    // The value column starts past the WIDEST of the two claims on it: the
+    // shared label column, and this row's own label. A column that is narrower
+    // than the word in front of it is how "Keyframes" and "8" ended up printed
+    // as one word.
+    float lw = std::max(st->label_w > 0.0f ? st->label_w : 62.0f,
+                        dai_ui_text_width(ui, label) + 8.0f);
+    char cut[192];
+    std::snprintf(cut, sizeof(cut), "%s", value ? value : "");
+
+    // Docked at a fifth of the frame there is no room for both on one line.
+    // Then the value goes UNDER its label, indented, rather than being cut to
+    // "25.3 ..." - a number with its end taken off is not a shorter number.
+    const bool one_row = (dai_ui_text_width(ui, cut) <= full - lw - 4.0f);
+    const float need = one_row ? lh : lh * 2.0f + st->spacing;
+    if (bottom > 0.0f && y + need > bottom) { dai_ui_advance(ui, full, need); return; }
+
+    dai_ui_text(ui, x, y, label, st->text_dim);
+    if (one_row) {
+        dai_ui_text(ui, x + lw, y, cut, st->text);
+        dai_ui_advance(ui, full, lh);
+        return;
+    }
+    dai_ui_advance(ui, full, lh);
+    ellide(ui, cut, full - 10.0f);
+    dai_ui_cursor_pos(ui, &x, &y);
+    dai_ui_text(ui, x + 8.0f, y, cut, st->text);
+    dai_ui_advance(ui, full, lh);
 }
 
 // What a full width row has for its own text: the widget takes three paddings
@@ -134,13 +245,30 @@ float row_text_width(dai_ui *ui) {
 // under the panel edge. These lines are read at a fifth of the frame's width
 // when the panel is docked, and a number that ends mid digit is worse than no
 // number at all.
-void stat_line(dai_ui *ui, const char *fmt, ...) {
+//
+// `bottom` is the lower edge of the scroll region the block lives in. A row
+// that starts above it and ends below it used to be drawn anyway and the clip
+// cut it through the middle of the glyphs - a line of text sliced lengthwise,
+// at the exact place a reader looks for the last number. Such a row is skipped
+// here, whole, but it still ADVANCES the layout: the scroll region measures its
+// content from the cursor, and a row that takes no space is a row the wheel can
+// never bring into view.
+void stat_line(dai_ui *ui, float bottom, const char *fmt, ...) {
     char buf[256];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    wrapped_label(ui, buf);
+
+    float cx = 0.0f, cy = 0.0f;
+    dai_ui_cursor_pos(ui, &cx, &cy);
+    int rows = wrapped_rows(ui, buf, 0);
+    float need = row_pitch(ui) * (float)rows;
+    if (bottom > 0.0f && cy + need > bottom) {
+        dai_ui_advance(ui, 0.0f, need - dai_ui_style_of(ui)->spacing);
+        return;
+    }
+    wrapped_rows(ui, buf, 1);
 }
 
 const char *conflict_word(int kind) {
@@ -343,6 +471,20 @@ int project(const Cam &c, float px, float py, float pz, float *sx, float *sy, fl
     return 1;
 }
 
+// A circle, out of the line segments the 2D canvas has. Sixteen of them is
+// round to the eye at any size this marker is drawn at, and a shape the canvas
+// already knows beats a new primitive in dai_ui for the sake of one panel.
+void ring(dai_ui *ui, float cx, float cy, float r, float thick, uint32_t col) {
+    const int SEG = 16;
+    float px = cx + r, py = cy;
+    for (int i = 1; i <= SEG; ++i) {
+        float a = 2.0f * (float)M_PI * (float)i / (float)SEG;
+        float qx = cx + r * std::cos(a), qy = cy + r * std::sin(a);
+        dai_ui_line(ui, px, py, qx, qy, thick, col);
+        px = qx; py = qy;
+    }
+}
+
 // Fits the orbit to whatever the plan holds, once per plan. A preview that
 // opens on an empty patch of sky is a preview nobody trusts.
 void frame_plan(dai_show_ui *u) {
@@ -482,7 +624,7 @@ void dai_show_ui_storyboard(dai_show_ui *u, dai_ui *ui, float x, float y, float 
     float label_was = fit_labels(ui, LABELS, 8);
 
     dai_ui_section(ui, "Figures");
-    dai_ui_seg_buttons(ui, "Shape", &u->figure, FIGURES, 3);
+    seg_row(ui, "Shape", &u->figure, FIGURES, 3);
     dai_ui_num_field(ui, "Size (m)", &u->figure_size, 1.0f, 2.0f, 2000.0f, "showfigsize");
     dai_ui_row(ui, 0.0f);
     if (dai_ui_button(ui, "Add figure")) add_builtin(u);
@@ -577,7 +719,14 @@ void dai_show_ui_storyboard(dai_show_ui *u, dai_ui *ui, float x, float y, float 
 void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h) {
     if (!u || !ui) return;
     dai_ui_panel_begin(ui, x, y, w, h, nullptr);
-    dai_ui_scroll_begin(ui, "showparams", h - 8.0f);
+    // Where the scrolled area ends, in the same coordinates the layout cursor
+    // uses. Every stat_line below is measured against it, so the block stops at
+    // a whole row instead of being cut through the middle of one.
+    float view_x = 0.0f, view_y = 0.0f;
+    dai_ui_cursor_pos(ui, &view_x, &view_y);
+    const float view_h = h - 8.0f;
+    const float report_bottom = view_y + view_h;
+    dai_ui_scroll_begin(ui, "showparams", view_h);
     // One column for the whole panel rather than one per section: a label
     // column that changes width halfway down reads as two panels stacked.
     const char *const LABELS[] = { "Drones", "Min dist (m)", "v max (m/s)", "a max (m/s2)",
@@ -598,7 +747,7 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
     u->s.fps = (int)(fps + 0.5f);
 
     dai_ui_section(ui, "Pipeline");
-    dai_ui_seg_buttons(ui, "Sampling", &u->sample_mode, SAMPLE_MODES, 3);
+    seg_row(ui, "Sampling", &u->sample_mode, SAMPLE_MODES, 3);
     dai_ui_option(ui, "Assignment", &u->assign_method, ASSIGN_METHODS, 4);
     dai_ui_help(ui, "Auto solves exactly up to 2000 drones and switches to the "
                     "clustered auction above - the storyboard shows what ran.");
@@ -623,22 +772,22 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
         // delayed" came to stand next to eleven conflicts, which reads as a
         // contradiction and is in fact two different transitions.
         dai_ui_label(ui, "show total");
-        stat_line(ui, "sample   %8.1f ms", t.sample_ms);
-        stat_line(ui, "assign   %8.1f ms  (%s)", t.assign_ms,
+        stat_line(ui, report_bottom, "sample   %8.1f ms", t.sample_ms);
+        stat_line(ui, report_bottom, "assign   %8.1f ms  (%s)", t.assign_ms,
                   ASSIGN_METHODS[(t.last_assign.method_used >= 0 &&
                                   t.last_assign.method_used < 4) ? t.last_assign.method_used : 0]);
         if (t.last_assign.gap_percent >= 0.0f)
-            stat_line(ui, "  worst move %.2f%% over the exact optimum",
+            stat_line(ui, report_bottom, "  worst move %.2f%% over the exact optimum",
                       (double)t.last_assign.gap_percent);
-        stat_line(ui, "layer    %8.1f ms", t.layer_ms);
-        stat_line(ui, "  %u crossings: %u lifted, %u delayed, %u left over",
+        stat_line(ui, report_bottom, "layer    %8.1f ms", t.layer_ms);
+        stat_line(ui, report_bottom, "  %u crossings: %u lifted, %u delayed, %u left over",
                   t.last_layer.crossings_found, t.last_layer.resolved_by_height,
                   t.last_layer.resolved_by_delay, t.last_layer.unresolved);
-        stat_line(ui, "validate %8.1f ms", t.validate_ms);
-        stat_line(ui, "  %u pairs over %u ticks",
+        stat_line(ui, report_bottom, "validate %8.1f ms", t.validate_ms);
+        stat_line(ui, report_bottom, "  %u pairs over %u ticks",
                   t.last_validate.pairs_tested, t.last_validate.ticks_checked);
         const dai_show_plan *p = dai_show_get_plan(u->sh);
-        if (p) stat_line(ui, "plan     %8.2f MB of keyframes",
+        if (p) stat_line(ui, report_bottom, "plan     %8.2f MB of keyframes",
                          (double)dai_show_plan_bytes(p) / (1024.0 * 1024.0));
 
         // And the move the storyboard has selected, on its own - a sum says
@@ -657,16 +806,16 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
                           u->sel_formation + 1, info.name);
             ellide(ui, head, row_text_width(ui));
             dai_ui_label(ui, head);
-            stat_line(ui, "assign   %8.1f ms  (%s)", sa.solve_ms,
+            stat_line(ui, report_bottom, "assign   %8.1f ms  (%s)", sa.solve_ms,
                       ASSIGN_METHODS[(sa.method_used >= 0 && sa.method_used < 4) ? sa.method_used : 0]);
             if (sa.gap_percent >= 0.0f)
-                stat_line(ui, "  %.2f%% over the exact optimum", (double)sa.gap_percent);
-            stat_line(ui, "  %.0f m flown in total", sa.total_cost_m);
-            stat_line(ui, "layer    %8.1f ms", sl.solve_ms);
-            stat_line(ui, "  %u crossings: %u lifted, %u delayed, %u left over",
+                stat_line(ui, report_bottom, "  %.2f%% over the exact optimum", (double)sa.gap_percent);
+            stat_line(ui, report_bottom, "  %.0f m flown in total", sa.total_cost_m);
+            stat_line(ui, report_bottom, "layer    %8.1f ms", sl.solve_ms);
+            stat_line(ui, report_bottom, "  %u crossings: %u lifted, %u delayed, %u left over",
                       sl.crossings_found, sl.resolved_by_height,
                       sl.resolved_by_delay, sl.unresolved);
-            stat_line(ui, "  %u layers, up to %.1f m of detour",
+            stat_line(ui, report_bottom, "  %u layers, up to %.1f m of detour",
                       sl.layers_used, (double)sl.max_extra_height_m);
         }
     } else {
@@ -830,25 +979,83 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
         uint32_t col = bad ? COL_CONFLICT
                            : rgba(std::max<uint32_t>(p.r, 24), std::max<uint32_t>(p.g, 24),
                                   std::max<uint32_t>(p.b, 24), 255);
-        if (bad) size = std::max(size, 5.0f);
+        if (bad) size = std::min(size, 4.0f);   // the ring below is the marker
         dai_ui_rect(ui, sx - size * 0.5f, sy - size * 0.5f, size, size, col);
         if (i == u->sel_drone || i == u->sel_drone_b)
             dai_ui_rect_outline(ui, sx - size - 2.0f, sy - size - 2.0f,
                                 size * 2.0f + 4.0f, size * 2.0f + 4.0f, 1.0f, COL_WARN);
     }
 
-    // And the pairs that are too close, joined by the line an operator is
-    // going to point at in the debrief.
+    // And what is wrong, marked so it survives being photographed: a red ring
+    // around each drone involved, the line between the pair, and the number.
+    //
+    // The ring is drawn at twelve pixels across whatever the perspective says,
+    // because the point of a marker is to be found in a sky of ten thousand
+    // dots - a red dot among coloured dots is not found, it is looked for. The
+    // label is the pair and how close they came, which is the sentence the
+    // debrief argues about, and it is placed once per marker: labels that pile
+    // up on each other say less than the one that would have been legible, so
+    // a label whose box overlaps one already written is left off and the ring
+    // - which cannot lie about position - carries the news alone.
+    const float RING_R = 7.0f;                  // 14 px across, empty in the middle
     uint32_t cn = dai_show_conflict_count(u->sh);
+    struct LabelBox { float x0, y0, x1, y1; };
+    std::vector<LabelBox> taken;
     for (uint32_t i = 0; i < cn; ++i) {
         dai_show_conflict c;
         if (!dai_show_conflict_at(u->sh, i, &c)) continue;
         if (std::fabs(c.time_s - u->time) > 0.35f) continue;
-        if (c.a == c.b || c.a >= n || c.b >= n) continue;
-        float ax, ay, bx2, by2;
-        if (project(cam, u->fleet[c.a].x, u->fleet[c.a].y, u->fleet[c.a].z, &ax, &ay, nullptr) &&
-            project(cam, u->fleet[c.b].x, u->fleet[c.b].y, u->fleet[c.b].z, &bx2, &by2, nullptr))
+        if (c.a >= n) continue;
+        const int pair = (c.b != c.a && c.b < n);
+        float ax, ay, bx2 = 0.0f, by2 = 0.0f;
+        if (!project(cam, u->fleet[c.a].x, u->fleet[c.a].y, u->fleet[c.a].z, &ax, &ay, nullptr))
+            continue;
+        if (pair && !project(cam, u->fleet[c.b].x, u->fleet[c.b].y, u->fleet[c.b].z,
+                             &bx2, &by2, nullptr))
+            continue;
+        // Two drones a metre apart, seen from two hundred, are four pixels
+        // apart: two rings there are one red blob and the line between them is
+        // invisible. So a pair that close gets ONE ring around both, which is
+        // the honest picture - what is wrong is the pair, not either drone.
+        float gapx = pair ? (bx2 - ax) : 0.0f, gapy = pair ? (by2 - ay) : 0.0f;
+        float gap  = std::sqrt(gapx * gapx + gapy * gapy);
+        if (pair && gap > 2.2f * RING_R) {
+            ring(ui, ax, ay, RING_R, 2.0f, COL_CONFLICT);
+            ring(ui, bx2, by2, RING_R, 2.0f, COL_CONFLICT);
             dai_ui_line(ui, ax, ay, bx2, by2, 1.5f, COL_CONFLICT);
+        } else if (pair) {
+            ring(ui, 0.5f * (ax + bx2), 0.5f * (ay + by2), RING_R + gap * 0.5f,
+                 2.0f, COL_CONFLICT);
+        } else {
+            ring(ui, ax, ay, RING_R, 2.0f, COL_CONFLICT);
+        }
+
+        char tag[64];
+        if (pair)
+            std::snprintf(tag, sizeof(tag), "%u+%u  %.2f m", c.a, c.b, (double)c.value);
+        else if (c.kind == DAI_SHOW_CONFLICT_VMAX)
+            std::snprintf(tag, sizeof(tag), "%u  %.1f m/s", c.a, (double)c.value);
+        else if (c.kind == DAI_SHOW_CONFLICT_AMAX)
+            std::snprintf(tag, sizeof(tag), "%u  %.1f m/s2", c.a, (double)c.value);
+        else
+            std::snprintf(tag, sizeof(tag), "%u  %.2f m", c.a, (double)c.value);
+        float lw = dai_ui_text_width(ui, tag), lh = dai_ui_text_height(ui);
+        float lx = (pair ? 0.5f * (ax + bx2) : ax) - lw * 0.5f;
+        float ly = (pair ? std::fmin(ay, by2) : ay) - RING_R - lh - 3.0f;
+        lx = std::max(x + 2.0f, std::min(lx, x + w - lw - 2.0f));
+        ly = std::max(y + 2.0f, std::min(ly, y + vh - lh - 2.0f));
+        LabelBox box{ lx - 3.0f, ly - 2.0f, lx + lw + 3.0f, ly + lh + 2.0f };
+        bool clash = false;
+        for (size_t k = 0; k < taken.size() && !clash; ++k)
+            clash = !(box.x1 < taken[k].x0 || taken[k].x1 < box.x0 ||
+                      box.y1 < taken[k].y0 || taken[k].y1 < box.y0);
+        if (clash) continue;
+        taken.push_back(box);
+        // A plate under the text: the sky behind a marker is whatever colour
+        // the figure happens to be, and red on cyan is not a readable label.
+        dai_ui_rect(ui, box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0,
+                    rgba(0x10, 0x10, 0x14, 220));
+        dai_ui_text(ui, lx, ly, tag, COL_CONFLICT);
     }
     dai_ui_clip_end(ui);
 
@@ -920,6 +1127,247 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
             u->time    = dur * (mx - sx0) / (sx1 - sx0);
             u->playing = 0;
         }
+    }
+}
+
+// ---- the two panels a show inherits from the game layout ----------------------
+//
+// A droneshow project has no scene graph and no components, so the Hierarchy
+// and the Inspector had nothing to say and stood in the dock as two empty
+// rectangles. An empty panel in the default layout is a promise the program
+// does not keep, and there were only two honest ways out of it: take the two
+// panels off the show's layout, or give them what a show DOES have a hierarchy
+// and a detail view of. It has both - the figures in order, and one drone at
+// one instant - so they are filled rather than removed, and the layout a
+// director learned in the game editor is the layout he keeps.
+
+void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h) {
+    if (!u || !ui) return;
+    dai_ui_panel_begin(ui, x, y, w, h, nullptr);
+    const dai_ui_style *st = dai_ui_style_of(ui);
+    uint32_t n = dai_show_formation_count(u->sh);
+
+    dai_ui_section(ui, "Figures");
+    if (!n) {
+        wrapped_label(ui, "no figures yet - add one in the Storyboard panel");
+        dai_ui_panel_end(ui);
+        return;
+    }
+
+    float cx = 0.0f, cy = 0.0f;
+    dai_ui_cursor_pos(ui, &cx, &cy);
+    const float pitch = row_pitch(ui);
+    // Whole rows only, and room kept under the list for the drone picker: the
+    // same rule the validation list follows, for the same reason.
+    float space = y + h - cy - 10.0f - pitch * 3.0f;
+    if (space < pitch) space = pitch;
+    const int   visible = (int)std::floor(space / pitch);
+    const float list_h  = (float)visible * pitch;
+    const float top = cy, bottom = cy + list_h;
+    float t = u->time;
+    dai_ui_scroll_begin(ui, "showfigs", list_h);
+    for (uint32_t i = 0; i < n; ++i) {
+        dai_show_formation_info info;
+        if (!dai_show_formation_get(u->sh, i, &info)) continue;
+        // The lit row is the figure the TIMELINE is standing in, not the one
+        // the storyboard happens to be editing - two panels lighting up two
+        // different rows for two meanings of "selected" is how a reader stops
+        // believing either. Clicking a row seeks to it, so the light follows
+        // the click as well as the playhead.
+        dai_show_formation_info next;
+        int has_next = (i + 1u < n) && dai_show_formation_get(u->sh, i + 1u, &next);
+        int here = (t >= info.t_start - 0.001f) && (!has_next || t < next.t_start);
+        // Detail is dropped from the RIGHT before anything is cut: docked at a
+        // tenth of the frame the row still has to say which figure it is, and
+        // "1. Sp..." says nothing at all. The count and the timestamp are the
+        // parts a reader can get from the storyboard; the name is not.
+        char row[192];
+        // Measured against the toggle button this row IS - panel width less
+        // its padding and the text inset - rather than against the whole-row
+        // estimate the wider panels use. In a tenth of the frame the two
+        // differ by twenty pixels, which is the difference between "1. Sphere"
+        // and "1. Sp...".
+        const float avail = dai_ui_panel_width(ui) - st->padding * 2.0f - 10.0f;
+        std::snprintf(row, sizeof(row), "%u. %s  %u drones  %.1f s",
+                      i + 1u, info.name, info.point_count, (double)info.t_start);
+        if (dai_ui_text_width(ui, row) > avail)
+            std::snprintf(row, sizeof(row), "%u. %s  %.1f s",
+                          i + 1u, info.name, (double)info.t_start);
+        if (dai_ui_text_width(ui, row) > avail)
+            std::snprintf(row, sizeof(row), "%u. %s", i + 1u, info.name);
+        ellide(ui, row, avail);
+        float rx = 0.0f, ry = 0.0f;
+        dai_ui_cursor_pos(ui, &rx, &ry);
+        if (ry < top - 0.5f || ry + pitch > bottom + 0.5f) {
+            dai_ui_advance(ui, w - 16.0f, pitch - st->spacing);
+            continue;
+        }
+        if (dai_ui_toggle_button(ui, row, here)) {
+            u->sel_formation = (int)i;
+            u->time          = info.t_start;
+            u->playing       = 0;
+        }
+    }
+    dai_ui_scroll_end(ui);
+
+    dai_ui_separator(ui);
+    // The fleet is ten thousand identical rows, so it is not a list: a drone is
+    // picked by its number, which is what the conflict list, every export and
+    // every ground station calls it by anyway.
+    const dai_show_plan *plan = dai_show_get_plan(u->sh);
+    uint32_t count = plan ? dai_show_plan_drone_count(plan) : u->s.drone_count;
+    dai_ui_style *mst = dai_ui_style_of(ui);
+    float label_was = mst->label_w;
+    mst->label_w = std::max(62.0f, dai_ui_text_width(ui, "Drone") + 10.0f);
+    float pick = (u->sel_drone == 0xFFFFFFFFu) ? 0.0f : (float)u->sel_drone;
+    if (dai_ui_num_field(ui, "Drone", &pick, 1.0f, 0.0f,
+                         (float)(count ? count - 1u : 0u), "showpick")) {
+        u->sel_drone   = (uint32_t)(pick + 0.5f);
+        u->sel_drone_b = 0xFFFFFFFFu;
+    }
+    mst->label_w = label_was;
+    char fleet[96];
+    std::snprintf(fleet, sizeof(fleet), "%u drones in the fleet", count);
+    wrapped_label(ui, fleet);
+    dai_ui_panel_end(ui);
+}
+
+void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h) {
+    if (!u || !ui) return;
+    dai_ui_panel_begin(ui, x, y, w, h, nullptr);
+    const dai_show_plan *plan = dai_show_get_plan(u->sh);
+    const char *const LABELS[] = { "Position", "Colour", "Keyframes", "Nearest" };
+    float label_was = fit_labels(ui, LABELS, 4);
+
+    // Everything below scrolls, and everything below stops at `bot`. The panel
+    // is a fifth of the frame wide when a show is open, which is narrow enough
+    // that four fields and a conflict do not always fit - and a panel whose
+    // last line is sliced through the middle by its own edge is the defect this
+    // whole file is careful about, not a detail of this one panel.
+    float cx = 0.0f, cy = 0.0f;
+    dai_ui_cursor_pos(ui, &cx, &cy);
+    const float view_h = std::max(row_pitch(ui), y + h - cy - 6.0f);
+    const float bot    = cy + view_h;
+    dai_ui_scroll_begin(ui, "showinsp", view_h);
+    // One exit, so the scroll region and the label column are always put back.
+    struct Done {
+        dai_ui *ui; float was;
+        ~Done() { dai_ui_scroll_end(ui); dai_ui_style_of(ui)->label_w = was; dai_ui_panel_end(ui); }
+    } done{ ui, label_was };
+
+    // The conflict the validation list has open, in full. A list row is one
+    // line because there can be eight thousand of them; this is where the whole
+    // sentence fits, and it is the sentence the debrief argues about.
+    int ci = u->sel_conflict;
+    if (ci >= 0 && (uint32_t)ci < dai_show_conflict_count(u->sh)) {
+        dai_show_conflict c;
+        if (dai_show_conflict_at(u->sh, (uint32_t)ci, &c)) {
+            dai_ui_section(ui, "Conflict");
+            char line[192];
+            if (c.a == c.b)
+                std::snprintf(line, sizeof(line), "drone %u %s", c.a, conflict_word(c.kind));
+            else
+                std::snprintf(line, sizeof(line), "drones %u and %u %s",
+                              c.a, c.b, conflict_word(c.kind));
+            stat_line(ui, bot, "%s", line);
+            std::snprintf(line, sizeof(line), "%.2f against a limit of %.2f, at %.2f s",
+                          (double)c.value, (double)c.limit, (double)c.time_s);
+            stat_line(ui, bot, "%s", line);
+            if (c.kind == DAI_SHOW_CONFLICT_DISTANCE) {
+                std::snprintf(line, sizeof(line), "%.2f m too close",
+                              (double)(c.limit - c.value));
+                stat_line(ui, bot, "%s", line);
+            }
+            // The long label when the column is wide enough for it, the short
+            // one when it is not. A button whose text runs out over its own
+            // edges is a button that has stopped looking like one.
+            const char *go = "Go to the moment";
+            if (dai_ui_text_width(ui, go) > dai_ui_panel_width(ui) -
+                                            dai_ui_style_of(ui)->padding * 4.0f)
+                go = "Go to it";
+            if (row_button(ui, bot, go)) {
+                u->time    = c.time_s;
+                u->playing = 0;
+            }
+        }
+    }
+
+    dai_ui_section(ui, "Drone");
+    uint32_t n = plan ? dai_show_plan_drone_count(plan) : 0;
+    if (!plan || !n) {
+        stat_line(ui, bot, "no plan yet - press Solve in Show Parameters");
+        return;
+    }
+    if (u->sel_drone >= n) {
+        stat_line(ui, bot, "no drone selected - click a row in Validation, or "
+                            "pick a number in the figure list");
+        return;
+    }
+
+    // Sampled here rather than read out of the viewport's copy: this panel is
+    // drawn before the preview, and a position one frame old is a position that
+    // disagrees with the picture beside it.
+    refresh_fleet(u);
+    const uint32_t d = u->sel_drone;
+    const dai_show_point p = u->fleet[d];
+
+    char val[128];
+    std::snprintf(val, sizeof(val), "drone %u of %u at %.2f s", d, n, (double)u->time);
+    stat_line(ui, bot, "%s", val);
+
+    // Metres, and the decimal only while there is room for it: a coordinate
+    // that ends in an ellipsis has lost the axis a reader was looking for.
+    std::snprintf(val, sizeof(val), "%.1f  %.1f  %.1f m", (double)p.x, (double)p.y, (double)p.z);
+    if (dai_ui_text_width(ui, val) > dai_ui_panel_width(ui) - 20.0f)
+        std::snprintf(val, sizeof(val), "%.0f %.0f %.0f m",
+                      (double)p.x, (double)p.y, (double)p.z);
+    field_row(ui, "Position", val, bot);
+
+    // The LED as a colour, not only as four numbers: this is the one value in
+    // the panel a director checks against what he can see in the sky.
+    float sx = 0.0f, sy = 0.0f;
+    dai_ui_cursor_pos(ui, &sx, &sy);
+    std::snprintf(val, sizeof(val), "%u %u %u   w %u", p.r, p.g, p.b, p.w);
+    if (dai_ui_text_width(ui, val) > dai_ui_panel_width(ui) - 20.0f)
+        std::snprintf(val, sizeof(val), "%u %u %u", p.r, p.g, p.b);
+    field_row(ui, "Colour", val, bot);
+    {
+        const dai_ui_style *s2 = dai_ui_style_of(ui);
+        float sw = dai_ui_text_height(ui);
+        float bx = x + w - sw - s2->padding - 6.0f;
+        dai_ui_rect(ui, bx, sy, sw, sw, rgba(p.r, p.g, p.b, 255));
+        dai_ui_rect_outline(ui, bx, sy, sw, sw, 1.0f, s2->panel_border);
+    }
+
+    std::snprintf(val, sizeof(val), "%u", dai_show_plan_keyframe_count(plan, d));
+    field_row(ui, "Keyframes", val, bot);
+
+    // The nearest neighbour at this instant. One linear scan for ONE drone -
+    // the panel asks about one, so the grid the validator needs for every pair
+    // would be a page of code to save a tenth of a millisecond.
+    uint32_t best = 0xFFFFFFFFu;
+    float    bestd = 0.0f;
+    for (uint32_t i = 0; i < n; ++i) {
+        if (i == d) continue;
+        float dx = u->fleet[i].x - p.x, dy = u->fleet[i].y - p.y, dz = u->fleet[i].z - p.z;
+        float dd = dx * dx + dy * dy + dz * dz;
+        if (best == 0xFFFFFFFFu || dd < bestd) { best = i; bestd = dd; }
+    }
+    if (best != 0xFFFFFFFFu) {
+        float dist = std::sqrt(bestd);
+        std::snprintf(val, sizeof(val), "drone %u, %.2f m", best, (double)dist);
+        field_row(ui, "Nearest", val, bot);
+        if (dist < u->s.min_distance_m) {
+            char warn[128];
+            std::snprintf(warn, sizeof(warn), "inside the %.2f m minimum",
+                          (double)u->s.min_distance_m);
+            float wx = 0.0f, wy = 0.0f;
+            dai_ui_cursor_pos(ui, &wx, &wy);
+            if (fits(ui, bot, dai_ui_text_height(ui)))
+                dai_ui_text(ui, wx, wy, warn, COL_CONFLICT);
+            dai_ui_advance(ui, w - 16.0f, dai_ui_text_height(ui));
+        }
+        if (row_button(ui, bot, "Select the neighbour")) u->sel_drone_b = best;
     }
 }
 

@@ -48,6 +48,37 @@ no other suite can:
 ./build/test_droneshow quick    # the same, without the 10,000 drone row (~10 s faster)
 ```
 
+### The scaling table, as measured
+
+Not a claim, a run. This is what the last row of `./build/test_droneshow`
+printed here, so a reader can tell a regression from a faster machine:
+
+| when | machine |
+|---|---|
+| 2026-08-14 | AMD EPYC 7571, 8 cores, 12 GB, Debian 12, g++ 12.2, `-O3`, and three other builds running next to it |
+
+| drones | sample | assign | layer | profile | validate | plan MB | check MB | ticks | wall |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 18 ms | 2 ms | 1 ms | 0.01 ms | 16 ms | 0.01 | 0.01 | 701 | 37 ms |
+| 1 000 | 104 ms | 523 ms | 19 ms | 0.07 ms | 243 ms | 0.14 | 0.09 | 946 | 0.9 s |
+| 10 000 | 1 142 ms | 381 ms | 1 953 ms | 1.35 ms | 22 423 ms | 1.87 | 1.08 | 8 815 | 25.9 s |
+
+Read it with the tick column in hand: the fixture's figures grow with the
+fleet, so the 10,000 drone show is also nine times LONGER than the 1,000 drone
+one, and most of the wall clock difference is show length rather than fleet
+size. The test therefore compares the two rows per tick - 3.1 x for ten times
+the drones - and fails the build above 15 x, or above 30 s of wall clock. A
+quadratic tick would put ten in that ratio on its own; a cubic assignment a
+hundred.
+
+`assign` falling from 523 ms to 381 ms between the two big rows is not a typo:
+above 2,000 drones the solver switches from the exact Jonker-Volgenant to the
+clustered auction, and the storyboard says so in the panel.
+
+The memory columns are the point of the whole keyframe design: 10,000 drones
+over a six minute show (8,815 ticks at 25 fps) are 1.87 MB of plan.
+Materialised ticks would be 3.4 GB, which the suite prints next to it.
+
 ## 3. The editor
 
 ```bash

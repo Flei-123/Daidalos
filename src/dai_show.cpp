@@ -49,7 +49,7 @@ namespace daishow {
 float    ease_profile(int profile, float u);
 void     leg_point(const dai_show_leg *leg, const dai_show_point *a,
                    const dai_show_point *b, float t, dai_show_point *out);
-uint32_t leg_key_count(const dai_show_leg *leg);
+uint32_t leg_key_count(const dai_show_leg *leg, const dai_show_settings *s);
 }
 
 // ---------------------------------------------------------------------------
@@ -639,7 +639,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
                 k.t = g.t_start; k.p = a; k.profile = DAI_SHOW_PROFILE_LINEAR;
                 keys[d].push_back(k);
             }
-            uint32_t steps = daishow::leg_key_count(&g);
+            uint32_t steps = daishow::leg_key_count(&g, &sh->s);
             for (uint32_t st = 1; st <= steps; ++st) {
                 float u = (float)st / (float)steps;
                 k.t = g.t_start + (g.t_end - g.t_start) * u;

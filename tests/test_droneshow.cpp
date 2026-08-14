@@ -322,12 +322,13 @@ static void aggregation(void) {
 
 static void scaling(int with_10k) {
     show_section("scaling - measured, not claimed (milliseconds)");
-    std::printf("  %8s %10s %10s %10s %10s %10s %10s %10s\n",
+    std::printf("  %8s %10s %10s %10s %10s %10s %10s %10s %8s\n",
                 "drones", "sample", "assign", "layer", "profile", "validate",
-                "plan MB", "check MB");
+                "plan MB", "check MB", "ticks");
 
     const uint32_t sizes[3] = { 100, 1000, 10000 };
-    double wall_of[3] = { 0.0, 0.0, 0.0 };
+    double wall_of[3]  = { 0.0, 0.0, 0.0 };
+    double ticks_of[3] = { 1.0, 1.0, 1.0 };
     for (int i = 0; i < (with_10k ? 3 : 2); ++i) {
         dai_show_timings t{};
         size_t plan_bytes = 0;
@@ -340,11 +341,21 @@ static void scaling(int with_10k) {
         // number this design exists to make small) and "check MB" is what the
         // validator borrowed while streaming over it. Materialised ticks would
         // put gigabytes in the first column and there would be no argument.
-        std::printf("  %8u %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f   (%.0f ms wall)\n",
+        // The tick column is there because the fixture's figures grow with the
+        // fleet: 10,000 drones stand 200 m apart, v_max makes the moves between
+        // them longer, and the show that has to be validated is several times
+        // the length of the 1,000 drone one. Without that number in the table,
+        // the wall clock column looks like an algorithmic blow-up when it is
+        // mostly a longer show - and the bound below would be measuring the
+        // fixture instead of the code.
+        ticks_of[i] = (t.last_validate.ticks_checked > 0)
+                          ? (double)t.last_validate.ticks_checked : 1.0;
+        std::printf("  %8u %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f %10.2f %8.0f   (%.0f ms wall)\n",
                     sizes[i], t.sample_ms, t.assign_ms, t.layer_ms, t.profile_ms,
                     t.validate_ms,
                     (double)plan_bytes / (1024.0 * 1024.0),
-                    (double)t.last_validate.peak_bytes / (1024.0 * 1024.0), wall);
+                    (double)t.last_validate.peak_bytes / (1024.0 * 1024.0),
+                    ticks_of[i], wall);
 
         CHECK((double)plan_bytes < 64.0 * 1024.0 * 1024.0,
               "%u drones: the plan is %.1f MB - that is materialised ticks, not keyframes",
@@ -368,16 +379,28 @@ static void scaling(int with_10k) {
     // merely printing an ugly number nobody reads. The test is the growth, not
     // the absolute time: ten times the drones cost about eleven times the
     // seconds here, a quadratic path would cost a hundred and a cubic one a
-    // thousand. Sixty is far above the measurement noise of a loaded machine
-    // and far below either of the two things this is looking for. The absolute
-    // ceiling on top of it is for the case where BOTH rows are already slow.
+    // thousand.
+    //
+    // The bound was sixty on the raw wall clock, which is a long way from
+    // anything measured and therefore a long way from catching anything: a
+    // stage that had gone quadratic could hide under it. Two changes make it
+    // bite. The time is divided by the number of ticks the show actually has,
+    // so the ten thousand row is compared at the same amount of work rather
+    // than at ten times the drones AND nine times the length; and the bound is
+    // fifteen, against a measured 3.2 (the table in RUN.md, with the date and
+    // the machine, so the next reader can tell a regression from a slower
+    // laptop). A quadratic tick would put ten in that ratio all by itself and a
+    // cubic assignment a hundred. The absolute ceiling of thirty seconds is the
+    // second half of the same claim: a ratio is meaningless if both rows are
+    // already too slow to sell.
     if (with_10k && wall_of[1] > 0.0) {
-        double growth = wall_of[2] / wall_of[1];
-        CHECK(growth < 60.0,
-              "10,000 drones took %.0f x the 1,000 drone time (%.0f ms vs %.0f ms) - "
-              "that is the shape of an O(n^2) or O(n^3) path, not of the broadphase",
-              growth, wall_of[2], wall_of[1]);
-        CHECK(wall_of[2] < 180000.0,
+        double growth = (wall_of[2] / ticks_of[2]) / (wall_of[1] / ticks_of[1]);
+        CHECK(growth < 15.0,
+              "10,000 drones cost %.1f x the 1,000 drone time per tick "
+              "(%.0f ms / %.0f ticks vs %.0f ms / %.0f ticks) - that is the shape "
+              "of an O(n^2) or O(n^3) path, not of the broadphase",
+              growth, wall_of[2], ticks_of[2], wall_of[1], ticks_of[1]);
+        CHECK(wall_of[2] < 30000.0,
               "the 10,000 drone show took %.0f ms end to end - too slow to be the "
               "scaling this feature is sold on", wall_of[2]);
     }

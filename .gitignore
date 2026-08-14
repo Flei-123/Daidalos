@@ -9,3 +9,9 @@ build-win/
 
 # editor backups
 *.bak*
+
+# how the tree got here is git's job, not the tree's: throwaway patch
+# scripts, old cross builds and hand-kept snapshots stay out of the checkout
+patch*.py
+build-win-old/
+tools/history/
