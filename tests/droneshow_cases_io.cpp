@@ -27,7 +27,13 @@
 //        back, and the REIMPORTED trajectories are flown over the whole
 //        timeline at four steps per tick - separation, speed and acceleration.
 //        Nothing of the plan object is consulted; what is measured is what the
-//        file says the drones will do.
+//        file says the drones will do. The separation of a pair inside a
+//        sub-step is a proven LOWER BOUND, not a sample: the chord distance
+//        less an eighth of the second difference of the relative motion, the
+//        same correction daishow::min_separation applies, refined until it
+//        agrees to SEP_EPS with a distance the pair really reaches. So "no pair
+//        ever came closer than X" is a statement about the whole timeline and
+//        not about the instants that happened to be looked at.
 //
 //   [5f..5j] ONE RULE AT A TIME. [5c] proves the five rules are all there at
 //        once, which is the wrong test to read when one of them is wrong: it
@@ -275,10 +281,12 @@ float dist3(const dai_show_point &a, const dai_show_point &b) {
 // The closest the two segments a0->a1 and b0->b1 come to each other. Written
 // out here rather than borrowed: it is the same quantity the separator and the
 // validator work with, and a test that calls their function cannot fail when
-// their function is wrong. Over one sub-step this is a lower bound on the
-// separation of the two drones whatever the profiles do with the timing inside
-// it, which is the property that makes the answer a statement about the whole
-// timeline rather than about the instants that were sampled.
+// their function is wrong.
+//
+// On its own this is a statement about two STRAIGHT lines, not about two
+// drones: where the trajectories bend away from their chords inside the step
+// the true pair can be closer than the chords ever are. What makes it a bound
+// on the flight is the curvature term pair_separation subtracts from it below.
 float segment_separation(const dai_show_point &a0, const dai_show_point &a1,
                          const dai_show_point &b0, const dai_show_point &b1) {
     const float ux = a1.x - a0.x, uy = a1.y - a0.y, uz = a1.z - a0.z;
@@ -315,22 +323,45 @@ float segment_separation(const dai_show_point &a0, const dai_show_point &a1,
     return std::sqrt(cx * cx + cy * cy + cz * cz);
 }
 
-// A pair over one sub-step, refined until the bound and a distance the pair
-// really takes agree. The segment bound is pessimistic by at most what the two
-// drones travel inside the step, so halving the step halves the error; six
-// levels below a quarter tick is under a millisecond, and the loop stops as
-// soon as the two agree to SEP_EPS - the tolerance the whole pipeline shares.
+// A pair over one sub-step, as a LOWER BOUND on what the two drones really do
+// in it - never an optimistic one - refined until the bound and a distance the
+// pair provably takes agree.
+//
+// Two straight chords are not two trajectories. Between the sampled instants
+// each drone may leave its chord, and a pair that its chords keep 2.00 m apart
+// can pass at less. The step is therefore paid for the same way
+// daishow::min_separation pays for it, with the same constant: the middle of
+// the step is sampled, the second difference of the RELATIVE motion is taken
+// over the three instants, and an eighth of its length comes off the chord
+// distance. For a curve with a bounded second derivative an eighth of the
+// second difference is exactly how far it can leave the chord between the two
+// ends, so what is returned cannot be above the true minimum of the step.
+//
+// It cannot be far BELOW it either, and that is what the loop is for: `hi` is
+// a distance the pair really reaches (at an end or in the middle), so `hi - lo`
+// is everything still unproven. Halving the step halves the chord error and
+// quarters the curvature term, and the recursion stops as soon as the two agree
+// to SEP_EPS - the tolerance the whole pipeline shares - or at six levels,
+// which is a step under a millisecond. What comes back is then a bound that is
+// tight to SEP_EPS, in metres, over the whole sub-step and not only at its ends.
 float pair_separation(const dai_show_plan *p, uint32_t i, uint32_t j,
                       float t0, float t1, const dai_show_point &a0,
                       const dai_show_point &a1, const dai_show_point &b0,
                       const dai_show_point &b1, int depth) {
-    const float lo = segment_separation(a0, a1, b0, b1);
-    const float hi = std::min(dist3(a0, b0), dist3(a1, b1));
-    if (depth <= 0 || hi - lo <= daishow::SEP_EPS) return lo;
     const float tm = 0.5f * (t0 + t1);
     dai_show_point am, bm;
     dai_show_plan_sample(p, i, tm, &am);
     dai_show_plan_sample(p, j, tm, &bm);
+
+    // The second difference of the relative position over (t0, tm, t1).
+    const float sx = (a0.x - b0.x) - 2.0f * (am.x - bm.x) + (a1.x - b1.x);
+    const float sy = (a0.y - b0.y) - 2.0f * (am.y - bm.y) + (a1.y - b1.y);
+    const float sz = (a0.z - b0.z) - 2.0f * (am.z - bm.z) + (a1.z - b1.z);
+    const float slack = 0.125f * std::sqrt(sx * sx + sy * sy + sz * sz);
+
+    const float lo = segment_separation(a0, a1, b0, b1) - slack;
+    const float hi = std::min(std::min(dist3(a0, b0), dist3(a1, b1)), dist3(am, bm));
+    if (depth <= 0 || hi - lo <= daishow::SEP_EPS) return lo;
     return std::min(pair_separation(p, i, j, t0, tm, a0, am, b0, bm, depth - 1),
                     pair_separation(p, i, j, tm, t1, am, a1, bm, b1, depth - 1));
 }
@@ -359,7 +390,14 @@ Audit fly(const dai_show_plan *p, const dai_show_settings *s, int sub, float flo
     // memory.
     const int ring = 2 * sub + 1;
     std::vector<std::vector<dai_show_point>> hist((size_t)ring, std::vector<dai_show_point>(n));
-    std::vector<float> move(n, 0.0f);
+    std::vector<dai_show_point> mid(n);
+    // How far a drone can be from the END of the sub-step at any instant
+    // inside it: the chord it flies, plus how far it may leave that chord -
+    // an eighth of the second difference over the step, the same constant
+    // pair_separation and daishow::min_separation pay. Chord alone was the
+    // quiet optimism in this filter: a pair skipped by it was skipped on the
+    // assumption that both drones fly straight lines between samples.
+    std::vector<float> reach(n, 0.0f);
 
     for (uint32_t f = 0; f < frames; ++f) {
         const float t = (float)((double)f * (double)h);
@@ -368,14 +406,22 @@ Audit fly(const dai_show_plan *p, const dai_show_settings *s, int sub, float flo
 
         if (f > 0) {
             const std::vector<dai_show_point> &was = hist[(f - 1) % (uint32_t)ring];
-            for (uint32_t i = 0; i < n; ++i) move[i] = dist3(was[i], now[i]);
+            dai_show_plan_sample_all(p, (float)((double)t - 0.5 * (double)h), mid.data());
+            for (uint32_t i = 0; i < n; ++i) {
+                const float cx = was[i].x - 2.0f * mid[i].x + now[i].x;
+                const float cy = was[i].y - 2.0f * mid[i].y + now[i].y;
+                const float cz = was[i].z - 2.0f * mid[i].z + now[i].z;
+                reach[i] = dist3(was[i], now[i]) +
+                           0.125f * std::sqrt(cx * cx + cy * cy + cz * cz);
+            }
             for (uint32_t i = 0; i < n; ++i)
                 for (uint32_t j = i + 1; j < n; ++j) {
                     const float end_d = dist3(now[i], now[j]);
-                    // Nothing inside the step can be closer than this, and the
-                    // step is a fortieth of a second: almost every pair leaves
-                    // here.
-                    const float bound = end_d - move[i] - move[j];
+                    // Nothing inside the step can be closer than this - neither
+                    // drone can be further from where the step ends than its
+                    // own reach - and the step is a fortieth of a second: almost
+                    // every pair leaves here.
+                    const float bound = end_d - reach[i] - reach[j];
                     if (bound >= w.sep && bound >= floor_m) continue;
                     const float d = pair_separation(p, i, j, t - h, t, was[i], now[i],
                                                     was[j], now[j], 6);
@@ -892,8 +938,9 @@ int show_cases_io(void) {
                       "[6e] the file is %.3f s long, the show is %.3f s",
                       (double)dai_show_plan_duration(q), (double)dai_show_plan_duration(plan));
 
-                // Four sub-steps per exported frame, and the separation of
-                // every pair over each of them - the bound, not the samples.
+                // Four sub-steps per exported frame, and over each of them
+                // the curvature-corrected bound on every pair - the proven
+                // minimum of the step, not the distance at its ends.
                 const Audit w = fly(q, &back, 4, back.min_distance_m);
 
                 // What the flight is allowed to contain, and nothing else: the

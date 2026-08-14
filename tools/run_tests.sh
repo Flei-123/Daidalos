@@ -19,6 +19,24 @@ cd "$(dirname "$0")/.."
 VERBOSE=0
 [ "${1:-}" = "-v" ] && VERBOSE=1
 
+# Everything this run prints also lands in build/last_run.log, APPENDED after
+# whatever ./build.sh left there. RUN.md quotes two numbers - the drone show
+# suite's check count out of the build, and the TOTAL out of this script - and
+# a document that quotes a number nobody can re-read is a document that ages
+# into fiction. The file is the receipt for both, in the order the two commands
+# are documented in.
+#
+# Done by re-running the script through `tee` once rather than by redirecting
+# with a process substitution: the exit code has to survive (a red run must stay
+# red), and a background `tee` can lose the last lines when the shell exits
+# under it - which would drop exactly the TOTAL line this exists for.
+if [ "${DAI_RUN_LOG:-}" != "1" ]; then
+    mkdir -p build
+    echo "=== tools/run_tests.sh $(date -u '+%Y-%m-%dT%H:%M:%SZ') ===" >> build/last_run.log
+    DAI_RUN_LOG=1 "$0" "$@" 2>&1 | tee -a build/last_run.log
+    exit "${PIPESTATUS[0]}"
+fi
+
 # Headless: arithmetic, documents, parsing, layout. No Vulkan instance is
 # created, no window is opened.
 SUITES="
@@ -53,9 +71,11 @@ test_assetkind
 test_editor_ui
 test_window_two
 "
-# Deliberately NOT here (each needs a GPU or a display):
-#   test_render_visual test_ui_text test_gltf test_particles test_skinning
-#   test_ui test_viewport test_window
+# Deliberately NOT here (each needs a GPU or a display). The list is a VARIABLE
+# rather than a comment because the run prints it: a suite that is quietly
+# absent looks exactly like a suite that passed, and "all green" over an
+# unnamed exclusion is the sentence this script exists to stop.
+GPU_ONLY="test_render_visual test_ui_text test_gltf test_particles test_skinning test_ui test_viewport test_window"
 #
 # test_editor_ui was on that list too and did not belong there either: it
 # creates no renderer and opens no window, it feeds the panels a pointer and
@@ -209,6 +229,7 @@ fi
 
 echo "-------------------------------------------"
 printf 'TOTAL %d passed, %d failed\n' "$TOTAL_PASS" "$TOTAL_FAIL"
+echo "not run (needs GPU): $GPU_ONLY"
 [ -n "$MISSING" ] && echo "not built:$MISSING"
 [ -n "$SUITES_SKIPPED" ] && echo "skipped:$SUITES_SKIPPED"
 [ -n "$NOCOUNT" ] && echo "no counts parsed (summary line changed shape?):$NOCOUNT"

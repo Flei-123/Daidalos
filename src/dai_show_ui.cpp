@@ -126,6 +126,40 @@ void ellide(dai_ui *ui, char *s, float avail) {
     }
 }
 
+// The same cut, but in the MIDDLE, so the END of the line survives it.
+//
+// A storyboard row is "4. Sphere (near miss) - 420 pts - t 80.6s", and the two
+// things a director needs off it are the number at the front and the second at
+// the back. Cutting at the end keeps the half he can rebuild from the figure
+// list and throws away the half he cannot - which is how "4. Sphere (nea..."
+// came to stand in a panel whose whole job is saying WHEN a figure begins.
+// `head` may lose its tail; `tail` never does. If even "..." plus the tail is
+// wider than the row, the whole thing falls back to the end cut, because a
+// timestamp with no figure in front of it belongs to nothing.
+// `min_head` is the floor under the trade: keeping the timestamp is only worth
+// it while enough of the head survives to say WHICH figure it belongs to. Below
+// that the row would read "1.... 0.0 s" - a time with no owner, which is worse
+// than the name with no time - so the tail is dropped instead and the head cut
+// at the end, the way a one-column list has always done it.
+void ellide_middle(dai_ui *ui, char *out, size_t cap, const char *head,
+                   const char *tail, float avail, size_t min_head) {
+    std::snprintf(out, cap, "%s%s", head, tail);
+    if (avail <= 0.0f || dai_ui_text_width(ui, out) <= avail) return;
+
+    char probe[256];
+    size_t n = std::strlen(head);
+    while (n > min_head) {
+        std::snprintf(probe, sizeof(probe), "%.*s...%s", (int)n, head, tail);
+        if (dai_ui_text_width(ui, probe) <= avail) {
+            std::snprintf(out, cap, "%.*s...%s", (int)n, head, tail);
+            return;
+        }
+        --n;
+    }
+    std::snprintf(out, cap, "%s", head);   // the name alone, cut at its end
+    ellide(ui, out, avail);
+}
+
 // A hint that is longer than the panel is wide, broken at spaces onto as many
 // label rows as it needs. The alternative - letting it run under the edge - is
 // how "no mesh selected - pick one in the Project panel" became "no mesh sele".
@@ -271,6 +305,12 @@ void stat_line(dai_ui *ui, float bottom, const char *fmt, ...) {
     wrapped_rows(ui, buf, 1);
 }
 
+// "1 conflicts" is the kind of small wrongness that makes a reader distrust the
+// number in front of it - and this panel's whole job is being believed about
+// exactly that number. One place decides it, so the list header, the status
+// line and the message after a re-check can never disagree.
+const char *plural(uint32_t n) { return (n == 1u) ? "" : "s"; }
+
 const char *conflict_word(int kind) {
     switch (kind) {
     case DAI_SHOW_CONFLICT_DISTANCE: return "too close";
@@ -398,6 +438,40 @@ void say(dai_show_ui *u, int bad, const char *fmt, ...) {
     vsnprintf(u->status, sizeof(u->status), fmt, ap);
     va_end(ap);
     u->status_bad = bad;
+}
+
+// The verdict at the right hand end of the status line, as text. Split out of
+// dai_show_ui_status so the same sentence can be READ (dai_show_ui_verdict) as
+// well as drawn - a test that re-formats the string itself would agree with
+// itself rather than with the panel. The return value says how to colour it:
+// 0 dim, 1 warning, 2 conflict, 3 ok.
+int verdict_text(const dai_show_ui *u, char *buf, size_t cap) {
+    dai_show_timings t = dai_show_get_timings(u->sh);
+    uint32_t figures = dai_show_formation_count(u->sh);
+    if (figures == 0) {
+        std::snprintf(buf, cap, "%u drones, %.1f m apart - add a figure to begin",
+                      u->s.drone_count, (double)u->s.min_distance_m);
+        return 0;
+    }
+    if (t.formations == 0 || !dai_show_get_plan(u->sh)) {
+        std::snprintf(buf, cap, "%u figure%s - not solved yet", figures, plural(figures));
+        return 1;
+    }
+    if (t.last_validate.conflicts) {
+        std::snprintf(buf, cap, "%u conflict%s", t.last_validate.conflicts,
+                      plural(t.last_validate.conflicts));
+        return 2;
+    }
+    // The validator normally finds these too - but if a fault stands between
+    // two ticks it would not, and "no conflicts" over a figure the separator
+    // has already named as faulted is the one lie this line must not tell.
+    if (t.last_layer.endpoint_pairs) {
+        std::snprintf(buf, cap, "%u formation fault%s", t.last_layer.endpoint_pairs,
+                      plural(t.last_layer.endpoint_pairs));
+        return 2;
+    }
+    std::snprintf(buf, cap, "no conflicts");
+    return 3;
 }
 
 float show_duration(const dai_show_ui *u) {
@@ -560,9 +634,10 @@ void solve_now(dai_show_ui *u) {
     if (r != DAI_OK)
         say(u, 1, "%s", err[0] ? err : "the show could not be solved");
     else if (t.last_validate.conflicts)
-        say(u, 1, "solved in %.0f ms - %u conflicts remain",
+        say(u, 1, "solved in %.0f ms - %u conflict%s remain%s",
             t.sample_ms + t.assign_ms + t.layer_ms + t.validate_ms,
-            t.last_validate.conflicts);
+            t.last_validate.conflicts, plural(t.last_validate.conflicts),
+            (t.last_validate.conflicts == 1u) ? "s" : "");
     else
         say(u, 0, "solved in %.0f ms - no conflicts (%u shown)",
             t.sample_ms + t.assign_ms + t.layer_ms + t.validate_ms, cn);
@@ -612,6 +687,14 @@ void dai_show_ui_mesh(dai_show_ui *u, const dai_show_sample_desc *desc, const ch
 
 uint32_t dai_show_ui_selected_drone(const dai_show_ui *u) { return u ? u->sel_drone : 0xFFFFFFFFu; }
 int      dai_show_ui_selected_conflict(const dai_show_ui *u) { return u ? u->sel_conflict : -1; }
+
+uint32_t dai_show_ui_verdict(const dai_show_ui *u, char *buf, size_t cap) {
+    if (!buf || !cap) return 0;
+    buf[0] = 0;
+    if (!u) return 0;
+    verdict_text(u, buf, cap);
+    return (uint32_t)std::strlen(buf);
+}
 
 // ---- storyboard ------------------------------------------------------------
 
@@ -665,20 +748,37 @@ void dai_show_ui_storyboard(dai_show_ui *u, dai_ui *ui, float x, float y, float 
 
     float cx = 0.0f, cyy = 0.0f;
     dai_ui_cursor_pos(ui, &cx, &cyy);
-    dai_ui_scroll_begin(ui, "showstory", std::max(60.0f, y + h - cyy - 8.0f));
+    const float story_h   = std::max(60.0f, y + h - cyy - 8.0f);
+    const float story_top = cyy, story_bot = cyy + story_h;
+    dai_ui_scroll_begin(ui, "showstory", story_h);
     for (uint32_t i = 0; i < n; ++i) {
         dai_show_formation_info info;
         if (!dai_show_formation_get(u->sh, i, &info)) continue;
 
-        char head[192];
-        std::snprintf(head, sizeof(head), "%u. %s - %u pts - t %.1fs",
-                      i + 1u, info.name, info.point_count, (double)info.t_start);
+        char left_part[160], right_part[64], head[224];
+        std::snprintf(left_part, sizeof(left_part), "%u. %s - %u pts",
+                      i + 1u, info.name, info.point_count);
+        std::snprintf(right_part, sizeof(right_part), " - t %.1fs", (double)info.t_start);
         // Docked, this panel is a fifth of the frame wide. The row keeps its
-        // number and loses its tail - the half a reader can rebuild - instead
-        // of being centred and clipped at both ends by the button it sits in.
-        ellide(ui, head, row_text_width(ui));
+        // number AND its timestamp and loses the middle - the half a reader
+        // can rebuild from the figure list - instead of losing the second the
+        // figure starts in, which is the one thing only this row says.
+        ellide_middle(ui, head, sizeof(head), left_part, right_part,
+                      row_text_width(ui), 8);
         int selected = ((int)i == u->sel_formation);
-        if (dai_ui_toggle_button(ui, head, selected)) u->sel_formation = (int)i;
+        // Whole rows only: a toggle button cut across the middle by the edge of
+        // the scroll region is a control whose caption cannot be read and whose
+        // click still lands. It keeps its place in the layout, so the wheel
+        // brings it in whole.
+        float rx = 0.0f, ry = 0.0f;
+        dai_ui_cursor_pos(ui, &rx, &ry);
+        const float rh = widget_row(ui);
+        if (ry < story_top - 0.5f || ry + rh > story_bot + 0.5f) {
+            dai_ui_advance(ui, dai_ui_panel_width(ui), rh);
+            if (!selected) continue;
+        } else if (dai_ui_toggle_button(ui, head, selected)) {
+            u->sel_formation = (int)i;
+        }
         if (!selected) continue;
 
         if (dai_ui_num_field(ui, "Hold (s)", &info.hold_s, 0.25f, 0.0f, 600.0f, "showhold"))
@@ -725,14 +825,35 @@ void dai_show_ui_storyboard(dai_show_ui *u, dai_ui *ui, float x, float y, float 
 void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h) {
     if (!u || !ui) return;
     dai_ui_panel_begin(ui, x, y, w, h, nullptr);
-    // Where the scrolled area ends, in the same coordinates the layout cursor
-    // uses. Every stat_line below is measured against it, so the block stops at
-    // a whole row instead of being cut through the middle of one.
+    // TWO scrolled areas, not one, and both of them end at the bottom edge of
+    // the PANEL rather than h pixels below where the cursor happened to stand.
+    //
+    // One region was the bug: the settings above it are twenty rows tall, so
+    // in a docked column at 1100x700 the solve report began below the fold and
+    // the only way to it was a wheel over a panel that gave no sign it had
+    // anything left. Worse, the region was started at the layout cursor and
+    // given the WHOLE panel height, so it reached past the panel's own edge -
+    // the last row was clipped by the panel instead of by the region, and the
+    // scroll bar the region draws at its bottom right was outside the panel and
+    // never appeared. The five numbers a director solves a show to read
+    // (sample, assign, layer, validate, plan) now live in a block of their own
+    // that keeps its place at the bottom of the panel whatever the settings
+    // above it do, with its own bar.
     float view_x = 0.0f, view_y = 0.0f;
     dai_ui_cursor_pos(ui, &view_x, &view_y);
-    const float view_h = h - 8.0f;
-    const float report_bottom = view_y + view_h;
-    dai_ui_scroll_begin(ui, "showparams", view_h);
+    const float pitch  = row_pitch(ui);
+    const float avail  = (y + h) - view_y - 8.0f;
+    dai_show_timings t = dai_show_get_timings(u->sh);
+    // The report keeps the button, its heading and the five timing rows - and
+    // never more than half the panel, because settings that cannot be reached
+    // are as bad as a report that cannot.
+    float report_h = 0.0f;
+    if (avail > pitch * 6.0f) {
+        report_h = std::min(avail * 0.5f, pitch * 8.0f + 10.0f);
+        if (report_h < pitch * 3.0f) report_h = pitch * 3.0f;
+    }
+    const float settings_h = avail - report_h;
+    dai_ui_scroll_begin(ui, "showparams", settings_h);
     // One column for the whole panel rather than one per section: a label
     // column that changes width halfway down reads as two panels stacked.
     const char *const LABELS[] = { "Drones", "Min dist (m)", "v max (m/s)", "a max (m/s2)",
@@ -767,9 +888,30 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
 
     if (changed) dai_show_set_settings(u->sh, &u->s);
 
-    dai_ui_section(ui, "Solve");
+    // Everything above lives in the settings region; the report has its own
+    // below, so this one ends here.
+    dai_ui_scroll_end(ui);
+    dai_ui_style_of(ui)->label_w = label_was;
+
+    // ---- the solve block, always where the reader left it -------------------
+    //
+    // A separator, the button, and then a region of its own. The button is
+    // drawn OUTSIDE any scroll region: the one control this panel exists for
+    // may never be a thing you have to go looking for.
+    if (report_h <= 0.0f) { dai_ui_panel_end(ui); return; }
+    const float rep_y = view_y + settings_h;
+    // A panel of its own, ended and begun rather than drawn by hand: that is
+    // what puts the layout cursor at the top of the block, gives it its own
+    // clip rectangle and lets its scroll region measure against its own edge.
+    dai_ui_panel_end(ui);
+    dai_ui_panel_begin(ui, x, rep_y, w, (y + h) - rep_y, nullptr);
+    dai_ui_rect(ui, x + 6.0f, rep_y, w - 12.0f, 1.0f, dai_ui_style_of(ui)->panel_border);
     if (dai_ui_button(ui, "Solve show")) solve_now(u);
-    dai_show_timings t = dai_show_get_timings(u->sh);
+    float bx2 = 0.0f, by2 = 0.0f;
+    dai_ui_cursor_pos(ui, &bx2, &by2);
+    const float report_view_h = std::max(pitch, (y + h) - by2 - 6.0f);
+    const float report_bottom = by2 + report_view_h;
+    dai_ui_scroll_begin(ui, "showreport", report_view_h);
     if (t.formations) {
         // Everything under this heading is the WHOLE SHOW: counts summed over
         // every transition, the gap and the detour at their worst case, the
@@ -777,33 +919,40 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
         // whichever move happened to be solved last - is how "0 lifted, 0
         // delayed" came to stand next to eleven conflicts, which reads as a
         // contradiction and is in fact two different transitions.
+        // The FIVE STAGE TIMES first and unbroken - sample, assign, layer,
+        // validate, plan. They are what a director reads to know the show was
+        // actually solved, and they used to sit interleaved with the detail
+        // lines, which put "plan" eight rows down and out of a docked column.
+        // Everything that qualifies a number now stands below all five.
         dai_ui_label(ui, "show total");
         stat_line(ui, report_bottom, "sample   %8.1f ms", t.sample_ms);
-        stat_line(ui, report_bottom, "assign   %8.1f ms  (%s)", t.assign_ms,
+        stat_line(ui, report_bottom, "assign   %8.1f ms", t.assign_ms);
+        stat_line(ui, report_bottom, "layer    %8.1f ms", t.layer_ms);
+        stat_line(ui, report_bottom, "validate %8.1f ms", t.validate_ms);
+        const dai_show_plan *p = dai_show_get_plan(u->sh);
+        if (p) stat_line(ui, report_bottom, "plan     %8.2f MB of keyframes",
+                         (double)dai_show_plan_bytes(p) / (1024.0 * 1024.0));
+
+        // The detail, below the five: which assignment ran and what it cost,
+        // what the layering had to do, how much the validator looked at. A
+        // formation fault is not a crossing the separator lost, but it is a
+        // reason the show does not fly - so it is counted here rather than
+        // left out, on a line of its own, because this panel is a fifth of the
+        // window wide and a number that wraps gets read as part of the line
+        // above it.
+        stat_line(ui, report_bottom, "  assignment: %s",
                   ASSIGN_METHODS[(t.last_assign.method_used >= 0 &&
                                   t.last_assign.method_used < 4) ? t.last_assign.method_used : 0]);
         if (t.last_assign.gap_percent >= 0.0f)
             stat_line(ui, report_bottom, "  worst move %.2f%% over the exact optimum",
                       (double)t.last_assign.gap_percent);
-        stat_line(ui, report_bottom, "layer    %8.1f ms", t.layer_ms);
-        // The fourth number belongs next to the other three: a formation fault
-        // is not a crossing the separator lost, but it is a reason the show
-        // does not fly, and a panel that reports "0 left over" and nothing else
-        // reads as a sign-off. The Validation panel names the figure it stands
-        // in; here it is counted - on a line of its own, because this panel is
-        // a fifth of the window wide and a number that wraps is a number that
-        // gets read as part of the line above it.
         stat_line(ui, report_bottom, "  %u crossings: %u lifted, %u delayed, %u left over",
                   t.last_layer.crossings_found, t.last_layer.resolved_by_height,
                   t.last_layer.resolved_by_delay, t.last_layer.unresolved);
         stat_line(ui, report_bottom, "  %u formation fault%s", t.last_layer.endpoint_pairs,
-                  (t.last_layer.endpoint_pairs == 1) ? "" : "s");
-        stat_line(ui, report_bottom, "validate %8.1f ms", t.validate_ms);
+                  plural(t.last_layer.endpoint_pairs));
         stat_line(ui, report_bottom, "  %u pairs over %u ticks",
                   t.last_validate.pairs_tested, t.last_validate.ticks_checked);
-        const dai_show_plan *p = dai_show_get_plan(u->sh);
-        if (p) stat_line(ui, report_bottom, "plan     %8.2f MB of keyframes",
-                         (double)dai_show_plan_bytes(p) / (1024.0 * 1024.0));
 
         // And the move the storyboard has selected, on its own - a sum says
         // that something is wrong, a per transition row says WHERE, and the fix
@@ -831,7 +980,7 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
                       sl.crossings_found, sl.resolved_by_height,
                       sl.resolved_by_delay, sl.unresolved);
             stat_line(ui, report_bottom, "  %u formation fault%s", sl.endpoint_pairs,
-                      (sl.endpoint_pairs == 1) ? "" : "s");
+                      plural(sl.endpoint_pairs));
             if (sl.endpoint_pairs)
                 wrapped_label(ui, "  the fault stands IN this figure - two points are "
                                   "closer than the minimum distance, no transition can fix that");
@@ -843,7 +992,6 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
     }
 
     dai_ui_scroll_end(ui);
-    dai_ui_style_of(ui)->label_w = label_was;
     dai_ui_panel_end(ui);
 }
 
@@ -861,7 +1009,8 @@ void dai_show_ui_validation(dai_show_ui *u, dai_ui *ui, float x, float y, float 
         dai_show_validate_show(u->sh);
         t = dai_show_get_timings(u->sh);
         say(u, t.last_validate.conflicts != 0,
-            "%u conflicts over %u ticks", t.last_validate.conflicts, t.last_validate.ticks_checked);
+            "%u conflict%s over %u ticks", t.last_validate.conflicts,
+            plural(t.last_validate.conflicts), t.last_validate.ticks_checked);
     }
     dai_ui_row_end(ui);
 
@@ -886,8 +1035,8 @@ void dai_show_ui_validation(dai_show_ui *u, dai_ui *ui, float x, float y, float 
 
     dai_ui_rect(ui, bx, by + 2.0f, w - 16.0f, th + 8.0f, rgba(0x3A, 0x14, 0x12, 255));
     char head[128];
-    std::snprintf(head, sizeof(head), "%u conflicts%s - click one to jump to it",
-                  total, (shown < total) ? " (first 8192 listed)" : "");
+    std::snprintf(head, sizeof(head), "%u conflict%s%s - click one to jump to it",
+                  total, plural(total), (shown < total) ? " (first 8192 listed)" : "");
     dai_ui_text(ui, bx + 8.0f, by + 6.0f, head, COL_CONFLICT);
     dai_ui_advance(ui, w - 16.0f, th + 12.0f);
 
@@ -1267,21 +1416,24 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         // tenth of the frame the row still has to say which figure it is, and
         // "1. Sp..." says nothing at all. The count and the timestamp are the
         // parts a reader can get from the storyboard; the name is not.
-        char row[192];
+        char row[224], row_head[160], row_tail[64];
         // Measured against the toggle button this row IS - panel width less
         // its padding and the text inset - rather than against the whole-row
         // estimate the wider panels use. In a tenth of the frame the two
         // differ by twenty pixels, which is the difference between "1. Sphere"
         // and "1. Sp...".
         const float avail = dai_ui_panel_width(ui) - st->padding * 2.0f - 10.0f;
-        std::snprintf(row, sizeof(row), "%u. %s  %u drones  %.1f s",
-                      i + 1u, info.name, info.point_count, (double)info.t_start);
-        if (dai_ui_text_width(ui, row) > avail)
-            std::snprintf(row, sizeof(row), "%u. %s  %.1f s",
-                          i + 1u, info.name, (double)info.t_start);
-        if (dai_ui_text_width(ui, row) > avail)
-            std::snprintf(row, sizeof(row), "%u. %s", i + 1u, info.name);
-        ellide(ui, row, avail);
+        std::snprintf(row_head, sizeof(row_head), "%u. %s  %u drones",
+                      i + 1u, info.name, info.point_count);
+        std::snprintf(row_tail, sizeof(row_tail), "  %.1f s", (double)info.t_start);
+        std::snprintf(row, sizeof(row), "%s%s", row_head, row_tail);
+        // The drone count is the first thing dropped, whole - it is the same
+        // for every figure of a fixed fleet. What follows is cut in the MIDDLE
+        // so the second the figure begins in survives the narrow column.
+        if (dai_ui_text_width(ui, row) > avail) {
+            std::snprintf(row_head, sizeof(row_head), "%u. %s", i + 1u, info.name);
+            ellide_middle(ui, row, sizeof(row), row_head, row_tail, avail, 8);
+        }
         float rx = 0.0f, ry = 0.0f;
         dai_ui_cursor_pos(ui, &rx, &ry);
         if (ry < top - 0.5f || ry + pitch > bottom + 0.5f) {
@@ -1493,32 +1645,12 @@ void dai_show_ui_status(dai_show_ui *u, dai_ui *ui, float x, float y, float w, f
     // figure to begin" over a show with eleven conflicts in it is worse than
     // no status line: it is a status line that has been caught lying, and
     // after that nobody reads the green one either.
+    // ...and it is the SAME sentence dai_show_ui_verdict hands a test, from the
+    // same function, so a check on the wording checks the panel rather than a
+    // second copy of the wording.
     char verdict[128];
-    uint32_t verdict_col;
-    uint32_t figures = dai_show_formation_count(u->sh);
-    if (figures == 0) {
-        std::snprintf(verdict, sizeof(verdict), "%u drones, %.1f m apart - add a figure to begin",
-                      u->s.drone_count, (double)u->s.min_distance_m);
-        verdict_col = st->text_dim;
-    } else if (t.formations == 0 || !dai_show_get_plan(u->sh)) {
-        std::snprintf(verdict, sizeof(verdict), "%u figures - not solved yet", figures);
-        verdict_col = COL_WARN;
-    } else if (t.last_validate.conflicts) {
-        std::snprintf(verdict, sizeof(verdict), "%u conflicts", t.last_validate.conflicts);
-        verdict_col = COL_CONFLICT;
-    } else if (t.last_layer.endpoint_pairs) {
-        // The validator normally finds these too - but if a fault stands
-        // between two ticks it would not, and "no conflicts" over a figure the
-        // separator has already named as faulted is the one lie this line must
-        // not tell.
-        std::snprintf(verdict, sizeof(verdict), "%u formation fault%s",
-                      t.last_layer.endpoint_pairs,
-                      (t.last_layer.endpoint_pairs == 1) ? "" : "s");
-        verdict_col = COL_CONFLICT;
-    } else {
-        std::snprintf(verdict, sizeof(verdict), "no conflicts");
-        verdict_col = COL_OK;
-    }
+    const uint32_t VERDICT_COL[4] = { st->text_dim, COL_WARN, COL_CONFLICT, COL_OK };
+    uint32_t verdict_col = VERDICT_COL[verdict_text(u, verdict, sizeof(verdict)) & 3];
     float vw = dai_ui_text_width(ui, verdict);
     dai_ui_text(ui, x + w - vw - 10.0f, ty, verdict, verdict_col);
 

@@ -35,6 +35,16 @@
 //        nothing left to do: dai_show_layer answers
 //        DAI_SHOW_LAYER_FORMATION_FAULT, dai_show_solve passes that on and
 //        names the figure, and every conflict in it is placed in that figure.
+//   [3k] THREE faults in one figure are three all the way through: three
+//        endpoint_pairs out of the separator, zero unresolved, the same three
+//        out of the solved document, and three rows in the conflict list - one
+//        per planted pair, matched by the drones the assignment really sent
+//        there rather than by the gap they measure.
+//   [3l] and the mirror of [3i]: a crossing the separator solves, and one it
+//        cannot, both between formations that are themselves legal - neither is
+//        ever re-filed as a formation fault. endpoint_pairs stays at zero, so a
+//        transition that does not fly cannot be signed off as somebody else's
+//        problem.
 #include "droneshow_cases.hpp"
 
 #include <cmath>
@@ -183,6 +193,49 @@ dai_show_leg straight_leg(float t0, float t1, int profile) {
 dai_show_point pt(float x, float y, float z, uint8_t r, uint8_t g, uint8_t b) {
     dai_show_point p; p.x = x; p.y = y; p.z = z; p.r = r; p.g = g; p.b = b; p.w = 0;
     return p;
+}
+
+// WHICH DRONE ENDS UP ON WHICH POINT - the assignment, inverted.
+//
+// A conflict is reported with DRONE ids, and a fault is planted on POINTS.
+// Between the two stands stage 2: assignment renumbers who flies where, and
+// after three transitions the drone parked on point 173 is not drone 173.
+// Recognising the planted pair by its GAP ("the conflict that measures 0.40 m
+// must be mine") is a test that would also accept a completely different pair
+// that happens to stand 0.4 m apart - which is exactly the failure the case is
+// supposed to catch.
+//
+// So the permutation is traced back instead, out of the plan the solve left
+// behind: while a formation HOLDS, every drone is parked exactly on one of its
+// points, so sampling the plan in the middle of that hold and matching
+// positions inverts the composition of every permutation before it. Exact, not
+// approximate - the keyframes at a hold ARE the formation points. Returns 0
+// when a point has no drone standing on it or more than one, which is itself
+// worth failing on.
+int trace_points_to_drones(const dai_show *sh, uint32_t formation,
+                           const uint32_t *points, uint32_t np, uint32_t *out_drones) {
+    const dai_show_plan *p = dai_show_get_plan(sh);
+    dai_show_formation_info fi;
+    if (!p || !dai_show_formation_get(sh, formation, &fi)) return 0;
+    const dai_show_point *pts = dai_show_formation_points(sh, formation);
+    uint32_t n = dai_show_plan_drone_count(p);
+    if (!pts || n == 0 || n != fi.point_count) return 0;
+
+    std::vector<dai_show_point> fleet(n);
+    dai_show_plan_sample_all(p, fi.t_start + fi.hold_s * 0.5f, fleet.data());
+    for (uint32_t k = 0; k < np; ++k) {
+        uint32_t found = 0, which = 0;
+        for (uint32_t d = 0; d < n; ++d)
+            if (dist(fleet[d], pts[points[k]]) < 1e-3f) { ++found; which = d; }
+        if (found != 1) return 0;
+        out_drones[k] = which;
+    }
+    // Two points may not trace back to one drone: that would make the test
+    // agree with an assignment that lost a drone.
+    for (uint32_t i = 0; i < np; ++i)
+        for (uint32_t j = i + 1; j < np; ++j)
+            if (out_drones[i] == out_drones[j]) return 0;
+    return 1;
 }
 
 // ---- [3a] -----------------------------------------------------------------
@@ -594,6 +647,14 @@ void case_solved_show_is_clean(void) {
     dai_show_solve(sh, nullptr, 0);
     dai_show_validate_show(sh);
 
+    // Who the planted points belong to after assignment - by identity, not by
+    // the 0.40 m the pair happens to measure (see trace_points_to_drones).
+    const uint32_t bad_points[2] = { BAD_A, BAD_B };
+    uint32_t bad_drones[2] = { 0, 0 };
+    int traced = trace_points_to_drones(sh, 2, bad_points, 2, bad_drones);
+    CHECK(traced, "the two planted points could not be traced back through the "
+          "assignment - no single drone stands on them while the figure holds");
+
     uint32_t cn = dai_show_conflict_count(sh);
     uint32_t planted = 0, other = 0;
     float worst_other = 0.0f;
@@ -603,7 +664,9 @@ void case_solved_show_is_clean(void) {
         dai_show_conflict k;
         if (!dai_show_conflict_at(sh, i, &k)) continue;
         if (k.kind != DAI_SHOW_CONFLICT_DISTANCE) continue;
-        int is_planted = (k.a == BAD_A && k.b == BAD_B) || (k.a == BAD_B && k.b == BAD_A);
+        int is_planted = traced &&
+                         ((k.a == bad_drones[0] && k.b == bad_drones[1]) ||
+                          (k.a == bad_drones[1] && k.b == bad_drones[0]));
         if (is_planted) { ++planted; continue; }
         ++other;
         if (k.limit - k.value > worst_other) {
@@ -611,7 +674,9 @@ void case_solved_show_is_clean(void) {
             other_a = k.a; other_b = k.b; other_t = k.time_s;
         }
     }
-    CHECK(planted > 0, "the planted 0.40 m pair was not reported at all");
+    CHECK(planted == 1, "the planted 0.40 m pair (drones %u and %u) was reported %u "
+          "times, expected exactly once",
+          (unsigned)bad_drones[0], (unsigned)bad_drones[1], (unsigned)planted);
     CHECK(other == 0,
           "%u distance conflicts beyond the planted pair - worst is %u+%u at %.2fs, "
           "%.3f m inside the limit: the separator proved a curve the plan does not fly",
@@ -748,8 +813,17 @@ void case_sampled_show_is_clean(void) {
 
     // The planted pair travels: assignment renumbers who flies where, so the
     // two drones that end up 0.4 m apart are the ones standing at those two
-    // POINTS, whichever drones those turned out to be. Recognised by the gap
-    // rather than by the index, which is what the validator reports anyway.
+    // POINTS, whichever drones those turned out to be. Which is why the pair is
+    // identified by tracing the permutation back out of the plan rather than by
+    // the gap it measures: "the conflict that reads 0.40 m" would also accept
+    // some other pair the layering pushed to 0.4 m, and that pair is precisely
+    // the bug this case exists to find.
+    const uint32_t bad_points[2] = { BAD_A, BAD_B };
+    uint32_t bad_drones[2] = { 0, 0 };
+    int traced = trace_points_to_drones(sh, 3, bad_points, 2, bad_drones);
+    CHECK(traced, "the two planted points could not be traced back through the "
+          "assignment - no single drone stands on them while the figure holds");
+
     uint32_t cn = dai_show_conflict_count(sh);
     uint32_t planted = 0, other = 0;
     float worst_other = 0.0f;
@@ -759,14 +833,19 @@ void case_sampled_show_is_clean(void) {
         dai_show_conflict k;
         if (!dai_show_conflict_at(sh, i, &k)) continue;
         if (k.kind != DAI_SHOW_CONFLICT_DISTANCE) continue;
-        if (std::fabs(k.value - 0.4f) < 0.02f) { ++planted; continue; }
+        int is_planted = traced &&
+                         ((k.a == bad_drones[0] && k.b == bad_drones[1]) ||
+                          (k.a == bad_drones[1] && k.b == bad_drones[0]));
+        if (is_planted) { ++planted; continue; }
         ++other;
         if (k.limit - k.value > worst_other) {
             worst_other = k.limit - k.value;
             other_a = k.a; other_b = k.b; other_t = k.time_s;
         }
     }
-    CHECK(planted > 0, "the planted 0.40 m pair was not reported at all");
+    CHECK(planted == 1, "the planted 0.40 m pair (drones %u and %u) was reported %u "
+          "times, expected exactly once",
+          (unsigned)bad_drones[0], (unsigned)bad_drones[1], (unsigned)planted);
     CHECK(other == 0,
           "%u distance conflicts beyond the planted pair - worst is %u+%u at %.2fs, "
           "%.3f m inside the limit: the show on the screenshots does not fly",
@@ -1017,6 +1096,211 @@ void case_dense_formation(void) {
 }
 
 // ---------------------------------------------------------------------------
+// [3k] THREE formation faults are three, and the whole way through.
+//
+// [3i] plants one faulted pair and [3j] plants a figure that is nothing but
+// fault. The class in between is the one a real storyboard produces - a figure
+// that is fine except for a handful of points a modeller put on top of each
+// other - and it is the class the re-filing of endpoint pairs could silently
+// collapse: counting "the formation has a fault" once, or reporting the first
+// pair and dropping the rest, would pass both neighbours of this case.
+//
+// So the assertion here is arithmetic rather than boolean, along the whole
+// chain: THREE pairs planted, `endpoint_pairs == 3` out of the separator,
+// `unresolved == 0` because no transition is at fault, the same three out of
+// the solved document, DAI_SHOW_LAYER_FORMATION_FAULT from dai_show_solve, and
+// three rows in the conflict list - one per planted pair, matched by the
+// drones the assignment really sent there, with nothing else in the list.
+void case_many_formation_faults(void) {
+    show_section("[3k] three faults in one figure are counted, reported and listed as three");
+
+    dai_show_settings s = plan_settings(2.0f, 8.0f, 4.0f);
+    const uint32_t n = 48;
+    s.drone_count = n;
+    s.fps         = 20;
+
+    std::vector<dai_show_point> from(n), to(n);
+    std::vector<uint32_t>       perm(n);
+    for (uint32_t i = 0; i < n; ++i) perm[i] = i;
+    show_grid_formation(from.data(), n, 6.0f, dai_vec3{ 0.0f, 60.0f, 0.0f });
+    show_grid_formation(to.data(),   n, 6.0f, dai_vec3{ 25.0f, 80.0f, 0.0f });
+
+    // Three pairs, far enough apart in the grid that each fault is its own:
+    // the moved point lands 0.35 m from its partner and no closer than five
+    // metres to anybody else, so what the separator counts is three pairs and
+    // not the six a sloppy plant would produce.
+    const uint32_t PAIRS = 3;
+    // Spatial neighbours, not merely consecutive indices: the grid is seven
+    // wide, so 20 and 21 stand at opposite ends of two different rows, and
+    // moving one onto the other would plant a 36 m leg rather than a fault.
+    const uint32_t pa[PAIRS] = {  4, 19, 38 };
+    const uint32_t pb[PAIRS] = {  5, 20, 39 };
+    for (uint32_t k = 0; k < PAIRS; ++k) {
+        to[pb[k]] = to[pa[k]];
+        to[pb[k]].x += 0.35f;
+    }
+    uint32_t packed = 0;
+    for (uint32_t i = 0; i < n; ++i)
+        for (uint32_t j = i + 1; j < n; ++j)
+            if (dist(to[i], to[j]) < s.min_distance_m) ++packed;
+    CHECK(packed == PAIRS, "the fixture itself puts %u pairs inside the floor, not %u - "
+          "the plant is not the thing being measured", (unsigned)packed, (unsigned)PAIRS);
+
+    dai_show_transition tr = dai_show_transition_default();
+    tr.duration_s = 14.0f;
+    std::vector<dai_show_leg> legs(n);
+    dai_show_layer_stats st;
+    dai_result r = dai_show_layer(from.data(), to.data(), n, perm.data(), &tr, &s,
+                                  0.0f, legs.data(), &st);
+    CHECK(r == DAI_SHOW_LAYER_FORMATION_FAULT,
+          "three formation faults answered %d, expected the formation-fault warning", (int)r);
+    CHECK(st.endpoint_pairs == PAIRS, "%u formation faults counted where %u were planted",
+          (unsigned)st.endpoint_pairs, (unsigned)PAIRS);
+    CHECK(st.unresolved == 0, "%u pairs blamed on a transition that is not at fault",
+          (unsigned)st.unresolved);
+
+    // The same show through the document, which is what the panel reads.
+    dai_show *sh = dai_show_create(&s);
+    CHECK(sh != nullptr, "the document could not be created");
+    if (!sh) return;
+    dai_show_formation_add(sh, "start", "test://grid", from.data(), n, 3.0f);
+    dai_show_formation_add(sh, "three faults", "test://grid", to.data(), n, 4.0f);
+
+    char err[256] = { 0 };
+    dai_result sr = dai_show_solve(sh, err, sizeof(err));
+    CHECK(sr == DAI_SHOW_LAYER_FORMATION_FAULT,
+          "dai_show_solve answered %d for a figure with three faults in it: \"%s\"",
+          (int)sr, err);
+    dai_show_timings tm = dai_show_get_timings(sh);
+    CHECK(tm.last_layer.endpoint_pairs == PAIRS,
+          "the show total reports %u formation faults, three were planted",
+          (unsigned)tm.last_layer.endpoint_pairs);
+    CHECK(tm.last_layer.unresolved == 0,
+          "%u transition pairs left unresolved in a show whose transitions are clean",
+          (unsigned)tm.last_layer.unresolved);
+
+    // And the list a director clicks: three rows, one per planted pair, found
+    // by tracing the assignment back rather than by the gap they measure.
+    dai_show_validate_show(sh);
+    uint32_t points[PAIRS * 2] = { pa[0], pb[0], pa[1], pb[1], pa[2], pb[2] };
+    uint32_t drones[PAIRS * 2] = { 0, 0, 0, 0, 0, 0 };
+    int traced = trace_points_to_drones(sh, 1, points, PAIRS * 2, drones);
+    CHECK(traced, "the six planted points could not be traced back through the assignment");
+
+    uint32_t rows = 0, matched = 0, seen[PAIRS] = { 0, 0, 0 };
+    uint32_t stray_a = 0, stray_b = 0;
+    float stray_t = 0.0f;
+    for (uint32_t i = 0; i < dai_show_conflict_count(sh); ++i) {
+        dai_show_conflict c;
+        if (!dai_show_conflict_at(sh, i, &c)) continue;
+        if (c.kind != DAI_SHOW_CONFLICT_DISTANCE) continue;
+        ++rows;
+        int hit = 0;
+        for (uint32_t k = 0; traced && k < PAIRS; ++k) {
+            uint32_t da = drones[k * 2], db = drones[k * 2 + 1];
+            if ((c.a == da && c.b == db) || (c.a == db && c.b == da)) {
+                ++seen[k]; ++matched; hit = 1;
+            }
+        }
+        if (!hit) { stray_a = c.a; stray_b = c.b; stray_t = c.time_s; }
+    }
+    CHECK(rows == PAIRS, "the validation list has %u distance rows for three planted "
+          "faults - the stray one is %u+%u at %.2f s",
+          (unsigned)rows, (unsigned)stray_a, (unsigned)stray_b, (double)stray_t);
+    CHECK(matched == PAIRS, "%u of the three rows name a pair that was not planted",
+          (unsigned)(rows - matched));
+    CHECK(seen[0] == 1 && seen[1] == 1 && seen[2] == 1,
+          "the three planted pairs are reported %u, %u and %u times, expected once each",
+          (unsigned)seen[0], (unsigned)seen[1], (unsigned)seen[2]);
+    dai_show_destroy(sh);
+}
+
+// ---------------------------------------------------------------------------
+// [3l] a transition pair can NEVER be booked as a formation fault.
+//
+// [3i], [3j] and [3k] all push in one direction: pairs the formation itself
+// parks too close come out of `unresolved` and into `endpoint_pairs`. The risk
+// that creates is the opposite mistake - a crossing the separator could not
+// solve quietly re-filed as "the formation's problem", which would turn a
+// transition that does not fly into a warning somebody signs off.
+//
+// So this case runs the two transitions whose endpoints are provably legal -
+// one the separator solves, one it cannot - and asserts the same thing about
+// both: endpoint_pairs stays at ZERO. The fault is where it happened.
+void case_transition_pair_is_never_endpoint(void) {
+    show_section("[3l] a crossing is never re-filed as a formation fault");
+
+    // (a) the classic swap: both formations are 20 m apart end to end, the two
+    //     drones meet in the middle. A real crossing, solvable.
+    {
+        dai_show_settings s = plan_settings(2.0f, 12.0f, 8.0f);
+        std::vector<dai_show_point> from{ pt(-10, 50, 0, 255, 0, 0), pt(10, 50, 0, 0, 0, 255) };
+        std::vector<dai_show_point> to  { pt( 10, 50, 0, 255, 0, 0), pt(-10, 50, 0, 0, 0, 255) };
+        std::vector<uint32_t> perm{ 0, 1 };
+        dai_show_transition tr = dai_show_transition_default();
+        tr.duration_s = 12.0f;
+        std::vector<dai_show_leg> legs(2);
+        dai_show_layer_stats st;
+        dai_result r = dai_show_layer(from.data(), to.data(), 2, perm.data(), &tr, &s,
+                                      0.0f, legs.data(), &st);
+        CHECK(st.crossings_found > 0, "the swap was not seen as a crossing at all");
+        CHECK(st.endpoint_pairs == 0,
+              "a swap between two formations 20 m wide was booked as %u formation "
+              "faults", (unsigned)st.endpoint_pairs);
+        CHECK(r == DAI_OK, "the swap came back as %d (%u unresolved)", (int)r,
+              (unsigned)st.unresolved);
+        float dfrom = dist(from[0], from[1]), dto = dist(to[0], to[1]);
+        CHECK(dfrom >= s.min_distance_m && dto >= s.min_distance_m,
+              "the fixture's own endpoints are %.2f / %.2f m apart - this case would "
+              "prove nothing", (double)dfrom, (double)dto);
+    }
+
+    // (b) the same question where it is uncomfortable: a transition the
+    //     separator CANNOT solve, between formations that are themselves fine.
+    //     Sixteen drones onto the same sixteen points, rotated by half a
+    //     spacing in a corridor with a ceiling - the crossing is real and stays
+    //     unresolved, and it must stay in `unresolved`.
+    {
+        dai_show_settings s = plan_settings(4.0f, 3.0f, 1.0f);   // slow: no room to detour
+        const uint32_t n = 16;
+        std::vector<dai_show_point> from(n), to(n);
+        std::vector<uint32_t>       perm(n);
+        show_grid_formation(from.data(), n, 4.5f, dai_vec3{ 0.0f, 50.0f, 0.0f });
+        for (uint32_t i = 0; i < n; ++i) {
+            perm[i] = n - 1 - i;                 // every drone crosses the middle
+            to[i]   = from[i];
+        }
+        float dmin = 1e30f;
+        for (uint32_t i = 0; i < n; ++i)
+            for (uint32_t j = i + 1; j < n; ++j)
+                dmin = std::fmin(dmin, dist(from[i], from[j]));
+        CHECK(dmin >= s.min_distance_m,
+              "the fixture's formation is %.2f m tight and the floor is %.2f m - the "
+              "case would be measuring the wrong thing", (double)dmin,
+              (double)s.min_distance_m);
+
+        dai_show_transition tr = dai_show_transition_default();
+        tr.duration_s = 6.0f;                    // too short for 4 m of clearance
+        std::vector<dai_show_leg> legs(n);
+        dai_show_layer_stats st;
+        dai_result r = dai_show_layer(from.data(), to.data(), n, perm.data(), &tr, &s,
+                                      0.0f, legs.data(), &st);
+        CHECK(st.endpoint_pairs == 0,
+              "%u crossings the separator could not solve were re-filed as formation "
+              "faults, and both formations are %.2f m apart",
+              (unsigned)st.endpoint_pairs, (double)dmin);
+        CHECK(r != DAI_SHOW_LAYER_FORMATION_FAULT,
+              "an unsolved transition answered with the formation-fault warning");
+        // Whatever the separator managed, the answer is about the transition:
+        // either it solved it (DAI_OK, nothing left) or it says so.
+        CHECK((r == DAI_OK && st.unresolved == 0) ||
+              (r == DAI_ERR_STATE && st.unresolved > 0),
+              "the separator answered %d with %u unresolved - the two do not agree",
+              (int)r, (unsigned)st.unresolved);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // [3h] the leg that is longer than the grid.
 //
 // The separator indexes each leg into a uniform grid, and a grid has a limit
@@ -1095,6 +1379,8 @@ int show_cases_plan(void) {
     case_sampled_show_is_clean();
     case_endpoint_fault();
     case_dense_formation();
+    case_many_formation_faults();
+    case_transition_pair_is_never_endpoint();
     case_long_leg();
     return g_show_fail - before;
 }

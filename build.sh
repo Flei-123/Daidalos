@@ -10,6 +10,23 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# The whole build, on the terminal AND in build/last_run.log. RUN.md quotes
+# lines out of a run - "ok: N checks, 0 failures" from the drone show suite,
+# the scaling table, the screenshot tool's own log - and a quoted number that
+# nobody can go back and re-read is a number that ages into a claim. The log is
+# TRUNCATED here and appended to by tools/run_tests.sh, so the file holds the
+# two commands in the order RUN.md documents them.
+#
+# Re-run through `tee` rather than redirected into a process substitution: the
+# exit code has to survive (a broken build must stay broken), and a background
+# tee can lose the last lines - which are the ones that say whether it worked.
+if [ "${DAI_RUN_LOG:-}" != "1" ]; then
+    mkdir -p build
+    echo "=== ./build.sh $* $(date -u '+%Y-%m-%dT%H:%M:%SZ') ===" > build/last_run.log
+    DAI_RUN_LOG=1 "$0" "$@" 2>&1 | tee -a build/last_run.log
+    exit "${PIPESTATUS[0]}"
+fi
+
 # Why every "compile, then run" below is two statements and never
 # `g++ ... && ./build/x`: under `set -e` a command on the LEFT of an AND-list is
 # exempt from errexit, so that shape turns a compiler error into a silent skip -

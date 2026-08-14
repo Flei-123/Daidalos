@@ -18,6 +18,12 @@
 // validation panel photographed with an empty list proves nothing about the
 // panel that has to show a conflict.
 //
+// Ten pictures per set: the show as it opens, the fleet in the MIDDLE of its
+// first move (the instant is computed from the solved plan, not typed in), the
+// ring and the cube standing in their own hold, the conflict in the preview,
+// the three panels in the dock the editor really builds, the preview alone in
+// one, and the click on a validation row.
+//
 // And a real PROJECT around it. The show panels only appear because a project
 // of kind droneshow is open, so the tool creates one on disk (and a game
 // project beside it, which must keep opening exactly as it always did), opens
@@ -26,6 +32,7 @@
 // then show is the editor with a project in it, not a panel set floating in a
 // window.
 
+#include "dai_dock.h"
 #include "dai_editor_ui.h"
 #include "dai_gltf.h"
 #include "dai_project.h"
@@ -239,9 +246,20 @@ int main(int argc, char **argv) {
         std::printf("formation %u  %-8s %u points\n", idx, figs[i].name, s.drone_count);
     }
 
-    // The figure that is WRONG on purpose: the sphere again, with two drones
-    // pushed to 0.4 m apart. The validator has to find it, the list has to show
-    // it and the preview has to paint it red - that is what these images are for.
+    // The figures that are WRONG on purpose. One kind of fault photographs one
+    // row, and a validation panel with one row in it proves that the list can
+    // hold a row - not that it is a LIST: that it sorts, that a second click
+    // moves the selection, that what does not fit is reachable. So the fixture
+    // plants two different classes of fault in two different figures, which is
+    // also the honest picture of what goes wrong in a real show:
+    //
+    //   * a pair of drones parked inside the minimum distance - a FORMATION
+    //     fault no transition can undo, and
+    //   * a figure that leaves the safety volume, with a second, wider pair
+    //     beside it: three rows, two rules, three figures.
+    //
+    // Both come out of the ordinary pipeline: the points are the sampler's,
+    // moved afterwards the way a director moves a drone in the storyboard.
     {
         const dai_show_point *base = dai_show_formation_points(sh, 0);
         std::vector<dai_show_point> pts(base, base + s.drone_count);
@@ -250,6 +268,33 @@ int main(int argc, char **argv) {
         uint32_t idx = dai_show_formation_add(sh, "Sphere (near miss)", "builtin://figure",
                                               pts.data(), (uint32_t)pts.size(), 5.0f);
         std::printf("formation %u  near miss injected between drones 172 and 173\n", idx);
+    }
+    {
+        // The cube again, with one point lifted 15 m over the ceiling the
+        // settings declare, and a second pair pushed to 1.2 m - inside the 2 m
+        // floor, but not as far inside it as the sphere's 0.4 m. A different
+        // RULE and a different severity, in a different figure at a different
+        // second: the list has to sort three entries of two kinds and stay
+        // clickable, which is what 06 and 08 photograph.
+        //
+        // Both moves stay SHORT on purpose. A point parked far outside the
+        // figure would make the longest leg of the transition into it the
+        // thing that sets the show's length - the solver raises a duration
+        // that cannot hold v_max - and a fixture whose fault rewrites the
+        // timeline is a fixture that photographs its own side effect.
+        const dai_show_point *base = dai_show_formation_points(sh, 2);
+        std::vector<dai_show_point> pts(base, base + s.drone_count);
+        pts[64].y  = s.fence_top_m + 15.0f;
+        pts[311]   = pts[310];
+        pts[311].z += 1.2f;
+        uint32_t idx = dai_show_formation_add(sh, "Cube (out of bounds)", "builtin://figure",
+                                              pts.data(), (uint32_t)pts.size(), 5.0f);
+        // The POINT is what the fixture moves; which DRONE flies to it is the
+        // assignment's answer, and the conflict list is where it is named.
+        std::printf("formation %u  point 64 lifted to %.0f m over the %.0f m ceiling, "
+                    "points 310 and 311 parked %.1f m apart inside the %.1f m floor\n",
+                    idx, (double)(pts[64].y - s.fence_top_m), (double)s.fence_top_m,
+                    1.2, (double)s.min_distance_m);
     }
 
     char err[256] = { 0 };
@@ -488,8 +533,88 @@ int main(int argc, char **argv) {
 
     // 2  mid transition - the fleet in flight between two figures, which is
     //    where the colours and the layering are actually visible.
-    dai_show_ui_seek(show, 10.5f);
+    //
+    //    The moment is COMPUTED from the solved plan, not typed in: figure 2
+    //    starts at t_start and the move into it takes `transit` seconds, so the
+    //    middle of that move is t_start - transit/2. A hard 10.5 s was a
+    //    guess that the solver invalidated the moment a transition was
+    //    stretched to hold v_max - and a "transition" picture of a fleet
+    //    standing still in a figure is a picture of nothing.
+    {
+        float t_mid = 10.5f;
+        dai_show_formation_info a{}, b{};
+        dai_show_transition tr{};
+        if (dai_show_formation_count(sh) > 1 &&
+            dai_show_formation_get(sh, 0, &a) && dai_show_formation_get(sh, 1, &b) &&
+            dai_show_transition_get(sh, 1, &tr)) {
+            // The duration the SOLVE used, which is what the plan carries:
+            // b.t_start is the end of the move, a.t_start + a.hold_s its start.
+            float transit = b.t_start - (a.t_start + a.hold_s);
+            if (!(transit > 0.0f)) transit = tr.duration_s;
+            t_mid = b.t_start - transit * 0.5f;
+            std::printf("02-transition at t %.2fs - the middle of the %.2fs move "
+                        "out of 1. %s (t %.2fs) into 2. %s (t %.2fs)\n",
+                        (double)t_mid, (double)transit, a.name, (double)a.t_start,
+                        b.name, (double)b.t_start);
+            // What the picture has to show is that the fleet is BETWEEN the two
+            // figures, so the tool measures it rather than claiming it: the
+            // mean distance of every drone from where it stands in each of the
+            // two formations, at the instant photographed.
+            const dai_show_plan *pl = dai_show_get_plan(sh);
+            const dai_show_point *pa = dai_show_formation_points(sh, 0);
+            const dai_show_point *pb = dai_show_formation_points(sh, 1);
+            if (pl && pa && pb) {
+                uint32_t n = dai_show_plan_drone_count(pl);
+                std::vector<dai_show_point> now(n);
+                dai_show_plan_sample_all(pl, t_mid, now.data());
+                double da = 0.0, db = 0.0;
+                for (uint32_t i = 0; i < n; ++i) {
+                    double best_a = 1e30, best_b = 1e30;
+                    // Nearest point of each formation: the assignment permutes
+                    // the drones, so "how far from the sphere" is a question
+                    // about the SHAPE, not about drone i's own slot.
+                    for (uint32_t k = 0; k < n; ++k) {
+                        double ax = now[i].x - pa[k].x, ay = now[i].y - pa[k].y, az = now[i].z - pa[k].z;
+                        double bx = now[i].x - pb[k].x, by = now[i].y - pb[k].y, bz = now[i].z - pb[k].z;
+                        double la = ax * ax + ay * ay + az * az;
+                        double lb = bx * bx + by * by + bz * bz;
+                        if (la < best_a) best_a = la;
+                        if (lb < best_b) best_b = lb;
+                    }
+                    da += std::sqrt(best_a);
+                    db += std::sqrt(best_b);
+                }
+                if (n) std::printf("  the fleet at that instant is %.1f m off the "
+                                   "%s it left and %.1f m off the %s it is flying to\n",
+                                   da / (double)n, a.name, db / (double)n, b.name);
+            }
+        }
+        dai_show_ui_seek(show, t_mid);
+    }
     shot("02-transition", (float)W * 0.5f, (float)H * 0.5f, 0);
+
+    // 2b, 2c  the two figures the transition is between, STANDING: the ring and
+    //    the cube in the middle of their own hold. A picture of a fleet in
+    //    flight is a picture of a cloud - it is the right proof that the show
+    //    moves and the wrong one that the sampler puts drones on a shape. So
+    //    each figure gets its own frame, at a moment computed from the plan
+    //    (t_start is when the figure is reached, hold_s how long it stands),
+    //    and the log names the figure the timeline is inside.
+    {
+        struct Hold { uint32_t index; const char *file; };
+        const Hold holds[2] = { { 1, "02b-ring-formation" }, { 2, "02c-cube-formation" } };
+        for (int i = 0; i < 2; ++i) {
+            dai_show_formation_info fi{};
+            if (!dai_show_formation_get(sh, holds[i].index, &fi)) continue;
+            float t = fi.t_start + fi.hold_s * 0.5f;
+            dai_show_ui_seek(show, t);
+            uint32_t at = dai_show_formation_at_time(sh, t);
+            std::printf("%-20s t %6.2fs - %u. %s, standing (hold %.1fs, the timeline "
+                        "is in figure %u)\n", holds[i].file, (double)t,
+                        holds[i].index + 1u, fi.name, (double)fi.hold_s, at + 1u);
+            shot(holds[i].file, (float)W * 0.5f, (float)H * 0.5f, 0);
+        }
+    }
 
     // 3  the conflict. Seek to the moment the validator complained about and
     //    select the drones it named, exactly as clicking the row does.
@@ -504,67 +629,159 @@ int main(int argc, char **argv) {
     if (conflict_row >= 0) dai_show_ui_seek(show, c.time_s);
     shot("03-viewport-conflict", (float)W * 0.5f, (float)H * 0.5f, 0);
 
-    // ---- the panels on their own -----------------------------------------
-    // Same functions the dock calls, at the size the DOCK gives them, with the
-    // tab head above them - a column stays a column, a strip stays a strip.
-    // Blowing a 380 px panel up to the whole frame used to produce a picture
-    // that was nine tenths empty background with a button stretched across it,
-    // which says nothing about the panel a director actually sees.
-    const float TABH = 26.0f;
-    // One panel in its dock frame: the tab head, the accent line under the
-    // active tab and the border the dock draws, then the panel itself in the
-    // rectangle below. `focus` is the tab that is open; an unfocused frame is
-    // drawn dimmer, which is how the picture says which panel it is about.
-    auto tab_panel = [&](const char *title, float px, float py, float pw, float ph, int focus,
-                         void (*fn)(dai_show_ui *, dai_ui *, float, float, float, float)) {
+    // ---- the panels, through the dock the editor really builds -------------
+    // These four used to be drawn by this file: a hand rolled tab head over a
+    // rectangle the tool picked. That photographs the right FUNCTIONS at
+    // roughly the right size, and it is exactly the picture that cannot show a
+    // layout fault - the dock gives Show Parameters 22% of the width and
+    // whatever height is left after Validation has taken the bottom quarter,
+    // and a report that overflows THAT rectangle was visible in the editor and
+    // in no image next to it.
+    //
+    // So the set is registered in a real dai_dock through dai_show_ui_panels -
+    // the same call src/dai_editor_ui.cpp makes - the preview goes into the
+    // middle the way the editor puts the scene view there, and every tab strip,
+    // splitter and border in the picture is the dock's own. `focus` names the
+    // tab the picture is about, and the size the dock handed that panel is
+    // printed beside it, so the log says what the image is showing.
+    const float BOT = 30.0f;                            // the status line
+    dai_dock *dock = dai_dock_create();
+    dai_dock_add(dock, "Preview", DAI_DOCK_NONE, 0.0f);
+    auto dock_frame = [&](float mx, float my, int down) {
+        dai_ui_input in{};
+        in.mouse_x = mx; in.mouse_y = my; in.mouse_down = down;
+        dai_ui_begin(ui, (float)W, (float)H, &in);
         const dai_ui_style *st = dai_ui_style_of(ui);
-        dai_ui_rect(ui, px, py, pw, TABH, st->chrome);
-        float tw = dai_ui_text_width(ui, title) + 24.0f;
-        dai_ui_rect(ui, px, py, tw, TABH, focus ? st->panel : st->button);
-        if (focus) dai_ui_rect(ui, px, py, tw, 2.0f, st->accent);
-        dai_ui_text(ui, px + 12.0f, py + (TABH - dai_ui_text_height(ui)) * 0.5f,
-                    title, focus ? st->text : st->text_dim);
-        dai_ui_rect(ui, px, py + TABH - 1.0f, pw, 1.0f, st->panel_border);
-        fn(show, ui, px, py + TABH, pw, ph - TABH);
+        dai_ui_rect(ui, 0.0f, 0.0f, (float)W, (float)H, st->chrome);
+        dai_dock_begin(dock, ui, 0.0f, 0.0f, (float)W, (float)H - BOT);
+        dai_show_ui_panels(show, ui, dock);
+        float px, py, pw, ph;
+        if (dai_dock_panel(dock, "Preview", &px, &py, &pw, &ph)) {
+            dai_show_ui_viewport(show, ui, px, py, pw, ph);
+            dai_dock_panel_end(dock);
+        }
+        dai_dock_end(dock);
+        dai_show_ui_status(show, ui, 0.0f, (float)H - BOT, (float)W, BOT);
+        dai_ui_end(ui);
     };
-    // The panel that is being photographed, at the size the DOCK gives it -
-    // and the preview beside it, because the rest of the frame is a dock too.
-    // Blowing a 380 px column up to the whole window used to produce a picture
-    // that was nine tenths background with one button stretched across it,
-    // which says nothing about the panel a director actually uses.
-    const float M = 20.0f;                              // the frame's margin
-    const float COLW = std::min(380.0f, (float)W * 0.34f);
-    const float BOT  = 30.0f;                           // the status line
-    auto panel_shot = [&](const char *name, int which) {
+    // Two warm-up frames, not one: dai_show_ui_panels registers its panels
+    // INSIDE dai_dock_begin/end, so the layout that gives them a rectangle is
+    // the next frame's - and everything below asks the dock where its panel is
+    // before it points at it.
+    dock_frame(-100.0f, -100.0f, 0);        // the frame the panels register on
+    dock_frame(-100.0f, -100.0f, 0);        // ...and the one that lays them out
+    // The pointer is part of the picture: the dock shows all three panels at
+    // once (they sit on three different edges, which is the layout), so what
+    // makes 04, 05 and 06 three different pictures is not which one is drawn
+    // but what is being DONE in it. Each shot therefore points at its own
+    // panel, and `down` presses.
+    auto panel_shot = [&](const char *name, const char *focus, float mx, float my, int down) {
+        dai_dock_focus(dock, focus);
+        // Twice, like every other shot here: the dock lays out on the frame it
+        // registers on, and immediate mode scroll state settles one frame later.
+        dock_frame(mx, my, down);
+        dock_frame(mx, my, down);
+        float px, py, pw, ph;
+        if (dai_dock_panel_rect(dock, focus, 0, &px, &py, &pw, &ph))
+            std::printf("%-16s the dock gives it %4.0f x %4.0f px at %4.0f,%4.0f\n",
+                        focus, pw, ph, px, py);
+        flush(shot_path(name).c_str());
+    };
+    // A point inside a panel the dock placed, in panel fractions - so the
+    // pointer follows the layout instead of assuming the 1600x900 one.
+    auto in_panel = [&](const char *title, float fx, float fy, float *mx, float *my) {
+        float px, py, pw, ph;
+        if (!dai_dock_panel_rect(dock, title, 0, &px, &py, &pw, &ph)) return false;
+        *mx = px + pw * fx;
+        *my = py + ph * fy;
+        return true;
+    };
+
+    // 04  the storyboard, with a figure taken out of the list: a row is a
+    //     toggle, and the figure it selects opens its own Hold, Transit,
+    //     Profile and Assignment fields under it. That expansion is the panel's
+    //     whole job, and a picture of the list with nothing open is a picture
+    //     of a list. The row is pressed through the pointer, at a fraction of
+    //     the rectangle the DOCK gave the panel, so the same code hits a row at
+    //     1100 px and at 1920.
+    {
+        float mx = -100.0f, my = -100.0f;
+        if (in_panel("Storyboard", 0.40f, 0.41f, &mx, &my)) {
+            dock_frame(mx, my, 0);         // hover
+            dock_frame(mx, my, 1);         // press
+            dock_frame(mx, my, 0);         // release: the row commits
+            std::printf("storyboard row pressed at %.0f,%.0f - the figure it selects "
+                        "opens Hold, Transit, Profile and Assignment under it\n", mx, my);
+        }
+        panel_shot("04-storyboard", "Storyboard", mx, my, 0);
+    }
+
+    // 05  the parameters, with the pointer resting on Solve show - hovering,
+    //     not pressing: a shot tool that re-solves the show would photograph a
+    //     different plan than the one every other picture is of.
+    {
+        float mx = -100.0f, my = -100.0f;
+        in_panel("Show Parameters", 0.5f, 0.66f, &mx, &my);
+        panel_shot("05-parameters", "Show Parameters", mx, my, 0);
+    }
+
+    // 06  the validation list with a row SELECTED, which is the state a
+    //     director reads it in: the preview behind it is at that conflict's
+    //     second, with the pair drawn red.
+    {
+        float px, py, pw, ph;
+        float mx = -100.0f, my = -100.0f;
+        int picked = -1;
+        if (dai_dock_panel_rect(dock, "Validation", 0, &px, &py, &pw, &ph)) {
+            for (float y = py + 30.0f; y < py + ph - 10.0f && picked < 0; y += 5.0f) {
+                dock_frame(px + 120.0f, y, 0);
+                dock_frame(px + 120.0f, y, 1);
+                dock_frame(px + 120.0f, y, 0);
+                if (dai_show_ui_selected_conflict(show) >= 0) {
+                    picked = dai_show_ui_selected_conflict(show);
+                    mx = px + 120.0f; my = y;
+                }
+            }
+        }
+        if (picked >= 0)
+            std::printf("validation row at %.0f,%.0f -> conflict %d selected, the "
+                        "timeline is at %.2fs\n", mx, my, picked, dai_show_ui_time(show));
+        else
+            std::printf("no validation row took the click in the docked panel\n");
+        panel_shot("06-validation", "Validation", mx, my, 0);
+    }
+
+    // 07  the preview alone: a dock with nothing else registered in it, which
+    //     is what the editor looks like once the director has closed the three
+    //     side panels and only the show is left. Its own dock rather than
+    //     dai_dock_close on the one above, because dai_show_ui_panels re-adds
+    //     its panels every frame - and re-adding a panel opens it, on purpose.
+    {
+        dai_dock *solo = dai_dock_create();
+        dai_dock_add(solo, "Preview", DAI_DOCK_NONE, 0.0f);
         for (int pass = 0; pass < 2; ++pass) {
             dai_ui_input in{};
-            in.mouse_x = -100; in.mouse_y = -100;
+            in.mouse_x = -100.0f; in.mouse_y = -100.0f;
             dai_ui_begin(ui, (float)W, (float)H, &in);
             const dai_ui_style *st = dai_ui_style_of(ui);
             dai_ui_rect(ui, 0.0f, 0.0f, (float)W, (float)H, st->chrome);
-            float ax = M, ay = M, aw = (float)W - 2.0f * M, ah = (float)H - M - BOT - 10.0f;
-            if (which == 0)
-                tab_panel("Storyboard", ax, ay, COLW, ah, 1, dai_show_ui_storyboard);
-            else if (which == 1)
-                tab_panel("Show Parameters", ax, ay, COLW, ah, 1, dai_show_ui_parameters);
-            if (which == 0 || which == 1)
-                tab_panel("Preview", ax + COLW + 8.0f, ay, aw - COLW - 8.0f, ah, 0,
-                          dai_show_ui_viewport);
-            else if (which == 2) {
-                float strip = std::min(320.0f, ah * 0.42f);
-                tab_panel("Preview", ax, ay, aw, ah - strip - 8.0f, 0, dai_show_ui_viewport);
-                tab_panel("Validation", ax, ay + ah - strip, aw, strip, 1, dai_show_ui_validation);
-            } else if (which == 3)
-                tab_panel("Preview", ax, ay, aw, ah, 1, dai_show_ui_viewport);
+            dai_dock_begin(solo, ui, 0.0f, 0.0f, (float)W, (float)H - BOT);
+            float px, py, pw, ph;
+            if (dai_dock_panel(solo, "Preview", &px, &py, &pw, &ph)) {
+                dai_show_ui_viewport(show, ui, px, py, pw, ph);
+                dai_dock_panel_end(solo);
+            }
+            dai_dock_end(solo);
             dai_show_ui_status(show, ui, 0.0f, (float)H - BOT, (float)W, BOT);
             dai_ui_end(ui);
         }
-        flush(shot_path(name).c_str());
-    };
-    panel_shot("04-storyboard",   0);
-    panel_shot("05-parameters",   1);
-    panel_shot("06-validation",   2);
-    panel_shot("07-preview-full", 3);
+        float px, py, pw, ph;
+        if (dai_dock_panel_rect(solo, "Preview", 0, &px, &py, &pw, &ph))
+            std::printf("%-16s alone in its dock: %4.0f x %4.0f px at %4.0f,%4.0f\n",
+                        "Preview", pw, ph, px, py);
+        flush(shot_path("07-preview-full").c_str());
+        dai_dock_destroy(solo);
+    }
 
     // 8  the click the validation panel promises: a row is pressed, the
     //    timeline jumps to it and the two drones go red in the preview. Done
@@ -578,25 +795,48 @@ int main(int argc, char **argv) {
         // answer (dai_show_ui_selected_conflict) is the test that it landed.
         const float TOP = 34.0f, BOTTOM = 24.0f;
         float py = TOP + 0.74f * ((float)H - TOP - BOTTOM);
-        int hit = 0;
-        for (float dy = 60.0f; dy < 160.0f && !hit; dy += 6.0f) {
-            float rx = 120.0f, ry = py + dy;
+        int  first = -1, second = -1;
+        auto click_at = [&](float rx, float ry) {
             frame(rx, ry, 0);          // hover
             frame(rx, ry, 1);          // press
             frame(rx, ry, 0);          // release: the row commits
             frame(rx, ry, 0);
-            if (dai_show_ui_selected_conflict(show) >= 0) {
-                hit = 1;
-                std::string path = shot_path("08-conflict-clicked");
-                flush(path.c_str());
+            return dai_show_ui_selected_conflict(show);
+        };
+        // The first row that takes the click, and then a DIFFERENT one: a list
+        // is only a list if the selection moves, and the second click is what
+        // proves the panel is not showing one hard wired row. The picture kept
+        // is the second state, with the first one named in the log beside it.
+        for (float dy = 60.0f; dy < 200.0f; dy += 6.0f) {
+            int got = click_at(120.0f, py + dy);
+            if (got < 0) continue;
+            if (first < 0) {
+                first = got;
                 std::printf("clicked validation row at %.0f,%.0f -> conflict %d, t=%.2f, drone %u\n",
-                            rx, ry, dai_show_ui_selected_conflict(show),
-                            dai_show_ui_time(show), dai_show_ui_selected_drone(show));
+                            120.0f, py + dy, first, dai_show_ui_time(show),
+                            dai_show_ui_selected_drone(show));
+                continue;
+            }
+            if (got != first) {
+                second = got;
+                std::printf("clicked the next row at %.0f,%.0f -> the selection moved "
+                            "from conflict %d to %d, t=%.2f, drone %u\n",
+                            120.0f, py + dy, first, second, dai_show_ui_time(show),
+                            dai_show_ui_selected_drone(show));
+                break;
             }
         }
-        if (!hit) std::printf("no validation row took the click\n");
+        if (first >= 0) {
+            std::string path = shot_path("08-conflict-clicked");
+            flush(path.c_str());
+            if (second < 0)
+                std::printf("only one validation row took a click - conflict %d\n", first);
+        } else {
+            std::printf("no validation row took the click\n");
+        }
     }
 
+    dai_dock_destroy(dock);
     dai_editor_ui_destroy(panels);
     if (game) dai_project_close(game);
     dai_project_close(proj);

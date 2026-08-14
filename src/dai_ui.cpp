@@ -743,6 +743,36 @@ void dai_ui_text(dai_ui *ui, float x, float y, const char *utf8, uint32_t color)
     if (ui && ui->tr_on && utf8) utf8 = dai_tr(utf8);
     if (!ui || !ui->font || !utf8) return;
     float pen_x = x, pen_y = y + dai_font_ascent(ui->font);
+
+    // WHOLE LINES ONLY, vertically. A clip that runs through the middle of a
+    // line of text slices the glyphs lengthwise, and the result is not "less
+    // text" - it is a row a reader cannot read and cannot tell he is missing:
+    // half of "show.skyc" under a panel border reads as a file called
+    // "show.sk", and half of a stat line reads as the last number of a solve.
+    // So a line whose INK crosses the edge of the clip is not drawn at all.
+    // Measured on the ink rather than on the line box, because a text field
+    // clips to a box shorter than a line and its digits must still appear.
+    // Horizontally nothing changes: a long label is still cut by the clip, and
+    // the panels shorten those with an ellipsis before it gets that far.
+    if (!ui->clips.empty()) {
+        const dai_ui::Clip &c = ui->clips.back();
+        float ink_lo = 0.0f, ink_hi = 0.0f;
+        bool  any = false;
+        float ly = pen_y;
+        uint32_t moff = 0;
+        for (;;) {
+            uint32_t cp = dai_utf8_next(utf8, &moff);
+            if (!cp) break;
+            if (cp == '\n') { ly += dai_font_line_height(ui->font); continue; }
+            const dai_glyph *g = dai_font_glyph(ui->font, cp);
+            if (!g || g->x1 <= g->x0) continue;
+            const float lo = ly + g->y0, hi = ly + g->y1;
+            if (!any) { ink_lo = lo; ink_hi = hi; any = true; }
+            else { if (lo < ink_lo) ink_lo = lo; if (hi > ink_hi) ink_hi = hi; }
+        }
+        if (any && (ink_lo < c.y0 - 0.01f || ink_hi > c.y1 + 0.01f)) return;
+    }
+
     uint32_t off = 0;
     for (;;) {
         uint32_t cp = dai_utf8_next(utf8, &off);

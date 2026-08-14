@@ -5,6 +5,7 @@
 // No renderer needed - the UI produces triangles, and that is what is checked.
 
 #include "dai_editor_ui.h"
+#include "dai_show_ui.h"
 #include <cstdio>
 #include <cmath>
 #include <cstring>
@@ -702,6 +703,63 @@ int main() {
         dai_editor_camera(ed, dai_vec3{ 0, 3, 10 }, dai_vec3{ 0, 0, 0 }, dai_vec3{ 0, 1, 0 },
                           55.0f, 0.1f, 200.0f, 1280.0f, 720.0f);
         dai_editor_camera_viewport_rect(ed, 0.0f, 0.0f, 1280.0f, 720.0f);
+    }
+
+    // ---- the sentence the show status line ends in --------------------------
+    //
+    // "1 conflicts" is not a typo a reader forgives: this line is the last
+    // thing on the screen before a show is signed off, and a program that
+    // cannot count to one is a program whose count of eleven nobody believes
+    // either. dai_show_ui_verdict hands over the very string the status line
+    // draws, so the check reads the panel rather than a second copy of the
+    // wording. The shows below are built by hand - two formations of six
+    // drones, one of which parks a pair inside the minimum distance - because
+    // a fixture that has to be sampled and solved would be testing the
+    // pipeline, and what is under test here is one sentence.
+    {
+        auto build = [](int faults, uint32_t *conflicts_out) {
+            dai_show_settings s = dai_show_settings_default();
+            s.drone_count    = 6;
+            s.min_distance_m = 2.0f;
+            s.v_max_ms       = 8.0f;
+            s.a_max_ms2      = 4.0f;
+            s.fps            = 10;
+            s.seed           = 7u;
+            dai_show *sh = dai_show_create(&s);
+            dai_show_point a[6], b[6];
+            for (int i = 0; i < 6; ++i) {
+                a[i] = dai_show_point{};
+                a[i].x = (float)i * 10.0f; a[i].y = 30.0f; a[i].z = 0.0f;
+                a[i].r = 200; a[i].g = 200; a[i].b = 200; a[i].w = 0;
+                b[i] = a[i];
+            }
+            if (faults >= 1) b[3].x = b[2].x + 0.5f;     // one pair, 0.5 m apart
+            if (faults >= 2) b[5].x = b[4].x + 0.5f;     // and a second one
+            dai_show_formation_add(sh, "Line", "builtin://line", a, 6, 4.0f);
+            dai_show_formation_add(sh, "Line (fault)", "builtin://line", b, 6, 4.0f);
+            char serr[256] = { 0 };
+            dai_show_solve(sh, serr, sizeof(serr));
+            dai_show_validate_show(sh);
+            if (conflicts_out) *conflicts_out = dai_show_get_timings(sh).last_validate.conflicts;
+            return sh;
+        };
+        char said[128] = { 0 };
+        for (int faults = 0; faults <= 2; ++faults) {
+            uint32_t n = 0;
+            dai_show *sh = build(faults, &n);
+            dai_show_ui *su = dai_show_ui_create(sh);
+            dai_show_ui_verdict(su, said, sizeof(said));
+            const char *want = (faults == 0) ? "no conflicts"
+                             : (faults == 1) ? "1 conflict" : "2 conflicts";
+            CHECK(n == (uint32_t)faults, "%d planted fault(s) came back as %u conflicts",
+                  faults, n);
+            CHECK(std::strcmp(said, want) == 0,
+                  "the verdict for %d fault(s) reads \"%s\", not \"%s\"", faults, said, want);
+            dai_show_ui_destroy(su);
+            dai_show_destroy(sh);
+        }
+        std::printf("  the show verdict counts: \"no conflicts\" / \"1 conflict\" / "
+                    "\"2 conflicts\"\n");
     }
 
     dai_editor_ui_destroy(panels);

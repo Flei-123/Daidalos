@@ -7322,6 +7322,17 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
         if (p->proj_list_scroll > lmax) p->proj_list_scroll = lmax;
         if (p->proj_list_scroll < 0.0f) p->proj_list_scroll = 0.0f;
         float ry = cols_y + 2.0f - p->proj_list_scroll;
+        // WHOLE ROWS ONLY. A row that does not fit between the top of the list
+        // and its bottom edge is not drawn at all - it used to be drawn and
+        // then sliced lengthwise by the clip, which put half of "show.skyc"
+        // under the panel border and left a reader unable to tell whether he
+        // had seen the last file or only the top of it. The row still costs
+        // its 20 pixels, so the wheel brings it in whole; the bar on the right
+        // says there is something to wheel to.
+        const float list_top = cols_y, list_bot = cols_y + list_h;
+        auto row_whole = [&](float top) {
+            return top >= list_top - 0.5f && top + ROW <= list_bot + 0.5f;
+        };
         int rows = 0;
         if (p->assets.empty()) {
             dai_ui_text(ui, list_x + 8.0f, ry + 4.0f,
@@ -7335,7 +7346,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
         }
         for (const std::string &name : subfolders) {
             ++rows;
-            if (ry + ROW > cols_y && ry < cols_y + list_h) {
+            if (row_whole(ry)) {
                 std::string ffull = p->proj_dir.empty() ? name : p->proj_dir + "/" + name;
                 if (ffull == p->rename_asset) {
                     p->rename_drawn = 1;
@@ -7405,7 +7416,7 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
         }
         for (int fi : files) {
             ++rows;
-            if (ry + ROW > cols_y && ry < cols_y + list_h) {
+            if (row_whole(ry)) {
                 std::string full = asset_at(p, fi);
                 std::string label = searching ? full : base_of(full);
                 int selected = fi == p->asset_sel;
@@ -7483,6 +7494,22 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
             ry += ROW;
         }
         (void)rows;   // the clamp happened before the draw, where it belongs
+        // The indicator: a track and a thumb on the right edge of the column,
+        // drawn whenever there is more listing than column. Without it a list
+        // that hides its last entries looks exactly like a list that has none,
+        // and the whole-row rule above makes that MORE true, not less - the
+        // half row that used to peek out was the only hint there was.
+        if (lmax > 0.0f) {
+            const float track_x = list_x + list_w - 7.0f;
+            const float content = (float)want_rows * ROW + 4.0f;
+            float bar_h = list_h * (list_h / content);
+            if (bar_h < 18.0f) bar_h = 18.0f;
+            if (bar_h > list_h) bar_h = list_h;
+            const float tpos = p->proj_list_scroll / lmax;
+            dai_ui_rect(ui, track_x, cols_y, 6.0f, list_h, rgba(0x00, 0x00, 0x00, 60));
+            dai_ui_rect(ui, track_x, cols_y + (list_h - bar_h) * tpos, 6.0f, bar_h,
+                        st->text_dim);
+        }
         dai_ui_clip_end(ui);
     }
 

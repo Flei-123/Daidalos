@@ -104,6 +104,13 @@ DAI_API void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, 
 /* Drone count, tightest gap, fastest drone, and what the last solve cost. The
  * numbers a show director reads before signing anything. */
 DAI_API void dai_show_ui_status(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h);
+/* The verdict the status line puts at its right hand end, as text, without
+ * drawing anything: "no conflicts", "1 conflict", "7 conflicts", "2 formation
+ * faults". It exists so a test can read the sentence the operator reads -
+ * counting words is the only way to catch "1 conflicts", which is not a
+ * cosmetic defect but the line every debrief quotes. Returns the length
+ * written; `buf` is always terminated. */
+DAI_API uint32_t dai_show_ui_verdict(const dai_show_ui *u, char *buf, size_t cap);
 
 DAI_API void dai_show_ui_panels(dai_show_ui *u, dai_ui *ui, struct dai_dock *dock);
 
