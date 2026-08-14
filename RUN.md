@@ -3,6 +3,12 @@
 Everything below was run on this checkout, in this order. Commands are relative
 to the project root.
 
+Every number in this file was measured on commit `44e3a5a`, which is this file's
+parent - the two commits differ in RUN.md alone, because a document cannot
+contain the hash of the commit that contains it. The output the numbers come
+out of is `build/last_run.log`, written by `./build.sh` and appended to by
+`./tools/run_tests.sh`.
+
 ## 1. Build
 
 ```bash
@@ -102,7 +108,7 @@ table:
 ```
 
 It ends in `ok: 354 checks, 0 failures` (the line is in `build/last_run.log`
-after a build, tree at `HASH_OF_THIS_COMMIT`), and on the way it
+after a build, tree at `44e3a5a`), and on the way it
 prints the audit of the show the screenshots are
 taken of, read back out of the exported `.skyc` and
 flown at 40 Hz between the exported frames:
@@ -128,7 +134,7 @@ machine:
 
 | when | commit | machine |
 |---|---|---|
-| 2026-08-14 | `HASH_OF_THIS_COMMIT` | AMD EPYC 7571, 8 cores, 12 GB, Debian 12, g++ 12.2, `-O3`, and other builds running next to it |
+| 2026-08-14 | `44e3a5a` | AMD EPYC 7571, 8 cores, 12 GB, Debian 12, g++ 12.2, `-O3`, and other builds running next to it |
 
 | drones | sample | assign | layer | profile | validate | plan MB | check MB | ticks | wall |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -140,7 +146,7 @@ Read it with the tick column in hand: the fixture's figures grow with the fleet,
 so the 10,000 drone show is also longer than the 1,000 drone one, and part of
 the wall clock difference is show length rather than fleet size. The test
 therefore compares the two rows PER TICK - (8785/2437) / (779/946) = **4.38 x**
-for ten times the drones, on the tree at `HASH_OF_THIS_COMMIT` - and fails the
+for ten times the drones, on the tree at `44e3a5a` - and fails the
 build above 15 x, or above 30 s of wall clock for the big row (`tests/test_droneshow.cpp`,
 the two CHECKs after the table). A quadratic tick would put ten in that ratio on
 its own; a cubic assignment a hundred. An earlier run of the same table on an
