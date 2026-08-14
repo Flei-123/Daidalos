@@ -11,6 +11,9 @@
 //        a validator that reports everything is equally useless.
 //   [5c] planted v_max, a_max, geofence and ground violations are each found
 //        and reported with the right kind.
+//   [5k] a fence episode that is measured first against a side wall and then
+//        against the ceiling reports the WORSE of the two - the deeper
+//        overshoot - together with the limit that overshoot belongs to.
 //   [5d] the conflict list is sorted by (time, a, b) and identical across two
 //        runs of the same input.
 //   [5e] the broadphase is used: pairs_tested per tick is far below n^2/2 on a
@@ -766,6 +769,38 @@ int show_cases_io(void) {
         dai_show_settings s = all_rules();
         expect_one(p, &s, DAI_SHOW_CONFLICT_FENCE, 0, 0, 300.0f, 1e-3f, 200.0f, 0.0f, 1e-4f,
                    "[5j] the geofence");
+        dai_show_plan_destroy(p);
+    }
+    {
+        // [5k] FENCE severity: one episode, two walls.
+        //
+        // The drone hangs a metre past the 200 m side wall for the whole show
+        // and rises through the 150 m ceiling in the middle of it, so a single
+        // unbroken episode is measured first against one limit and then
+        // against another. Which of the two moments is the WORST is the whole
+        // point: fifteen metres over the ceiling is a worse breach than one
+        // metre past the wall, and the only number that says so is the
+        // overshoot. The raw values are 165 and 201, so a rule that keeps the
+        // SMALLER of the two - "lower is worse", which is right for distance
+        // and ground and wrong for a fence - reports a drone that is fifteen
+        // metres out as 165 of 200: comfortably inside a limit it is nowhere
+        // near. The limit has to travel with the value, or the pair that
+        // leaves the validator was never measured together.
+        //
+        // Speed and acceleration are switched off rather than tiptoed around:
+        // this case is about the fence alone, and a rise slow enough to please
+        // a 4 m/s2 limit would take seven minutes of ticks to say the same
+        // thing.
+        std::vector<std::vector<dai_show_key>> d(1);
+        d[0].push_back(key_at( 0.0f, 201.0f,  50.0f, 0.0f, DAI_SHOW_PROFILE_LINEAR));
+        d[0].push_back(key_at(60.0f, 201.0f, 165.0f, 0.0f, DAI_SHOW_PROFILE_LINEAR));
+        d[0].push_back(key_at(70.0f, 201.0f, 165.0f, 0.0f, DAI_SHOW_PROFILE_LINEAR));
+        dai_show_plan *p = hand_plan(d);
+        dai_show_settings s = all_rules();
+        s.v_max_ms  = 0.0f;
+        s.a_max_ms2 = 0.0f;
+        expect_one(p, &s, DAI_SHOW_CONFLICT_FENCE, 0, 0, 165.0f, 1e-3f, 150.0f, 60.0f, 0.2f,
+                   "[5k] the fence severity");
         dai_show_plan_destroy(p);
     }
 

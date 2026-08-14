@@ -182,12 +182,26 @@ inline uint64_t episode_key(uint32_t a, uint32_t b, int kind) {
     return ((uint64_t)a << 34) | ((uint64_t)b << 4) | (uint64_t)(kind & 15);
 }
 
-// Distance, fence and ground get worse as the number falls; speed and
-// acceleration get worse as it rises. One comparison, told which way is down.
-inline bool worse(int kind, float value, float previous) {
-    if (kind == DAI_SHOW_CONFLICT_VMAX || kind == DAI_SHOW_CONFLICT_AMAX)
-        return value > previous;
-    return value < previous;
+// How far past its limit a number is. Distance and ground are broken by
+// falling below the limit; speed, acceleration and the fence by rising above
+// it - the fence included, because its `value` is a coordinate and its `limit`
+// is the wall that coordinate passed.
+//
+// The comparison is on the OVERSHOOT rather than on the raw value, and that is
+// not tidiness. A fence episode can move from a side wall to the ceiling
+// between two ticks, and then the two numbers being compared belong to two
+// different limits: 135 m against a 120 m ceiling is fifteen metres out, 201 m
+// against a 200 m wall is one - the raw values say the opposite of the truth.
+// So the wall travels with the worst instant, and the pair that leaves this
+// file is the pair that was really measured together.
+inline float overshoot(int kind, float value, float limit) {
+    if (kind == DAI_SHOW_CONFLICT_VMAX || kind == DAI_SHOW_CONFLICT_AMAX ||
+        kind == DAI_SHOW_CONFLICT_FENCE)
+        return value - limit;
+    return limit - value;
+}
+inline bool worse(int kind, float value, float limit, const Episode &e) {
+    return overshoot(kind, value, limit) > overshoot(kind, e.worst_value, e.limit);
 }
 
 struct Recorder {
@@ -225,9 +239,10 @@ struct Recorder {
             self_live.push_back((uint32_t)slot);
             return;
         }
-        if (worse(kind, value, e.worst_value)) {
+        if (worse(kind, value, limit, e)) {
             e.worst_value = value;
             e.worst_time  = t;
+            e.limit       = limit;   // the wall it was measured against
         }
         e.last_tick = tick;
     }
@@ -242,7 +257,7 @@ struct Recorder {
             live.emplace(k, e);
             return;
         }
-        if (worse(DAI_SHOW_CONFLICT_DISTANCE, value, it->second.worst_value)) {
+        if (worse(DAI_SHOW_CONFLICT_DISTANCE, value, limit, it->second)) {
             it->second.worst_value = value;
             it->second.worst_time  = t;
         }
