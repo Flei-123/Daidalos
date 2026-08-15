@@ -363,6 +363,18 @@ reader who is told about it can weigh the green total correctly.
   before `[6e]` can use it. The `planted_seen == 1` check limits the damage - two
   pairs at 0.40 m fail the case - but it does not close the hole.
 
+* **The gizmo and the brush are proved as INPUT, not as a picture.**
+  `tests/test_editor_ui.cpp` grabs the X handle where `dai_show_ui_gizmo_handle`
+  says the panel drew it, drags it sixty pixels and checks the figure moved in X
+  and in nothing else; the brush is clicked over the preview and the painted
+  points are counted. That covers the arithmetic and the hit testing. It does
+  NOT cover whether the handle is legible against a bright figure, whether the
+  three colours are distinguishable, or whether the new Figure section in the
+  inspector fits the panel at every width. Those are answers only a screenshot
+  gives, and the screenshots in `.gauntlet-shots/` are taken with the pointer
+  parked outside the preview, so no shot in this repository has a gizmo being
+  dragged in it.
+
 * **Nothing here proves a real drone flies.** The whole suite is a proof about
   a FILE: the plan, the export and the reimported trajectories. Whether an
   aircraft can follow them is a question about thrust, wind and the flight
