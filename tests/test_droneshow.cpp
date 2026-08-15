@@ -419,6 +419,7 @@ int main(int argc, char **argv) {
     show_cases_assign();
     show_cases_plan();
     show_cases_io();
+    show_cases_edit();
     determinism();
     aggregation();
     scaling(!quick);

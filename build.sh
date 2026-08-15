@@ -358,7 +358,7 @@ fi
 # promise that the build skips is a scaling promise nobody is keeping.
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_droneshow.cpp \
     tests/droneshow_cases_sample.cpp tests/droneshow_cases_assign.cpp \
-    tests/droneshow_cases_plan.cpp tests/droneshow_cases_io.cpp \
+    tests/droneshow_cases_plan.cpp tests/droneshow_cases_io.cpp tests/droneshow_cases_edit.cpp \
     $LIBS -o build/test_droneshow
 ./build/test_droneshow
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/test_font

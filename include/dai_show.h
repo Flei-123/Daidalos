@@ -477,6 +477,52 @@ typedef struct dai_show dai_show;
 
 #define DAI_SHOW_NAME_MAX 64
 
+/* ---- where a figure stands ----------------------------------------------
+ *
+ * A formation used to BE a cloud of world coordinates. dai_show_sample_desc
+ * carried a centre and a scale, the sampler baked both into the points, and
+ * from that moment the figure could not be moved: a heart that landed twenty
+ * metres too far east had to be SAMPLED AGAIN, and sampling again is a
+ * different point cloud, a different assignment and a different show. That is
+ * the wrong shape for an editor - it makes "nudge it left" destructive.
+ *
+ * So the points are kept as they came off the mesh, and where they stand is a
+ * separate value that a gizmo can drag:
+ *
+ *     world = position + R(rotation) * (scale * (local - pivot)) + pivot
+ *
+ * R applies X, then Y, then Z. The pivot sits at the figure's own centroid at
+ * the moment it was sampled, so a scale shrinks the figure WHERE IT STANDS
+ * rather than dragging it towards the show origin - which is what every 3D
+ * editor does and what a director expects.
+ *
+ * IDENTITY IS EXACT, and that is not an optimisation. When position is zero,
+ * rotation is zero and scale is one, world == local bit for bit: no multiply,
+ * no add, no rounding. Every show written before this field existed loads with
+ * an identity transform, and it has to solve to the same plan it solved to
+ * yesterday down to the last bit. A determinism promise that a new feature can
+ * quietly move by one ulp is not a promise.
+ *
+ * THE CATCH, and it is a real one. min_distance is a WORLD distance. Scaling a
+ * figure by 0.5 halves every gap inside it, so a figure that was legal at 1.0
+ * is a crash at 0.5 - the gizmo can build a collision that the sampler would
+ * have refused to produce. dai_show_formation_min_spacing measures the closest
+ * pair AFTER the transform, cheaply enough to call while a value is being
+ * dragged, so the panel can say it then rather than the validator saying it
+ * after the show is built.
+ */
+typedef struct dai_show_transform {
+    dai_vec3 position;            /* metres, added last                        */
+    dai_vec3 rotation_deg;        /* degrees, applied X then Y then Z          */
+    dai_vec3 scale;               /* per axis; 1,1,1 is identity               */
+} dai_show_transform;
+
+DAI_API dai_show_transform dai_show_transform_identity(void);
+/* Exactly identity - the test the world cache takes to decide whether it may
+ * copy rather than compute. Compares against 0/0/1 with ==, on purpose: this
+ * asks "was this ever touched", not "is it nearly straight". */
+DAI_API int dai_show_transform_is_identity(const dai_show_transform *t);
+
 typedef struct dai_show_formation_info {
     char     name[DAI_SHOW_NAME_MAX];
     char     source[128];         /* the asset it was sampled from, or ""      */
@@ -484,6 +530,12 @@ typedef struct dai_show_formation_info {
     float    hold_s;              /* how long the figure stands still          */
     int      sample_mode;
     float    t_start;             /* derived: where it lands on the timeline   */
+    /* Appended, so every field above keeps its offset and a caller compiled
+     * against the older struct still reads what it always read. */
+    dai_show_transform xf;        /* where the figure stands                   */
+    dai_vec3 pivot;               /* the local point xf turns and scales about */
+    int      colour_override;     /* 1 = the whole figure is `colour`          */
+    uint8_t  colour[4];           /* r, g, b, w of that override               */
 } dai_show_formation_info;
 
 DAI_API dai_show *dai_show_create(const dai_show_settings *s);
@@ -516,6 +568,53 @@ DAI_API int      dai_show_formation_remove(dai_show *sh, uint32_t i);
 DAI_API int      dai_show_formation_move(dai_show *sh, uint32_t i, int delta);
 DAI_API int      dai_show_formation_rename(dai_show *sh, uint32_t i, const char *name);
 DAI_API int      dai_show_formation_set_hold(dai_show *sh, uint32_t i, float hold_s);
+
+/* ---- moving a figure, and colouring it ----------------------------------- */
+
+DAI_API int dai_show_formation_get_transform(const dai_show *sh, uint32_t i,
+                                             dai_show_transform *out);
+/* Invalidates the plan, like every other edit that changes where a drone flies.
+ * A scale of zero on any axis is refused rather than silently collapsing the
+ * figure onto a point - N drones at one coordinate is not a small figure, it is
+ * N drones in the same cubic metre. */
+DAI_API int dai_show_formation_set_transform(dai_show *sh, uint32_t i,
+                                             const dai_show_transform *xf);
+
+/* The points as they came off the mesh, before the transform.
+ * dai_show_formation_points gives the world ones - which is what the solver,
+ * the exporter and the preview want, and why that function keeps its name. */
+DAI_API const dai_show_point *dai_show_formation_local_points(const dai_show *sh, uint32_t i);
+
+/* The closest pair in the figure, in world metres, after the transform. A
+ * uniform grid, not n^2: this is called from a panel while a scale is dragged,
+ * and 10,000 drones squared per frame is not a thing a panel may do. Returns a
+ * negative number when there is no pair to measure. */
+DAI_API float dai_show_formation_min_spacing(const dai_show *sh, uint32_t i);
+
+/* THREE LEVELS OF COLOUR, and the order matters.
+ *
+ *   1 the mesh      - what the sampler read out of vertex colours or a texture
+ *   2 the point     - one drone's colour, painted by hand, stored in the point
+ *   3 the figure    - one colour over the whole formation, a switch not a paint
+ *
+ * The figure override WINS while it is on, which raises the obvious trap:
+ * painting a point under an override is an edit nobody can see. So painting
+ * FLATTENS - dai_show_formation_set_point_colour first bakes the override into
+ * every point, then turns it off, then paints. Nothing jumps on screen, nothing
+ * is lost, and what the user sees after the click is what he asked for.
+ *
+ * Colour belongs to the POINT, never to the drone number. Which drone flies to
+ * which point is the assignment's answer and it changes whenever the figure,
+ * the fleet or the minimum distance changes; a red drone 99 would wander across
+ * the figure every time the solver ran. */
+DAI_API int dai_show_formation_get_colour(const dai_show *sh, uint32_t i,
+                                          int *on, uint8_t rgbw[4]);
+DAI_API int dai_show_formation_set_colour(dai_show *sh, uint32_t i, int on,
+                                          uint8_t r, uint8_t g, uint8_t b, uint8_t w);
+/* Paints `n` points of formation `i`. `idx` is NULL to mean "all of them". */
+DAI_API int dai_show_formation_set_point_colour(dai_show *sh, uint32_t i,
+                                                const uint32_t *idx, uint32_t n,
+                                                uint8_t r, uint8_t g, uint8_t b, uint8_t w);
 
 /* Which formation a moment on the timeline belongs to: the one being flown into
  * while a transition runs, and the one standing still while it holds. This is

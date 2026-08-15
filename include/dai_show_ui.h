@@ -77,6 +77,34 @@ DAI_API void dai_show_ui_mesh(dai_show_ui *u, const dai_show_sample_desc *desc,
 DAI_API uint32_t dai_show_ui_selected_drone(const dai_show_ui *u);
 DAI_API int      dai_show_ui_selected_conflict(const dai_show_ui *u);
 
+/* ---- the figure being edited, and the tools that edit it -----------------
+ *
+ * The storyboard, the figure list and the inspector all talk about ONE
+ * selected figure, and the viewport draws its gizmo. A host that wants a
+ * keyboard shortcut or a menu item for any of that needs to be able to say so
+ * from outside - and a test that wants to grab a handle the way a user does
+ * needs to know where the handle was drawn.
+ *
+ * dai_show_ui_gizmo_handle reports where the three axis handles ENDED UP on
+ * screen in the last frame the viewport drew, in window pixels, or 0 when that
+ * axis was not on screen. It is a read of what was drawn, never a second
+ * computation of it: a test that projected the pivot itself would be checking
+ * its own arithmetic rather than the gizmo the user grabs. */
+DAI_API void     dai_show_ui_select_formation(dai_show_ui *u, uint32_t i);
+DAI_API uint32_t dai_show_ui_selected_formation(const dai_show_ui *u);
+DAI_API int      dai_show_ui_gizmo_handle(const dai_show_ui *u, int axis,
+                                          float *sx, float *sy);
+
+/* The point brush. `pick_on` makes a click in the preview select a point of the
+ * selected figure; `paint_on` makes a drag colour every point under the brush.
+ * Colour is set on the POINT, never on the drone number - which drone stands
+ * there is the assignment's answer and it changes every time the show is
+ * solved. */
+DAI_API void     dai_show_ui_pick_mode(dai_show_ui *u, int pick_on, int paint_on);
+DAI_API void     dai_show_ui_brush(dai_show_ui *u, float radius_px,
+                                   uint8_t r, uint8_t g, uint8_t b);
+DAI_API uint32_t dai_show_ui_picked_point(const dai_show_ui *u);
+
 /* ---- the panels ----------------------------------------------------------
  * Each fills the rectangle the dock handed out. Called directly by a host that
  * lays out its own windows; dai_show_ui_panels does the ordinary thing of

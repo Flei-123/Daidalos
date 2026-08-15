@@ -65,7 +65,7 @@ struct dai_show_plan {
 
 namespace {
 
-const int  FORMAT_VERSION = 1;
+const int  FORMAT_VERSION = 2;   // 2 adds the formation transform and the colour override
 const char MAGIC[] = "daidalos-show";
 
 // How many conflicts the document keeps for the panel. The validator's stats
@@ -77,12 +77,119 @@ const uint32_t CONFLICT_LIMIT = 8192;
 struct Formation {
     std::string                 name;
     std::string                 source;
-    std::vector<dai_show_point> pts;
+    // TWO copies of the figure, and the split is the whole point of the
+    // transform: `local` is what came off the mesh and is never touched by a
+    // move, `pts` is that put through `xf` and is what the solver, the
+    // exporter and the preview read. Everything downstream already asked for
+    // world coordinates, so the cache keeps the name they already use and not
+    // one line of the pipeline had to learn about a transform.
+    std::vector<dai_show_point> local;
+    std::vector<dai_show_point> pts;               // = local through xf, cached
+    dai_show_transform          xf;
+    dai_vec3                    pivot = { 0.0f, 0.0f, 0.0f };
+    int                         colour_override = 0;
+    uint8_t                     ovr[4] = { 255, 255, 255, 0 };
     float                       hold_s = 4.0f;
     int                         sample_mode = DAI_SHOW_SAMPLE_SURFACE;
     float                       t_start = 0.0f;    // derived by the last solve
     dai_show_transition         tr;                // the move INTO this one
 };
+
+// local -> world, plus the colour override, into the cache everything reads.
+//
+// The identity path COPIES. It does not multiply by one and add zero: a show
+// saved before this field existed has to solve to the same plan it solved to
+// before, bit for bit, and (x - p) * 1 + p is not x for every float x. A
+// feature that moves an untouched show by one ulp has broken the determinism
+// rule this engine is built on, quietly, in the one place nobody looks.
+void rebuild(Formation &f) {
+    f.pts.resize(f.local.size());
+    const size_t n = f.local.size();
+    if (dai_show_transform_is_identity(&f.xf)) {
+        for (size_t k = 0; k < n; ++k) f.pts[k] = f.local[k];
+    } else {
+        const float rx = f.xf.rotation_deg.x * (float)(3.14159265358979323846 / 180.0);
+        const float ry = f.xf.rotation_deg.y * (float)(3.14159265358979323846 / 180.0);
+        const float rz = f.xf.rotation_deg.z * (float)(3.14159265358979323846 / 180.0);
+        const float cx = std::cos(rx), sx = std::sin(rx);
+        const float cy = std::cos(ry), sy = std::sin(ry);
+        const float cz = std::cos(rz), sz = std::sin(rz);
+        // Rz * Ry * Rx, written out once rather than three matrix products per
+        // point: ten thousand points times a dragged slider is a per-frame cost.
+        const float m00 =  cz * cy;
+        const float m01 =  cz * sy * sx - sz * cx;
+        const float m02 =  cz * sy * cx + sz * sx;
+        const float m10 =  sz * cy;
+        const float m11 =  sz * sy * sx + cz * cx;
+        const float m12 =  sz * sy * cx - cz * sx;
+        const float m20 = -sy;
+        const float m21 =  cy * sx;
+        const float m22 =  cy * cx;
+        for (size_t k = 0; k < n; ++k) {
+            const dai_show_point &l = f.local[k];
+            float ax = (l.x - f.pivot.x) * f.xf.scale.x;
+            float ay = (l.y - f.pivot.y) * f.xf.scale.y;
+            float az = (l.z - f.pivot.z) * f.xf.scale.z;
+            dai_show_point w = l;
+            w.x = f.xf.position.x + m00 * ax + m01 * ay + m02 * az + f.pivot.x;
+            w.y = f.xf.position.y + m10 * ax + m11 * ay + m12 * az + f.pivot.y;
+            w.z = f.xf.position.z + m20 * ax + m21 * ay + m22 * az + f.pivot.z;
+            f.pts[k] = w;
+        }
+    }
+    if (f.colour_override) {
+        for (size_t k = 0; k < n; ++k) {
+            f.pts[k].r = f.ovr[0]; f.pts[k].g = f.ovr[1];
+            f.pts[k].b = f.ovr[2]; f.pts[k].w = f.ovr[3];
+        }
+    }
+}
+
+// Where one keyframe's COLOUR came from, so a colour can be changed without
+// throwing away a solve.
+//
+// Colour is not geometry. Repainting a figure moves no drone, breaks no
+// minimum distance and invalidates no assignment - but the colour lives in the
+// keyframes, so without this the only honest thing the editor could do after a
+// click on a swatch is discard the plan and make the user solve ten thousand
+// drones again to see a shade of blue. That is not a tool, that is a dare.
+//
+// So the solve records, per key, which two formation points that key's colour
+// was mixed from and at what fraction, and a repaint walks the list. Sixteen
+// bytes per key against the twenty-four the key itself costs; a ten thousand
+// drone show is a couple of megabytes of it, which is the same order as the
+// plan and orders below the array of ticks this design exists to avoid.
+struct KeySrc {
+    uint32_t form;   // the formation being flown INTO, or held at
+    uint32_t pa;     // point index in forms[form - 1]; == pb while standing
+    uint32_t pb;     // point index in forms[form]
+    float    s;      // the mix: 0 = the colour of a, 1 = the colour of b
+};
+
+inline uint8_t mix_u8(uint8_t a, uint8_t b, float s) {
+    // The same arithmetic daishow::lerp_u8 does, so a repainted key is byte for
+    // byte the key a fresh solve would have produced. Two roundings that differ
+    // by one would make "recolour" and "solve again" two different pictures.
+    float v = (float)a + ((float)b - (float)a) * s;
+    v = v + 0.5f;
+    if (!(v > 0.0f)) v = 0.0f;
+    if (v > 255.0f)  v = 255.0f;
+    return (uint8_t)v;
+}
+
+dai_vec3 centroid_of(const std::vector<dai_show_point> &v) {
+    dai_vec3 c = { 0.0f, 0.0f, 0.0f };
+    if (v.empty()) return c;
+    // Summed in double and in index order: the pivot is part of every world
+    // coordinate the show is flown at, so it may not depend on how the compiler
+    // felt about reassociating a float sum.
+    double sx = 0.0, sy = 0.0, sz = 0.0;
+    for (size_t i = 0; i < v.size(); ++i) { sx += v[i].x; sy += v[i].y; sz += v[i].z; }
+    c.x = (float)(sx / (double)v.size());
+    c.y = (float)(sy / (double)v.size());
+    c.z = (float)(sz / (double)v.size());
+    return c;
+}
 
 // What one transition cost. Kept per transition as well as summed, because the
 // two questions a director asks are different ones: "what did this show cost"
@@ -208,6 +315,10 @@ struct dai_show {
     std::vector<dai_show_conflict> conflicts;
     std::vector<TrStats>           tr_stats;          // one per formation, [0] unused
     double                         sample_ms = 0.0;   // accumulated over the mesh samples
+    // Parallel to plan->keys, filled by the solve, read by a repaint. Empty
+    // when there is no plan, and a size mismatch is treated as "do not touch"
+    // rather than as an index to trust.
+    std::vector<KeySrc>            key_src;
 };
 
 namespace {
@@ -300,6 +411,33 @@ int first_endpoint_pair(const dai_show_point *p, uint32_t n, float min_d,
     if (out_b) *out_b = bb;
     if (out_gap) *out_gap = bgap;
     return 1;
+}
+
+// A repaint, straight into the plan the last solve left behind.
+//
+// Nothing here decides anything: it re-reads the colour of the two formation
+// points every key was mixed from and mixes them again at the same fraction.
+// No position is touched, so the show that was validated is still the show in
+// memory - which is why a colour edit may keep the "no conflicts" badge while a
+// moved figure may not.
+void recolour(dai_show *sh) {
+    if (!sh || !sh->plan) return;
+    if (sh->key_src.size() != sh->plan->keys.size()) return;  // out of step: leave it alone
+    const size_t nf = sh->forms.size();
+    for (size_t k = 0; k < sh->plan->keys.size(); ++k) {
+        const KeySrc &src = sh->key_src[k];
+        if (src.form >= nf) continue;
+        const Formation &fb = sh->forms[src.form];
+        const Formation &fa = (src.form == 0) ? fb : sh->forms[src.form - 1];
+        if (src.pa >= fa.pts.size() || src.pb >= fb.pts.size()) continue;
+        const dai_show_point &A = fa.pts[src.pa];
+        const dai_show_point &B = fb.pts[src.pb];
+        dai_show_point &o = sh->plan->keys[k].p;
+        o.r = mix_u8(A.r, B.r, src.s);
+        o.g = mix_u8(A.g, B.g, src.s);
+        o.b = mix_u8(A.b, B.b, src.s);
+        o.w = mix_u8(A.w, B.w, src.s);
+    }
 }
 
 } // namespace
@@ -455,7 +593,15 @@ uint32_t dai_show_formation_add(dai_show *sh, const char *name, const char *sour
     Formation f;
     f.name   = name ? name : "formation";
     f.source = source ? source : "";
-    f.pts.assign(pts, pts + n);
+    // What comes in is where the figure stands today, so it becomes the LOCAL
+    // shape and the transform starts at identity - which means the world cache
+    // is a copy of it and this call behaves exactly as it did before there was
+    // a transform at all. The pivot goes to the figure's own centre so the
+    // first thing a user does with the gizmo (scale) does the expected thing.
+    f.local.assign(pts, pts + n);
+    f.xf    = dai_show_transform_identity();
+    f.pivot = centroid_of(f.local);
+    rebuild(f);
     f.hold_s = (hold_s > 0.0f) ? hold_s : 0.0f;
     f.tr     = dai_show_transition_default();
     sh->forms.push_back(f);
@@ -506,6 +652,11 @@ int dai_show_formation_get(const dai_show *sh, uint32_t i, dai_show_formation_in
     out->hold_s      = f.hold_s;
     out->sample_mode = f.sample_mode;
     out->t_start     = f.t_start;
+    out->xf          = f.xf;
+    out->pivot       = f.pivot;
+    out->colour_override = f.colour_override;
+    out->colour[0] = f.ovr[0]; out->colour[1] = f.ovr[1];
+    out->colour[2] = f.ovr[2]; out->colour[3] = f.ovr[3];
     return 1;
 }
 
@@ -568,6 +719,198 @@ int dai_show_formation_set_hold(dai_show *sh, uint32_t i, float hold_s) {
     return 1;
 }
 
+/* ---- moving a figure, and colouring it ------------------------------------ */
+
+dai_show_transform dai_show_transform_identity(void) {
+    dai_show_transform t;
+    t.position     = dai_vec3{ 0.0f, 0.0f, 0.0f };
+    t.rotation_deg = dai_vec3{ 0.0f, 0.0f, 0.0f };
+    t.scale        = dai_vec3{ 1.0f, 1.0f, 1.0f };
+    return t;
+}
+
+int dai_show_transform_is_identity(const dai_show_transform *t) {
+    if (!t) return 0;
+    return t->position.x == 0.0f && t->position.y == 0.0f && t->position.z == 0.0f &&
+           t->rotation_deg.x == 0.0f && t->rotation_deg.y == 0.0f && t->rotation_deg.z == 0.0f &&
+           t->scale.x == 1.0f && t->scale.y == 1.0f && t->scale.z == 1.0f;
+}
+
+int dai_show_formation_get_transform(const dai_show *sh, uint32_t i, dai_show_transform *out) {
+    if (!sh || !out || i >= sh->forms.size()) return 0;
+    *out = sh->forms[i].xf;
+    return 1;
+}
+
+int dai_show_formation_set_transform(dai_show *sh, uint32_t i, const dai_show_transform *xf) {
+    if (!sh || !xf || i >= sh->forms.size()) return 0;
+    // A zero scale is not a very small figure, it is every drone in the fleet
+    // at one coordinate - the collision the sampler exists to refuse, arrived
+    // at through the inspector. Refused here rather than reported later.
+    if (!(xf->scale.x != 0.0f) || !(xf->scale.y != 0.0f) || !(xf->scale.z != 0.0f)) return 0;
+    if (xf->scale.x != xf->scale.x || xf->scale.y != xf->scale.y || xf->scale.z != xf->scale.z) return 0;
+    if (xf->position.x != xf->position.x || xf->position.y != xf->position.y ||
+        xf->position.z != xf->position.z) return 0;
+    if (xf->rotation_deg.x != xf->rotation_deg.x || xf->rotation_deg.y != xf->rotation_deg.y ||
+        xf->rotation_deg.z != xf->rotation_deg.z) return 0;
+    sh->forms[i].xf = *xf;
+    rebuild(sh->forms[i]);
+    // Where a drone flies has changed, so the plan and its verdict are gone -
+    // the same rule a new hold time or a new minimum distance follows.
+    dai_show_plan_destroy(sh->plan);
+    sh->plan = nullptr;
+    sh->conflicts.clear();
+    sh->tr_stats.clear();
+    return 1;
+}
+
+const dai_show_point *dai_show_formation_local_points(const dai_show *sh, uint32_t i) {
+    if (!sh || i >= sh->forms.size() || sh->forms[i].local.empty()) return nullptr;
+    return sh->forms[i].local.data();
+}
+
+float dai_show_formation_min_spacing(const dai_show *sh, uint32_t i) {
+    if (!sh || i >= sh->forms.size()) return -1.0f;
+    const std::vector<dai_show_point> &p = sh->forms[i].pts;
+    const size_t n = p.size();
+    if (n < 2) return -1.0f;
+
+    // A uniform grid, cell by cell, so only the 27 neighbouring buckets are ever
+    // tested. The same shape the validator uses and for the same reason: this is
+    // called while a scale is being DRAGGED, and ten thousand squared per frame
+    // is 10^8 distance tests for one number in a panel.
+    //
+    // The subtlety, and it cost a failing test to find: a grid of cell c can
+    // only be TRUSTED about pairs closer than c. Two points three cells apart
+    // are never compared, so a figure whose drones stand well beyond the cell
+    // size returns "found nothing" - which is not an answer, it is silence
+    // wearing an answer's clothes. So the cell starts at the average spacing
+    // the point count implies and DOUBLES until the closest pair it finds is
+    // inside one cell; at that moment the result is exact, because any pair
+    // closer than a cell is guaranteed to have been looked at.
+    float lo[3] = { p[0].x, p[0].y, p[0].z }, hi[3] = { p[0].x, p[0].y, p[0].z };
+    for (size_t k = 1; k < n; ++k) {
+        if (p[k].x < lo[0]) lo[0] = p[k].x;
+        if (p[k].x > hi[0]) hi[0] = p[k].x;
+        if (p[k].y < lo[1]) lo[1] = p[k].y;
+        if (p[k].y > hi[1]) hi[1] = p[k].y;
+        if (p[k].z < lo[2]) lo[2] = p[k].z;
+        if (p[k].z > hi[2]) hi[2] = p[k].z;
+    }
+    float ext = hi[0] - lo[0];
+    if (hi[1] - lo[1] > ext) ext = hi[1] - lo[1];
+    if (hi[2] - lo[2] > ext) ext = hi[2] - lo[2];
+    if (!(ext > 0.0f)) return 0.0f;                 // every point in one place
+
+    float cell = ext / (float)std::max(1.0, std::cbrt((double)n));
+    if (!(cell > 1e-6f)) cell = ext;
+
+    auto hash_of = [](int32_t x, int32_t y, int32_t z) -> uint64_t {
+        return ((uint64_t)(uint32_t)x * 73856093ull) ^
+               ((uint64_t)(uint32_t)y * 19349663ull) ^
+               ((uint64_t)(uint32_t)z * 83492791ull);
+    };
+    std::unordered_map<uint64_t, std::vector<uint32_t> > grid;
+    std::vector<int32_t> kx(n), ky(n), kz(n);
+
+    // The bound: doubling from the average spacing reaches the diagonal of the
+    // figure in a handful of rounds, and at the diagonal every point shares one
+    // bucket - so the last round is an exhaustive check rather than a give up.
+    for (int round = 0; round < 40; ++round) {
+        const float inv = 1.0f / cell;
+        grid.clear();
+        grid.reserve(n * 2);
+        for (size_t k = 0; k < n; ++k) {
+            kx[k] = (int32_t)std::floor((p[k].x - lo[0]) * inv);
+            ky[k] = (int32_t)std::floor((p[k].y - lo[1]) * inv);
+            kz[k] = (int32_t)std::floor((p[k].z - lo[2]) * inv);
+            grid[hash_of(kx[k], ky[k], kz[k])].push_back((uint32_t)k);
+        }
+
+        double best = -1.0;
+        for (size_t k = 0; k < n; ++k) {
+            for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy)
+            for (int dz = -1; dz <= 1; ++dz) {
+                std::unordered_map<uint64_t, std::vector<uint32_t> >::const_iterator it =
+                    grid.find(hash_of(kx[k] + dx, ky[k] + dy, kz[k] + dz));
+                if (it == grid.end()) continue;
+                const std::vector<uint32_t> &b = it->second;
+                for (size_t m = 0; m < b.size(); ++m) {
+                    uint32_t j = b[m];
+                    if ((size_t)j <= k) continue;     // each pair once, lower index first
+                    double ddx = (double)p[j].x - (double)p[k].x;
+                    double ddy = (double)p[j].y - (double)p[k].y;
+                    double ddz = (double)p[j].z - (double)p[k].z;
+                    double d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                    if (best < 0.0 || d2 < best) best = d2;
+                }
+            }
+        }
+        // A hash collision only ever ADDS candidates, it never hides a pair, so
+        // an answer that is inside one cell is the exact answer and not an
+        // estimate of it.
+        if (best >= 0.0 && std::sqrt(best) <= (double)cell) return (float)std::sqrt(best);
+        if (cell > ext * 2.0f) return best < 0.0 ? -1.0f : (float)std::sqrt(best);
+        cell *= 2.0f;
+    }
+    return -1.0f;
+}
+
+int dai_show_formation_get_colour(const dai_show *sh, uint32_t i, int *on, uint8_t rgbw[4]) {
+    if (!sh || i >= sh->forms.size()) return 0;
+    const Formation &f = sh->forms[i];
+    if (on) *on = f.colour_override;
+    if (rgbw) { rgbw[0] = f.ovr[0]; rgbw[1] = f.ovr[1]; rgbw[2] = f.ovr[2]; rgbw[3] = f.ovr[3]; }
+    return 1;
+}
+
+int dai_show_formation_set_colour(dai_show *sh, uint32_t i, int on,
+                                  uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
+    if (!sh || i >= sh->forms.size()) return 0;
+    Formation &f = sh->forms[i];
+    f.colour_override = on ? 1 : 0;
+    f.ovr[0] = r; f.ovr[1] = g; f.ovr[2] = b; f.ovr[3] = w;
+    rebuild(f);
+    // Colour changes no geometry, so the PLAN survives - but the colours it
+    // carries came from the formation, so they have to be refreshed. Cheaper
+    // and more honest than throwing a solve away over a swatch: the keyframes
+    // hold the colour, so they are the thing that is updated.
+    recolour(sh);
+    return 1;
+}
+
+int dai_show_formation_set_point_colour(dai_show *sh, uint32_t i, const uint32_t *idx,
+                                        uint32_t n, uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
+    if (!sh || i >= sh->forms.size()) return 0;
+    Formation &f = sh->forms[i];
+    const uint32_t count = (uint32_t)f.local.size();
+    // Painting under an override is an edit nobody can see. So the override is
+    // FLATTENED into the points first and switched off: nothing on screen
+    // moves, nothing is lost, and the next click paints what it says it paints.
+    if (f.colour_override) {
+        for (uint32_t k = 0; k < count; ++k) {
+            f.local[k].r = f.ovr[0]; f.local[k].g = f.ovr[1];
+            f.local[k].b = f.ovr[2]; f.local[k].w = f.ovr[3];
+        }
+        f.colour_override = 0;
+    }
+    if (!idx) {
+        for (uint32_t k = 0; k < count; ++k) {
+            f.local[k].r = r; f.local[k].g = g; f.local[k].b = b; f.local[k].w = w;
+        }
+    } else {
+        for (uint32_t m = 0; m < n; ++m) {
+            uint32_t k = idx[m];
+            if (k >= count) continue;
+            f.local[k].r = r; f.local[k].g = g; f.local[k].b = b; f.local[k].w = w;
+        }
+    }
+    rebuild(f);
+    recolour(sh);
+    return 1;
+}
+
 int dai_show_transition_get(const dai_show *sh, uint32_t i, dai_show_transition *out) {
     if (!sh || !out || i == 0 || i >= sh->forms.size()) return 0;
     *out = sh->forms[i].tr;
@@ -612,6 +955,12 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         }
 
     std::vector<std::vector<dai_show_key> > keys((size_t)n);
+    // Parallel to `keys`, and filled at every single push below: where each
+    // key's colour was mixed from. It costs one struct per keyframe and it buys
+    // a colour edit that does not throw the solve away.
+    std::vector<std::vector<KeySrc> >       ksrc((size_t)n);
+    std::vector<uint32_t>       cur_pt(n);      // which point of the current figure
+    sh->key_src.clear();
     std::vector<dai_show_point> cur(sh->forms[0].pts);
     std::vector<dai_show_point> nxt(n);
     std::vector<uint32_t>       perm(n);
@@ -619,9 +968,12 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
 
     for (uint32_t d = 0; d < n; ++d) {
         keys[d].reserve(sh->forms.size() * 3 + 2);
+        ksrc[d].reserve(sh->forms.size() * 3 + 2);
+        cur_pt[d] = d;                       // formation 0 is flown in drone order
         dai_show_key k;
         k.t = 0.0f; k.p = cur[d]; k.profile = DAI_SHOW_PROFILE_LINEAR;
         keys[d].push_back(k);
+        ksrc[d].push_back(KeySrc{ 0u, d, d, 1.0f });
     }
 
     float t_cursor = sh->forms[0].hold_s;
@@ -631,6 +983,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
             dai_show_key k;
             k.t = t_cursor; k.p = cur[d]; k.profile = DAI_SHOW_PROFILE_LINEAR;
             keys[d].push_back(k);
+            ksrc[d].push_back(KeySrc{ 0u, d, d, 1.0f });
         }
     }
 
@@ -715,10 +1068,14 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
             const dai_show_leg &g = legs[d];
             const dai_show_point a = cur[d];
             const dai_show_point b = nxt[perm[d]];
+            const uint32_t pa = cur_pt[d], pb = perm[d];
+            const uint32_t fi = (uint32_t)i;
+            const float    span = g.t_end - g.t_start;
             dai_show_key k;
             if (g.t_start > keys[d].back().t) {          // staggered or delayed: wait first
                 k.t = g.t_start; k.p = a; k.profile = DAI_SHOW_PROFILE_LINEAR;
                 keys[d].push_back(k);
+                ksrc[d].push_back(KeySrc{ fi, pa, pb, 0.0f });
             }
             uint32_t steps = daishow::leg_key_count(&g, &sh->s);
             for (uint32_t st = 1; st <= steps; ++st) {
@@ -728,16 +1085,26 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
                 else daishow::leg_point(&g, &a, &b, k.t, &k.p);
                 k.profile = (steps == 1) ? g.profile : DAI_SHOW_PROFILE_LINEAR;
                 keys[d].push_back(k);
+                // The same fraction leg_point mixed the colour at, from the
+                // same function - not a second opinion about the easing.
+                float uu = (span > 0.0f) ? (k.t - g.t_start) / span : 1.0f;
+                if (uu < 0.0f) uu = 0.0f;
+                if (uu > 1.0f) uu = 1.0f;
+                float mix = (st == steps) ? 1.0f : daishow::ease_profile(g.profile, uu);
+                ksrc[d].push_back(KeySrc{ fi, pa, pb, mix });
             }
             if (t_arrive > g.t_end) {                    // hold formation until the last one lands
                 k.t = t_arrive; k.p = b; k.profile = DAI_SHOW_PROFILE_LINEAR;
                 keys[d].push_back(k);
+                ksrc[d].push_back(KeySrc{ fi, pa, pb, 1.0f });
             }
             if (f.hold_s > 0.0f) {
                 k.t = t_arrive + f.hold_s; k.p = b; k.profile = DAI_SHOW_PROFILE_LINEAR;
                 keys[d].push_back(k);
+                ksrc[d].push_back(KeySrc{ fi, pa, pb, 1.0f });
             }
-            cur[d] = b;
+            cur[d]    = b;
+            cur_pt[d] = pb;
         }
         sh->timings.profile_ms += now_ms() - t0;
 
@@ -752,7 +1119,11 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
     size_t total = 0;
     for (uint32_t d = 0; d < n; ++d) { counts[d] = (uint32_t)keys[d].size(); total += counts[d]; }
     flat.reserve(total);
-    for (uint32_t d = 0; d < n; ++d) flat.insert(flat.end(), keys[d].begin(), keys[d].end());
+    sh->key_src.reserve(total);
+    for (uint32_t d = 0; d < n; ++d) {
+        flat.insert(flat.end(), keys[d].begin(), keys[d].end());
+        sh->key_src.insert(sh->key_src.end(), ksrc[d].begin(), ksrc[d].end());
+    }
     sh->plan = dai_show_plan_from_keys(n, counts.data(), flat.data());
 
     if (unresolved_total > 0) {
@@ -858,12 +1229,34 @@ dai_result dai_show_save(const dai_show *sh, const char *path, char *err, size_t
         if (i > 0 && !tr_equal(f.tr, td))
             put(out, "  transition %s %d %d %s %d\n", fstr(f.tr.duration_s).c_str(),
                 f.tr.profile, f.tr.timing, fstr(f.tr.stagger_s).c_str(), f.tr.assign_method);
-        // The points as a block. Ten thousand of them per formation is the one
-        // place in this engine where a line of prose per property would be
-        // silly - seven fields, one point, no keys.
-        put(out, "  points %u\n", (unsigned)f.pts.size());
-        for (size_t k = 0; k < f.pts.size(); ++k) {
-            const dai_show_point &p = f.pts[k];
+        // Where the figure stands, and only when it has been moved: an
+        // untouched formation writes no transform line at all, so every show
+        // file written before this field existed re-reads identical.
+        if (!dai_show_transform_is_identity(&f.xf)) {
+            put(out, "  transform %s %s %s %s %s %s %s %s %s\n",
+                fstr(f.xf.position.x).c_str(), fstr(f.xf.position.y).c_str(),
+                fstr(f.xf.position.z).c_str(),
+                fstr(f.xf.rotation_deg.x).c_str(), fstr(f.xf.rotation_deg.y).c_str(),
+                fstr(f.xf.rotation_deg.z).c_str(),
+                fstr(f.xf.scale.x).c_str(), fstr(f.xf.scale.y).c_str(),
+                fstr(f.xf.scale.z).c_str());
+            // Saved rather than recomputed, because the pivot is part of every
+            // world coordinate a moved figure has: a centroid that shifted by
+            // one ulp between two builds would move the whole show.
+            put(out, "  pivot %s %s %s\n", fstr(f.pivot.x).c_str(),
+                fstr(f.pivot.y).c_str(), fstr(f.pivot.z).c_str());
+        }
+        if (f.colour_override)
+            put(out, "  colour %u %u %u %u\n", f.ovr[0], f.ovr[1], f.ovr[2], f.ovr[3]);
+        // The points as a block, LOCAL - what came off the mesh. The world
+        // positions are the transform applied to these and are never stored:
+        // a file that carried both would be a file that can disagree with
+        // itself. Ten thousand of them per formation is the one place in this
+        // engine where a line of prose per property would be silly - seven
+        // fields, one point, no keys.
+        put(out, "  points %u\n", (unsigned)f.local.size());
+        for (size_t k = 0; k < f.local.size(); ++k) {
+            const dai_show_point &p = f.local[k];
             put(out, "    %s %s %s %u %u %u %u\n", fstr(p.x).c_str(), fstr(p.y).c_str(),
                 fstr(p.z).c_str(), p.r, p.g, p.b, p.w);
         }
@@ -914,6 +1307,12 @@ dai_show *dai_show_load(const char *path, char *err, size_t err_len) {
         dai_show_transition tr = { 0.0f, 0, 0, 0.0f, 0 };
         bool  has_tr = false;
         std::vector<dai_show_point> pts;
+        dai_show_transform xf = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f } };
+        bool     has_xf = false;
+        dai_vec3 pivot = { 0.0f, 0.0f, 0.0f };
+        bool     has_pivot = false;
+        int      colour_on = 0;
+        uint8_t  ovr[4] = { 255, 255, 255, 0 };
     };
     std::vector<Loaded> forms;
 
@@ -954,6 +1353,40 @@ dai_show *dai_show_load(const char *path, char *err, size_t err_len) {
         else if (tok == "source")      fm.source = rest_of_line(lp);
         else if (tok == "hold")        fm.hold   = (float)atof(skip_ws(lp));
         else if (tok == "sample-mode") fm.mode   = atoi(skip_ws(lp));
+        else if (tok == "transform") {
+            char *e = nullptr;
+            const char *q = skip_ws(lp);
+            float v[9];
+            int ok = 1;
+            for (int c = 0; c < 9; ++c) {
+                v[c] = (float)strtod(q, &e);
+                if (e == q) { ok = 0; break; }
+                q = e;
+            }
+            if (ok) {
+                fm.xf.position     = dai_vec3{ v[0], v[1], v[2] };
+                fm.xf.rotation_deg = dai_vec3{ v[3], v[4], v[5] };
+                fm.xf.scale        = dai_vec3{ v[6], v[7], v[8] };
+                fm.has_xf = true;
+            }
+        }
+        else if (tok == "pivot") {
+            char *e1 = nullptr, *e2 = nullptr;
+            fm.pivot.x = (float)strtod(skip_ws(lp), &e1);
+            fm.pivot.y = (float)strtod(e1, &e2);
+            fm.pivot.z = (float)strtod(e2, nullptr);
+            fm.has_pivot = true;
+        }
+        else if (tok == "colour") {
+            char *e1 = nullptr, *e2 = nullptr, *e3 = nullptr;
+            long a = strtol(skip_ws(lp), &e1, 10);
+            long b = strtol(e1, &e2, 10);
+            long c = strtol(e2, &e3, 10);
+            long w = strtol(e3, nullptr, 10);
+            fm.ovr[0] = (uint8_t)a; fm.ovr[1] = (uint8_t)b;
+            fm.ovr[2] = (uint8_t)c; fm.ovr[3] = (uint8_t)w;
+            fm.colour_on = 1;
+        }
         else if (tok == "transition") {
             char *e1 = nullptr, *e2 = nullptr, *e3 = nullptr, *e4 = nullptr;
             fm.tr.duration_s    = (float)strtod(skip_ws(lp), &e1);
@@ -1004,6 +1437,16 @@ dai_show *dai_show_load(const char *path, char *err, size_t err_len) {
         }
         sh->forms[idx].sample_mode = fm.mode;
         if (fm.has_tr) sh->forms[idx].tr = fm.tr;
+        // dai_show_formation_add already put the points in `local` and the
+        // pivot at their centroid, which is exactly right for a file that
+        // carries no transform - a version 1 show, or one nobody moved.
+        if (fm.has_pivot) sh->forms[idx].pivot = fm.pivot;
+        if (fm.has_xf)    sh->forms[idx].xf    = fm.xf;
+        if (fm.colour_on) {
+            sh->forms[idx].colour_override = 1;
+            for (int c = 0; c < 4; ++c) sh->forms[idx].ovr[c] = fm.ovr[c];
+        }
+        if (fm.has_xf || fm.has_pivot || fm.colour_on) rebuild(sh->forms[idx]);
     }
     return sh;
 }

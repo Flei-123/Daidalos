@@ -762,6 +762,145 @@ int main() {
                     "\"2 conflicts\"\n");
     }
 
+    // ---- the gizmo and the brush, driven the way a hand drives them ---------
+    //
+    // Everything else about a figure's transform is tested in
+    // tests/droneshow_cases_edit.cpp against the document. This block is about
+    // the other half, and it is the half nobody had ever exercised: the handle
+    // a user grabs in the preview, and the click that paints a drone. Both run
+    // through dai_ui with synthetic mouse input on a machine with no GPU - the
+    // viewport draws through the 2D canvas, so it needs no renderer.
+    //
+    // The handle is grabbed WHERE IT WAS DRAWN, read back out of the panel
+    // rather than projected a second time here: a test that computes the
+    // handle's position itself agrees with its own arithmetic instead of with
+    // the gizmo, and the bug that would slip past is exactly the one that
+    // matters - a handle drawn somewhere other than where it can be grabbed.
+    {
+        const float VX = 300.0f, VY = 40.0f, VW = 900.0f, VH = 600.0f;
+        dai_show_settings s = dai_show_settings_default();
+        s.drone_count    = 16;
+        s.min_distance_m = 2.0f;
+        s.fps            = 10;
+        s.seed           = 3u;
+        dai_show *sh = dai_show_create(&s);
+        dai_show_point a[16], b[16];
+        for (int i = 0; i < 16; ++i) {
+            a[i] = dai_show_point{};
+            a[i].x = (float)(i % 4) * 6.0f - 9.0f;
+            a[i].y = 40.0f;
+            a[i].z = (float)(i / 4) * 6.0f - 9.0f;
+            a[i].r = 200; a[i].g = 200; a[i].b = 200; a[i].w = 0;
+            b[i] = a[i];
+            b[i].y = 60.0f;
+        }
+        dai_show_formation_add(sh, "Grid", "builtin://grid", a, 16, 4.0f);
+        dai_show_formation_add(sh, "Grid up", "builtin://grid", b, 16, 4.0f);
+        char serr[256] = { 0 };
+        dai_show_solve(sh, serr, sizeof(serr));
+
+        dai_show_ui *su = dai_show_ui_create(sh);
+        dai_show_ui_select_formation(su, 1);
+
+        auto frame = [&](float mxp, float myp, int mdown) {
+            dai_ui_input in{};
+            in.mouse_x = mxp; in.mouse_y = myp; in.mouse_down = mdown;
+            dai_ui_begin(ui, 1280, 720, &in);
+            dai_show_ui_viewport(su, ui, VX, VY, VW, VH);
+            dai_ui_end(ui);
+        };
+
+        // One frame with the pointer parked outside, so the handles get drawn
+        // and reported without anything being grabbed.
+        frame(10.0f, 10.0f, 0);
+        float hx = 0.0f, hy = 0.0f;
+        int   have_handle = dai_show_ui_gizmo_handle(su, 0, &hx, &hy);
+        CHECK(have_handle, "the X gizmo handle was never drawn - a figure cannot be moved");
+        CHECK(hx >= VX && hx <= VX + VW && hy >= VY && hy <= VY + VH,
+              "the X handle was drawn at %.0f,%.0f, outside the %.0fx%.0f preview",
+              (double)hx, (double)hy, (double)VW, (double)VH);
+
+        if (have_handle) {
+            dai_show_formation_info before;
+            dai_show_formation_get(sh, 1, &before);
+
+            // press ON the handle, then drag sixty pixels and let go.
+            frame(hx, hy, 0);
+            frame(hx, hy, 1);
+            frame(hx + 60.0f, hy, 1);
+            frame(hx + 60.0f, hy, 0);
+
+            dai_show_formation_info after;
+            dai_show_formation_get(sh, 1, &after);
+            float dx = after.xf.position.x - before.xf.position.x;
+            float dy = after.xf.position.y - before.xf.position.y;
+            float dz = after.xf.position.z - before.xf.position.z;
+            CHECK(std::fabs(dx) > 0.05f,
+                  "dragging the X handle sixty pixels moved the figure %.4f m in X", (double)dx);
+            CHECK(std::fabs(dy) < 1e-4f && std::fabs(dz) < 1e-4f,
+                  "dragging the X handle also moved Y by %.4f and Z by %.4f - an axis handle "
+                  "that moves two axes is not an axis handle", (double)dy, (double)dz);
+            std::printf("  the X handle moved the figure %.2f m for 60 px\n", (double)dx);
+
+            // And the same drag with the pointer NOT on a handle turns the
+            // camera instead of moving the figure. A preview where every drag
+            // moves the show is a preview you cannot look around in.
+            dai_show_formation_get(sh, 1, &before);
+            frame(VX + 12.0f, VY + 12.0f, 0);
+            frame(VX + 12.0f, VY + 12.0f, 1);
+            frame(VX + 90.0f, VY + 40.0f, 1);
+            frame(VX + 90.0f, VY + 40.0f, 0);
+            dai_show_formation_get(sh, 1, &after);
+            CHECK(after.xf.position.x == before.xf.position.x &&
+                  after.xf.position.y == before.xf.position.y &&
+                  after.xf.position.z == before.xf.position.z,
+                  "a drag in empty sky moved the figure - the gizmo has no grab radius");
+        }
+
+        // ---- the brush ----------------------------------------------------
+        // A wide brush over the middle of the preview has to reach SOME point
+        // of the figure and none of the others may change: painting is a local
+        // edit, and a brush that repaints the whole show is a brush nobody dares
+        // to use.
+        {
+            dai_show_ui_select_formation(su, 0);
+            dai_show_ui_seek(su, 0.0f);
+            const dai_show_point *fp = dai_show_formation_points(sh, 0);
+            std::vector<dai_show_point> was(fp, fp + 16);
+
+            dai_show_ui_pick_mode(su, 1, 1);
+            dai_show_ui_brush(su, 400.0f, 255, 0, 0);
+            frame(VX + VW * 0.5f, VY + VH * 0.5f, 0);
+            frame(VX + VW * 0.5f, VY + VH * 0.5f, 1);
+            frame(VX + VW * 0.5f, VY + VH * 0.5f, 0);
+
+            fp = dai_show_formation_points(sh, 0);
+            int painted = 0;
+            for (int i = 0; i < 16; ++i)
+                if (fp[i].r == 255 && fp[i].g == 0 && fp[i].b == 0) ++painted;
+            CHECK(painted > 0, "a 400 px brush over the middle of the preview painted nothing");
+            std::printf("  the brush painted %d of 16 points\n", painted);
+
+            // Picking without painting selects one point and changes no colour.
+            dai_show_ui_pick_mode(su, 1, 0);
+            std::vector<dai_show_point> before_pick(fp, fp + 16);
+            frame(VX + VW * 0.5f, VY + VH * 0.5f, 0);
+            frame(VX + VW * 0.5f, VY + VH * 0.5f, 1);
+            frame(VX + VW * 0.5f, VY + VH * 0.5f, 0);
+            fp = dai_show_formation_points(sh, 0);
+            int changed = 0;
+            for (int i = 0; i < 16; ++i)
+                if (fp[i].r != before_pick[i].r || fp[i].g != before_pick[i].g ||
+                    fp[i].b != before_pick[i].b) ++changed;
+            CHECK(changed == 0, "picking a point repainted %d of them", changed);
+            CHECK(dai_show_ui_picked_point(su) != 0xFFFFFFFFu,
+                  "a click in the preview with picking on selected no point");
+        }
+
+        dai_show_ui_destroy(su);
+        dai_show_destroy(sh);
+    }
+
     dai_editor_ui_destroy(panels);
     dai_editor_destroy(ed);
     dai_doc_sync_destroy(sync);

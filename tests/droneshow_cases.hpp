@@ -1,6 +1,6 @@
 // The shared half of build/test_droneshow.
 //
-// One binary, five source files. The split is not tidiness: the suites are
+// One binary, six source files. The split is not tidiness: the suites are
 // written against different halves of the pipeline and they are built in
 // parallel, and two people editing one 2,000 line test file is how assertions
 // get lost in a merge. Each case file exposes exactly one entry point below,
@@ -50,10 +50,11 @@ dai_show_test_mesh show_test_mesh(int kind);
 void show_grid_formation(dai_show_point *out, uint32_t n, float spacing,
                          dai_vec3 centre);
 
-// The five suites. Each returns the number of failures it added.
+// The suites. Each returns the number of failures it added.
 int show_cases_sample(void);   // tests/droneshow_cases_sample.cpp
 int show_cases_assign(void);   // tests/droneshow_cases_assign.cpp
 int show_cases_plan(void);     // tests/droneshow_cases_plan.cpp
 int show_cases_io(void);       // tests/droneshow_cases_io.cpp
+int show_cases_edit(void);     // tests/droneshow_cases_edit.cpp
 
 #endif
