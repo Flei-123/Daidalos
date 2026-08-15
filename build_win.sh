@@ -85,6 +85,13 @@ CORE="dai_engine dai_scene dai_input dai_doc dai_doc_text dai_doc_sync dai_edito
       dai_editor_ui dai_meshgen dai_image dai_inflate dai_jpeg dai_json dai_gltf dai_gltf_geom \
       dai_gltf_write dai_fracture dai_particles dai_font dai_svg dai_icons dai_thumb dai_ui dai_dock dai_project dai_update \
       dai_audio dai_native dai_tr dai_strings dai_material physics_null"
+# The drone show pipeline and its panels. They are part of the editor, not an
+# add-on: a project.daidalos whose marker says "kind droneshow" opens a panel
+# set that is compiled in here or it does not open at all. dai_show_ui is the
+# one file that knows about both dai_show and dai_ui, and both are in this
+# same archive, so it goes in with the rest rather than beside it.
+CORE="$CORE dai_show dai_show_sample dai_show_assign dai_show_plan dai_show_check \
+      dai_show_export dai_show_ui"
 # dai_script needs the vendored QuickJS headers; the define lets the editor
 # compile its runner only when scripting is actually linked.
 CORE="$CORE dai_script"

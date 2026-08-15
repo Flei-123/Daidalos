@@ -24,6 +24,14 @@
 
 namespace {
 
+// The circle constant, written down rather than included. M_PI is POSIX, not
+// C++: glibc hands it over anyway, mingw does not without _USE_MATH_DEFINES,
+// and the Windows cross build stopped on four lines that had compiled on Linux
+// for weeks. A constant that appears or does not appear depending on which
+// <cmath> answered is not a constant.
+constexpr float PI = 3.14159265358979323846f;
+
+
 inline uint32_t rgba(uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
     return (a << 24) | (b << 16) | (g << 8) | r;
 }
@@ -339,11 +347,11 @@ struct Soup {
 
 void figure_sphere(Soup &s, int rings, int segs) {
     for (int i = 0; i < rings; ++i) {
-        float p0 = (float)M_PI * (float)i / (float)rings;
-        float p1 = (float)M_PI * (float)(i + 1) / (float)rings;
+        float p0 = PI * (float)i / (float)rings;
+        float p1 = PI * (float)(i + 1) / (float)rings;
         for (int j = 0; j < segs; ++j) {
-            float t0 = 2.0f * (float)M_PI * (float)j / (float)segs;
-            float t1 = 2.0f * (float)M_PI * (float)(j + 1) / (float)segs;
+            float t0 = 2.0f * PI * (float)j / (float)segs;
+            float t1 = 2.0f * PI * (float)(j + 1) / (float)segs;
             float a[3] = { std::sin(p0) * std::cos(t0), std::cos(p0), std::sin(p0) * std::sin(t0) };
             float b[3] = { std::sin(p1) * std::cos(t0), std::cos(p1), std::sin(p1) * std::sin(t0) };
             float c[3] = { std::sin(p1) * std::cos(t1), std::cos(p1), std::sin(p1) * std::sin(t1) };
@@ -368,11 +376,11 @@ void figure_cube(Soup &s) {
 
 void figure_ring(Soup &s, int segs, float thick) {
     for (int j = 0; j < segs; ++j) {
-        float t0 = 2.0f * (float)M_PI * (float)j / (float)segs;
-        float t1 = 2.0f * (float)M_PI * (float)(j + 1) / (float)segs;
+        float t0 = 2.0f * PI * (float)j / (float)segs;
+        float t1 = 2.0f * PI * (float)(j + 1) / (float)segs;
         for (int k = 0; k < 12; ++k) {
-            float u0 = 2.0f * (float)M_PI * (float)k / 12.0f;
-            float u1 = 2.0f * (float)M_PI * (float)(k + 1) / 12.0f;
+            float u0 = 2.0f * PI * (float)k / 12.0f;
+            float u1 = 2.0f * PI * (float)(k + 1) / 12.0f;
             auto pt = [&](float t, float u, float *o) {
                 float rr = 1.0f + thick * std::cos(u);
                 o[0] = rr * std::cos(t); o[1] = thick * std::sin(u); o[2] = rr * std::sin(t);
@@ -527,7 +535,7 @@ Cam camera_of(const dai_show_ui *u, float x, float y, float w, float h) {
     c.ry[0] = c.rz[1] * c.rx[2] - c.rz[2] * c.rx[1];
     c.ry[1] = c.rz[2] * c.rx[0] - c.rz[0] * c.rx[2];
     c.ry[2] = c.rz[0] * c.rx[1] - c.rz[1] * c.rx[0];
-    c.f  = 0.5f * h / std::tan(0.5f * 50.0f * (float)M_PI / 180.0f);
+    c.f  = 0.5f * h / std::tan(0.5f * 50.0f * PI / 180.0f);
     c.cx = x + w * 0.5f;
     c.cy = y + h * 0.5f;
     return c;
@@ -552,7 +560,7 @@ void ring(dai_ui *ui, float cx, float cy, float r, float thick, uint32_t col) {
     const int SEG = 16;
     float px = cx + r, py = cy;
     for (int i = 1; i <= SEG; ++i) {
-        float a = 2.0f * (float)M_PI * (float)i / (float)SEG;
+        float a = 2.0f * PI * (float)i / (float)SEG;
         float qx = cx + r * std::cos(a), qy = cy + r * std::sin(a);
         dai_ui_line(ui, px, py, qx, qy, thick, col);
         px = qx; py = qy;
