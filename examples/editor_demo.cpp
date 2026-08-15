@@ -30,6 +30,8 @@
 #include "dai_show_ui.h"
 #include "dai_gltf.h"
 #include "dai_update.h"
+
+#include <ctime>
 #ifdef DAI_WITH_SCRIPT
 #include "dai_script.h"
 #include "dai_prelude.h"
@@ -111,32 +113,70 @@ static struct UpdateCheck {
     char note[256]{};
 } g_update;
 
+// Every verdict, appended to a file beside the exe.
+//
+// Until now the only place the update said anything was stdout, and a Windows
+// editor has no stdout: "update: not applied (cannot write ...)" was printed
+// into a handle nobody owns. The result was a self update that either worked
+// or did nothing at all with no way to tell which, and "irgendwie wird's nicht
+// geupdatet" is the bug report that produces. One line per start, kept short,
+// next to the binary it is about - so the next time the question is asked it
+// is answerable by reading a file rather than by guessing.
+static void update_log(const char *what) {
+    if (!g_update.exe_path[0] || !what) return;
+    char path[600];
+    std::snprintf(path, sizeof(path), "%s.update.log", g_update.exe_path);
+    FILE *f = std::fopen(path, "ab");
+    if (!f) return;
+    std::time_t t = std::time(nullptr);
+    char when[32] = { 0 };
+    std::tm tmv{};
+#ifdef _WIN32
+    if (gmtime_s(&tmv, &t) == 0) std::strftime(when, sizeof(when), "%Y-%m-%dT%H:%M:%SZ", &tmv);
+#else
+    if (gmtime_r(&t, &tmv)) std::strftime(when, sizeof(when), "%Y-%m-%dT%H:%M:%SZ", &tmv);
+#endif
+    std::fprintf(f, "%s  %s\n", when[0] ? when : "?", what);
+    std::fclose(f);
+}
+
 static void update_worker() {
     char err[256] = { 0 };
     if (dai_self_update_check("https://daidalos.fleitec.com/api/version.json",
                               g_update.exe_path, &g_update.info, err, sizeof(err)) != DAI_OK) {
         std::snprintf(g_update.note, sizeof(g_update.note), "update: no check (%s)", err);
+        update_log(g_update.note);
         g_update.state = 2;
         return;
     }
     if (!g_update.info.needed) {
         std::snprintf(g_update.note, sizeof(g_update.note), "update: current (%s)",
                       g_update.info.version);
+        update_log(g_update.note);
         g_update.state = 1;
         if (!g_update.info.sidecar)
             dai_self_update_mark_current(g_update.exe_path, g_update.info.sha256);
         return;
     }
-    std::printf("update: %s available, downloading\n", g_update.info.version);
+    {
+        char line[256];
+        std::snprintf(line, sizeof(line), "update: %s available (%llu bytes), downloading to \"%s.new\"",
+                      g_update.info.version, (unsigned long long)g_update.info.size,
+                      g_update.exe_path);
+        update_log(line);
+        std::printf("%s\n", line);
+    }
     char err2[256] = { 0 };
     if (dai_self_update_stage(&g_update.info, g_update.exe_path, err2, sizeof(err2)) != DAI_OK) {
         // A refused download is a log line, not a crash - the old build runs on.
         std::snprintf(g_update.note, sizeof(g_update.note), "update: not applied (%s)", err2);
+        update_log(g_update.note);
         g_update.state = 4;
         return;
     }
     std::snprintf(g_update.note, sizeof(g_update.note), "update: %s verified, restarting",
                   g_update.info.version);
+    update_log(g_update.note);
     g_update.state = 3;
 }
 
@@ -3611,6 +3651,11 @@ int main(int argc, char **argv) {
         if (!update_reported && g_update.state != 0) {
             update_reported = 1;
             std::printf("%s\n", g_update.note);
+            // ...and into the Console panel, which is the only place a user of
+            // a windowed program can actually read it.
+            if (g_panels_for_log && g_update.note[0])
+                dai_editor_ui_log(g_panels_for_log, (g_update.state >= 2) ? 1 : 0,
+                                  g_update.note);
         }
         if (g_update.state == 3) break;   // staged and verified: hand over
         auto now = std::chrono::high_resolution_clock::now();
@@ -4967,8 +5012,14 @@ int main(int argc, char **argv) {
         // exe, writes the sidecar and starts the new build.
         char uerr[256] = { 0 };
         if (dai_self_update_restart(&g_update.info, g_update.exe_path,
-                                    uerr, sizeof(uerr)) != DAI_OK)
-            std::printf("update: restart failed (%s)\n", uerr);
+                                    uerr, sizeof(uerr)) != DAI_OK) {
+            char line[320];
+            std::snprintf(line, sizeof(line), "update: restart failed (%s)", uerr);
+            update_log(line);
+            std::printf("%s\n", line);
+        } else {
+            update_log("update: handed over to the swap script");
+        }
     }
     return 0;
 }
