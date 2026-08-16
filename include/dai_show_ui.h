@@ -121,7 +121,6 @@ DAI_API void dai_show_ui_note(dai_show_ui *u, int bad, const char *text);
  * Each fills the rectangle the dock handed out. Called directly by a host that
  * lays out its own windows; dai_show_ui_panels does the ordinary thing of
  * registering all four in an existing dock and drawing whichever are visible. */
-DAI_API void dai_show_ui_storyboard(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h);
 DAI_API void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h);
 DAI_API void dai_show_ui_validation(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h);
 /* The two panels the game layout already has, given the thing a show puts in

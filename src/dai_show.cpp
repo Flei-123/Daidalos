@@ -98,6 +98,17 @@ struct Formation {
     // group every figure ever made before this field existed is in, which is
     // why zero is the default: an old show re-reads as the show it was.
     int                         group = 0;
+    // A paint stroke is colour WITH A TIME: "these points, from this second
+    // on". The point's own colour is what it starts the show in; every stroke
+    // whose time has come repaints its points until a later stroke repaints
+    // them again. That is what makes "paint at the playhead" a light program
+    // instead of a static recolour.
+    struct Stroke {
+        float                 t;
+        uint8_t               rgba[4];
+        std::vector<uint32_t> idx;
+    };
+    std::vector<Stroke>         strokes;
 };
 
 // local -> world, plus the colour override, into the cache everything reads.
@@ -165,10 +176,17 @@ void rebuild(Formation &f) {
 // drone show is a couple of megabytes of it, which is the same order as the
 // plan and orders below the array of ticks this design exists to avoid.
 struct KeySrc {
-    uint32_t form;   // the formation being flown INTO, or held at
-    uint32_t pa;     // point index in forms[form - 1]; == pb while standing
-    uint32_t pb;     // point index in forms[form]
-    float    s;      // the mix: 0 = the colour of a, 1 = the colour of b
+    uint32_t form;       // the formation being flown INTO, or held at
+    uint32_t form_from;  // the formation flown FROM - NOT form - 1, because a
+                         // group's predecessor is a sibling, not a neighbour
+    uint32_t pa;         // point index in forms[form_from]; == pb while standing
+    uint32_t pb;         // point index in forms[form]
+    float    s;          // the mix: 0 = the colour of a, 1 = the colour of b
+    // 1 on the two keys a paint stroke INSERTS at its second. They are not
+    // the solver's keys: every colour refresh drops them and inserts them
+    // again from the strokes that exist then, so a cleared stroke leaves no
+    // keyhole behind.
+    uint8_t  stroke_key = 0;
 };
 
 inline uint8_t mix_u8(uint8_t a, uint8_t b, float s) {
@@ -425,24 +443,156 @@ int first_endpoint_pair(const dai_show_point *p, uint32_t n, float min_d,
 // No position is touched, so the show that was validated is still the show in
 // memory - which is why a colour edit may keep the "no conflicts" badge while a
 // moved figure may not.
+// The colour of one point at one second: its own colour, repainted by every
+// stroke whose time has come, the latest stroke last.
+void colour_at(const Formation &f, uint32_t pt, float t,
+               uint8_t *r, uint8_t *g, uint8_t *b, uint8_t *w) {
+    const dai_show_point &p = f.pts[pt];
+    *r = p.r; *g = p.g; *b = p.b; *w = p.w;
+    for (size_t si = 0; si < f.strokes.size(); ++si) {
+        const Formation::Stroke &st = f.strokes[si];
+        if (st.t > t + 1e-4f) continue;
+        for (size_t k = 0; k < st.idx.size(); ++k)
+            if (st.idx[k] == pt) {
+                *r = st.rgba[0]; *g = st.rgba[1]; *b = st.rgba[2]; *w = st.rgba[3];
+                break;
+            }
+    }
+}
+
+// The mixed colour one key carries when the clock stands at t_eval.
+void key_colour(const dai_show *sh, const KeySrc &src, float t_eval,
+                uint8_t *r, uint8_t *g, uint8_t *b, uint8_t *w) {
+    const Formation &fb = sh->forms[src.form];
+    const Formation &fa = sh->forms[src.form_from];
+    uint8_t ar, ag, ab, aw, br, bg, bb, bw;
+    colour_at(fa, src.pa, t_eval, &ar, &ag, &ab, &aw);
+    colour_at(fb, src.pb, t_eval, &br, &bg, &bb, &bw);
+    *r = mix_u8(ar, br, src.s);
+    *g = mix_u8(ag, bg, src.s);
+    *b = mix_u8(ab, bb, src.s);
+    *w = mix_u8(aw, bw, src.s);
+}
+
 void recolour(dai_show *sh) {
     if (!sh || !sh->plan) return;
     if (sh->key_src.size() != sh->plan->keys.size()) return;  // out of step: leave it alone
     const size_t nf = sh->forms.size();
     for (size_t k = 0; k < sh->plan->keys.size(); ++k) {
         const KeySrc &src = sh->key_src[k];
-        if (src.form >= nf) continue;
+        if (src.stroke_key) continue;          // inserted keys keep their colour
+        if (src.form >= nf || src.form_from >= nf) continue;
         const Formation &fb = sh->forms[src.form];
-        const Formation &fa = (src.form == 0) ? fb : sh->forms[src.form - 1];
+        const Formation &fa = sh->forms[src.form_from];
         if (src.pa >= fa.pts.size() || src.pb >= fb.pts.size()) continue;
-        const dai_show_point &A = fa.pts[src.pa];
-        const dai_show_point &B = fb.pts[src.pb];
         dai_show_point &o = sh->plan->keys[k].p;
-        o.r = mix_u8(A.r, B.r, src.s);
-        o.g = mix_u8(A.g, B.g, src.s);
-        o.b = mix_u8(A.b, B.b, src.s);
-        o.w = mix_u8(A.w, B.w, src.s);
+        key_colour(sh, src, sh->plan->keys[k].t, &o.r, &o.g, &o.b, &o.w);
     }
+}
+
+// Colours after any edit: the stroke keys from last time OUT, every solver
+// key re-mixed at its own second, and for every stroke two fresh keys IN at
+// its second - one holding the old colour until the stroke's time, one with
+// the new colour from it on. Without the pair the plan would BLEND towards a
+// stroke across the whole segment before it, which is a fade nobody ordered.
+void refresh_colours(dai_show *sh) {
+    if (!sh || !sh->plan) return;
+    if (sh->key_src.size() != sh->plan->keys.size()) return;
+    dai_show_plan *pl = sh->plan;
+
+    // 1) out with the old stroke keys
+    {
+        size_t w = 0;
+        bool dropped = false;
+        std::vector<uint32_t> first(pl->drones + 1, 0);
+        uint32_t d = 0;
+        for (size_t k = 0; k < pl->keys.size(); ++k) {
+            while (d < pl->drones && k >= pl->first[d + 1]) { first[d + 1] = (uint32_t)w; ++d; }
+            if (sh->key_src[k].stroke_key) { dropped = true; continue; }
+            pl->keys[w] = pl->keys[k];
+            sh->key_src[w] = sh->key_src[k];
+            ++w;
+        }
+        while (d < pl->drones) { first[d + 1] = (uint32_t)w; ++d; }
+        if (dropped) {
+            pl->keys.resize(w);
+            sh->key_src.resize(w);
+            pl->first = first;
+        }
+    }
+
+    // 2) every solver key re-mixed at its own second
+    recolour(sh);
+
+    // 3) in with the new stroke keys, per drone, in time order
+    bool any = false;
+    for (size_t i = 0; i < sh->forms.size(); ++i) any |= !sh->forms[i].strokes.empty();
+    if (!any) return;
+
+    std::vector<dai_show_key>  nk;
+    std::vector<KeySrc>        ns;
+    std::vector<uint32_t>      first(pl->drones + 1, 0);
+    nk.reserve(pl->keys.size() + 64);
+    ns.reserve(pl->keys.size() + 64);
+    for (uint32_t d = 0; d < pl->drones; ++d) {
+        uint32_t b = pl->first[d], e = pl->first[d + 1];
+        first[d] = (uint32_t)nk.size();
+        // Collect this drone's insertions.
+        struct Ins { float t; dai_show_key kold, knew; KeySrc src; };
+        std::vector<Ins> ins;
+        for (uint32_t fi = 0; fi < (uint32_t)sh->forms.size(); ++fi) {
+            const Formation &f = sh->forms[fi];
+            for (size_t si = 0; si < f.strokes.size(); ++si) {
+                const Formation::Stroke &st = f.strokes[si];
+                if (e == b || st.t <= pl->keys[b].t || st.t >= pl->keys[e - 1].t) continue;
+                uint32_t lo = b, hi = e - 1;
+                while (lo + 1 < hi) {
+                    uint32_t mid = lo + (hi - lo) / 2;
+                    if (pl->keys[mid].t <= st.t) lo = mid; else hi = mid;
+                }
+                const KeySrc &src = sh->key_src[lo];
+                if (src.stroke_key || src.form != fi) continue;
+                bool hits = false;
+                for (size_t q = 0; q < st.idx.size() && !hits; ++q)
+                    hits = (st.idx[q] == src.pb);
+                if (!hits) continue;
+                Ins one;
+                one.t = st.t;
+                one.src = src;
+                one.src.stroke_key = 1;
+                dai_show_plan_sample(pl, d, st.t, &one.kold.p);
+                one.knew = one.kold;
+                one.kold.t = st.t; one.knew.t = st.t;
+                one.kold.profile = DAI_SHOW_PROFILE_LINEAR;
+                one.knew.profile = DAI_SHOW_PROFILE_LINEAR;
+                key_colour(sh, src, st.t - 1e-3f,
+                           &one.kold.p.r, &one.kold.p.g, &one.kold.p.b, &one.kold.p.w);
+                key_colour(sh, src, st.t,
+                           &one.knew.p.r, &one.knew.p.g, &one.knew.p.b, &one.knew.p.w);
+                ins.push_back(one);
+            }
+        }
+        std::stable_sort(ins.begin(), ins.end(),
+                         [](const Ins &a, const Ins &b) { return a.t < b.t; });
+        size_t ii = 0;
+        for (uint32_t k = b; k < e; ++k) {
+            while (ii < ins.size() && ins[ii].t <= pl->keys[k].t) {
+                nk.push_back(ins[ii].kold); ns.push_back(ins[ii].src);
+                nk.push_back(ins[ii].knew); ns.push_back(ins[ii].src);
+                ++ii;
+            }
+            nk.push_back(pl->keys[k]); ns.push_back(sh->key_src[k]);
+        }
+        while (ii < ins.size()) {
+            nk.push_back(ins[ii].kold); ns.push_back(ins[ii].src);
+            nk.push_back(ins[ii].knew); ns.push_back(ins[ii].src);
+            ++ii;
+        }
+    }
+    first[pl->drones] = (uint32_t)nk.size();
+    pl->keys.swap(nk);
+    sh->key_src.swap(ns);
+    pl->first = first;
 }
 
 } // namespace
@@ -647,27 +797,27 @@ uint32_t dai_show_formation_from_mesh(dai_show *sh, const char *name, const char
     return idx;
 }
 
-uint32_t dai_show_formation_from_image(dai_show *sh, const char *name,
-                                       const char *source,
-                                       const uint8_t *rgba, uint32_t w, uint32_t h,
-                                       float width_m, uint8_t threshold,
-                                       uint32_t count, char *err, size_t err_len) {
+uint32_t dai_show_image_sample(dai_show *sh,
+                               const uint8_t *rgba, uint32_t w, uint32_t h,
+                               float width_m, uint8_t threshold,
+                               uint32_t count, dai_show_point *out,
+                               char *err, size_t err_len) {
     if (err && err_len) err[0] = 0;
-    if (!sh || !rgba || !w || !h) return UINT32_MAX;
+    if (!sh || !rgba || !w || !h || !out) return 0;
     if (count == 0) count = sh->s.drone_count;
-    if (count == 0) { fail(err, err_len, "the fleet is empty - set a drone count first"); return UINT32_MAX; }
+    if (count == 0) { fail(err, err_len, "the fleet is empty - set a drone count first"); return 0; }
     const float cell = sh->s.min_distance_m;
     if (!(cell > 0.0f) || !(width_m >= cell)) {
         fail(err, err_len, "the figure is %.1f m wide but a drone needs %.1f m",
              (double)width_m, (double)cell);
-        return UINT32_MAX;
+        return 0;
     }
     const float height_m = width_m * (float)h / (float)w;
     const uint32_t cols = (uint32_t)(width_m / cell);
     const uint32_t rows = (uint32_t)(height_m / cell);
     if (!cols || !rows) {
         fail(err, err_len, "the figure is too small for one lit cell");
-        return UINT32_MAX;
+        return 0;
     }
     const float cw = width_m / (float)cols;
     const float ch = height_m / (float)rows;
@@ -699,7 +849,7 @@ uint32_t dai_show_formation_from_image(dai_show *sh, const char *name,
              "the image lights %u cells at %.1f m spacing, but %u drones are asked for - "
              "lower the threshold or widen the figure",
              (unsigned)lit.size(), (double)cell, (unsigned)count);
-        return UINT32_MAX;
+        return 0;
     }
     if ((uint32_t)lit.size() > count) {
         // The brightest cells survive: a dim edge sacrificed keeps the shape
@@ -708,12 +858,26 @@ uint32_t dai_show_formation_from_image(dai_show *sh, const char *name,
                          [](const Cand &a, const Cand &b) { return a.lum > b.lum; });
         lit.resize(count);
     }
-    std::vector<dai_show_point> pts(lit.size());
     for (size_t k = 0; k < lit.size(); ++k) {
-        pts[k].x = lit[k].x; pts[k].y = lit[k].y; pts[k].z = 0.0f;
-        pts[k].r = lit[k].r; pts[k].g = lit[k].g; pts[k].b = lit[k].b; pts[k].w = 0;
+        out[k].x = lit[k].x; out[k].y = lit[k].y; out[k].z = 0.0f;
+        out[k].r = lit[k].r; out[k].g = lit[k].g; out[k].b = lit[k].b; out[k].w = 0;
     }
-    uint32_t idx = dai_show_formation_add(sh, name, source, pts.data(), (uint32_t)pts.size(), 4.0f);
+    return (uint32_t)lit.size();
+}
+
+uint32_t dai_show_formation_from_image(dai_show *sh, const char *name,
+                                       const char *source,
+                                       const uint8_t *rgba, uint32_t w, uint32_t h,
+                                       float width_m, uint8_t threshold,
+                                       uint32_t count, char *err, size_t err_len) {
+    if (err && err_len) err[0] = 0;
+    if (!sh) return UINT32_MAX;
+    uint32_t want = count ? count : sh->s.drone_count;
+    std::vector<dai_show_point> pts(want ? want : 1);
+    uint32_t got = dai_show_image_sample(sh, rgba, w, h, width_m, threshold,
+                                         want, pts.data(), err, err_len);
+    if (!got) return UINT32_MAX;
+    uint32_t idx = dai_show_formation_add(sh, name, source, pts.data(), got, 4.0f);
     if (idx != UINT32_MAX) sh->forms[idx].sample_mode = DAI_SHOW_SAMPLE_SILHOUETTE;
     return idx;
 }
@@ -984,7 +1148,7 @@ int dai_show_formation_set_colour(dai_show *sh, uint32_t i, int on,
     // carries came from the formation, so they have to be refreshed. Cheaper
     // and more honest than throwing a solve away over a swatch: the keyframes
     // hold the colour, so they are the thing that is updated.
-    recolour(sh);
+    refresh_colours(sh);
     return 1;
 }
 
@@ -1015,7 +1179,7 @@ int dai_show_formation_set_point_colour(dai_show *sh, uint32_t i, const uint32_t
         }
     }
     rebuild(f);
-    recolour(sh);
+    refresh_colours(sh);
     return 1;
 }
 
@@ -1060,6 +1224,42 @@ int dai_show_formation_set_point_world(dai_show *sh, uint32_t i, uint32_t point,
     sh->conflicts.clear();
     sh->tr_stats.clear();
     return 1;
+}
+
+int dai_show_formation_paint_at(dai_show *sh, uint32_t i, float t,
+                                const uint32_t *idx, uint32_t n,
+                                uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
+    if (!sh || i >= sh->forms.size() || !idx || !n || !(t >= 0.0f)) return 0;
+    Formation &f = sh->forms[i];
+    Formation::Stroke st;
+    st.t = t;
+    st.rgba[0] = r; st.rgba[1] = g; st.rgba[2] = b; st.rgba[3] = w;
+    st.idx.assign(idx, idx + n);
+    // Out-of-range points are dropped now rather than at every recolour.
+    uint32_t count = (uint32_t)f.local.size();
+    st.idx.erase(std::remove_if(st.idx.begin(), st.idx.end(),
+                                [count](uint32_t k) { return k >= count; }),
+                 st.idx.end());
+    if (st.idx.empty()) return 0;
+    f.strokes.push_back(st);
+    // The plan SURVIVES a stroke - no geometry moved - but its colours are
+    // re-mixed, the same deal a repaint always had.
+    refresh_colours(sh);
+    return 1;
+}
+
+int dai_show_formation_clear_strokes(dai_show *sh, uint32_t i) {
+    if (!sh || i >= sh->forms.size()) return 0;
+    if (sh->forms[i].strokes.empty()) return 1;
+    sh->forms[i].strokes.clear();
+    refresh_colours(sh);
+    return 1;
+}
+
+int dai_show_formation_set_sample_mode(dai_show *sh, uint32_t i, int mode) {
+    if (!sh || i >= sh->forms.size()) return 0;
+    sh->forms[i].sample_mode = mode;
+    return 1;   // a label about how the points were made; geometry untouched
 }
 
 int dai_show_transition_get(const dai_show *sh, uint32_t i, dai_show_transition *out) {
@@ -1170,7 +1370,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         dai_show_key k;
         k.t = 0.0f; k.p = cur[d]; k.profile = DAI_SHOW_PROFILE_LINEAR;
         keys[off + d].push_back(k);
-        ksrc[off + d].push_back(KeySrc{ mem[0], d, d, 1.0f });
+        ksrc[off + d].push_back(KeySrc{ mem[0], mem[0], d, d, 1.0f });
     }
 
     float t_cursor = sh->forms[mem[0]].hold_s;
@@ -1180,12 +1380,13 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
             dai_show_key k;
             k.t = t_cursor; k.p = cur[d]; k.profile = DAI_SHOW_PROFILE_LINEAR;
             keys[off + d].push_back(k);
-            ksrc[off + d].push_back(KeySrc{ mem[0], d, d, 1.0f });
+            ksrc[off + d].push_back(KeySrc{ mem[0], mem[0], d, d, 1.0f });
         }
     }
 
     for (size_t mi = 1; mi < mem.size(); ++mi) {
         const uint32_t i = mem[mi];
+        const uint32_t fprev = mem[mi - 1];
         Formation &f = sh->forms[i];
         for (uint32_t d = 0; d < ng; ++d) nxt[d] = f.pts[d];
 
@@ -1270,7 +1471,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
             if (g.t_start > keys[off + d].back().t) {    // staggered or delayed: wait first
                 k.t = g.t_start; k.p = a; k.profile = DAI_SHOW_PROFILE_LINEAR;
                 keys[off + d].push_back(k);
-                ksrc[off + d].push_back(KeySrc{ fi, pa, pb, 0.0f });
+                ksrc[off + d].push_back(KeySrc{ fi, fprev, pa, pb, 0.0f });
             }
             uint32_t steps = daishow::leg_key_count(&g, &sh->s);
             for (uint32_t st = 1; st <= steps; ++st) {
@@ -1286,17 +1487,17 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
                 if (uu < 0.0f) uu = 0.0f;
                 if (uu > 1.0f) uu = 1.0f;
                 float mix = (st == steps) ? 1.0f : daishow::ease_profile(g.profile, uu);
-                ksrc[off + d].push_back(KeySrc{ fi, pa, pb, mix });
+                ksrc[off + d].push_back(KeySrc{ fi, fprev, pa, pb, mix });
             }
             if (t_arrive > g.t_end) {                    // hold formation until the last one lands
                 k.t = t_arrive; k.p = b; k.profile = DAI_SHOW_PROFILE_LINEAR;
                 keys[off + d].push_back(k);
-                ksrc[off + d].push_back(KeySrc{ fi, pa, pb, 1.0f });
+                ksrc[off + d].push_back(KeySrc{ fi, fprev, pa, pb, 1.0f });
             }
             if (f.hold_s > 0.0f) {
                 k.t = t_arrive + f.hold_s; k.p = b; k.profile = DAI_SHOW_PROFILE_LINEAR;
                 keys[off + d].push_back(k);
-                ksrc[off + d].push_back(KeySrc{ fi, pa, pb, 1.0f });
+                ksrc[off + d].push_back(KeySrc{ fi, fprev, pa, pb, 1.0f });
             }
             cur[d]    = b;
             cur_pt[d] = pb;
@@ -1321,6 +1522,11 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         sh->key_src.insert(sh->key_src.end(), ksrc[d].begin(), ksrc[d].end());
     }
     sh->plan = dai_show_plan_from_keys(n, counts.data(), flat.data());
+    // Strokes are colour over time; the plan was built from static point
+    // colours, so the colours are re-mixed against the clock and the stroke
+    // key pairs go in. Without a single stroke the re-mix lands on exactly
+    // the bytes the legs already carry - an unpainted show is untouched.
+    refresh_colours(sh);
 
     if (unresolved_total > 0) {
         fail(err, err_len, "%u transition conflicts could not be separated", (unsigned)unresolved_total);
@@ -1445,6 +1651,18 @@ dai_result dai_show_save(const dai_show *sh, const char *path, char *err, size_t
         }
         if (f.colour_override)
             put(out, "  colour %u %u %u %u\n", f.ovr[0], f.ovr[1], f.ovr[2], f.ovr[3]);
+        for (size_t si = 0; si < f.strokes.size(); ++si) {
+            const Formation::Stroke &st = f.strokes[si];
+            put(out, "  stroke %s %u %u %u %u %u\n", fstr(st.t).c_str(),
+                st.rgba[0], st.rgba[1], st.rgba[2], st.rgba[3], (unsigned)st.idx.size());
+            std::string line;
+            for (size_t k = 0; k < st.idx.size(); ++k) {
+                char num[16];
+                std::snprintf(num, sizeof(num), "%u ", (unsigned)st.idx[k]);
+                line += num;
+            }
+            put(out, "%s\n", line.c_str());
+        }
         // The points as a block, LOCAL - what came off the mesh. The world
         // positions are the transform applied to these and are never stored:
         // a file that carried both would be a file that can disagree with
@@ -1511,6 +1729,8 @@ dai_show *dai_show_load(const char *path, char *err, size_t err_len) {
         bool     has_pivot = false;
         int      colour_on = 0;
         uint8_t  ovr[4] = { 255, 255, 255, 0 };
+        struct LStroke { float t; uint8_t rgba[4]; std::vector<uint32_t> idx; };
+        std::vector<LStroke> strokes;
     };
     std::vector<Loaded> forms;
 
@@ -1586,6 +1806,29 @@ dai_show *dai_show_load(const char *path, char *err, size_t err_len) {
             fm.ovr[2] = (uint8_t)c; fm.ovr[3] = (uint8_t)w;
             fm.colour_on = 1;
         }
+        else if (tok == "stroke") {
+            char *e1 = nullptr, *e2 = nullptr, *e3 = nullptr, *e4 = nullptr, *e5 = nullptr;
+            Loaded::LStroke st;
+            st.t         = (float)strtod(skip_ws(lp), &e1);
+            st.rgba[0]   = (uint8_t)strtol(e1, &e2, 10);
+            st.rgba[1]   = (uint8_t)strtol(e2, &e3, 10);
+            st.rgba[2]   = (uint8_t)strtol(e3, &e4, 10);
+            st.rgba[3]   = (uint8_t)strtol(e4, &e5, 10);
+            size_t count = strtoul(e5, nullptr, 10);
+            if (++li >= lines.size()) {
+                fail(err, err_len, "formation '%s': the stroke ends early", fm.name.c_str());
+                return nullptr;
+            }
+            const char *q = lines[li].c_str();
+            char *e = nullptr;
+            for (size_t k = 0; k < count; ++k) {
+                long v = strtol(q, &e, 10);
+                if (e == q) break;
+                st.idx.push_back((uint32_t)v);
+                q = e;
+            }
+            fm.strokes.push_back(st);
+        }
         else if (tok == "transition") {
             char *e1 = nullptr, *e2 = nullptr, *e3 = nullptr, *e4 = nullptr;
             fm.tr.duration_s    = (float)strtod(skip_ws(lp), &e1);
@@ -1637,6 +1880,12 @@ dai_show *dai_show_load(const char *path, char *err, size_t err_len) {
         sh->forms[idx].sample_mode = fm.mode;
         sh->forms[idx].group       = fm.group;
         if (fm.has_tr) sh->forms[idx].tr = fm.tr;
+        for (size_t si = 0; si < fm.strokes.size(); ++si) {
+            const Loaded::LStroke &ls = fm.strokes[si];
+            dai_show_formation_paint_at(sh, idx, ls.t, ls.idx.data(),
+                                        (uint32_t)ls.idx.size(),
+                                        ls.rgba[0], ls.rgba[1], ls.rgba[2], ls.rgba[3]);
+        }
         // dai_show_formation_add already put the points in `local` and the
         // pivot at their centroid, which is exactly right for a file that
         // carries no transform - a version 1 show, or one nobody moved.

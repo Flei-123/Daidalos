@@ -668,6 +668,30 @@ DAI_API int dai_show_formation_set_point_world(dai_show *sh, uint32_t i,
                                                uint32_t point,
                                                float wx, float wy, float wz);
 
+/* Paints `n` points of formation `i` AT A SECOND: from `t` on they burn in
+ * this colour, until a later stroke repaints them. A light program is a list
+ * of these; the point's own colour is only what the show starts in. The plan
+ * survives - colour is re-mixed, not re-solved. */
+DAI_API int dai_show_formation_paint_at(dai_show *sh, uint32_t i, float t,
+                                        const uint32_t *idx, uint32_t n,
+                                        uint8_t r, uint8_t g, uint8_t b, uint8_t w);
+/* Forgets every stroke of formation `i`; the points fall back to their own
+ * colours. */
+DAI_API int dai_show_formation_clear_strokes(dai_show *sh, uint32_t i);
+/* Records how a formation's points were made (surface / volume / silhouette).
+ * A label only - the points are already made; re-sample to change them. */
+DAI_API int dai_show_formation_set_sample_mode(dai_show *sh, uint32_t i, int mode);
+
+/* The sampler behind dai_show_formation_from_image, on its own, so an image
+ * figure can be RE-sampled at another point count without adding a second
+ * figure. Writes exactly `count` points (0 = the whole fleet) or fails with
+ * the reason in `err`. */
+DAI_API uint32_t dai_show_image_sample(dai_show *sh,
+                                       const uint8_t *rgba, uint32_t w, uint32_t h,
+                                       float width_m, uint8_t threshold,
+                                       uint32_t count, dai_show_point *out,
+                                       char *err, size_t err_len);
+
 /* Puts formation `i` into group `g` (>= 0). Formations that share a group fly
  * one after another, as they always have; formations in different groups fly
  * AT THE SAME TIME, each group over its own slice of the fleet. Inside one

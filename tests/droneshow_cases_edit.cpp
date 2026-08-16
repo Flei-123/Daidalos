@@ -723,5 +723,75 @@ int show_cases_edit(void) {
         dai_show_destroy(sh);
     }
 
+    // ---- [7p] paint is a KEYFRAME, not a rewrite ---------------------------
+    show_section("editing - a stroke starts at its second, not at the first frame");
+    {
+        const uint32_t n = 9;
+        dai_show_settings s = edit_settings(n, 2.0f);
+        dai_show *sh = dai_show_create(&s);
+        std::vector<dai_show_point> a(n);
+        show_grid_formation(a.data(), n, 3.0f, dai_vec3{ 0.0f, 50.0f, 0.0f });
+        dai_show_formation_add(sh, "f", "", a.data(), n, 20.0f);   // 20 s of hold
+        char err[256] = { 0 };
+        dai_result r = dai_show_solve(sh, err, sizeof(err));
+        CHECK(r == DAI_OK, "[7p] the show did not solve: %s", err);
+        const dai_show_plan *pl = dai_show_get_plan(sh);
+        CHECK(pl != nullptr, "[7p] no plan");
+
+        // Drone 0 stands on point 0 for the whole hold (first figure is flown
+        // in drone order). Its own colour: r 0, g 0, b 200.
+        uint32_t zero = 0;
+        CHECK(dai_show_formation_paint_at(sh, 0, 10.0f, &zero, 1, 255, 0, 0, 0),
+              "[7p] the stroke was refused");
+        dai_show_point before, after;
+        dai_show_plan_sample(pl, 0, 5.0f, &before);
+        dai_show_plan_sample(pl, 0, 15.0f, &after);
+        CHECK(before.r == 0 && before.b == 200,
+              "[7p] the stroke repainted a second BEFORE its time: %u %u %u",
+              before.r, before.g, before.b);
+        CHECK(after.r == 255 && after.b == 0,
+              "[7p] the stroke did not burn at 15 s: %u %u %u",
+              after.r, after.g, after.b);
+        // The neighbour keeps its own colour at both seconds.
+        dai_show_point nb;
+        dai_show_plan_sample(pl, 1, 15.0f, &nb);
+        CHECK(nb.b == 200 && nb.r != 255,
+              "[7p] the stroke leaked onto drone 1");
+
+        // A later stroke wins; clearing falls back to the point's own colour.
+        CHECK(dai_show_formation_paint_at(sh, 0, 14.0f, &zero, 1, 0, 255, 0, 0),
+              "[7p] the second stroke was refused");
+        dai_show_plan_sample(pl, 0, 15.0f, &after);
+        CHECK(after.g == 255 && after.r == 0,
+              "[7p] the later stroke did not win at 15 s");
+        dai_show_plan_sample(pl, 0, 12.0f, &before);
+        CHECK(before.r == 255, "[7p] the earlier stroke was lost at 12 s");
+
+        CHECK(dai_show_formation_clear_strokes(sh, 0), "[7p] clear was refused");
+        dai_show_plan_sample(pl, 0, 15.0f, &after);
+        CHECK(after.r == 0 && after.b == 200,
+              "[7p] cleared strokes did not fall back to the point colour");
+
+        // Strokes survive the file.
+        dai_show_formation_paint_at(sh, 0, 10.0f, &zero, 1, 255, 0, 0, 0);
+        const char *path = "build/edit_stroke.dshow";
+        CHECK(dai_show_save(sh, path, err, sizeof(err)) == DAI_OK, "[7p] the save failed");
+        dai_show *back = dai_show_load(path, err, sizeof(err));
+        CHECK(back != nullptr, "[7p] the reload failed: %s", err);
+        if (back) {
+            std::memset(err, 0, sizeof(err));
+            r = dai_show_solve(back, err, sizeof(err));
+            CHECK(r == DAI_OK, "[7p] the reloaded show did not solve: %s", err);
+            const dai_show_plan *bp = dai_show_get_plan(back);
+            dai_show_point rb;
+            dai_show_plan_sample(bp, 0, 15.0f, &rb);
+            CHECK(rb.r == 255 && rb.b == 0,
+                  "[7p] the stroke did not survive the round trip: %u %u %u",
+                  rb.r, rb.g, rb.b);
+            dai_show_destroy(back);
+        }
+        dai_show_destroy(sh);
+    }
+
     return g_show_fail - before;
 }

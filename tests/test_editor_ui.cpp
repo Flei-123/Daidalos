@@ -874,10 +874,22 @@ int main() {
             frame(VX + VW * 0.5f, VY + VH * 0.5f, 1);
             frame(VX + VW * 0.5f, VY + VH * 0.5f, 0);
 
-            fp = dai_show_formation_points(sh, 0);
+            // Painting is a STROKE at the playhead now: the point keeps its
+            // own colour, the PLAN burns red from the painted second on. So
+            // the check reads the plan, not the figure.
+            // The gizmo drags above threw the plan away (a moved figure is a
+            // new show), so solve again - the stroke lives on the formation
+            // and survives that, which is half the point of the design.
+            char berr[256] = { 0 };
+            dai_show_solve(sh, berr, sizeof(berr));
+            const dai_show_plan *bp = dai_show_get_plan(sh);
+            CHECK(bp != nullptr, "the brush test needs a solved show: %s", berr);
             int painted = 0;
-            for (int i = 0; i < 16; ++i)
-                if (fp[i].r == 255 && fp[i].g == 0 && fp[i].b == 0) ++painted;
+            for (int i = 0; i < 16; ++i) {
+                dai_show_point s0;
+                dai_show_plan_sample(bp, (uint32_t)i, 0.0f, &s0);
+                if (s0.r == 255 && s0.g == 0 && s0.b == 0) ++painted;
+            }
             CHECK(painted > 0, "a 400 px brush over the middle of the preview painted nothing");
             std::printf("  the brush painted %d of 16 points\n", painted);
 

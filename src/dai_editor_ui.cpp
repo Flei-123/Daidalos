@@ -7707,9 +7707,8 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     // a rectangle on the very first frame rather than on the second.
     if (p->show) {
         // Tabs, not new splits: the show panels live where their meaning
-        // already lives - figures beside the node tree, the show's numbers
-        // beside the inspector, its verdicts beside the log.
-        dai_dock_add_tab(p->dock, "Storyboard", "Hierarchy");
+        // already lives - the show's numbers beside the inspector, its
+        // verdicts beside the log. The figures themselves ARE the hierarchy.
         dai_dock_add_tab(p->dock, "Show Parameters", "Inspector");
         dai_dock_add_tab(p->dock, "Validation", "Console");
     }

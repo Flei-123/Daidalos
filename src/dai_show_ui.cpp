@@ -540,6 +540,7 @@ struct dai_show_ui {
 
     // ---- adding figures ----------------------------------------------------
     dai_ui_popup add_menu = {};              // the hierarchy's + / right-click
+    dai_ui_popup img_menu = {};              // the image import's own window
     // The image a figure can be sampled from. A path, a width, and how bright
     // a pixel has to be to earn a drone - all three plain fields, because a
     // file dialog is the host's luxury, not a panel's.
@@ -817,13 +818,14 @@ void builtin_desc(dai_show_ui *u, int shape, uint32_t count,
     d->seed             = u->s.seed + (uint64_t)dai_show_formation_count(u->sh) * 7919ull;
 }
 
-// The same figure with another point count. Only the builtins can be
-// re-sampled - their source IS the shape - so a mesh or an image keeps its
-// points and the field says why it is grey.
-int resample_builtin(dai_show_ui *u, uint32_t fi, int shape, uint32_t count) {
+// The same figure with another point count, or another sampling mode. Only
+// the builtins can be re-sampled - their source IS the shape - so a mesh
+// keeps its points and the field says why it is grey.
+int resample_builtin(dai_show_ui *u, uint32_t fi, int shape, uint32_t count, int mode) {
     Soup soup;
     dai_show_sample_desc d;
     builtin_desc(u, shape, count, soup, &d);
+    d.mode = mode;
     std::vector<dai_show_point> pts(count);
     char err[256] = { 0 };
     uint32_t got = dai_show_sample(&d, pts.data(), count, err, sizeof(err));
@@ -832,7 +834,39 @@ int resample_builtin(dai_show_ui *u, uint32_t fi, int shape, uint32_t count) {
         return 0;
     }
     if (!dai_show_formation_replace_points(u->sh, fi, pts.data(), got)) return 0;
-    say(u, 0, "formation re-sampled: %u points", got);
+    dai_show_formation_set_sample_mode(u->sh, fi, mode);
+    say(u, 0, "formation re-sampled: %u points, %s", got, SAMPLE_MODES[mode]);
+    return 1;
+}
+
+// The same picture with another point count: the path and the parameters ride
+// inside the source string, so the file is simply read again.
+int resample_image(dai_show_ui *u, uint32_t fi, const char *source, uint32_t count) {
+    if (std::strncmp(source, "image://", 8) != 0) return 0;
+    char path[256];
+    float w_m = 60.0f; int th = 128;
+    const char *q = source + 8;
+    const char *qm = std::strchr(q, '?');
+    size_t plen = qm ? (size_t)(qm - q) : std::strlen(q);
+    if (plen >= sizeof(path)) plen = sizeof(path) - 1;
+    std::memcpy(path, q, plen); path[plen] = 0;
+    if (qm) std::sscanf(qm + 1, "w=%f&th=%d", &w_m, &th);
+
+    std::vector<uint8_t> px;
+    uint32_t w = 0, h = 0;
+    char err[256] = { 0 };
+    const char *dot = std::strrchr(path, '.');
+    int jpeg = dot && (!strcmp(dot, ".jpg") || !strcmp(dot, ".jpeg") ||
+                       !strcmp(dot, ".JPG") || !strcmp(dot, ".JPEG"));
+    int ok = jpeg ? daiimg::read_jpeg_file(path, px, &w, &h, err, sizeof(err))
+                  : daiimg::read_png_file(path, px, &w, &h, err, sizeof(err));
+    if (!ok) { say(u, 1, "%s", err[0] ? err : "the image could not be read"); return 0; }
+    std::vector<dai_show_point> pts(count);
+    uint32_t got = dai_show_image_sample(u->sh, px.data(), w, h, w_m, (uint8_t)th,
+                                         count, pts.data(), err, sizeof(err));
+    if (!got) { say(u, 1, "%s", err[0] ? err : "the image gave no points"); return 0; }
+    if (!dai_show_formation_replace_points(u->sh, fi, pts.data(), got)) return 0;
+    say(u, 0, "image re-sampled: %u points", got);
     return 1;
 }
 
@@ -854,7 +888,10 @@ void add_image(dai_show_ui *u) {
     char name[DAI_SHOW_NAME_MAX];
     std::snprintf(name, sizeof(name), "%.*s", (int)sizeof(name) - 1, leaf);
     char src[300];
-    std::snprintf(src, sizeof(src), "image://%s", u->image_path);
+    // The parameters travel inside the source string, so "the same picture,
+    // but 300 drones" can re-read them instead of asking again.
+    std::snprintf(src, sizeof(src), "image://%s?w=%.1f&th=%d", u->image_path,
+                  (double)u->image_width_m, (int)u->image_threshold);
     uint8_t th = (uint8_t)std::max(0.0f, std::min(255.0f, u->image_threshold));
     uint32_t want = (u->image_points >= 1.0f) ? (uint32_t)(u->image_points + 0.5f)
                                               : u->s.drone_count;
@@ -1079,169 +1116,6 @@ uint32_t dai_show_ui_verdict(const dai_show_ui *u, char *buf, size_t cap) {
     if (!u) return 0;
     verdict_text(u, buf, cap);
     return (uint32_t)std::strlen(buf);
-}
-
-// ---- storyboard ------------------------------------------------------------
-
-void dai_show_ui_storyboard(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h) {
-    if (!u || !ui) return;
-    dai_ui_panel_begin(ui, x, y, w, h, nullptr);
-    const dai_ui_style *st = dai_ui_style_of(ui);
-    const char *const LABELS[] = { "Shape", "Size (m)", "Hold (s)", "Transit (s)",
-                                   "Profile", "Timing", "Spread (s)", "Assignment",
-                                   "Group", "Points", "Image", "Width (m)", "Threshold" };
-    float label_was = fit_labels(ui, LABELS, 13);
-
-    dai_ui_section(ui, "Figures");
-    seg_row(ui, "Shape", &u->figure, FIGURES, 3);
-    dai_ui_num_field(ui, "Size (m)", &u->figure_size, 1.0f, 2.0f, 2000.0f, "showfigsize");
-    dai_ui_row(ui, 0.0f);
-    if (dai_ui_button(ui, "Add figure")) add_builtin(u);
-    if (u->have_mesh) {
-        // Two buttons in one row, in a column that is a fifth of the frame:
-        // the long caption is the first thing the panel edge cuts in half, so
-        // below a certain width the button says the short version of the same
-        // sentence instead of "From selecte".
-        const char *from_label = dai_ui_panel_width(ui) < 260.0f ? "From mesh"
-                                                                 : "From selected mesh";
-        if (dai_ui_button(ui, from_label)) {
-            dai_show_sample_desc d = u->mesh;
-            d.mode             = u->sample_mode;
-            d.count            = u->s.drone_count;
-            d.min_distance_m   = u->s.min_distance_m;
-            d.relax_iterations = 6;
-            d.seed             = u->s.seed + (uint64_t)dai_show_formation_count(u->sh) * 7919ull;
-            if (d.scale <= 0.0f) d.scale = u->figure_size * 0.5f;
-            const char *base = std::strrchr(u->source, '/');
-            const char *leaf = base ? base + 1 : u->source;
-            char name[DAI_SHOW_NAME_MAX];
-            std::snprintf(name, sizeof(name), "%.*s", (int)sizeof(name) - 1, leaf);
-            add_formation(u, &d, name[0] ? name : "mesh", u->source);
-        }
-    }
-    dai_ui_row_end(ui);
-    if (!u->have_mesh)
-        wrapped_label(ui, "no mesh selected - pick one in the Project panel");
-
-    // A picture as a figure: the drones ARE the pixels that pass the
-    // threshold, in the picture's own colours, on a wall facing the audience.
-    dai_ui_input_text(ui, "Image", u->image_path, sizeof(u->image_path));
-    if (u->image_path[0]) {
-        dai_ui_num_field(ui, "Width (m)", &u->image_width_m, 1.0f, 2.0f, 2000.0f, "showimgw");
-        dai_ui_num_field(ui, "Threshold", &u->image_threshold, 1.0f, 0.0f, 255.0f, "showimgt");
-        dai_ui_num_field(ui, "Points", &u->image_points, 1.0f, 0.0f,
-                         (float)u->s.drone_count, "showimgn");
-        if (dai_ui_button(ui, "From image")) add_image(u);
-    }
-
-    dai_ui_section(ui, "Storyboard");
-    uint32_t n = dai_show_formation_count(u->sh);
-    if (!n) {
-        wrapped_label(ui, "The show is empty. Add a figure above.");
-        dai_ui_style_of(ui)->label_w = label_was;
-        dai_ui_panel_end(ui);
-        return;
-    }
-
-    float cx = 0.0f, cyy = 0.0f;
-    dai_ui_cursor_pos(ui, &cx, &cyy);
-    const float story_h   = std::max(60.0f, y + h - cyy - 8.0f);
-    const float story_top = cyy, story_bot = cyy + story_h;
-    dai_ui_scroll_begin(ui, "showstory", story_h);
-    for (uint32_t i = 0; i < n; ++i) {
-        dai_show_formation_info info;
-        if (!dai_show_formation_get(u->sh, i, &info)) continue;
-
-        char left_part[160], right_part[64], head[224];
-        std::snprintf(left_part, sizeof(left_part), "%u. %s - %u pts",
-                      i + 1u, info.name, info.point_count);
-        std::snprintf(right_part, sizeof(right_part), " - t %.1fs", (double)info.t_start);
-        // Docked, this panel is a fifth of the frame wide. The row keeps its
-        // number AND its timestamp and loses the middle - the half a reader
-        // can rebuild from the figure list - instead of losing the second the
-        // figure starts in, which is the one thing only this row says.
-        ellide_middle(ui, head, sizeof(head), left_part, right_part,
-                      row_text_width(ui), 8);
-        int selected = ((int)i == u->sel_formation);
-        // Whole rows only: a toggle button cut across the middle by the edge of
-        // the scroll region is a control whose caption cannot be read and whose
-        // click still lands. It keeps its place in the layout, so the wheel
-        // brings it in whole.
-        float rx = 0.0f, ry = 0.0f;
-        dai_ui_cursor_pos(ui, &rx, &ry);
-        const float rh = widget_row(ui);
-        if (ry < story_top - 0.5f || ry + rh > story_bot + 0.5f) {
-            dai_ui_advance(ui, dai_ui_panel_width(ui), rh);
-            if (!selected) continue;
-        } else if (dai_ui_toggle_button(ui, head, selected)) {
-            u->sel_formation = (int)i;
-        }
-        if (!selected) continue;
-
-        if (dai_ui_num_field(ui, "Hold (s)", &info.hold_s, 0.25f, 0.0f, 600.0f, "showhold"))
-            dai_show_formation_set_hold(u->sh, i, info.hold_s);
-
-        // Which timeline this figure belongs to. Same number as the figure
-        // before it = it flies AFTER it; a new number = at the same time,
-        // over its own slice of the fleet.
-        float grp = (float)info.group;
-        if (dai_ui_num_field(ui, "Group", &grp, 1.0f, 0.0f, 15.0f, "showgrp"))
-            dai_show_formation_set_group(u->sh, i, (int)(grp + 0.5f));
-
-        // The point count is editable where re-sampling is possible: a
-        // builtin's source IS its shape. A mesh or an image was sampled once,
-        // from a file - its count is what it is.
-        if (std::strncmp(info.source, "builtin://", 10) == 0) {
-            float pts_f = (float)info.point_count;
-            if (dai_ui_num_field(ui, "Points", &pts_f, 1.0f, 1.0f,
-                                 (float)u->s.drone_count, "showpts") &&
-                (uint32_t)(pts_f + 0.5f) != info.point_count) {
-                int shape = 0;
-                const char *bn = info.source + 10;
-                for (int k = 0; k < 3; ++k) if (!std::strcmp(bn, FIGURES[k])) shape = k;
-                resample_builtin(u, i, shape, (uint32_t)(pts_f + 0.5f));
-            }
-        } else {
-            char fixed[96];
-            std::snprintf(fixed, sizeof(fixed), "%u points (fixed at creation)",
-                          info.point_count);
-            wrapped_label(ui, fixed);
-        }
-
-        if (i >= 1) {
-            dai_show_transition tr;
-            if (dai_show_transition_get(u->sh, i, &tr)) {
-                int changed = 0;
-                changed |= dai_ui_num_field(ui, "Transit (s)", &tr.duration_s, 0.25f, 0.5f, 600.0f, "showdur");
-                changed |= dai_ui_option(ui, "Profile", &tr.profile, PROFILES, 4);
-                changed |= dai_ui_option(ui, "Timing", &tr.timing, TIMINGS, 2);
-                if (tr.timing == DAI_SHOW_TIMING_STAGGERED)
-                    changed |= dai_ui_num_field(ui, "Spread (s)", &tr.stagger_s, 0.1f, 0.0f, 120.0f, "showstag");
-                changed |= dai_ui_option(ui, "Assignment", &tr.assign_method, ASSIGN_METHODS, 4);
-                if (changed) dai_show_transition_set(u->sh, i, &tr);
-            }
-        } else {
-            wrapped_label(ui, "the first figure is the take-off grid");
-        }
-
-        dai_ui_row(ui, 0.0f);
-        if (dai_ui_button_fit(ui, "Up") && dai_show_formation_move(u->sh, i, -1))
-            u->sel_formation = (int)i - 1;
-        if (dai_ui_button_fit(ui, "Down") && dai_show_formation_move(u->sh, i, +1))
-            u->sel_formation = (int)i + 1;
-        if (dai_ui_button_fit(ui, "Remove")) {
-            dai_show_formation_remove(u->sh, i);
-            if (u->sel_formation >= (int)dai_show_formation_count(u->sh))
-                u->sel_formation = (int)dai_show_formation_count(u->sh) - 1;
-            say(u, 0, "formation removed - solve again");
-        }
-        dai_ui_row_end(ui);
-        dai_ui_separator(ui);
-    }
-    dai_ui_scroll_end(ui);
-    (void)st;
-    dai_ui_style_of(ui)->label_w = label_was;
-    dai_ui_panel_end(ui);
 }
 
 // ---- parameters -------------------------------------------------------------
@@ -1972,12 +1846,14 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                     if (d < best) { best = d; best_i = i; }
                 }
                 if (u->paint_on && !hit.empty()) {
-                    dai_show_formation_set_point_colour(
-                        u->sh, fi, hit.data(), (uint32_t)hit.size(),
+                    // Painted AT the playhead: a stroke, so the colour begins
+                    // at the second on the timeline the user is watching and
+                    // the show keeps whatever came before it.
+                    dai_show_formation_paint_at(
+                        u->sh, fi, u->time, hit.data(), (uint32_t)hit.size(),
                         (uint8_t)(u->paint_rgb[0] * 255.0f + 0.5f),
                         (uint8_t)(u->paint_rgb[1] * 255.0f + 0.5f),
                         (uint8_t)(u->paint_rgb[2] * 255.0f + 0.5f), 0);
-                    u->figure_on = 0;          // painting flattened the override
                     consumed = 1;
                 } else if (best_i != 0xFFFFFFFFu && pressed) {
                     u->sel_point = best_i;
@@ -2073,7 +1949,9 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                     u->sel_drone   = u->click_drone;
                     u->sel_drone_b = 0xFFFFFFFFu;
                 }
-                if (u->move_f >= 0) u->sel_formation = u->move_f;
+                // The FIGURE selection is not the drone's business: picking
+                // one drone out of a formation must not throw away the shape
+                // the inspector and the outline are working on.
             }
             u->move_f = -1; u->move_i = 0xFFFFFFFFu; u->move_active = 0;
             u->click_drone = 0xFFFFFFFFu;
@@ -2219,7 +2097,22 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         dai_ui_popup_open(&u->add_menu, hmx, hmy);
     int apick = dai_ui_popup_menu(ui, &u->add_menu, ADD_ITEMS, 4);
     if (apick >= 0 && apick < 3) { u->figure = apick; add_builtin(u); }
-    else if (apick == 3)         { add_image(u); }
+    else if (apick == 3)         { dai_ui_popup_open(&u->img_menu, hmx, hmy); }
+    // The image import is a little window of its own, because a menu row is
+    // not the place that can hold a path, a width and a threshold.
+    if (u->img_menu.open) {
+        dai_ui_popup_panel_begin(ui, &u->img_menu, 280.0f, 170.0f);
+        dai_ui_input_text(ui, "Image", u->image_path, sizeof(u->image_path));
+        dai_ui_num_field(ui, "Width (m)", &u->image_width_m, 1.0f, 2.0f, 2000.0f, "popimgw");
+        dai_ui_num_field(ui, "Threshold", &u->image_threshold, 1.0f, 0.0f, 255.0f, "popimgt");
+        dai_ui_num_field(ui, "Points (0 = fleet)", &u->image_points, 1.0f, 0.0f,
+                         (float)u->s.drone_count, "popimgn");
+        if (dai_ui_button(ui, "Import")) {
+            add_image(u);
+            dai_ui_popup_close(&u->img_menu);
+        }
+        dai_ui_popup_panel_end(ui);
+    }
     if (!n) {
         wrapped_label(ui, "no figures yet - the + above adds one");
         dai_ui_panel_end(ui);
@@ -2237,10 +2130,25 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
     const float list_h  = (float)visible * pitch;
     const float top = cy, bottom = cy + list_h;
     float t = u->time;
+    int prev_group = -1;                     // forces the first header
     dai_ui_scroll_begin(ui, "showfigs", list_h);
     for (uint32_t i = 0; i < n; ++i) {
         dai_show_formation_info info;
         if (!dai_show_formation_get(u->sh, i, &info)) continue;
+        // The step is the PARENT, the figure its child: everything sharing a
+        // step number flies one after another, a new step starts a parallel
+        // timeline with its own drones. Said as a header row, not a manual.
+        if (info.group != prev_group) {
+            prev_group = info.group;
+            char gh[64];
+            std::snprintf(gh, sizeof(gh), "Step %d", info.group + 1);
+            float hx2 = 0.0f, hy2 = 0.0f;
+            dai_ui_cursor_pos(ui, &hx2, &hy2);
+            if (hy2 >= top - 0.5f && hy2 + pitch <= bottom + 0.5f)
+                dai_ui_text(ui, hx2 + 2.0f,
+                            hy2 + (pitch - dai_ui_text_height(ui)) * 0.5f, gh, st->text_dim);
+            dai_ui_advance(ui, w - 16.0f, pitch - st->spacing);
+        }
         // The lit row is the figure the TIMELINE is standing in, not the one
         // the storyboard happens to be editing - two panels lighting up two
         // different rows for two meanings of "selected" is how a reader stops
@@ -2260,19 +2168,15 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         // differ by twenty pixels, which is the difference between "1. Sphere"
         // and "1. Sp...".
         const float avail = dai_ui_panel_width(ui) - st->padding * 2.0f - 10.0f;
-        std::snprintf(row_head, sizeof(row_head), "%u. %s  %u drones",
+        std::snprintf(row_head, sizeof(row_head), "   %u. %s  %u drones",
                       i + 1u, info.name, info.point_count);
-        if (info.group)
-            std::snprintf(row_tail, sizeof(row_tail), "  g%d %.1f s", info.group,
-                          (double)info.t_start);
-        else
-            std::snprintf(row_tail, sizeof(row_tail), "  %.1f s", (double)info.t_start);
+        std::snprintf(row_tail, sizeof(row_tail), "  %.1f s", (double)info.t_start);
         std::snprintf(row, sizeof(row), "%s%s", row_head, row_tail);
         // The drone count is the first thing dropped, whole - it is the same
         // for every figure of a fixed fleet. What follows is cut in the MIDDLE
         // so the second the figure begins in survives the narrow column.
         if (dai_ui_text_width(ui, row) > avail) {
-            std::snprintf(row_head, sizeof(row_head), "%u. %s", i + 1u, info.name);
+            std::snprintf(row_head, sizeof(row_head), "   %u. %s", i + 1u, info.name);
             ellide_middle(ui, row, sizeof(row), row_head, row_tail, avail, 8);
         }
         float rx = 0.0f, ry = 0.0f;
@@ -2315,8 +2219,11 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
     if (!u || !ui) return;
     dai_ui_panel_begin(ui, x, y, w, h, nullptr);
     const dai_show_plan *plan = dai_show_get_plan(u->sh);
-    const char *const LABELS[] = { "Position", "Colour", "Keyframes", "Nearest" };
-    float label_was = fit_labels(ui, LABELS, 4);
+    const char *const LABELS[] = { "Position", "Colour", "Keyframes", "Nearest",
+                                   "Hold (s)", "Step", "Points", "Mode",
+                                   "Transit (s)", "Profile", "Timing", "Spread (s)",
+                                   "Assignment" };
+    float label_was = fit_labels(ui, LABELS, 13);
 
     // Everything below scrolls, and everything below stops at `bot`. The panel
     // is a fifth of the frame wide when a show is open, which is narrow enough
@@ -2442,6 +2349,116 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                     }
                 }
 
+                // ---- the fields the storyboard used to own ----------------
+                // Hold, step and count are properties OF THE FIGURE, so they
+                // live where the figure is inspected - a second panel editing
+                // the same selected thing is how two panels drift apart.
+                {
+                    float hold = info.hold_s;
+                    float hgt = widget_row(ui);
+                    if (fits(ui, bot, hgt)) {
+                        if (dai_ui_num_field(ui, "Hold (s)", &hold, 0.25f, 0.0f, 600.0f, "inshold"))
+                            dai_show_formation_set_hold(u->sh, fi, hold);
+                    } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
+                }
+                {
+                    float grp = (float)info.group;
+                    float hgt = widget_row(ui);
+                    if (fits(ui, bot, hgt)) {
+                        if (dai_ui_num_field(ui, "Step", &grp, 1.0f, 1.0f, 16.0f, "insgrp"))
+                            dai_show_formation_set_group(u->sh, fi, (int)(grp - 0.5f));
+                    } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
+                }
+                {
+                    float pts_f = (float)info.point_count;
+                    float hgt = widget_row(ui);
+                    int is_builtin = std::strncmp(info.source, "builtin://", 10) == 0;
+                    int is_image   = std::strncmp(info.source, "image://", 8) == 0;
+                    if (is_builtin || is_image) {
+                        if (fits(ui, bot, hgt)) {
+                            if (dai_ui_num_field(ui, "Points", &pts_f, 1.0f, 1.0f,
+                                                 (float)u->s.drone_count, "inspts") &&
+                                (uint32_t)(pts_f + 0.5f) != info.point_count) {
+                                if (is_builtin) {
+                                    int shape = 0;
+                                    const char *bn = info.source + 10;
+                                    for (int k = 0; k < 3; ++k)
+                                        if (!std::strcmp(bn, FIGURES[k])) shape = k;
+                                    resample_builtin(u, fi, shape,
+                                                     (uint32_t)(pts_f + 0.5f), info.sample_mode);
+                                } else {
+                                    resample_image(u, fi, info.source,
+                                                   (uint32_t)(pts_f + 0.5f));
+                                }
+                            }
+                        } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
+                    } else {
+                        char fixed[80];
+                        std::snprintf(fixed, sizeof(fixed), "%u points (fixed at creation)",
+                                      info.point_count);
+                        field_row(ui, "Points", fixed, bot);
+                    }
+                    // Surface, volume or only the edges - the silhouette is
+                    // the one that makes a cube read as a cube instead of a
+                    // cloud. Re-samples the shape with the mode kept.
+                    if (is_builtin) {
+                        int mode = info.sample_mode;
+                        float hgt2 = widget_row(ui);
+                        if (fits(ui, bot, hgt2)) {
+                            if (seg_row(ui, "Mode", &mode, SAMPLE_MODES, 3) &&
+                                mode != info.sample_mode) {
+                                int shape = 0;
+                                const char *bn = info.source + 10;
+                                for (int k = 0; k < 3; ++k)
+                                    if (!std::strcmp(bn, FIGURES[k])) shape = k;
+                                resample_builtin(u, fi, shape, info.point_count, mode);
+                            }
+                        } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt2);
+                    }
+                }
+                // The move INTO this figure is meaningless for the first
+                // figure of a step - nothing comes before it.
+                int first_in_step = 1;
+                for (uint32_t j = 0; j < fi; ++j) {
+                    dai_show_formation_info oi;
+                    if (dai_show_formation_get(u->sh, j, &oi) && oi.group == info.group) {
+                        first_in_step = 0;
+                        break;
+                    }
+                }
+                if (!first_in_step) {
+                    dai_show_transition tr;
+                    if (dai_show_transition_get(u->sh, fi, &tr)) {
+                        int changed = 0;
+                        float hgt = widget_row(ui);
+                        if (fits(ui, bot, hgt))
+                            changed |= dai_ui_num_field(ui, "Transit (s)", &tr.duration_s,
+                                                        0.25f, 0.5f, 600.0f, "insdur");
+                        else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
+                        hgt = widget_row(ui);
+                        if (fits(ui, bot, hgt))
+                            changed |= dai_ui_option(ui, "Profile", &tr.profile, PROFILES, 4);
+                        else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
+                        hgt = widget_row(ui);
+                        if (fits(ui, bot, hgt))
+                            changed |= dai_ui_option(ui, "Timing", &tr.timing, TIMINGS, 2);
+                        else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
+                        if (tr.timing == DAI_SHOW_TIMING_STAGGERED) {
+                            hgt = widget_row(ui);
+                            if (fits(ui, bot, hgt))
+                                changed |= dai_ui_num_field(ui, "Spread (s)", &tr.stagger_s,
+                                                            0.1f, 0.0f, 120.0f, "insstag");
+                            else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
+                        }
+                        hgt = widget_row(ui);
+                        if (fits(ui, bot, hgt))
+                            changed |= dai_ui_option(ui, "Assignment", &tr.assign_method,
+                                                     ASSIGN_METHODS, 4);
+                        else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
+                        if (changed) dai_show_transition_set(u->sh, fi, &tr);
+                    }
+                }
+
                 // ---- colour, in the three levels the document has ---------
                 if (u->colour_for != (int)fi) {
                     u->colour_for = (int)fi;
@@ -2488,6 +2505,8 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                 if (u->pick_on) {
                     check_row(ui, bot, "Paint while dragging", &u->paint_on);
                     colour_row(ui, bot, "Brush", u->paint_rgb, "showbrush");
+                    if (row_button(ui, bot, "Forget all painted colours"))
+                        dai_show_formation_clear_strokes(u->sh, fi);
                     float bp = u->brush_px;
                     {
                         float hgt = widget_row(ui);
@@ -2508,10 +2527,14 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                         field_row(ui, "Colour", pl, bot);
                         if (row_button(ui, bot, "Paint the picked point")) {
                             uint32_t one = u->sel_point;
-                            dai_show_formation_set_point_colour(
-                                u->sh, fi, &one, 1, to_u8(u->paint_rgb[0]),
+                            // A stroke AT THE PLAYHEAD: the colour starts at
+                            // the second the user is looking at, not from the
+                            // first frame of the show.
+                            dai_show_formation_paint_at(
+                                u->sh, fi, u->time, &one, 1, to_u8(u->paint_rgb[0]),
                                 to_u8(u->paint_rgb[1]), to_u8(u->paint_rgb[2]), 0);
-                            u->figure_on = 0;      // the paint flattened it
+                            say(u, 0, "point %u painted at %.1f s", u->sel_point,
+                                (double)u->time);
                             say(u, 0, "point %u painted", one);
                         }
                     } else {
@@ -2682,19 +2705,15 @@ void dai_show_ui_panels(dai_show_ui *u, dai_ui *ui, struct dai_dock *dock) {
     // Idempotent, like every other registration in this editor: the first call
     // places the panel, the rest are free, and wherever the user dragged it
     // afterwards is where it stays.
-    // No new screen real estate at all: the storyboard tabs itself into the
-    // Hierarchy (a show has figures where a scene has nodes), the parameters
-    // into the Inspector (both edit the one selected thing), and the
-    // validation into the Console (both are the program talking back).
-    dai_dock_add_tab(dock, "Storyboard", "Hierarchy");
+    // No new screen real estate at all: the parameters tab themselves into
+    // the Inspector (both edit the one selected thing) and the validation
+    // into the Console (both are the program talking back). The storyboard
+    // panel is gone - the hierarchy lists the figures under their steps and
+    // the inspector edits the selected one, which is all it ever did.
     dai_dock_add_tab(dock, "Show Parameters", "Inspector");
     dai_dock_add_tab(dock, "Validation", "Console");
 
     float px, py, pw, ph;
-    if (dai_dock_panel(dock, "Storyboard", &px, &py, &pw, &ph)) {
-        dai_show_ui_storyboard(u, ui, px, py, pw, ph);
-        dai_dock_panel_end(dock);
-    }
     if (dai_dock_panel(dock, "Show Parameters", &px, &py, &pw, &ph)) {
         dai_show_ui_parameters(u, ui, px, py, pw, ph);
         dai_dock_panel_end(dock);
