@@ -173,7 +173,64 @@ echo "-- programs"
 # window class looks it up by that id. windres resolves the path relative to
 # the .rc, hence the cd.
 if [ -f assets/daidalos.ico ]; then
-    mkdir -p "$OUT/rc" && printf '1 ICON "../../assets/daidalos.ico"\n' > "$OUT/rc/daidalos.rc"
+    mkdir -p "$OUT/rc"
+    # Icon + version info + manifest. The metadata is not decoration: a
+    # binary with no name, no publisher and no manifest is exactly the shape
+    # Windows Defender's ML calls "Wacatac.B!ml" on sight, and every false
+    # positive costs a user who never gets as far as the viewport.
+    VER_Y=$(date -u +%Y); VER_M=$(date -u +%-m); VER_D=$(date -u +%-d)
+    VER_STR=$(date -u +%Y.%m.%d)
+    cat > "$OUT/rc/daidalos.manifest" <<EOF
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity version="$VER_STR.0" name="FleiTec.Daidalos.Editor" type="win32"/>
+  <description>Daidalos Editor</description>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security><requestedPrivileges>
+      <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+    </requestedPrivileges></security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1"><application>
+    <supportedOS Id="{e2011457-1546-43c5-a5fe-008deee3d3f0}"/>
+    <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
+    <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
+    <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
+    <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+  </application></compatibility>
+</assembly>
+EOF
+    cat > "$OUT/rc/daidalos.rc" <<EOF
+1 ICON "../../assets/daidalos.ico"
+1 24 "daidalos.manifest"
+1 VERSIONINFO
+FILEVERSION $VER_Y,$VER_M,$VER_D,0
+PRODUCTVERSION $VER_Y,$VER_M,$VER_D,0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "FleiTec"
+            VALUE "FileDescription", "Daidalos Editor"
+            VALUE "FileVersion", "$VER_STR"
+            VALUE "InternalName", "DaidalosEditor"
+            VALUE "LegalCopyright", "FleiTec"
+            VALUE "OriginalFilename", "DaidalosEditor.exe"
+            VALUE "ProductName", "Daidalos Engine"
+            VALUE "ProductVersion", "$VER_STR"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+EOF
     ( cd "$OUT/rc" && x86_64-w64-mingw32-windres daidalos.rc -O coff -o daidalos.res )
     ICON_RES="$OUT/rc/daidalos.res"
 fi
