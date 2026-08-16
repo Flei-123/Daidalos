@@ -467,6 +467,35 @@ DAI_API dai_show_plan *dai_show_import_skyc(const char *path,
                                             dai_show_settings *out_settings,
                                             char *err, size_t err_len);
 
+/* ---- DSX: the open format ------------------------------------------------
+ *
+ * .skyc exists because the show has to fly on proven firmware. This export
+ * exists for the other half of the problem: a show that is to be REVIEWED -
+ * by an authority, a client, a second vendor's tool, or a git history - needs
+ * a container that is human-readable, diffable and machine-validatable, and
+ * .skyc is none of those things.
+ *
+ * DSX (dsx-droneshow.org, v0.1) is the open answer: a ZIP of JSON, with the
+ * frame, the altitude reference, the axis handedness and the colour space
+ * declared as fields rather than guessed - every one of those has caused a
+ * documented failure when left implicit. Safety lives IN the file
+ * (min_separation, the geofence, the termination ladder), as data, not as a
+ * sidecar PDF.
+ *
+ * This writes a conforming L1 show: one fleet, the takeoff grid as the
+ * drones' homes, segment trajectories built from the plan's keyframes (a
+ * straight key is `linear`, an eased one is a `bezier` fitted through the
+ * profile so the reduction lands within the millimetre), and the light as a
+ * per-drone program of `set` and `fade` ops. What a Daidalos show does not
+ * have is stated rather than invented: the RTH-feasibility windows stay
+ * empty, because the planner computes no return branches.
+ *
+ * Deterministic, like every export here: the same plan and settings produce
+ * the same bytes. */
+DAI_API dai_result dai_show_export_dsx(const dai_show_plan *p,
+                                       const dai_show_settings *s,
+                                       const char *path, char *err, size_t err_len);
+
 /* ---- the document: formations, storyboard, and one solve ---------------- */
 
 /* What the editor edits. A list of formations, the transitions between them,

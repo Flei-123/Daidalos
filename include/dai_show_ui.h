@@ -105,6 +105,18 @@ DAI_API void     dai_show_ui_brush(dai_show_ui *u, float radius_px,
                                    uint8_t r, uint8_t g, uint8_t b);
 DAI_API uint32_t dai_show_ui_picked_point(const dai_show_ui *u);
 
+/* ---- the export row ------------------------------------------------------
+ * Writing the file is the host's job - it is the host that knows the project's
+ * folder. The panel knows WHEN, and what the last click asked for: 0 nothing,
+ * 1 Skybrush .skyc, 2 DSX .dsx, 3 CSV, 4 the JSON round trip. The host calls
+ * dai_show_ui_take_export once a frame, gets the pending format (the flag
+ * clears itself), writes the file, and hands the outcome back through
+ * dai_show_ui_note so the status line can say it. A panel that wrote the file
+ * itself would need to know where the project lives, and a show document does
+ * not. */
+DAI_API int  dai_show_ui_take_export(dai_show_ui *u);
+DAI_API void dai_show_ui_note(dai_show_ui *u, int bad, const char *text);
+
 /* ---- the panels ----------------------------------------------------------
  * Each fills the rectangle the dock handed out. Called directly by a host that
  * lays out its own windows; dai_show_ui_panels does the ordinary thing of

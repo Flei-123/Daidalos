@@ -463,6 +463,8 @@ struct dai_show_ui {
     char status[256] = { 0 };
     int  status_bad  = 0;
 
+    int  want_export = 0;        // 0 none; 1 skyc, 2 dsx, 3 csv, 4 json
+
     std::vector<dai_show_point> fleet;      // the fleet at `time`, per frame
     std::vector<uint8_t>        flagged;    // in a conflict at `time`
 
@@ -847,6 +849,18 @@ uint32_t dai_show_ui_picked_point(const dai_show_ui *u) { return u ? u->sel_poin
 uint32_t dai_show_ui_selected_drone(const dai_show_ui *u) { return u ? u->sel_drone : 0xFFFFFFFFu; }
 int      dai_show_ui_selected_conflict(const dai_show_ui *u) { return u ? u->sel_conflict : -1; }
 
+int dai_show_ui_take_export(dai_show_ui *u) {
+    if (!u) return 0;
+    int f = u->want_export;
+    u->want_export = 0;
+    return f;
+}
+
+void dai_show_ui_note(dai_show_ui *u, int bad, const char *text) {
+    if (!u || !text) return;
+    say(u, bad, "%s", text);
+}
+
 uint32_t dai_show_ui_verdict(const dai_show_ui *u, char *buf, size_t cap) {
     if (!buf || !cap) return 0;
     buf[0] = 0;
@@ -1100,6 +1114,34 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
     dai_ui_panel_begin(ui, x, rep_y, w, (y + h) - rep_y, nullptr);
     dai_ui_rect(ui, x + 6.0f, rep_y, w - 12.0f, 1.0f, dai_ui_style_of(ui)->panel_border);
     if (dai_ui_button(ui, "Solve show")) solve_now(u);
+    // The export row, beside Solve rather than under it: the one thing the
+    // whole panel is for may never scroll away. A click only RECORDS the wish -
+    // the host writes the file, because the host is the one that knows the
+    // project's folder. Disabled in spirit when there is no plan: an unsolved
+    // show exports nothing but an empty archive.
+    {
+        const dai_show_plan *plan = dai_show_get_plan(u->sh);
+        dai_ui_style *mst = dai_ui_style_of(ui);
+        float row_y = 0.0f, row_x = 0.0f;
+        dai_ui_cursor_pos(ui, &row_x, &row_y);
+        const float bw = (dai_ui_panel_width(ui) - mst->padding * 2.0f - mst->spacing * 3.0f) / 4.0f;
+        const float bh = widget_row(ui);
+        struct Btn { const char *label; int fmt; };
+        const Btn B[4] = { { "SKYC", 1 }, { "DSX", 2 }, { "CSV", 3 }, { "JSON", 4 } };
+        for (int i = 0; i < 4; ++i) {
+            float bx = row_x + i * (bw + mst->spacing);
+            float mx2 = 0.0f, my2 = 0.0f; int dn2 = 0, pr2 = 0;
+            dai_ui_mouse(ui, &mx2, &my2, &dn2, &pr2);
+            int over = (mx2 >= bx && mx2 < bx + bw && my2 >= row_y && my2 < row_y + bh);
+            dai_ui_rect(ui, bx, row_y, bw, bh,
+                        over ? (plan ? mst->button_hover : mst->button) : mst->button);
+            dai_ui_text(ui, bx + (bw - dai_ui_text_width(ui, B[i].label)) * 0.5f,
+                        row_y + (bh - dai_ui_text_height(ui)) * 0.5f, B[i].label,
+                        plan ? mst->text : mst->text_dim);
+            if (over && pr2 && plan) u->want_export = B[i].fmt;
+        }
+        dai_ui_advance(ui, dai_ui_panel_width(ui), bh);
+    }
     float bx2 = 0.0f, by2 = 0.0f;
     dai_ui_cursor_pos(ui, &bx2, &by2);
     const float report_view_h = std::max(pitch, (y + h) - by2 - 6.0f);

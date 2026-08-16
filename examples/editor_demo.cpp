@@ -4660,6 +4660,33 @@ int main(int argc, char **argv) {
         // rate of the machine it is being watched on.
         if (g_show_ui) {
             dai_show_ui_advance(g_show_ui, dt);
+
+            // A click on the export row only records the wish - the writing is
+            // done here, where the project's folder is known. The outcome is
+            // handed straight back so the status line can say it.
+            {
+                int fmt = dai_show_ui_take_export(g_show_ui);
+                if (fmt) {
+                    const dai_show_plan *plan = dai_show_get_plan(g_show);
+                    dai_show_settings ss = dai_show_get_settings(g_show);
+                    std::string base = std::string(dai_project_path(g_project)) + "/show";
+                    const char *ext = (fmt == 1) ? ".skyc" : (fmt == 2) ? ".dsx"
+                                    : (fmt == 3) ? ".csv" : ".json";
+                    std::string out = base + ext;
+                    char eerr[256] = { 0 };
+                    dai_result rr = DAI_ERR_INVALID_ARG;
+                    if (fmt == 1) rr = dai_show_export_skyc(plan, &ss, out.c_str(), eerr, sizeof(eerr));
+                    if (fmt == 2) rr = dai_show_export_dsx (plan, &ss, out.c_str(), eerr, sizeof(eerr));
+                    if (fmt == 3) rr = dai_show_export_csv (plan, &ss, out.c_str(), eerr, sizeof(eerr));
+                    if (fmt == 4) rr = dai_show_export_json(plan, &ss, out.c_str(), eerr, sizeof(eerr));
+                    char note[320];
+                    std::snprintf(note, sizeof(note), "%s%s",
+                                  rr == DAI_OK ? "wrote " : "export failed: ",
+                                  rr == DAI_OK ? out.c_str() : (eerr[0] ? eerr : "unknown"));
+                    dai_show_ui_note(g_show_ui, rr != DAI_OK, note);
+                    if (g_panels_for_log) dai_editor_ui_log(g_panels_for_log, rr != DAI_OK, note);
+                }
+            }
             // The selected asset, offered to the storyboard as a figure. A
             // .glb is read into the same plain arrays the pipeline takes, so
             // nothing about the asset layer reaches dai_show.

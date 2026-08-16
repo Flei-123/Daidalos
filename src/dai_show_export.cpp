@@ -562,4 +562,457 @@ dai_show_plan *dai_show_import_skyc(const char *path, dai_show_settings *out_set
     return plan;
 }
 
+
+/* ---- DSX: the open, reviewable container ---------------------------------
+ *
+ * .skyc above is the format the FIRMWARE eats. This one is the format a human,
+ * an authority or another vendor's tool reads: DSX v0.1, profile L1. The two
+ * are not redundant - a compiled-only format cannot be diffed or audited, and
+ * a sampled-only format loses intent, so DSX carries both and makes the
+ * conversion between them normative.
+ *
+ * Three implementation points are worth a comment each:
+ *
+ * 1) ROUNDING. DSX positions are rounded to the millimetre with round-half-
+ *    away-from-zero, on the EXACT binary64 value. floor(x+0.5) is not that
+ *    rule - the addition itself can round up (0.4999... + 0.5 == 1.0 in
+ *    binary64) - and neither is a second pass through a %f formatter, which
+ *    rounds half-to-even. dsx_round below converts the value to its exact
+ *    decimal string and rounds that, the one way that is genuinely away from
+ *    zero on the value as stored.
+ *
+ * 2) THE CURVE. A Daidalos key segment knows its easing profile; a DSX bezier
+ *    knows two control points. The exporter fits c1/c2 numerically (golden
+ *    section on the squared distance over the segment) so the DSX curve tracks
+ *    the Daidalos curve to within a fraction of a millimetre. That is a fit,
+ *    not an identity - the normative reduction samples it and rounds to the
+ *    millimetre, so the error budget is generous. A straight key needs none of
+ *    this and is written as `linear`.
+ *
+ * 3) WHAT IS ABSENT. The RTH-feasibility map (spec section 7.3) is written as
+ *    an empty window list, because the Daidalos planner computes no return
+ *    branches. The honest value is "not declared", not a fabricated map.
+ */
+
+namespace {
+
+// Round half away from zero on the exact binary64 value, per DSX 4.4.4. The
+// Decimal route of the Python reference is not available here, so the exact
+// decimal of the value is produced with %.17g (always enough to distinguish a
+// binary64 from its neighbours) and the digit walk does the rounding.
+long long dsx_round(double x) {
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%.17g", x);
+    double back = strtod(buf, nullptr);          // exact decimal of x
+    if (back == x) {
+        // Round on the decimal string.
+        const char *dot = std::strchr(buf, '.');
+        int up = 0;
+        if (dot) up = (dot[1] - '0') >= 5;
+        long long r = (long long)std::fabs(x);
+        if (up) ++r;
+        return x < 0 ? -r : r;
+    }
+    // The 17-digit decimal is on the other side of the half-integer than x
+    // only at the last ulp; nudge once and take the nearer integer.
+    long long r = (long long)std::llround(std::fabs(x));   // llround is half away
+    return x < 0 ? -r : r;
+}
+
+// Metres with exactly three decimals, formatted FROM the rounded millimetre,
+// never from the float a second time (4.4.5).
+std::string dsx_metres(double v) {
+    long long mm = dsx_round(v * 1000.0);
+    long long a = mm < 0 ? -mm : mm;
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%s%lld.%03lld", mm < 0 ? "-" : "",
+                  (long long)(a / 1000), (long long)(a % 1000));
+    return buf;
+}
+
+// One colour channel, 8 bit, same rule.
+int dsx_byte(float v) {
+    long long q = dsx_round((double)v);
+    if (q < 0) q = 0;
+    if (q > 255) q = 255;
+    return (int)q;
+}
+
+// The easing the keys carry, evaluated the same way dai_show_plan does. A
+// local copy rather than a link: this file is arithmetic on the plan's public
+// surface and pulls in nothing from the solver's internals.
+// The profile a segment was flown with is stored on the DESTINATION key of
+// the leg - which, in the exporter's loop below, is `ka`, the key the fade
+// lands on. Reading it off `kb` (the PREVIOUS key) reads the hold key that
+// stands still before the move, and that one is always LINEAR, so the colour
+// ramp was eased with a straight line where the motion was a smoothstep. The
+// parity test caught it as a 25-level residual exactly where the easing bends.
+
+float dsx_ease(int profile, float u) {
+    if (u < 0.0f) u = 0.0f;
+    if (u > 1.0f) u = 1.0f;
+    switch (profile) {
+    case DAI_SHOW_PROFILE_SMOOTH: {
+        // cubic hermite, zero slope at both ends
+        return u * u * (3.0f - 2.0f * u);
+    }
+    case DAI_SHOW_PROFILE_SMOOTH_LEFT:
+        return u * (2.0f - u);
+    case DAI_SHOW_PROFILE_SMOOTH_RIGHT:
+        return u * u;
+    default:
+        return u;
+    }
+}
+
+void jstr(std::string &o, const char *s) {
+    o += '"';
+    for (const char *c = s; *c; ++c) {
+        if (*c == '"' || *c == '\\') o += '\\';
+        if ((unsigned char)*c >= 0x20) o += *c; else if (*c == '\n') o += "\\n";
+    }
+    o += '"';
+}
+void jnum(std::string &o, double v) { o += dstr(v); }
+void jint(std::string &o, long long v) { char b[24]; std::snprintf(b, sizeof(b), "%lld", v); o += b; }
+
+// Fit bezier control points (c1, c2) to a Daidalos eased segment so the DSX
+// curve approximates the Daidalos curve. The eased path is a straight line in
+// space with a nonlinear time law; c1/c2 sit on that line and only their
+// parameter matters, which collapses the fit to two scalars. Golden-section
+// search on the squared position error over the segment, in binary64.
+void fit_bezier(const dai_show_point *a, const dai_show_point *b, int profile,
+                float t0, float t1, float *c1x, float *c1y, float *c1z,
+                float *c2x, float *c2y, float *c2z) {
+    double ax = a->x, ay = a->y, az = a->z;
+    double bx = b->x, by = b->y, bz = b->z;
+    double dx = bx - ax, dy = by - ay, dz = bz - az;
+    auto target_s = [&](double u) {
+        return (double)dsx_ease(profile, (float)u);
+    };
+    // squared error between the DSX bezier at parameter c1t,c2t and the
+    // Daidalos eased point, summed over a few interior samples
+    auto err2 = [&](double e1, double e2) {
+        double sum = 0.0;
+        for (int k = 1; k <= 6; ++k) {
+            double u = k / 7.0;
+            double s = target_s(u);
+            double tx = ax + dx * s, ty = ay + dy * s, tz = az + dz * s;
+            double omu = 1.0 - u;
+            double bezx = omu*omu*omu*ax + 3*omu*omu*u*(ax+dx*e1) + 3*omu*u*u*(ax+dx*e2) + u*u*u*bx;
+            double bezy = omu*omu*omu*ay + 3*omu*omu*u*(ay+dy*e1) + 3*omu*u*u*(ay+dy*e2) + u*u*u*by;
+            double bezz = omu*omu*omu*az + 3*omu*omu*u*(az+dz*e1) + 3*omu*u*u*(az+dz*e2) + u*u*u*bz;
+            double ex = bezx-tx, ey = bezy-ty, ez = bezz-tz;
+            sum += ex*ex + ey*ey + ez*ez;
+        }
+        return sum;
+    };
+    // Two independent 1-D minimisations over e1 and e2, a few rounds.
+    double e1 = 0.0, e2 = 1.0;
+    if (std::fabs(dx) + std::fabs(dy) + std::fabs(dz) < 1e-9) {
+        e1 = 0.0; e2 = 1.0;
+    } else {
+        for (int round = 0; round < 3; ++round) {
+            for (int which = 0; which < 2; ++which) {
+                double lo = (which == 0) ? -0.5 : 0.0, hi = (which == 0) ? 0.5 : 1.5;
+                double gr = 0.6180339887498948482;
+                double c = hi - gr * (hi - lo), d = lo + gr * (hi - lo);
+                for (int it = 0; it < 48; ++it) {
+                    double ec = (which == 0) ? err2(c, e2) : err2(e1, c);
+                    double ed = (which == 0) ? err2(d, e2) : err2(e1, d);
+                    if (ec < ed) hi = d; else lo = c;
+                    c = hi - gr * (hi - lo);
+                    d = lo + gr * (hi - lo);
+                }
+                if (which == 0) e1 = 0.5 * (lo + hi); else e2 = 0.5 * (lo + hi);
+            }
+        }
+    }
+    *c1x = (float)(ax + dx * e1); *c1y = (float)(ay + dy * e1); *c1z = (float)(az + dz * e1);
+    *c2x = (float)(ax + dx * e2); *c2y = (float)(ay + dy * e2); *c2z = (float)(az + dz * e2);
+}
+
+} // namespace
+
+dai_result dai_show_export_dsx(const dai_show_plan *p, const dai_show_settings *s,
+                               const char *path, char *err, size_t err_len) {
+    if (err && err_len) err[0] = 0;
+    if (!p || !s || !path) return DAI_ERR_INVALID_ARG;
+    uint32_t n = dai_show_plan_drone_count(p);
+    if (!n) { fail(err, err_len, "the plan has no drones"); return DAI_ERR_STATE; }
+
+    std::vector<ZipMember> members;
+
+    // ---- devices/example dsxp: a fixed block, Daidalos' own profile -------
+    std::string dsxp;
+    dsxp += "{\n";
+    dsxp += "  \"dsxp\": \"0.1\",\n";
+    dsxp += "  \"device_type_id\": \"a3f9c1e2-4b7d-4f5a-9c2e-1d8b6a4e7f30\",\n";
+    dsxp += "  \"device_class\": \"aircraft\",\n";
+    dsxp += "  \"manufacturer\": \"FleiTec\",\n";
+    dsxp += "  \"model\": \"DAIDALOS-SHOW-1\",\n";
+    dsxp += "  \"revision\": { \"id\": \"rev1\", \"date\": \"2026-08-15\", \"modified_by\": \"daidalos\" },\n";
+    dsxp += "  \"light\": { \"channels\": [\"R\",\"G\",\"B\",\"W\"],\n";
+    dsxp += "    \"color_space\": { \"mode\": \"sRGB\", \"gamma\": 2.2, \"dimming_curve\": \"linear\" },\n";
+    dsxp += "    \"pwm_hz\": null, \"beam_angle_deg\": null },\n";
+    dsxp += "  \"flight\": {\n";
+    dsxp += "    \"max_speed_xy_ms\": "; jnum(dsxp, s->v_max_ms); dsxp += ",\n";
+    dsxp += "    \"max_speed_z_up_ms\": "; jnum(dsxp, s->v_max_ms); dsxp += ",\n";
+    dsxp += "    \"max_speed_z_down_ms\": "; jnum(dsxp, s->v_max_ms); dsxp += ",\n";
+    dsxp += "    \"max_accel_xy_ms2\": "; jnum(dsxp, s->a_max_ms2); dsxp += ",\n";
+    dsxp += "    \"max_accel_z_ms2\": "; jnum(dsxp, s->a_max_ms2); dsxp += ",\n";
+    dsxp += "    \"max_yaw_rate_dps\": null,\n";
+    dsxp += "    \"min_nav_altitude_m\": "; jnum(dsxp, s->min_ground_m); dsxp += ",\n";
+    dsxp += "    \"endurance_s\": null, \"mass_kg\": null,\n";
+    dsxp += "    \"position_accuracy_m\": { \"horizontal\": 0.1, \"vertical\": 0.2, \"requires\": \"rtk_fixed\" } },\n";
+    dsxp += "  \"payload_slots\": [],\n";
+    dsxp += "  \"modes\": [ { \"name\": \"rgbw-key\",\n";
+    dsxp += "    \"trajectory_rate_hz\": { \"required\": null, \"min\": null, \"max\": null },\n";
+    dsxp += "    \"light_rate_hz\": { \"required\": null, \"min\": null, \"max\": null },\n";
+    dsxp += "    \"channels\": [\"R\",\"G\",\"B\",\"W\"],\n";
+    dsxp += "    \"capabilities\": [\"dsx.core\",\"dsx.light.rgbw\"] } ],\n";
+    dsxp += "  \"firmware\": []\n}\n";
+    members.push_back({ "devices/daidalos-show-1.dsxp", dsxp });
+
+    // ---- geo/fence.json: the show box as a GeoJSON polygon around origin --
+    if (s->fence_half_x > 0.0f && s->fence_half_z > 0.0f) {
+        std::string gj = "{\n  \"type\": \"FeatureCollection\",\n  \"features\": [\n    {\n";
+        gj += "      \"type\": \"Feature\",\n";
+        gj += "      \"properties\": { \"name\": \"show geofence\", \"alt_band_m\": [";
+        jnum(gj, s->min_ground_m); gj += ", "; jnum(gj, s->fence_top_m); gj += "] },\n";
+        gj += "      \"geometry\": { \"type\": \"Polygon\", \"coordinates\": [ [ [";
+        jnum(gj, -(double)s->fence_half_x); gj += ", "; jnum(gj, -(double)s->fence_half_z); gj += "], [";
+        jnum(gj,  (double)s->fence_half_x); gj += ", "; jnum(gj, -(double)s->fence_half_z); gj += "], [";
+        jnum(gj,  (double)s->fence_half_x); gj += ", "; jnum(gj,  (double)s->fence_half_z); gj += "], [";
+        jnum(gj, -(double)s->fence_half_x); gj += ", "; jnum(gj,  (double)s->fence_half_z); gj += "], [";
+        jnum(gj, -(double)s->fence_half_x); gj += ", "; jnum(gj, -(double)s->fence_half_z); gj += "] ] ] }\n";
+        gj += "    }\n  ]\n}\n";
+        members.push_back({ "geo/fence.json", gj });
+    }
+
+    // ---- one segment trajectory + one light program per drone --------------
+    const double dur = (double)dai_show_plan_duration(p);
+    for (uint32_t d = 0; d < n; ++d) {
+        char name[64];
+        std::snprintf(name, sizeof(name), "traj/%04u.json", (unsigned)(d + 1));
+        std::string tj;
+        tj += "{\n  \"kind\": \"segments\",\n  \"interp\": \"bezier\",\n  \"start_ms\": 0,\n";
+        uint32_t kc = dai_show_plan_keyframe_count(p, d);
+        dai_show_key k0;
+        dai_show_plan_key_at(p, d, 0, &k0);
+        tj += "  \"start_point\": [";
+        tj += dsx_metres(k0.p.x); tj += ", "; tj += dsx_metres(k0.p.y); tj += ", "; tj += dsx_metres(k0.p.z);
+        tj += "],\n  \"segments\": [\n";
+        for (uint32_t k = 1; k < kc; ++k) {
+            dai_show_key ka, kb;
+            dai_show_plan_key_at(p, d, k - 1, &ka);
+            dai_show_plan_key_at(p, d, k,     &kb);
+            double dt = (double)kb.t - (double)ka.t;
+            if (dt <= 0.0) continue;
+            long long dt_ms = dsx_round(dt * 1000.0);
+            tj += "    { \"dt_ms\": "; jint(tj, dt_ms);
+            // A straight key is linear; an eased one is a fitted bezier.
+            int linear = (kb.profile == DAI_SHOW_PROFILE_LINEAR);
+            float dx = kb.p.x - ka.p.x, dy = kb.p.y - ka.p.y, dz = kb.p.z - ka.p.z;
+            if (linear || (std::fabs(dx) < 1e-6f && std::fabs(dy) < 1e-6f && std::fabs(dz) < 1e-6f)) {
+                tj += ", \"type\": \"linear\", \"p\": [";
+            } else {
+                float c1x, c1y, c1z, c2x, c2y, c2z;
+                fit_bezier(&ka.p, &kb.p, kb.profile, ka.t, kb.t,
+                           &c1x, &c1y, &c1z, &c2x, &c2y, &c2z);
+                tj += ", \"type\": \"bezier\", \"p\": [";
+                tj += dsx_metres(kb.p.x); tj += ", "; tj += dsx_metres(kb.p.y); tj += ", "; tj += dsx_metres(kb.p.z);
+                tj += "], \"c1\": [";
+                tj += dsx_metres(c1x); tj += ", "; tj += dsx_metres(c1y); tj += ", "; tj += dsx_metres(c1z);
+                tj += "], \"c2\": [";
+                tj += dsx_metres(c2x); tj += ", "; tj += dsx_metres(c2y); tj += ", "; tj += dsx_metres(c2z);
+                tj += "] }";
+                if (k + 1 < kc) tj += ",";
+                tj += "\n";
+                continue;
+            }
+            tj += dsx_metres(kb.p.x); tj += ", "; tj += dsx_metres(kb.p.y); tj += ", "; tj += dsx_metres(kb.p.z);
+            tj += "] }";
+            if (k + 1 < kc) tj += ",";
+            tj += "\n";
+        }
+        tj += "  ]\n}\n";
+        members.push_back({ name, tj });
+
+        // light: set/fade ops from the keyframes' colours
+        char lname[64];
+        std::snprintf(lname, sizeof(lname), "light/%04u.json", (unsigned)(d + 1));
+        std::string lj;
+        lj += "{\n  \"kind\": \"light_program\",\n  \"channels\": [\"R\",\"G\",\"B\",\"W\"],\n";
+        lj += "  \"color_space\": \"sRGB\",\n  \"ops\": [\n";
+        // One op per keyframe whose colour CHANGED. The Daidalos plan eases the
+        // colour with the SEGMENT's motion profile; a DSX fade is linear, so
+        // the ramp is subdivided into 50 ms pieces - each a linear fade - which
+        // tracks the eased ramp to within a handful of quantisation levels. A
+        // single linear fade would hold the old colour too long and then catch
+        // up; that is a different show, not the same one rounded.
+        int first_op = 1;
+        for (uint32_t k = 0; k < kc; ++k) {
+            dai_show_key ka, kb;
+            dai_show_plan_key_at(p, d, k, &ka);
+            if (k > 0) {
+                dai_show_plan_key_at(p, d, k - 1, &kb);
+                if (ka.p.r == kb.p.r && ka.p.g == kb.p.g && ka.p.b == kb.p.b && ka.p.w == kb.p.w)
+                    continue;
+            }
+            if (k > 0) {
+                dai_show_key pk; dai_show_plan_key_at(p, d, k - 1, &pk);
+                double span = (double)ka.t - (double)pk.t;
+                if (span > 0.0) {
+                    // The Daidalos plan eases the colour with the segment's
+                    // motion profile; a DSX fade is linear, so the ramp is
+                    // written as a chain of short PIECEWISE-CONSTANT steps.
+                    // Each is a zero-length set AT the sample instant it
+                    // stands for, holding the eased value there. A chain of
+                    // fades reads half a piece out of date at every sample -
+                    // the evaluator interpolates between the value in effect
+                    // and the target over the op's own window - and that lag
+                    // is exactly the residual the parity test measured. The
+                    // steps are the value AT the instant, which is what the
+                    // reduction asks for; the smoothness of the light is the
+                    // hardware's dimming curve, not the file's.
+                    int steps = (int)dsx_round(span * 1000.0 / 50.0);
+                    if (steps < 1) steps = 1;
+                    for (int st = 1; st <= steps; ++st) {
+                        double u = (double)st / (double)steps;
+                        double sc = dsx_ease(ka.profile, (float)u);
+                        int rr = dsx_byte(pk.p.r + (ka.p.r - pk.p.r) * (float)sc);
+                        int gg = dsx_byte(pk.p.g + (ka.p.g - pk.p.g) * (float)sc);
+                        int bb = dsx_byte(pk.p.b + (ka.p.b - pk.p.b) * (float)sc);
+                        int ww = dsx_byte(pk.p.w + (ka.p.w - pk.p.w) * (float)sc);
+                        long long t_at = dsx_round(((double)pk.t + span * u) * 1000.0);
+                        if (!first_op) lj += ",\n";
+                        first_op = 0;
+                        lj += "    { \"t_ms\": "; jint(lj, t_at);
+                        lj += ", \"op\": \"set\"";
+                        lj += ", \"channels\": { \"R\": "; jint(lj, rr);
+                        lj += ", \"G\": "; jint(lj, gg);
+                        lj += ", \"B\": "; jint(lj, bb);
+                        lj += ", \"W\": "; jint(lj, ww); lj += " } }";
+                    }
+                } else {
+                    if (!first_op) lj += ",\n";
+                    first_op = 0;
+                    long long t_ms = dsx_round((double)ka.t * 1000.0);
+                    lj += "    { \"t_ms\": "; jint(lj, t_ms);
+                    lj += ", \"op\": \"set\", \"channels\": { \"R\": "; jint(lj, ka.p.r);
+                    lj += ", \"G\": "; jint(lj, ka.p.g);
+                    lj += ", \"B\": "; jint(lj, ka.p.b);
+                    lj += ", \"W\": "; jint(lj, ka.p.w); lj += " } }";
+                }
+            } else {
+                long long t_ms = dsx_round((double)ka.t * 1000.0);
+                if (!first_op) lj += ",\n";
+                first_op = 0;
+                lj += "    { \"t_ms\": "; jint(lj, t_ms);
+                lj += ", \"op\": \"set\", \"channels\": { \"R\": "; jint(lj, ka.p.r);
+                lj += ", \"G\": "; jint(lj, ka.p.g);
+                lj += ", \"B\": "; jint(lj, ka.p.b);
+                lj += ", \"W\": "; jint(lj, ka.p.w); lj += " } }";
+            }
+        }
+        lj += "\n  ]\n}\n";
+        members.push_back({ lname, lj });
+    }
+
+    // ---- the manifest ------------------------------------------------------
+    std::string mj;
+    mj += "{\n";
+    mj += "  \"dsx\": \"0.1\",\n  \"profile\": \"L1\",\n";
+    mj += "  \"show\": { \"title\": \"Daidalos show\", \"duration_ms\": ";
+    jint(mj, dsx_round(dur * 1000.0));
+    mj += " },\n";
+    mj += "  \"frame\": { \"type\": \"ENU\", \"handedness\": \"right\", \"units\": \"m\",\n";
+    mj += "    \"bearing_deg\": "; jnum(mj, s->show_orientation_deg); mj += ",\n";
+    mj += "    \"origin\": { \"lat\": "; mj += dstr(s->show_origin_lat);
+    mj += ", \"lon\": "; mj += dstr(s->show_origin_lon);
+    mj += ", \"alt_m\": "; jnum(mj, s->show_origin_amsl);
+    mj += ", \"alt_ref\": \"AMSL\", \"geoid\": \"EGM2008\", \"datum\": \"WGS84\" } },\n";
+    mj += "  \"time\": { \"base\": \"ms\", \"start\": { \"mode\": \"countdown\" },\n";
+    mj += "    \"time_source\": { \"primary\": \"gnss\", \"holdover\": { \"source\": \"rtc\", \"max_drift_ms_per_min\": null } } },\n";
+
+    // fleet with declared envelope measured from the plan
+    float peak_v = 0.0f, min_sep = 1e30f;
+    {
+        // envelope over the whole timeline at the export fps
+        double fps = s->fps > 0 ? s->fps : 25;
+        std::vector<dai_show_point> a(n), b2(n);
+        double t = 0.0, dt = 1.0 / fps;
+        for (; t <= dur; t += dt) {
+            dai_show_plan_sample_all(p, (float)t, a.data());
+            if (t > 0.0) {
+                for (uint32_t i = 0; i < n; ++i) {
+                    float dx = a[i].x - b2[i].x, dy = a[i].y - b2[i].y, dz = a[i].z - b2[i].z;
+                    float v = std::sqrt(dx*dx + dy*dy + dz*dz) / (float)dt;
+                    if (v > peak_v) peak_v = v;
+                }
+            }
+            for (uint32_t i = 0; i < n; ++i)
+                for (uint32_t j2 = i + 1; j2 < n; ++j2) {
+                    float dx = a[i].x - a[j2].x, dy = a[i].y - a[j2].y, dz = a[i].z - a[j2].z;
+                    float dd = std::sqrt(dx*dx + dy*dy + dz*dz);
+                    if (dd < min_sep) min_sep = dd;
+                }
+            b2 = a;
+        }
+    }
+    if (min_sep > 1e29f) min_sep = 0.0f;
+    mj += "  \"fleet\": [ { \"id\": \"main\", \"count\": "; jint(mj, n); mj += ",\n";
+    mj += "    \"device_profile\": \"devices/daidalos-show-1.dsxp\",\n";
+    mj += "    \"device_type_id\": \"a3f9c1e2-4b7d-4f5a-9c2e-1d8b6a4e7f30\",\n";
+    mj += "    \"device_mode\": \"rgbw-key\",\n";
+    mj += "    \"declared_envelope\": { \"peak_speed_xy_ms\": "; jnum(mj, peak_v);
+    mj += ", \"peak_speed_z_up_ms\": "; jnum(mj, peak_v);
+    mj += ", \"peak_speed_z_down_ms\": "; jnum(mj, peak_v);
+    mj += ", \"peak_accel_xy_ms2\": "; jnum(mj, s->a_max_ms2);
+    mj += ", \"peak_accel_z_ms2\": "; jnum(mj, s->a_max_ms2);
+    mj += ", \"min_separation_m\": "; jnum(mj, min_sep);
+    mj += ", \"uses_channels\": [\"R\",\"G\",\"B\",\"W\"] } } ],\n";
+
+    // drones: homes from the first keyframe
+    mj += "  \"drones\": [\n";
+    for (uint32_t d = 0; d < n; ++d) {
+        dai_show_key k0;
+        dai_show_plan_key_at(p, d, 0, &k0);
+        mj += "    { \"id\": "; jint(mj, d + 1); mj += ", \"fleet\": \"main\",\n";
+        mj += "      \"slot\": null, \"home\": { \"x\": "; jnum(mj, k0.p.x);
+        mj += ", \"y\": "; jnum(mj, k0.p.y); mj += ", \"z\": "; jnum(mj, k0.p.z);
+        mj += ", \"heading_deg\": 0.0 },\n";
+        char tn[24], ln[24];
+        std::snprintf(tn, sizeof(tn), "traj/%04u.json", (unsigned)(d + 1));
+        std::snprintf(ln, sizeof(ln), "light/%04u.json", (unsigned)(d + 1));
+        mj += "      \"trajectory\": "; jstr(mj, tn);
+        mj += ", \"light\": "; jstr(mj, ln); mj += " }";
+        if (d + 1 < n) mj += ",";
+        mj += "\n";
+    }
+    mj += "  ],\n";
+
+    mj += "  \"safety\": { \"min_separation_m\": "; jnum(mj, s->min_distance_m);
+    if (s->fence_half_x > 0.0f) mj += ", \"geofence\": \"geo/fence.json\"";
+    mj += " },\n";
+    mj += "  \"termination\": { \"channel\": \"independent\",\n";
+    mj += "    \"escalation\": [\"hold\",\"coordinated_rth\",\"land_in_place\",\"disarm\"],\n";
+    mj += "    \"coordinated_rth\": { \"precomputed\": false },\n";
+    // The RTH-feasibility windows stay empty on purpose: the planner computes
+    // no return branches, and an empty map is the honest value.
+    mj += "    \"rth_availability\": { \"windows\": [] },\n";
+    mj += "    \"geofence\": {\n";
+    mj += "      \"soft\": { \"type\": \"bubble\", \"radius_m\": 4.0, \"action\": \"auto_land\", \"timeout_ms\": 1500 },\n";
+    mj += "      \"hard\": { \"type\": \"polygon\", \"ref\": \"geo/fence.json\", \"action\": \"disarm\" } },\n";
+    mj += "    \"link_loss\": { \"heartbeat_timeout_ms\": 5000, \"action_on_loss\": \"land_in_place\" } },\n";
+    mj += "  \"provenance\": { \"created_by\": { \"tool\": \"daidalos\", \"version\": \"2026.08.15\", \"date\": \"2026-08-15\" } }\n";
+    mj += "}\n";
+    members.push_back({ "show.json", mj });
+
+    std::string zip = zip_build(members);
+    return write_atomic(path, zip, err, err_len);
+}
+
+
 } // extern "C"
