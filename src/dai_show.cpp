@@ -93,6 +93,11 @@ struct Formation {
     int                         sample_mode = DAI_SHOW_SAMPLE_SURFACE;
     float                       t_start = 0.0f;    // derived by the last solve
     dai_show_transition         tr;                // the move INTO this one
+    // Same group id = the figures fly one after another. Different ids = at
+    // the same time, each group over its own slice of the fleet. Zero is the
+    // group every figure ever made before this field existed is in, which is
+    // why zero is the default: an old show re-reads as the show it was.
+    int                         group = 0;
 };
 
 // local -> world, plus the colour override, into the cache everything reads.
@@ -589,7 +594,10 @@ void dai_show_set_settings(dai_show *sh, const dai_show_settings *s) {
 uint32_t dai_show_formation_add(dai_show *sh, const char *name, const char *source,
                                 const dai_show_point *pts, uint32_t n, float hold_s) {
     if (!sh || !pts) return UINT32_MAX;
-    if (n != sh->s.drone_count) return UINT32_MAX;   // no drone may be left in the air
+    if (n == 0) return UINT32_MAX;
+    // Any count goes in now; whether the counts ADD UP is the solver's
+    // question, asked per group against the fleet size - that is where the
+    // answer "no drone may be left in the air" lives since groups exist.
     Formation f;
     f.name   = name ? name : "formation";
     f.source = source ? source : "";
@@ -618,11 +626,12 @@ uint32_t dai_show_formation_from_mesh(dai_show *sh, const char *name, const char
     if (err && err_len) err[0] = 0;
     if (!sh || !desc) return UINT32_MAX;
 
-    // The fleet size and the safety distance belong to the document, not to
-    // whoever filled in the descriptor. A formation sampled at a different
-    // count could not be flown by this show at all.
+    // The safety distance belongs to the document, not to whoever filled in
+    // the descriptor. The COUNT may be the caller's - groups fly slices of
+    // the fleet, so a figure no longer has to be the whole sky - and only
+    // defaults to the full fleet when the caller did not ask.
     dai_show_sample_desc d = *desc;
-    d.count          = sh->s.drone_count;
+    if (d.count == 0) d.count = sh->s.drone_count;
     d.min_distance_m = sh->s.min_distance_m;
     if (d.count == 0) { fail(err, err_len, "the fleet is empty - set a drone count first"); return UINT32_MAX; }
 
@@ -635,6 +644,77 @@ uint32_t dai_show_formation_from_mesh(dai_show *sh, const char *name, const char
 
     uint32_t idx = dai_show_formation_add(sh, name, source, pts.data(), got, 4.0f);
     if (idx != UINT32_MAX) sh->forms[idx].sample_mode = d.mode;
+    return idx;
+}
+
+uint32_t dai_show_formation_from_image(dai_show *sh, const char *name,
+                                       const char *source,
+                                       const uint8_t *rgba, uint32_t w, uint32_t h,
+                                       float width_m, uint8_t threshold,
+                                       uint32_t count, char *err, size_t err_len) {
+    if (err && err_len) err[0] = 0;
+    if (!sh || !rgba || !w || !h) return UINT32_MAX;
+    if (count == 0) count = sh->s.drone_count;
+    if (count == 0) { fail(err, err_len, "the fleet is empty - set a drone count first"); return UINT32_MAX; }
+    const float cell = sh->s.min_distance_m;
+    if (!(cell > 0.0f) || !(width_m >= cell)) {
+        fail(err, err_len, "the figure is %.1f m wide but a drone needs %.1f m",
+             (double)width_m, (double)cell);
+        return UINT32_MAX;
+    }
+    const float height_m = width_m * (float)h / (float)w;
+    const uint32_t cols = (uint32_t)(width_m / cell);
+    const uint32_t rows = (uint32_t)(height_m / cell);
+    if (!cols || !rows) {
+        fail(err, err_len, "the figure is too small for one lit cell");
+        return UINT32_MAX;
+    }
+    const float cw = width_m / (float)cols;
+    const float ch = height_m / (float)rows;
+
+    struct Cand { float x, y; uint8_t r, g, b, lum; };
+    std::vector<Cand> lit;
+    lit.reserve((size_t)cols * rows / 2);
+    for (uint32_t cy = 0; cy < rows; ++cy) {
+        for (uint32_t cx = 0; cx < cols; ++cx) {
+            uint32_t pxx = (uint32_t)(((float)cx + 0.5f) / (float)cols * (float)w);
+            uint32_t pxy = (uint32_t)(((float)cy + 0.5f) / (float)rows * (float)h);
+            if (pxx >= w) pxx = w - 1;
+            if (pxy >= h) pxy = h - 1;
+            const uint8_t *px = rgba + ((size_t)pxy * w + pxx) * 4;
+            uint8_t lum = (uint8_t)((px[0] * 299u + px[1] * 587u + px[2] * 114u) / 1000u);
+            if (lum < threshold) continue;
+            Cand c;
+            c.x = -width_m * 0.5f + ((float)cx + 0.5f) * cw;
+            // Image row 0 is the TOP; the sky's y grows upwards. The figure
+            // stands with its foot at the take-off altitude, like every
+            // builtin does.
+            c.y = sh->s.takeoff_alt_m + height_m - ((float)cy + 0.5f) * ch;
+            c.r = px[0]; c.g = px[1]; c.b = px[2]; c.lum = lum;
+            lit.push_back(c);
+        }
+    }
+    if ((uint32_t)lit.size() < count) {
+        fail(err, err_len,
+             "the image lights %u cells at %.1f m spacing, but %u drones are asked for - "
+             "lower the threshold or widen the figure",
+             (unsigned)lit.size(), (double)cell, (unsigned)count);
+        return UINT32_MAX;
+    }
+    if ((uint32_t)lit.size() > count) {
+        // The brightest cells survive: a dim edge sacrificed keeps the shape
+        // readable, a random one leaves holes in the middle of a logo.
+        std::stable_sort(lit.begin(), lit.end(),
+                         [](const Cand &a, const Cand &b) { return a.lum > b.lum; });
+        lit.resize(count);
+    }
+    std::vector<dai_show_point> pts(lit.size());
+    for (size_t k = 0; k < lit.size(); ++k) {
+        pts[k].x = lit[k].x; pts[k].y = lit[k].y; pts[k].z = 0.0f;
+        pts[k].r = lit[k].r; pts[k].g = lit[k].g; pts[k].b = lit[k].b; pts[k].w = 0;
+    }
+    uint32_t idx = dai_show_formation_add(sh, name, source, pts.data(), (uint32_t)pts.size(), 4.0f);
+    if (idx != UINT32_MAX) sh->forms[idx].sample_mode = DAI_SHOW_SAMPLE_SILHOUETTE;
     return idx;
 }
 
@@ -657,6 +737,7 @@ int dai_show_formation_get(const dai_show *sh, uint32_t i, dai_show_formation_in
     out->colour_override = f.colour_override;
     out->colour[0] = f.ovr[0]; out->colour[1] = f.ovr[1];
     out->colour[2] = f.ovr[2]; out->colour[3] = f.ovr[3];
+    out->group = f.group;
     return 1;
 }
 
@@ -712,6 +793,33 @@ int dai_show_formation_rename(dai_show *sh, uint32_t i, const char *name) {
 int dai_show_formation_set_hold(dai_show *sh, uint32_t i, float hold_s) {
     if (!sh || i >= sh->forms.size() || !(hold_s >= 0.0f)) return 0;
     sh->forms[i].hold_s = hold_s;
+    dai_show_plan_destroy(sh->plan);
+    sh->plan = nullptr;
+    sh->conflicts.clear();
+    sh->tr_stats.clear();
+    return 1;
+}
+
+int dai_show_formation_set_group(dai_show *sh, uint32_t i, int group) {
+    if (!sh || i >= sh->forms.size() || group < 0) return 0;
+    if (sh->forms[i].group == group) return 1;
+    sh->forms[i].group = group;
+    dai_show_plan_destroy(sh->plan);
+    sh->plan = nullptr;
+    sh->conflicts.clear();
+    sh->tr_stats.clear();
+    return 1;
+}
+
+int dai_show_formation_replace_points(dai_show *sh, uint32_t i,
+                                      const dai_show_point *pts, uint32_t n) {
+    if (!sh || i >= sh->forms.size() || !pts || n == 0) return 0;
+    Formation &f = sh->forms[i];
+    f.local.assign(pts, pts + n);
+    // The pivot was the centroid of the OLD shape; the new one gets its own,
+    // or a resampled sphere would scale about the ghost of the old one.
+    f.pivot = centroid_of(f.local);
+    rebuild(f);
     dai_show_plan_destroy(sh->plan);
     sh->plan = nullptr;
     sh->conflicts.clear();
@@ -911,6 +1019,49 @@ int dai_show_formation_set_point_colour(dai_show *sh, uint32_t i, const uint32_t
     return 1;
 }
 
+int dai_show_formation_set_point_world(dai_show *sh, uint32_t i, uint32_t point,
+                                       float wx, float wy, float wz) {
+    if (!sh || i >= sh->forms.size()) return 0;
+    Formation &f = sh->forms[i];
+    if (point >= f.local.size()) return 0;
+    if (wx != wx || wy != wy || wz != wz) return 0;
+    // World to local is the inverse of what rebuild() runs: subtract the
+    // position and the pivot, undo the rotation (R^T, because R is orthogonal),
+    // undo the scale, add the pivot back. A scale of zero never reaches this
+    // line - set_transform refuses it - but a loaded file is not set_transform,
+    // so the division is guarded all the same.
+    if (!(f.xf.scale.x != 0.0f) || !(f.xf.scale.y != 0.0f) || !(f.xf.scale.z != 0.0f)) return 0;
+    const float deg = (float)(3.14159265358979323846 / 180.0);
+    const float rx = f.xf.rotation_deg.x * deg, ry = f.xf.rotation_deg.y * deg,
+                rz = f.xf.rotation_deg.z * deg;
+    const float cx = std::cos(rx), sx = std::sin(rx);
+    const float cy = std::cos(ry), sy = std::sin(ry);
+    const float cz = std::cos(rz), sz = std::sin(rz);
+    // R = Rz*Ry*Rx, as in rebuild(). R^T undoes it.
+    const float m00 =  cz * cy;
+    const float m01 =  cz * sy * sx - sz * cx;
+    const float m02 =  cz * sy * cx + sz * sx;
+    const float m10 =  sz * cy;
+    const float m11 =  sz * sy * sx + cz * cx;
+    const float m12 =  sz * sy * cx - cz * sx;
+    const float m20 = -sy;
+    const float m21 =  cy * sx;
+    const float m22 =  cy * cx;
+    const float dx = wx - f.xf.position.x - f.pivot.x;
+    const float dy = wy - f.xf.position.y - f.pivot.y;
+    const float dz = wz - f.xf.position.z - f.pivot.z;
+    dai_show_point &l = f.local[point];
+    l.x = f.pivot.x + (m00 * dx + m10 * dy + m20 * dz) / f.xf.scale.x;
+    l.y = f.pivot.y + (m01 * dx + m11 * dy + m21 * dz) / f.xf.scale.y;
+    l.z = f.pivot.z + (m02 * dx + m12 * dy + m22 * dz) / f.xf.scale.z;
+    rebuild(f);
+    dai_show_plan_destroy(sh->plan);
+    sh->plan = nullptr;
+    sh->conflicts.clear();
+    sh->tr_stats.clear();
+    return 1;
+}
+
 int dai_show_transition_get(const dai_show *sh, uint32_t i, dai_show_transition *out) {
     if (!sh || !out || i == 0 || i >= sh->forms.size()) return 0;
     *out = sh->forms[i].tr;
@@ -947,59 +1098,103 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
     const uint32_t n = sh->s.drone_count;
     if (n == 0)             { fail(err, err_len, "the fleet is empty"); return DAI_ERR_STATE; }
     if (sh->forms.empty())  { fail(err, err_len, "the storyboard has no formations"); return DAI_ERR_STATE; }
-    for (size_t i = 0; i < sh->forms.size(); ++i)
-        if (sh->forms[i].pts.size() != n) {
-            fail(err, err_len, "formation %u has %u points, the fleet is %u",
-                 (unsigned)i, (unsigned)sh->forms[i].pts.size(), (unsigned)n);
-            return DAI_ERR_STATE;
+    // ---- the group audit ----------------------------------------------------
+    // The storyboard is one list, but the show it describes can be several
+    // timelines at once: formations that share a group id fly one after
+    // another, as they always have, and two different groups fly at the same
+    // time, each over its own slice of the fleet. The slices are handed out
+    // in group id order, so which drone numbers a group owns stays stable
+    // from solve to solve as long as the counts do.
+    std::vector<int> gids;
+    for (size_t i = 0; i < sh->forms.size(); ++i) {
+        int g = sh->forms[i].group;
+        if (std::find(gids.begin(), gids.end(), g) == gids.end()) gids.push_back(g);
+    }
+    std::sort(gids.begin(), gids.end());
+
+    std::vector<std::vector<uint32_t> > members(gids.size());
+    std::vector<uint32_t> goff(gids.size()), gcount(gids.size());
+    uint32_t accounted = 0;
+    for (size_t gi = 0; gi < gids.size(); ++gi) {
+        for (uint32_t i = 0; i < (uint32_t)sh->forms.size(); ++i)
+            if (sh->forms[i].group == gids[gi]) members[gi].push_back(i);
+        uint32_t c = (uint32_t)sh->forms[members[gi][0]].pts.size();
+        for (size_t k = 1; k < members[gi].size(); ++k) {
+            const Formation &mf = sh->forms[members[gi][k]];
+            if (mf.pts.size() != c) {
+                fail(err, err_len,
+                     "'%s' has %u points, but group %d flies %u - one group, one count",
+                     mf.name.c_str(), (unsigned)mf.pts.size(), gids[gi], (unsigned)c);
+                return DAI_ERR_STATE;
+            }
         }
+        goff[gi]   = accounted;
+        gcount[gi] = c;
+        accounted += c;
+    }
+    if (accounted != n) {
+        fail(err, err_len, "the groups fly %u drones between them, the fleet is %u",
+             (unsigned)accounted, (unsigned)n);
+        return DAI_ERR_STATE;
+    }
 
     std::vector<std::vector<dai_show_key> > keys((size_t)n);
     // Parallel to `keys`, and filled at every single push below: where each
     // key's colour was mixed from. It costs one struct per keyframe and it buys
     // a colour edit that does not throw the solve away.
     std::vector<std::vector<KeySrc> >       ksrc((size_t)n);
-    std::vector<uint32_t>       cur_pt(n);      // which point of the current figure
     sh->key_src.clear();
-    std::vector<dai_show_point> cur(sh->forms[0].pts);
-    std::vector<dai_show_point> nxt(n);
-    std::vector<uint32_t>       perm(n);
-    std::vector<dai_show_leg>   legs(n);
-
-    for (uint32_t d = 0; d < n; ++d) {
-        keys[d].reserve(sh->forms.size() * 3 + 2);
-        ksrc[d].reserve(sh->forms.size() * 3 + 2);
-        cur_pt[d] = d;                       // formation 0 is flown in drone order
-        dai_show_key k;
-        k.t = 0.0f; k.p = cur[d]; k.profile = DAI_SHOW_PROFILE_LINEAR;
-        keys[d].push_back(k);
-        ksrc[d].push_back(KeySrc{ 0u, d, d, 1.0f });
-    }
-
-    float t_cursor = sh->forms[0].hold_s;
-    sh->forms[0].t_start = 0.0f;
-    if (t_cursor > 0.0f) {
-        for (uint32_t d = 0; d < n; ++d) {
-            dai_show_key k;
-            k.t = t_cursor; k.p = cur[d]; k.profile = DAI_SHOW_PROFILE_LINEAR;
-            keys[d].push_back(k);
-            ksrc[d].push_back(KeySrc{ 0u, d, d, 1.0f });
-        }
-    }
 
     uint32_t unresolved_total = 0, endpoint_total = 0;
     int      endpoint_named   = 0;
     char     endpoint_note[192] = { 0 };
-    for (size_t i = 1; i < sh->forms.size(); ++i) {
+
+    // Every group is its own little show over its own drone numbers, with its
+    // own cursor on the timeline - which is what "the groups fly at the same
+    // time" means in practice: nobody waits for anybody.
+    for (size_t gi = 0; gi < gids.size(); ++gi) {
+    const uint32_t off = goff[gi];
+    const uint32_t ng  = gcount[gi];
+    const std::vector<uint32_t> &mem = members[gi];
+
+    std::vector<uint32_t>       cur_pt(ng);     // which point of the current figure
+    std::vector<dai_show_point> cur(sh->forms[mem[0]].pts);
+    std::vector<dai_show_point> nxt(ng);
+    std::vector<uint32_t>       perm(ng);
+    std::vector<dai_show_leg>   legs(ng);
+
+    for (uint32_t d = 0; d < ng; ++d) {
+        keys[off + d].reserve(mem.size() * 3 + 2);
+        ksrc[off + d].reserve(mem.size() * 3 + 2);
+        cur_pt[d] = d;                  // a group's first figure is flown in order
+        dai_show_key k;
+        k.t = 0.0f; k.p = cur[d]; k.profile = DAI_SHOW_PROFILE_LINEAR;
+        keys[off + d].push_back(k);
+        ksrc[off + d].push_back(KeySrc{ mem[0], d, d, 1.0f });
+    }
+
+    float t_cursor = sh->forms[mem[0]].hold_s;
+    sh->forms[mem[0]].t_start = 0.0f;
+    if (t_cursor > 0.0f) {
+        for (uint32_t d = 0; d < ng; ++d) {
+            dai_show_key k;
+            k.t = t_cursor; k.p = cur[d]; k.profile = DAI_SHOW_PROFILE_LINEAR;
+            keys[off + d].push_back(k);
+            ksrc[off + d].push_back(KeySrc{ mem[0], d, d, 1.0f });
+        }
+    }
+
+    for (size_t mi = 1; mi < mem.size(); ++mi) {
+        const uint32_t i = mem[mi];
         Formation &f = sh->forms[i];
-        for (uint32_t d = 0; d < n; ++d) nxt[d] = f.pts[d];
+        for (uint32_t d = 0; d < ng; ++d) nxt[d] = f.pts[d];
 
         dai_show_transition tr = f.tr;
 
         dai_show_assign_stats astats;
         std::memset(&astats, 0, sizeof(astats));
         double t0 = now_ms();
-        dai_result ar = dai_show_assign(cur.data(), nxt.data(), n, tr.assign_method,
+        dai_result ar = dai_show_assign(cur.data(), nxt.data(), ng, tr.assign_method,
                                         perm.data(), &astats);
         double t1 = now_ms();
         sh->timings.assign_ms += t1 - t0;
@@ -1019,7 +1214,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         // Measured on the longest leg the assignment actually produced, which
         // is why this sits after it and not before.
         float longest = 0.0f;
-        for (uint32_t d = 0; d < n; ++d) {
+        for (uint32_t d = 0; d < ng; ++d) {
             const dai_show_point &b = nxt[perm[d]];
             float dx = b.x - cur[d].x, dy = b.y - cur[d].y, dz = b.z - cur[d].z;
             longest = std::max(longest, std::sqrt(dx * dx + dy * dy + dz * dz));
@@ -1033,7 +1228,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
 
         dai_show_layer_stats lstats;
         t0 = now_ms();
-        dai_result lr = dai_show_layer(cur.data(), nxt.data(), n, perm.data(), &tr,
+        dai_result lr = dai_show_layer(cur.data(), nxt.data(), ng, perm.data(), &tr,
                                        &sh->s, t_cursor, legs.data(), &lstats);
         t1 = now_ms();
         sh->timings.layer_ms += t1 - t0;
@@ -1048,7 +1243,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
             endpoint_total += lstats.endpoint_pairs;
             if (!endpoint_named) {
                 uint32_t a = 0, b = 0; float gap = 0.0f;
-                if (first_endpoint_pair(nxt.data(), n, sh->s.min_distance_m, &a, &b, &gap)) {
+                if (first_endpoint_pair(nxt.data(), ng, sh->s.min_distance_m, &a, &b, &gap)) {
                     endpoint_named = 1;
                     std::snprintf(endpoint_note, sizeof(endpoint_note),
                                   "drones %u and %u stand %.2f m apart in '%s' - the floor is "
@@ -1063,8 +1258,8 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         // is the curve the separator proved - a straight leg needs one key.
         t0 = now_ms();
         float t_arrive = legs[0].t_end;
-        for (uint32_t d = 0; d < n; ++d) t_arrive = std::max(t_arrive, legs[d].t_end);
-        for (uint32_t d = 0; d < n; ++d) {
+        for (uint32_t d = 0; d < ng; ++d) t_arrive = std::max(t_arrive, legs[d].t_end);
+        for (uint32_t d = 0; d < ng; ++d) {
             const dai_show_leg &g = legs[d];
             const dai_show_point a = cur[d];
             const dai_show_point b = nxt[perm[d]];
@@ -1072,10 +1267,10 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
             const uint32_t fi = (uint32_t)i;
             const float    span = g.t_end - g.t_start;
             dai_show_key k;
-            if (g.t_start > keys[d].back().t) {          // staggered or delayed: wait first
+            if (g.t_start > keys[off + d].back().t) {    // staggered or delayed: wait first
                 k.t = g.t_start; k.p = a; k.profile = DAI_SHOW_PROFILE_LINEAR;
-                keys[d].push_back(k);
-                ksrc[d].push_back(KeySrc{ fi, pa, pb, 0.0f });
+                keys[off + d].push_back(k);
+                ksrc[off + d].push_back(KeySrc{ fi, pa, pb, 0.0f });
             }
             uint32_t steps = daishow::leg_key_count(&g, &sh->s);
             for (uint32_t st = 1; st <= steps; ++st) {
@@ -1084,24 +1279,24 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
                 if (st == steps) { k.t = g.t_end; k.p = b; }
                 else daishow::leg_point(&g, &a, &b, k.t, &k.p);
                 k.profile = (steps == 1) ? g.profile : DAI_SHOW_PROFILE_LINEAR;
-                keys[d].push_back(k);
+                keys[off + d].push_back(k);
                 // The same fraction leg_point mixed the colour at, from the
                 // same function - not a second opinion about the easing.
                 float uu = (span > 0.0f) ? (k.t - g.t_start) / span : 1.0f;
                 if (uu < 0.0f) uu = 0.0f;
                 if (uu > 1.0f) uu = 1.0f;
                 float mix = (st == steps) ? 1.0f : daishow::ease_profile(g.profile, uu);
-                ksrc[d].push_back(KeySrc{ fi, pa, pb, mix });
+                ksrc[off + d].push_back(KeySrc{ fi, pa, pb, mix });
             }
             if (t_arrive > g.t_end) {                    // hold formation until the last one lands
                 k.t = t_arrive; k.p = b; k.profile = DAI_SHOW_PROFILE_LINEAR;
-                keys[d].push_back(k);
-                ksrc[d].push_back(KeySrc{ fi, pa, pb, 1.0f });
+                keys[off + d].push_back(k);
+                ksrc[off + d].push_back(KeySrc{ fi, pa, pb, 1.0f });
             }
             if (f.hold_s > 0.0f) {
                 k.t = t_arrive + f.hold_s; k.p = b; k.profile = DAI_SHOW_PROFILE_LINEAR;
-                keys[d].push_back(k);
-                ksrc[d].push_back(KeySrc{ fi, pa, pb, 1.0f });
+                keys[off + d].push_back(k);
+                ksrc[off + d].push_back(KeySrc{ fi, pa, pb, 1.0f });
             }
             cur[d]    = b;
             cur_pt[d] = pb;
@@ -1111,6 +1306,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         f.t_start = t_arrive;
         t_cursor  = t_arrive + f.hold_s;
     }
+    }                                          // the group's little show is planned
 
     aggregate(&sh->timings, sh->tr_stats);
 
@@ -1225,6 +1421,7 @@ dai_result dai_show_save(const dai_show *sh, const char *path, char *err, size_t
         put(out, "  name %s\n", f.name.c_str());
         if (!f.source.empty()) put(out, "  source %s\n", f.source.c_str());
         if (f.hold_s != 4.0f)  put(out, "  hold %s\n", fstr(f.hold_s).c_str());
+        if (f.group != 0)      put(out, "  group %d\n", f.group);
         if (f.sample_mode != DAI_SHOW_SAMPLE_SURFACE) put(out, "  sample-mode %d\n", f.sample_mode);
         if (i > 0 && !tr_equal(f.tr, td))
             put(out, "  transition %s %d %d %s %d\n", fstr(f.tr.duration_s).c_str(),
@@ -1303,6 +1500,7 @@ dai_show *dai_show_load(const char *path, char *err, size_t err_len) {
     struct Loaded {
         std::string name, source;
         float hold = 4.0f;
+        int   group = 0;
         int   mode = DAI_SHOW_SAMPLE_SURFACE;
         dai_show_transition tr = { 0.0f, 0, 0, 0.0f, 0 };
         bool  has_tr = false;
@@ -1352,6 +1550,7 @@ dai_show *dai_show_load(const char *path, char *err, size_t err_len) {
         if      (tok == "name")        fm.name   = rest_of_line(lp);
         else if (tok == "source")      fm.source = rest_of_line(lp);
         else if (tok == "hold")        fm.hold   = (float)atof(skip_ws(lp));
+        else if (tok == "group")       fm.group  = atoi(skip_ws(lp));
         else if (tok == "sample-mode") fm.mode   = atoi(skip_ws(lp));
         else if (tok == "transform") {
             char *e = nullptr;
@@ -1436,6 +1635,7 @@ dai_show *dai_show_load(const char *path, char *err, size_t err_len) {
             return nullptr;
         }
         sh->forms[idx].sample_mode = fm.mode;
+        sh->forms[idx].group       = fm.group;
         if (fm.has_tr) sh->forms[idx].tr = fm.tr;
         // dai_show_formation_add already put the points in `local` and the
         // pivot at their centroid, which is exactly right for a file that

@@ -565,6 +565,9 @@ typedef struct dai_show_formation_info {
     dai_vec3 pivot;               /* the local point xf turns and scales about */
     int      colour_override;     /* 1 = the whole figure is `colour`          */
     uint8_t  colour[4];           /* r, g, b, w of that override               */
+    /* Appended last, same rule as above. */
+    int      group;               /* same id = one after another; other id =  */
+                                  /* at the same time, over its own drones     */
 } dai_show_formation_info;
 
 DAI_API dai_show *dai_show_create(const dai_show_settings *s);
@@ -589,6 +592,18 @@ DAI_API uint32_t dai_show_formation_from_mesh(dai_show *sh, const char *name,
                                               const char *source,
                                               const dai_show_sample_desc *desc,
                                               char *err, size_t err_len);
+/* Samples a decoded image into a formation standing upright, facing the
+ * audience: one candidate point per min_distance cell, a cell is lit when its
+ * pixel's luminance passes `threshold`, and when more cells are lit than
+ * `count` (0 = the whole fleet) the BRIGHTEST ones win. Fewer lit cells than
+ * the count is an error naming both numbers - the fix is a lower threshold, a
+ * bigger width, or a bolder picture. Point colours come from the pixels, so a
+ * logo arrives already painted. */
+DAI_API uint32_t dai_show_formation_from_image(dai_show *sh, const char *name,
+                                               const char *source,
+                                               const uint8_t *rgba, uint32_t w, uint32_t h,
+                                               float width_m, uint8_t threshold,
+                                               uint32_t count, char *err, size_t err_len);
 DAI_API uint32_t dai_show_formation_count(const dai_show *sh);
 DAI_API int      dai_show_formation_get(const dai_show *sh, uint32_t i,
                                         dai_show_formation_info *out);
@@ -644,6 +659,29 @@ DAI_API int dai_show_formation_set_colour(dai_show *sh, uint32_t i, int on,
 DAI_API int dai_show_formation_set_point_colour(dai_show *sh, uint32_t i,
                                                 const uint32_t *idx, uint32_t n,
                                                 uint8_t r, uint8_t g, uint8_t b, uint8_t w);
+
+/* Moves ONE point of formation `i` to a world position: the inverse of the
+ * formation's transform is applied, so the caller works in the space the
+ * viewport shows. Where a drone stands has changed, so the plan and its
+ * verdict are thrown away - the same rule a moved figure follows. */
+DAI_API int dai_show_formation_set_point_world(dai_show *sh, uint32_t i,
+                                               uint32_t point,
+                                               float wx, float wy, float wz);
+
+/* Puts formation `i` into group `g` (>= 0). Formations that share a group fly
+ * one after another, as they always have; formations in different groups fly
+ * AT THE SAME TIME, each group over its own slice of the fleet. Inside one
+ * group every formation must have the same point count, and the counts of the
+ * groups sum to the fleet - a drone can neither be left in the air nor be in
+ * two places. Both are checked at solve, with the offenders named. The plan
+ * is thrown away: who flies when has changed. */
+DAI_API int dai_show_formation_set_group(dai_show *sh, uint32_t i, int group);
+
+/* Replaces the points of formation `i` - what "the same figure, but 300
+ * points" in the storyboard calls after re-sampling the source. Name, group,
+ * transform and transition survive; the plan does not. */
+DAI_API int dai_show_formation_replace_points(dai_show *sh, uint32_t i,
+                                              const dai_show_point *pts, uint32_t n);
 
 /* Which formation a moment on the timeline belongs to: the one being flown into
  * while a transition runs, and the one standing still while it holds. This is

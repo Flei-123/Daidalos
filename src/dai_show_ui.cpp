@@ -48,6 +48,14 @@ const char *const ASSIGN_METHODS[4] = { "Auto", "Exact", "Auction", "Cluster" };
 const char *const PROFILES[4] = { "Linear", "Smooth", "Ease out", "Ease in" };
 const char *const TIMINGS[2]  = { "Sync", "Staggered" };
 const char *const FIGURES[3]  = { "Sphere", "Cube", "Ring" };
+// The hierarchy's add menu: the three builtins, and the image the storyboard
+// has a path for.
+const dai_ui_menu_item ADD_ITEMS[4] = {
+    { nullptr, "Sphere", nullptr, 0 },
+    { nullptr, "Cube", nullptr, 0 },
+    { nullptr, "Ring", nullptr, 0 },
+    { nullptr, "From image path", nullptr, 0 },
+};
 
 // ---- fitting text to the column it has --------------------------------------
 //
@@ -487,6 +495,20 @@ struct dai_show_ui {
     float              gizmo_mx = 0.0f, gizmo_my = 0.0f;
     dai_show_transform gizmo_from;
 
+    // ---- one drone, one point --------------------------------------------
+    // A press that starts on a point is a candidate for two gestures, and
+    // only the next few pixels tell which: a CLICK (that drone is selected)
+    // or a DRAG (that one point moves). Deciding at press time would either
+    // eat the click or move a figure nobody meant to touch, so the press is
+    // remembered and the gesture is named once the pointer has travelled.
+    uint32_t click_drone = 0xFFFFFFFFu;      // fleet index under the press
+    float    click_x = 0.0f, click_y = 0.0f; // where the press started
+    int      move_f = -1;                    // formation the grabbed point is in
+    uint32_t move_i = 0xFFFFFFFFu;           // the point inside it
+    float    move_depth = 0.0f;              // camera depth the drag slides at
+    float    move_off[3] = { 0.0f, 0.0f, 0.0f }; // grab offset, against jumping
+    int      move_active = 0;                // the press became a drag (> 4 px)
+
     // ---- painting --------------------------------------------------------
     // Colour belongs to the POINT, never to the drone number: which drone flies
     // to which point is the assignment's answer and it moves whenever the
@@ -508,7 +530,33 @@ struct dai_show_ui {
     int      figure_on  = 0;
     float    figure_rgb[3] = { 1.0f, 1.0f, 1.0f };
     uint8_t  figure_w      = 0;
+
+    // ---- the 2D view ------------------------------------------------------
+    // Top-down, like the planning sheet a show is drawn on first: one button
+    // swaps the orbit for a map, and back. The 3D angles are kept, not
+    // recomputed - a view you return to should be the view you left.
+    int   view_2d = 0;
+    float pre2d_yaw = 0.0f, pre2d_pitch = 0.18f;
+
+    // ---- adding figures ----------------------------------------------------
+    dai_ui_popup add_menu = {};              // the hierarchy's + / right-click
+    // The image a figure can be sampled from. A path, a width, and how bright
+    // a pixel has to be to earn a drone - all three plain fields, because a
+    // file dialog is the host's luxury, not a panel's.
+    char  image_path[256]  = { 0 };
+    float image_width_m    = 60.0f;
+    float image_threshold  = 128.0f;
+    float image_points     = 0.0f;           // 0 = the whole fleet
 };
+
+// The image readers live in the renderer's library (dai_inflate / dai_jpeg);
+// declared here the way rhi_vulkan_texture.cpp declares them.
+namespace daiimg {
+bool read_png_file(const char *path, std::vector<uint8_t> &rgba, uint32_t *w, uint32_t *h,
+                   char *err, size_t err_len);
+bool read_jpeg_file(const char *path, std::vector<uint8_t> &rgba, uint32_t *w, uint32_t *h,
+                    char *err, size_t err_len);
+}
 
 namespace {
 
@@ -645,6 +693,19 @@ int project(const Cam &c, float px, float py, float pz, float *sx, float *sy, fl
     return 1;
 }
 
+// The inverse of project(), at a known depth: where the pointer's ray crosses
+// the plane `depth` metres in front of the eye. A point drag slides on exactly
+// that plane - the depth the grab started at - so a dragged point neither
+// falls towards the camera nor runs away from it.
+void unproject(const Cam &c, float sx, float sy, float depth,
+               float *wx, float *wy, float *wz) {
+    float rx = (sx - c.cx) / c.f;
+    float ry = (c.cy - sy) / c.f;
+    *wx = c.ex + depth * (rx * c.rx[0] + ry * c.ry[0] + c.rz[0]);
+    *wy = c.ey + depth * (rx * c.rx[1] + ry * c.ry[1] + c.rz[1]);
+    *wz = c.ez + depth * (rx * c.rx[2] + ry * c.ry[2] + c.rz[2]);
+}
+
 // How far a pointer is from a drawn handle. Screen space, so the answer is in
 // pixels and the tolerance is the same at every zoom - a gizmo whose grab
 // radius shrinks with perspective is a gizmo that stops working when you back
@@ -731,6 +792,80 @@ void add_formation(dai_show_ui *u, const dai_show_sample_desc *desc,
     if (idx == 0xFFFFFFFFu) { say(u, 1, "%s", err[0] ? err : "the figure could not be sampled"); return; }
     u->sel_formation = (int)idx;
     say(u, 0, "formation \"%s\" added: %u points", name, desc->count);
+}
+
+// The three builtin shapes as a descriptor, shared by "add" and by "the same
+// figure, but another point count": only the count differs between the two.
+void builtin_desc(dai_show_ui *u, int shape, uint32_t count,
+                  Soup &soup, dai_show_sample_desc *d) {
+    if (shape == 0)      figure_sphere(soup, 24, 32);
+    else if (shape == 1) figure_cube(soup);
+    else                 figure_ring(soup, 48, 0.28f);
+    std::memset(d, 0, sizeof(*d));
+    d->positions        = soup.pos.data();
+    d->vertex_count     = (uint32_t)(soup.pos.size() / 3);
+    d->indices          = soup.idx.data();
+    d->index_count      = (uint32_t)soup.idx.size();
+    d->base_rgba        = 0xFFFF9040u;
+    d->mode             = u->sample_mode;
+    d->count            = count;
+    d->min_distance_m   = u->s.min_distance_m;
+    d->scale            = u->figure_size * 0.5f;
+    d->centre           = dai_vec3{ 0.0f, u->s.takeoff_alt_m + u->figure_size * 0.6f, 0.0f };
+    d->view_dir         = dai_vec3{ 0.0f, 0.0f, 1.0f };
+    d->relax_iterations = 6;
+    d->seed             = u->s.seed + (uint64_t)dai_show_formation_count(u->sh) * 7919ull;
+}
+
+// The same figure with another point count. Only the builtins can be
+// re-sampled - their source IS the shape - so a mesh or an image keeps its
+// points and the field says why it is grey.
+int resample_builtin(dai_show_ui *u, uint32_t fi, int shape, uint32_t count) {
+    Soup soup;
+    dai_show_sample_desc d;
+    builtin_desc(u, shape, count, soup, &d);
+    std::vector<dai_show_point> pts(count);
+    char err[256] = { 0 };
+    uint32_t got = dai_show_sample(&d, pts.data(), count, err, sizeof(err));
+    if (got != count) {
+        say(u, 1, "%s", err[0] ? err : "the figure does not fit that many drones");
+        return 0;
+    }
+    if (!dai_show_formation_replace_points(u->sh, fi, pts.data(), got)) return 0;
+    say(u, 0, "formation re-sampled: %u points", got);
+    return 1;
+}
+
+// A picture becomes a figure: decode it (the vk library's reader answers for
+// PNG and JPEG alike), then let the core decide which pixels earn a drone.
+void add_image(dai_show_ui *u) {
+    if (!u->image_path[0]) { say(u, 1, "no image path - type one first"); return; }
+    std::vector<uint8_t> px;
+    uint32_t w = 0, h = 0;
+    char err[256] = { 0 };
+    const char *dot = std::strrchr(u->image_path, '.');
+    int jpeg = dot && (!strcmp(dot, ".jpg") || !strcmp(dot, ".jpeg") ||
+                       !strcmp(dot, ".JPG") || !strcmp(dot, ".JPEG"));
+    int ok = jpeg ? daiimg::read_jpeg_file(u->image_path, px, &w, &h, err, sizeof(err))
+                  : daiimg::read_png_file(u->image_path, px, &w, &h, err, sizeof(err));
+    if (!ok) { say(u, 1, "%s", err[0] ? err : "the image could not be read"); return; }
+    const char *base = std::strrchr(u->image_path, '/');
+    const char *leaf = base ? base + 1 : u->image_path;
+    char name[DAI_SHOW_NAME_MAX];
+    std::snprintf(name, sizeof(name), "%.*s", (int)sizeof(name) - 1, leaf);
+    char src[300];
+    std::snprintf(src, sizeof(src), "image://%s", u->image_path);
+    uint8_t th = (uint8_t)std::max(0.0f, std::min(255.0f, u->image_threshold));
+    uint32_t want = (u->image_points >= 1.0f) ? (uint32_t)(u->image_points + 0.5f)
+                                              : u->s.drone_count;
+    uint32_t idx = dai_show_formation_from_image(u->sh, name, src, px.data(), w, h,
+                                                 u->image_width_m, th, want,
+                                                 err, sizeof(err));
+    if (idx == 0xFFFFFFFFu) { say(u, 1, "%s", err[0] ? err : "the image gave no figure"); return; }
+    u->sel_formation = (int)idx;
+    dai_show_formation_info info;
+    dai_show_formation_get(u->sh, idx, &info);
+    say(u, 0, "formation \"%s\" added: %u points from %ux%u", name, info.point_count, w, h);
 }
 
 void add_builtin(dai_show_ui *u) {
@@ -953,8 +1088,9 @@ void dai_show_ui_storyboard(dai_show_ui *u, dai_ui *ui, float x, float y, float 
     dai_ui_panel_begin(ui, x, y, w, h, nullptr);
     const dai_ui_style *st = dai_ui_style_of(ui);
     const char *const LABELS[] = { "Shape", "Size (m)", "Hold (s)", "Transit (s)",
-                                   "Profile", "Timing", "Spread (s)", "Assignment" };
-    float label_was = fit_labels(ui, LABELS, 8);
+                                   "Profile", "Timing", "Spread (s)", "Assignment",
+                                   "Group", "Points", "Image", "Width (m)", "Threshold" };
+    float label_was = fit_labels(ui, LABELS, 13);
 
     dai_ui_section(ui, "Figures");
     seg_row(ui, "Shape", &u->figure, FIGURES, 3);
@@ -986,6 +1122,17 @@ void dai_show_ui_storyboard(dai_show_ui *u, dai_ui *ui, float x, float y, float 
     dai_ui_row_end(ui);
     if (!u->have_mesh)
         wrapped_label(ui, "no mesh selected - pick one in the Project panel");
+
+    // A picture as a figure: the drones ARE the pixels that pass the
+    // threshold, in the picture's own colours, on a wall facing the audience.
+    dai_ui_input_text(ui, "Image", u->image_path, sizeof(u->image_path));
+    if (u->image_path[0]) {
+        dai_ui_num_field(ui, "Width (m)", &u->image_width_m, 1.0f, 2.0f, 2000.0f, "showimgw");
+        dai_ui_num_field(ui, "Threshold", &u->image_threshold, 1.0f, 0.0f, 255.0f, "showimgt");
+        dai_ui_num_field(ui, "Points", &u->image_points, 1.0f, 0.0f,
+                         (float)u->s.drone_count, "showimgn");
+        if (dai_ui_button(ui, "From image")) add_image(u);
+    }
 
     dai_ui_section(ui, "Storyboard");
     uint32_t n = dai_show_formation_count(u->sh);
@@ -1033,6 +1180,33 @@ void dai_show_ui_storyboard(dai_show_ui *u, dai_ui *ui, float x, float y, float 
 
         if (dai_ui_num_field(ui, "Hold (s)", &info.hold_s, 0.25f, 0.0f, 600.0f, "showhold"))
             dai_show_formation_set_hold(u->sh, i, info.hold_s);
+
+        // Which timeline this figure belongs to. Same number as the figure
+        // before it = it flies AFTER it; a new number = at the same time,
+        // over its own slice of the fleet.
+        float grp = (float)info.group;
+        if (dai_ui_num_field(ui, "Group", &grp, 1.0f, 0.0f, 15.0f, "showgrp"))
+            dai_show_formation_set_group(u->sh, i, (int)(grp + 0.5f));
+
+        // The point count is editable where re-sampling is possible: a
+        // builtin's source IS its shape. A mesh or an image was sampled once,
+        // from a file - its count is what it is.
+        if (std::strncmp(info.source, "builtin://", 10) == 0) {
+            float pts_f = (float)info.point_count;
+            if (dai_ui_num_field(ui, "Points", &pts_f, 1.0f, 1.0f,
+                                 (float)u->s.drone_count, "showpts") &&
+                (uint32_t)(pts_f + 0.5f) != info.point_count) {
+                int shape = 0;
+                const char *bn = info.source + 10;
+                for (int k = 0; k < 3; ++k) if (!std::strcmp(bn, FIGURES[k])) shape = k;
+                resample_builtin(u, i, shape, (uint32_t)(pts_f + 0.5f));
+            }
+        } else {
+            char fixed[96];
+            std::snprintf(fixed, sizeof(fixed), "%u points (fixed at creation)",
+                          info.point_count);
+            wrapped_label(ui, fixed);
+        }
 
         if (i >= 1) {
             dai_show_transition tr;
@@ -1482,6 +1656,60 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                                 size * 2.0f + 4.0f, size * 2.0f + 4.0f, 1.0f, COL_WARN);
     }
 
+    // The selected figure's OUTLINE. Ten thousand selected dots are still ten
+    // thousand dots; what a director means by "the figure" is its silhouette.
+    // So the hull of its points, in screen space, as one closed line - the
+    // monotonic chain, O(n log n), on a decimated set when the figure is huge:
+    // past a few thousand points the hull stops changing and only the cost
+    // grows.
+    {
+        uint32_t fc_o = dai_show_formation_count(u->sh);
+        if (fc_o && u->sel_formation >= 0 && (uint32_t)u->sel_formation < fc_o) {
+            const dai_show_point *op = dai_show_formation_points(u->sh, (uint32_t)u->sel_formation);
+            dai_show_formation_info oi;
+            if (op && dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &oi) &&
+                oi.point_count >= 3) {
+                std::vector<std::pair<float, float>> sp;
+                uint32_t ostride = 1;
+                while (oi.point_count / ostride > 3000u) ++ostride;
+                sp.reserve(oi.point_count / ostride + 1);
+                for (uint32_t k = 0; k < oi.point_count; k += ostride) {
+                    float hx, hy;
+                    if (project(cam, op[k].x, op[k].y, op[k].z, &hx, &hy, nullptr))
+                        sp.push_back(std::make_pair(hx, hy));
+                }
+                if (sp.size() >= 3) {
+                    std::sort(sp.begin(), sp.end());
+                    std::vector<std::pair<float, float>> H(sp.size() * 2);
+                    int hn = 0;
+                    for (int pass = 0; pass < 2; ++pass) {
+                        int base = hn;
+                        for (size_t k = 0; k < sp.size(); ++k) {
+                            const std::pair<float, float> &pt =
+                                pass ? sp[sp.size() - 1 - k] : sp[k];
+                            while (hn - base >= 2) {
+                                float cr = (H[hn - 1].first - H[hn - 2].first) *
+                                               (pt.second - H[hn - 2].second) -
+                                           (H[hn - 1].second - H[hn - 2].second) *
+                                               (pt.first - H[hn - 2].first);
+                                if (cr <= 0.0f) --hn; else break;
+                            }
+                            H[hn++] = pt;
+                        }
+                        --hn;
+                    }
+                    const uint32_t OC = rgba(0xF5, 0xD7, 0x60, 220);
+                    for (int k = 0; k + 1 < hn; ++k)
+                        dai_ui_line(ui, H[k].first, H[k].second,
+                                    H[k + 1].first, H[k + 1].second, 1.5f, OC);
+                    if (hn > 1)
+                        dai_ui_line(ui, H[hn - 1].first, H[hn - 1].second,
+                                    H[0].first, H[0].second, 1.5f, OC);
+                }
+            }
+        }
+    }
+
     // And what is wrong, marked so it survives being photographed: a red ring
     // around each drone involved, the line between the pair, and the number.
     //
@@ -1664,8 +1892,23 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                 if (!drawn[a]) continue;
                 int lit = (u->gizmo_axis == a) || (hot == a);
                 dai_ui_line(ui, osx, osy, tipx[a], tipy[a], lit ? 3.0f : 2.0f, AXIS_COL[a]);
-                float hs = lit ? 5.0f : 4.0f;
-                dai_ui_rect(ui, tipx[a] - hs, tipy[a] - hs, hs * 2.0f, hs * 2.0f, AXIS_COL[a]);
+                // An ARROWHEAD, not a knob: a square at the tip is the scale
+                // gizmo's silhouette in every editor that has one, and a move
+                // handle that looks like a resize handle gets trusted like
+                // one - which is to say, not. Two chevrons back from the tip.
+                float ux = tipx[a] - osx, uy = tipy[a] - osy;
+                float ul = std::sqrt(ux * ux + uy * uy);
+                if (ul > 1.0f) {
+                    ux /= ul; uy /= ul;
+                    const float AL = lit ? 13.0f : 11.0f;   // arrow length, px
+                    const float AW = 0.45f;                 // how wide it opens
+                    float pxn = -uy * AL * AW, pyn = ux * AL * AW;
+                    float bx = tipx[a] - ux * AL, by = tipy[a] - uy * AL;
+                    dai_ui_line(ui, tipx[a], tipy[a], bx + pxn, by + pyn,
+                                lit ? 3.0f : 2.0f, AXIS_COL[a]);
+                    dai_ui_line(ui, tipx[a], tipy[a], bx - pxn, by - pyn,
+                                lit ? 3.0f : 2.0f, AXIS_COL[a]);
+                }
             }
             ring(ui, osx, osy, 4.0f, 1.5f, rgba(0xF5, 0xF5, 0xF5, 200));
 
@@ -1755,6 +1998,115 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     }
     dai_ui_clip_end(ui);
 
+    // ---- one drone, one point ---------------------------------------------
+    //
+    // Outside pick mode a press on the sky is a candidate for two gestures
+    // and only the next few pixels tell which: a CLICK - that drone is
+    // selected, the inspector already knows how to talk about one - or a
+    // DRAG - that one point of the figure moves. Deciding at press time
+    // would either eat the click or move a figure nobody meant to touch, so
+    // the press is remembered and the gesture is named at four pixels.
+    if (!u->pick_on) {
+        if (pressed && inside && !consumed) {
+            // The nearest point of ANY figure in grab range is the drag
+            // candidate; the nearest fleet drone is the click candidate.
+            // They are usually the same dot, but mid-transition they are
+            // not, and grabbing is about the figure while clicking is about
+            // the drone.
+            float best = 9.0f;
+            int bf = -1; uint32_t bi = 0xFFFFFFFFu; float bd = 0.0f;
+            uint32_t fc2 = dai_show_formation_count(u->sh);
+            for (uint32_t f2 = 0; f2 < fc2; ++f2) {
+                dai_show_formation_info inf;
+                const dai_show_point *fp2 = dai_show_formation_points(u->sh, f2);
+                if (!fp2 || !dai_show_formation_get(u->sh, f2, &inf)) continue;
+                for (uint32_t k = 0; k < inf.point_count; ++k) {
+                    float hx, hy, hd;
+                    if (!project(cam, fp2[k].x, fp2[k].y, fp2[k].z, &hx, &hy, &hd))
+                        continue;
+                    float ddx = hx - mx, ddy = hy - my;
+                    float d = std::sqrt(ddx * ddx + ddy * ddy);
+                    if (d < best) { best = d; bf = (int)f2; bi = k; bd = hd; }
+                }
+            }
+            u->move_f = bf; u->move_i = bi; u->move_depth = bd; u->move_active = 0;
+            if (bf >= 0) {
+                // The grab offset, so the point under the cursor stays under
+                // the cursor instead of jumping its centre onto it.
+                const dai_show_point *fp2 = dai_show_formation_points(u->sh, (uint32_t)bf);
+                float gx, gy, gz;
+                unproject(cam, mx, my, bd, &gx, &gy, &gz);
+                u->move_off[0] = fp2[bi].x - gx;
+                u->move_off[1] = fp2[bi].y - gy;
+                u->move_off[2] = fp2[bi].z - gz;
+                consumed = 1;          // a grabbed point is never also an orbit
+            }
+            float bestd = 9.0f; uint32_t bdi = 0xFFFFFFFFu;
+            for (uint32_t k = 0; k < n; ++k) {
+                float hx, hy;
+                if (!project(cam, u->fleet[k].x, u->fleet[k].y, u->fleet[k].z,
+                             &hx, &hy, nullptr))
+                    continue;
+                float ddx = hx - mx, ddy = hy - my;
+                float d = std::sqrt(ddx * ddx + ddy * ddy);
+                if (d < bestd) { bestd = d; bdi = k; }
+            }
+            u->click_drone = bdi;
+            u->click_x = mx; u->click_y = my;
+        }
+        if (down && u->move_f >= 0 && !u->move_active) {
+            float tvx = mx - u->click_x, tvy = my - u->click_y;
+            if (tvx * tvx + tvy * tvy > 16.0f) u->move_active = 1;
+        }
+        if (down && u->move_active && u->move_f >= 0) {
+            float wx, wy, wz;
+            unproject(cam, mx, my, u->move_depth, &wx, &wy, &wz);
+            dai_show_formation_set_point_world(u->sh, (uint32_t)u->move_f, u->move_i,
+                                               wx + u->move_off[0], wy + u->move_off[1],
+                                               wz + u->move_off[2]);
+            consumed = 1;
+        }
+        if (!down && (u->move_f >= 0 || u->click_drone != 0xFFFFFFFFu)) {
+            float tvx = mx - u->click_x, tvy = my - u->click_y;
+            if (!u->move_active && tvx * tvx + tvy * tvy <= 16.0f) {
+                if (u->click_drone != 0xFFFFFFFFu) {
+                    u->sel_drone   = u->click_drone;
+                    u->sel_drone_b = 0xFFFFFFFFu;
+                }
+                if (u->move_f >= 0) u->sel_formation = u->move_f;
+            }
+            u->move_f = -1; u->move_i = 0xFFFFFFFFu; u->move_active = 0;
+            u->click_drone = 0xFFFFFFFFu;
+        }
+    }
+
+    // The 2D toggle: top-down, like the planning sheet a show is drawn on
+    // first. The 3D angles are kept and restored, not recomputed - a view
+    // you return to should be the view you left. Handled BEFORE the orbit:
+    // a press on the button is never also the start of a camera move.
+    {
+        const dai_ui_style *vst = dai_ui_style_of(ui);
+        const char *vl = u->view_2d ? "3D" : "2D";
+        float vx = x + w - 50.0f, vy = y + 6.0f, vw2 = 44.0f, vh2 = 20.0f;
+        int over = (mx >= vx && mx < vx + vw2 && my >= vy && my < vy + vh2);
+        dai_ui_rect(ui, vx, vy, vw2, vh2, over ? vst->button_hover : vst->button);
+        dai_ui_rect_outline(ui, vx, vy, vw2, vh2, 1.0f, vst->panel_border);
+        dai_ui_text(ui, vx + (vw2 - dai_ui_text_width(ui, vl)) * 0.5f,
+                    vy + (vh2 - dai_ui_text_height(ui)) * 0.5f, vl, vst->text);
+        if (over && pressed) {
+            if (!u->view_2d) {
+                u->pre2d_yaw = u->yaw; u->pre2d_pitch = u->pitch;
+                u->yaw = 0.0f; u->pitch = 1.55f;    // straight down, a degree
+                                                    // off the degenerate pole
+                u->view_2d = 1;
+            } else {
+                u->yaw = u->pre2d_yaw; u->pitch = u->pre2d_pitch;
+                u->view_2d = 0;
+            }
+            consumed = 1;
+        }
+    }
+
     // Orbit and zoom. The gesture is the scene view's, because a second
     // convention for turning a camera is a second thing to learn for nothing.
     // A drag that a tool took is never also a camera move: grabbing an axis and
@@ -1762,10 +2114,22 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     if (pressed && inside && !consumed) { u->dragging = 1; u->drag_x = mx; u->drag_y = my; }
     if (!down || consumed) u->dragging = 0;
     if (u->dragging) {
-        u->yaw   += (mx - u->drag_x) * 0.008f;
-        u->pitch += (my - u->drag_y) * 0.006f;
-        u->pitch  = std::max(-1.4f, std::min(1.4f, u->pitch));
-        u->drag_x = mx; u->drag_y = my;
+        if (u->view_2d) {
+            // Top-down, a drag SLIDES the map: the world point under the
+            // press stays under the pointer. No orbit - there is nothing to
+            // orbit around in a plan view, only something to lose.
+            float wax, way, waz, wbx, wby, wbz;
+            unproject(cam, u->drag_x, u->drag_y, u->dist, &wax, &way, &waz);
+            unproject(cam, mx, my, u->dist, &wbx, &wby, &wbz);
+            u->focus_x += wax - wbx;
+            u->focus_z += waz - wbz;
+            u->drag_x = mx; u->drag_y = my;
+        } else {
+            u->yaw   += (mx - u->drag_x) * 0.008f;
+            u->pitch += (my - u->drag_y) * 0.006f;
+            u->pitch  = std::max(-1.4f, std::min(1.4f, u->pitch));
+            u->drag_x = mx; u->drag_y = my;
+        }
     }
     if (inside) {
         float wheel = dai_ui_wheel(ui);
@@ -1842,8 +2206,22 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
     uint32_t n = dai_show_formation_count(u->sh);
 
     dai_ui_section(ui, "Figures");
+    // The + and the right click open the same menu, because adding a figure
+    // is adding a figure no matter which hand did it. The menu floats; the
+    // pick is answered below, once, for both ways in.
+    float hmx = 0.0f, hmy = 0.0f;
+    dai_ui_mouse(ui, &hmx, &hmy, nullptr, nullptr);
+    dai_ui_row(ui, 0.0f);
+    if (dai_ui_button(ui, "+")) dai_ui_popup_open(&u->add_menu, hmx, hmy);
+    dai_ui_row_end(ui);
+    if (dai_ui_right_pressed(ui) &&
+        hmx >= x && hmx < x + w && hmy >= y && hmy < y + h)
+        dai_ui_popup_open(&u->add_menu, hmx, hmy);
+    int apick = dai_ui_popup_menu(ui, &u->add_menu, ADD_ITEMS, 4);
+    if (apick >= 0 && apick < 3) { u->figure = apick; add_builtin(u); }
+    else if (apick == 3)         { add_image(u); }
     if (!n) {
-        wrapped_label(ui, "no figures yet - add one in the Storyboard panel");
+        wrapped_label(ui, "no figures yet - the + above adds one");
         dai_ui_panel_end(ui);
         return;
     }
@@ -1884,7 +2262,11 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         const float avail = dai_ui_panel_width(ui) - st->padding * 2.0f - 10.0f;
         std::snprintf(row_head, sizeof(row_head), "%u. %s  %u drones",
                       i + 1u, info.name, info.point_count);
-        std::snprintf(row_tail, sizeof(row_tail), "  %.1f s", (double)info.t_start);
+        if (info.group)
+            std::snprintf(row_tail, sizeof(row_tail), "  g%d %.1f s", info.group,
+                          (double)info.t_start);
+        else
+            std::snprintf(row_tail, sizeof(row_tail), "  %.1f s", (double)info.t_start);
         std::snprintf(row, sizeof(row), "%s%s", row_head, row_tail);
         // The drone count is the first thing dropped, whole - it is the same
         // for every figure of a fixed fleet. What follows is cut in the MIDDLE
@@ -2300,14 +2682,13 @@ void dai_show_ui_panels(dai_show_ui *u, dai_ui *ui, struct dai_dock *dock) {
     // Idempotent, like every other registration in this editor: the first call
     // places the panel, the rest are free, and wherever the user dragged it
     // afterwards is where it stays.
-    // Validation is a STATUS strip, not a workspace. At a quarter of the frame
-    // it took three hundred pixels to say "no conflicts" in two lines, while
-    // the storyboard - the panel a show is actually built in - stood mostly
-    // empty above it. A conflict list that has rows scrolls; a clean show
-    // should not be charged a quarter of the window for saying so.
-    dai_dock_add(dock, "Storyboard", DAI_DOCK_LEFT, 0.24f);
-    dai_dock_add(dock, "Show Parameters", DAI_DOCK_RIGHT, 0.22f);
-    dai_dock_add(dock, "Validation", DAI_DOCK_BOTTOM, 0.14f);
+    // No new screen real estate at all: the storyboard tabs itself into the
+    // Hierarchy (a show has figures where a scene has nodes), the parameters
+    // into the Inspector (both edit the one selected thing), and the
+    // validation into the Console (both are the program talking back).
+    dai_dock_add_tab(dock, "Storyboard", "Hierarchy");
+    dai_dock_add_tab(dock, "Show Parameters", "Inspector");
+    dai_dock_add_tab(dock, "Validation", "Console");
 
     float px, py, pw, ph;
     if (dai_dock_panel(dock, "Storyboard", &px, &py, &pw, &ph)) {

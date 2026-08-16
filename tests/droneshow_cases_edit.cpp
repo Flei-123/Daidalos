@@ -535,5 +535,193 @@ int show_cases_edit(void) {
         dai_show_destroy(sh);
     }
 
+    // ---- [7l] one point, moved by the world -------------------------------
+    show_section("editing - set_point_world lands where it says, rotated or not");
+    {
+        const uint32_t n = 25;
+        dai_show_settings s = edit_settings(n, 2.0f);
+        dai_show *sh = dai_show_create(&s);
+        std::vector<dai_show_point> a(n);
+        show_grid_formation(a.data(), n, 3.0f, dai_vec3{ 0.0f, 50.0f, 0.0f });
+        dai_show_formation_add(sh, "f", "", a.data(), n, 2.0f);
+
+        // Identity: the point goes exactly where the caller said.
+        CHECK(dai_show_formation_set_point_world(sh, 0, 7, 3.0f, 61.0f, -8.0f),
+              "[7l] the point move was refused");
+        const dai_show_point *w = dai_show_formation_points(sh, 0);
+        CHECK(w[7].x == 3.0f && w[7].y == 61.0f && w[7].z == -8.0f,
+              "[7l] identity: the point is not where it was put");
+        CHECK(w[6].x == a[6].x && w[6].y == a[6].y && w[6].z == a[6].z,
+              "[7l] a neighbour moved with it - that is a figure move, not a point move");
+
+        // Under a 90 degree rotation about Y the same world target must still
+        // be hit - the inverse transform is the whole point of the API.
+        dai_show_transform xf = dai_show_transform_identity();
+        xf.rotation_deg.y = 90.0f;
+        dai_show_formation_set_transform(sh, 0, &xf);
+        CHECK(dai_show_formation_set_point_world(sh, 0, 7, 10.0f, 55.0f, 4.0f),
+              "[7l] the rotated point move was refused");
+        w = dai_show_formation_points(sh, 0);
+        float ddx = w[7].x - 10.0f, ddy = w[7].y - 55.0f, ddz = w[7].z - 4.0f;
+        float miss = std::sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
+        CHECK(miss < 0.01f, "[7l] rotated: the point missed its target by %.4f m", (double)miss);
+
+        // And a moved point is geometry: the plan is gone.
+        CHECK(dai_show_get_plan(sh) == nullptr,
+              "[7l] a moved point left the old plan alive");
+        dai_show_destroy(sh);
+    }
+
+    // ---- [7m] groups fly at the same time, over their own drones -----------
+    show_section("editing - groups run in parallel, each over its own slice");
+    {
+        const uint32_t n = 40;
+        dai_show_settings s = edit_settings(n, 2.0f);
+        dai_show *sh = dai_show_create(&s);
+        // Two figures of 25 in group 0, one figure of 15 in group 1.
+        std::vector<dai_show_point> a(25), b(25), c(15);
+        show_grid_formation(a.data(), 25, 3.0f, dai_vec3{ -20.0f, 50.0f, 0.0f });
+        show_grid_formation(b.data(), 25, 3.0f, dai_vec3{  20.0f, 50.0f, 0.0f });
+        show_grid_formation(c.data(), 15, 3.0f, dai_vec3{   0.0f, 70.0f, 0.0f });
+        dai_show_formation_add(sh, "a", "", a.data(), 25, 2.0f);
+        dai_show_formation_add(sh, "b", "", b.data(), 25, 2.0f);
+        dai_show_formation_add(sh, "c", "", c.data(), 15, 2.0f);
+        CHECK(dai_show_formation_set_group(sh, 2, 1), "[7m] set_group was refused");
+
+        char err[256] = { 0 };
+        dai_result r = dai_show_solve(sh, err, sizeof(err));
+        CHECK(r == DAI_OK, "[7m] a legal two-group show did not solve: %s", err);
+        if (r == DAI_OK) {
+            const dai_show_plan *pl = dai_show_get_plan(sh);
+            CHECK(dai_show_plan_drone_count(pl) == n,
+                  "[7m] the plan does not cover the whole fleet");
+            dai_show_formation_info ia, ib, ic;
+            dai_show_formation_get(sh, 0, &ia);
+            dai_show_formation_get(sh, 1, &ib);
+            dai_show_formation_get(sh, 2, &ic);
+            CHECK(ia.t_start == 0.0f && ic.t_start == 0.0f,
+                  "[7m] the second group waited for the first - that is serial, not parallel");
+            CHECK(ib.t_start > 0.0f,
+                  "[7m] the second figure of group 0 did not come after the first");
+            // The groups' drones are different drones: at t=0 nobody stands
+            // on anybody.
+            dai_show_point pa, pc;
+            dai_show_plan_sample(pl, 0, 0.0f, &pa);
+            dai_show_plan_sample(pl, 25, 0.0f, &pc);
+            float gx = pa.x - pc.x, gy = pa.y - pc.y, gz = pa.z - pc.z;
+            CHECK(gx * gx + gy * gy + gz * gz > 1.0f,
+                  "[7m] drone 0 and drone 25 start on the same spot");
+        }
+        dai_show_destroy(sh);
+    }
+
+    // ---- [7m2] the audit says who is wrong, in words ------------------------
+    show_section("editing - the group audit names the offender");
+    {
+        const uint32_t n = 40;
+        dai_show_settings s = edit_settings(n, 2.0f);
+        dai_show *sh = dai_show_create(&s);
+        std::vector<dai_show_point> a(25), b(20);
+        show_grid_formation(a.data(), 25, 3.0f, dai_vec3{ 0.0f, 50.0f, 0.0f });
+        show_grid_formation(b.data(), 20, 3.0f, dai_vec3{ 0.0f, 60.0f, 0.0f });
+        dai_show_formation_add(sh, "alpha", "", a.data(), 25, 2.0f);
+        dai_show_formation_add(sh, "beta", "", b.data(), 20, 2.0f);
+        char err[256] = { 0 };
+        dai_result r = dai_show_solve(sh, err, sizeof(err));
+        CHECK(r != DAI_OK, "[7m2] two counts in one group solved anyway");
+        CHECK(std::strstr(err, "beta") != nullptr,
+              "[7m2] the error does not name the figure that breaks the group: %s", err);
+
+        // Same counts, but the sum is not the fleet: nobody may be left over.
+        dai_show_destroy(sh);
+        sh = dai_show_create(&s);
+        std::vector<dai_show_point> c(20), d(20);
+        show_grid_formation(c.data(), 20, 3.0f, dai_vec3{ 0.0f, 50.0f, 0.0f });
+        show_grid_formation(d.data(), 20, 3.0f, dai_vec3{ 0.0f, 60.0f, 0.0f });
+        dai_show_formation_add(sh, "c", "", c.data(), 20, 2.0f);
+        dai_show_formation_add(sh, "d", "", d.data(), 20, 2.0f);
+        dai_show_formation_set_group(sh, 1, 1);
+        std::memset(err, 0, sizeof(err));
+        r = dai_show_solve(sh, err, sizeof(err));
+        CHECK(r == DAI_OK, "[7m2] two groups of 20 over a fleet of 40 did not solve: %s", err);
+        dai_show_destroy(sh);
+    }
+
+    // ---- [7n] an image becomes a figure -------------------------------------
+    show_section("editing - from_image lights the right cells");
+    {
+        const uint32_t n = 16;
+        dai_show_settings s = edit_settings(n, 2.0f);
+        dai_show *sh = dai_show_create(&s);
+        // A 4x4 image, all black but four bright pixels.
+        uint8_t img[4 * 4 * 4];
+        std::memset(img, 0, sizeof(img));
+        for (int k = 0; k < 4; ++k) {
+            img[(k * 4 + k) * 4 + 0] = 255;   // the diagonal, red
+            img[(k * 4 + k) * 4 + 1] = 200;
+            img[(k * 4 + k) * 4 + 2] = 100;
+        }
+        char err[256] = { 0 };
+        // 8 m wide at 2 m spacing: 4x4 cells, 4 of them lit.
+        uint32_t idx = dai_show_formation_from_image(sh, "img", "test://img", img, 4, 4,
+                                                     8.0f, 128, 4, err, sizeof(err));
+        CHECK(idx != UINT32_MAX, "[7n] the image gave no figure: %s", err);
+        if (idx != UINT32_MAX) {
+            dai_show_formation_info info;
+            dai_show_formation_get(sh, idx, &info);
+            CHECK(info.point_count == 4, "[7n] %u points, expected the 4 lit cells",
+                  info.point_count);
+            const dai_show_point *w = dai_show_formation_points(sh, idx);
+            CHECK(w[0].r == 255 && w[0].g == 200 && w[0].b == 100,
+                  "[7n] the pixel colour did not reach the drone");
+        }
+        // Asking for more drones than lit cells is an error, not a guess.
+        std::memset(err, 0, sizeof(err));
+        idx = dai_show_formation_from_image(sh, "img2", "test://img", img, 4, 4,
+                                            8.0f, 128, 5, err, sizeof(err));
+        CHECK(idx == UINT32_MAX && err[0],
+              "[7n] five drones from four lit cells was not refused");
+        dai_show_destroy(sh);
+    }
+
+    // ---- [7o] replace_points keeps the figure, drops the plan --------------
+    show_section("editing - replace_points re-samples in place");
+    {
+        const uint32_t n = 25;
+        dai_show_settings s = edit_settings(n, 2.0f);
+        dai_show *sh = dai_show_create(&s);
+        std::vector<dai_show_point> a(n);
+        show_grid_formation(a.data(), n, 3.0f, dai_vec3{ 0.0f, 50.0f, 0.0f });
+        dai_show_formation_add(sh, "keepme", "", a.data(), n, 2.0f);
+        dai_show_formation_set_group(sh, 0, 3);
+        char err[256] = { 0 };
+        dai_show_solve(sh, err, sizeof(err));
+
+        std::vector<dai_show_point> b(9);
+        show_grid_formation(b.data(), 9, 3.0f, dai_vec3{ 0.0f, 50.0f, 0.0f });
+        CHECK(dai_show_formation_replace_points(sh, 0, b.data(), 9),
+              "[7o] replace_points was refused");
+        dai_show_formation_info info;
+        dai_show_formation_get(sh, 0, &info);
+        CHECK(info.point_count == 9, "[7o] the count did not change");
+        CHECK(std::strcmp(info.name, "keepme") == 0, "[7o] the name did not survive");
+        CHECK(info.group == 3, "[7o] the group did not survive");
+        CHECK(dai_show_get_plan(sh) == nullptr, "[7o] the old plan survived a new shape");
+
+        // And the group survives a save and a load.
+        const char *path = "build/edit_group.dshow";
+        CHECK(dai_show_save(sh, path, err, sizeof(err)) == DAI_OK, "[7o] the save failed");
+        dai_show *back = dai_show_load(path, err, sizeof(err));
+        CHECK(back != nullptr, "[7o] the reload failed: %s", err);
+        if (back) {
+            dai_show_formation_info bi;
+            dai_show_formation_get(back, 0, &bi);
+            CHECK(bi.group == 3 && bi.point_count == 9,
+                  "[7o] group or count did not survive the round trip");
+            dai_show_destroy(back);
+        }
+        dai_show_destroy(sh);
+    }
+
     return g_show_fail - before;
 }

@@ -7706,9 +7706,12 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     // same tree, same splitters. Registered BEFORE the layout runs so they have
     // a rectangle on the very first frame rather than on the second.
     if (p->show) {
-        dai_dock_add(p->dock, "Storyboard", DAI_DOCK_LEFT, 0.22f);
-        dai_dock_add(p->dock, "Show Parameters", DAI_DOCK_RIGHT, 0.22f);
-        dai_dock_add(p->dock, "Validation", DAI_DOCK_BOTTOM, 0.26f);
+        // Tabs, not new splits: the show panels live where their meaning
+        // already lives - figures beside the node tree, the show's numbers
+        // beside the inspector, its verdicts beside the log.
+        dai_dock_add_tab(p->dock, "Storyboard", "Hierarchy");
+        dai_dock_add_tab(p->dock, "Show Parameters", "Inspector");
+        dai_dock_add_tab(p->dock, "Validation", "Console");
     }
 
     dai_dock_begin(p->dock, ui, 0.0f, TOP, vw, vh - TOP - BOTTOM);

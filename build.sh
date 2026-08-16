@@ -382,7 +382,8 @@ g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_strings.cpp src/dai_strings.cpp -o b
 # The HUD, measured through the draw list: no GPU, no window, real coordinates.
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_hud.cpp src/dai_ui.cpp src/dai_font.cpp \
     src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp src/dai_strings.cpp \
-    src/dai_editor_ui.cpp src/dai_dock.cpp src/dai_show_ui.cpp $LIBS -o build/test_hud
+    src/dai_editor_ui.cpp src/dai_dock.cpp src/dai_show_ui.cpp \
+    src/dai_inflate.cpp src/dai_jpeg.cpp $LIBS -o build/test_hud
     # Looks at the pixels: text that covers ~100%% of its own box is boxes, not
     # glyphs, which is how a broken font binding hid for so long.
     g++ $FLAGS $ARCH -Iinclude tests/test_ui_text.cpp $VKLIBS -o build/test_ui_text
