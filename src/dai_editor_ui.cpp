@@ -4776,6 +4776,16 @@ int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in) {
     p->last_ctrl_held = in->key_ctrl != 0;
     p->last_shift_held = in->key_shift != 0;
 
+    // A droneshow project has no scene camera and no canvas to menu: the
+    // preview owns its pointer itself (LMB orbit, wheel zoom, gizmo), and the
+    // host feeds it dai_show_ui_nav for flying. Running the game camera here
+    // anyway would put a "create cube" menu under every right-button look.
+    if (p->show) {
+        p->prev_right_down = in->mouse_right != 0;
+        p->prev_viewport_down = in->mouse_left != 0;
+        return 0;
+    }
+
     // The game view is not navigable - it is the player's camera, and dragging
     // it around would be editing the scene by accident.
     if (p->view != DAI_VIEW_SCENE) {
@@ -5015,6 +5025,31 @@ void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
     // under it, inspector on the right, scene and game as two tabs of the
     // middle. Registering is idempotent, so this also runs on the first frame.
     dai_dock_reset(p->dock);
+    if (p->show) {
+        // The layout a SHOW opens with: the preview in the middle, the
+        // storyboard (WHEN each figure flies) on the left, the parameters of
+        // the selected figure on the right, the validation along the bottom.
+        // The two panels a show inherits - figures where a scene has nodes, a
+        // drone at an instant where a node has components - start as tabs, so
+        // they cost nothing until they are wanted. The game default with
+        // three more panels squeezed into it is not a show layout, it is the
+        // game layout apologising.
+        dai_dock_add(p->dock, "Scene", DAI_DOCK_NONE, 0.0f);
+        dai_dock_add(p->dock, "Storyboard", DAI_DOCK_LEFT, 0.22f);
+        dai_dock_add(p->dock, "Show Parameters", DAI_DOCK_RIGHT, 0.24f);
+        dai_dock_add(p->dock, "Validation", DAI_DOCK_BOTTOM, 0.26f);
+        dai_dock_add_tab(p->dock, "Hierarchy", "Storyboard");
+        dai_dock_add_tab(p->dock, "Inspector", "Show Parameters");
+        dai_dock_add_tab(p->dock, "Console", "Validation");
+        dai_dock_add_tab(p->dock, "Project", "Validation");
+        dai_dock_add_tab(p->dock, "Script", "Scene");
+        dai_dock_focus(p->dock, "Storyboard");
+        dai_dock_focus(p->dock, "Show Parameters");
+        dai_dock_focus(p->dock, "Validation");
+        p->layout_ready = true;
+        p->layout_w = vw; p->layout_h = vh;
+        return;
+    }
     dai_dock_add(p->dock, "Scene", DAI_DOCK_NONE, 0.0f);
     dai_dock_add_tab(p->dock, "Game", "Scene");
     dai_dock_add(p->dock, "Hierarchy", DAI_DOCK_LEFT, 0.18f);

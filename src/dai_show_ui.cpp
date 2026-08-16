@@ -435,11 +435,19 @@ struct dai_show_ui {
 
     // The orbit the preview is watched from. A show is watched from ONE
     // direction, so the camera starts where the audience stands: south of the
-    // origin, looking slightly up.
+    // origin, looking slightly up. The focus is a POINT, not a height over the
+    // origin: flying (dai_show_ui_nav) walks it through the sky, and the eye
+    // follows at `dist` behind it.
     float yaw = 0.0f, pitch = 0.18f, dist = 260.0f;
-    float focus_y = 60.0f;
+    float focus_x = 0.0f, focus_y = 60.0f, focus_z = 0.0f;
     int   dragging = 0;
     float drag_x = 0.0f, drag_y = 0.0f;
+    // The flying camera's memory: where the pointer was when a look or a pan
+    // started, and whether the buttons were down last frame. Deltas, not
+    // absolutes - an absolute look accumulates whatever the pointer did over
+    // a panel on the way in.
+    int   nav_rmb = 0, nav_mmb = 0, nav_f = 0;
+    float nav_mx = 0.0f, nav_my = 0.0f;
     int   framed_for = -1;                 // drone count the camera was fitted to
 
     int      sel_formation = 0;
@@ -604,10 +612,10 @@ Cam camera_of(const dai_show_ui *u, float x, float y, float w, float h) {
     Cam c;
     float cp = std::cos(u->pitch), sp = std::sin(u->pitch);
     float cy_ = std::cos(u->yaw),  sy = std::sin(u->yaw);
-    float fwd[3] = { -sy * cp, -sp, -cy_ * cp };    // looking towards the origin
-    c.ex = -fwd[0] * u->dist;
+    float fwd[3] = { -sy * cp, -sp, -cy_ * cp };    // looking towards the focus
+    c.ex = u->focus_x - fwd[0] * u->dist;
     c.ey = u->focus_y - fwd[1] * u->dist;
-    c.ez = -fwd[2] * u->dist;
+    c.ez = u->focus_z - fwd[2] * u->dist;
     float up[3] = { 0.0f, 1.0f, 0.0f };
     float r[3] = { fwd[1] * up[2] - fwd[2] * up[1],
                    fwd[2] * up[0] - fwd[0] * up[2],
@@ -680,7 +688,9 @@ void frame_points(dai_show_ui *u) {
     }
     if (lo[0] > hi[0]) return;
     float ext = std::max(hi[0] - lo[0], std::max(hi[1] - lo[1], hi[2] - lo[2]));
+    u->focus_x = 0.5f * (lo[0] + hi[0]);
     u->focus_y = 0.5f * (lo[1] + hi[1]);
+    u->focus_z = 0.5f * (lo[2] + hi[2]);
     u->dist    = std::max(20.0f, ext * 1.8f + 30.0f);
     u->framed_for = (int)u->fleet.size();
 }
@@ -704,7 +714,9 @@ void frame_plan(dai_show_ui *u) {
     }
     if (lo[0] > hi[0]) return;
     float ext = std::max(hi[0] - lo[0], std::max(hi[1] - lo[1], hi[2] - lo[2]));
+    u->focus_x = 0.5f * (lo[0] + hi[0]);
     u->focus_y = 0.5f * (lo[1] + hi[1]);
+    u->focus_z = 0.5f * (lo[2] + hi[2]);
     u->dist    = std::max(20.0f, ext * 1.8f + 30.0f);
     u->framed_for = (int)n;
 }
@@ -802,6 +814,71 @@ void  dai_show_ui_seek(dai_show_ui *u, float t) {
 }
 int  dai_show_ui_playing(const dai_show_ui *u) { return u ? u->playing : 0; }
 void dai_show_ui_play(dai_show_ui *u, int on) { if (u) u->playing = on ? 1 : 0; }
+
+void dai_show_ui_nav(dai_show_ui *u, const dai_show_nav_input *in) {
+    if (!u || !in) return;
+    float dt = (in->dt > 0.0001f && in->dt < 1.0f) ? in->dt : 1.0f / 60.0f;
+
+    // The basis the movement keys walk along. camera_of computes it from the
+    // orbit numbers alone; the rectangle it is also fed only matters to the
+    // projection, which a move does not use.
+    Cam cam = camera_of(u, 0.0f, 0.0f, 100.0f, 100.0f);
+
+    // Look: hold the right button and the mouse steers yaw and pitch. The
+    // first frame of a hold only REMEMBERS the pointer - counting its journey
+    // onto the viewport as a turn is how a camera ends up looking at its own
+    // feet. The sign matches the left-drag orbit below: down looks down.
+    if (in->mouse_right) {
+        if (u->nav_rmb) {
+            u->yaw   += (in->mouse_x - u->nav_mx) * 0.005f;
+            u->pitch += (in->mouse_y - u->nav_my) * 0.005f;
+            u->pitch  = std::max(-1.5f, std::min(1.5f, u->pitch));
+        }
+        u->nav_mx = in->mouse_x;
+        u->nav_my = in->mouse_y;
+    }
+
+    // Fly: only while looking, the scene view's rule - W A S D without the
+    // right button is typing, not walking. The step scales with `dist`, so a
+    // show framed from 300 m crosses the sky briskly and a figure inspected
+    // from 20 m creeps. Shift hurries, as everywhere.
+    if (in->mouse_right) {
+        float fw = (float)(in->key_w - in->key_s);
+        float sd = (float)(in->key_d - in->key_a);
+        float up = (float)(in->key_e - in->key_q);
+        if (fw != 0.0f || sd != 0.0f || up != 0.0f) {
+            float speed = std::max(6.0f, u->dist * 0.6f) * (in->key_shift ? 3.0f : 1.0f);
+            float step  = speed * dt;
+            u->focus_x += (cam.rz[0] * fw + cam.rx[0] * sd + cam.ry[0] * up) * step;
+            u->focus_y += (cam.rz[1] * fw + cam.rx[1] * sd + cam.ry[1] * up) * step;
+            u->focus_z += (cam.rz[2] * fw + cam.rx[2] * sd + cam.ry[2] * up) * step;
+            if (u->focus_y < 0.5f) u->focus_y = 0.5f;   // the floor is the floor
+        }
+    }
+    u->nav_rmb = in->mouse_right;
+
+    // Pan: the middle button slides the focus across the view plane, scaled by
+    // distance so one pixel of drag is about one pixel of world at the focus.
+    if (in->mouse_middle) {
+        if (u->nav_mmb) {
+            float k = u->dist * 0.0016f;
+            float dx = (in->mouse_x - u->nav_mx) * k;
+            float dy = (in->mouse_y - u->nav_my) * k;
+            u->focus_x -= cam.rx[0] * dx - cam.ry[0] * dy;
+            u->focus_y -= cam.rx[1] * dx - cam.ry[1] * dy;
+            u->focus_z -= cam.rx[2] * dx - cam.ry[2] * dy;
+        }
+        u->nav_mx = in->mouse_x;
+        u->nav_my = in->mouse_y;
+    }
+    u->nav_mmb = in->mouse_middle;
+
+    // F: frame the whole show again. Edge triggered here because the host
+    // reports the key held, and a held F re-framing every frame is a camera
+    // you can never leave.
+    if (in->key_focus && !u->nav_f) u->framed_for = -1;
+    u->nav_f = in->key_focus;
+}
 
 void dai_show_ui_mesh(dai_show_ui *u, const dai_show_sample_desc *desc, const char *source) {
     if (!u) return;

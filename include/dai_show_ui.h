@@ -152,7 +152,27 @@ DAI_API void dai_show_ui_status(dai_show_ui *u, dai_ui *ui, float x, float y, fl
  * written; `buf` is always terminated. */
 DAI_API uint32_t dai_show_ui_verdict(const dai_show_ui *u, char *buf, size_t cap);
 
+
+/* Scene-view navigation for the preview, the convention the game editor's
+ * viewport and Unity share: HOLD the right button to look around, W A S D to
+ * move, Q E down and up, shift to hurry; the middle button pans; F frames the
+ * whole show again. It is a struct the HOST fills because dai_ui never sees a
+ * held key - its input carries typed characters, not walking - and an orbit
+ * you can only turn with the left drag is a camera you inspect, not one you
+ * stand inside. The left-drag orbit and the wheel zoom stay in the panel
+ * itself; this call is what adds flying. */
+typedef struct dai_show_nav_input {
+    float mouse_x, mouse_y;           /* logical pixels, dai_ui's space */
+    int   mouse_right, mouse_middle;  /* held */
+    int   key_w, key_a, key_s, key_d, key_q, key_e;
+    int   key_shift;
+    int   key_focus;                  /* F, held - the call edge-triggers it */
+    float dt;                         /* seconds since the last call */
+} dai_show_nav_input;
+DAI_API void dai_show_ui_nav(dai_show_ui *u, const dai_show_nav_input *in);
+
 DAI_API void dai_show_ui_panels(dai_show_ui *u, dai_ui *ui, struct dai_dock *dock);
+
 
 #ifdef __cplusplus
 }

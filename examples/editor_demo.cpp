@@ -326,8 +326,12 @@ static void show_save(void) {
 // from: the scene, the assets, the settings. The editor never runs without
 // one - that is why this is called before the first frame as well as from the
 // project window.
+static void layout_save_for_project(void);
+static void layout_load_for_project(void);
+
 static int open_project_path(const char *path) {
     char err[256] = { 0 };
+    layout_save_for_project();   // g_project is still the one being LEFT
     dai_project *np = dai_project_open(path, err, sizeof(err));
     if (!np) { std::printf("project: %s\n", err); return 0; }
     if (g_project) dai_project_close(g_project);
@@ -370,6 +374,12 @@ static int open_project_path(const char *path) {
     std::snprintf(pr.last_project, sizeof(pr.last_project), "%s", dai_project_path(g_project));
     dai_prefs_save(&pr);
     show_open_for_project();
+    // The layout belongs to the project, so it switches WITH the project:
+    // the show that was open gets its arrangement written, the one being
+    // opened gets its own back - or the default for its kind on the first
+    // open. g_project still names the OLD project at the top of this
+    // function, which is why the save happens before the switch, below.
+    layout_load_for_project();
     return 1;
 }
 
@@ -427,6 +437,59 @@ static int layout_load_file(const char *name, char *out, size_t n, void *) {
     out[got] = 0;
     std::fclose(f);
     return (int)got;
+}
+
+// ---- the working layout, per project --------------------------------------
+// One layout.txt for every project was one layout too few: a droneshow docks
+// Storyboard, Show Parameters and Validation where a game docks nothing, so
+// whichever kind was closed second overwrote the other's arrangement and the
+// next open apologised with the wrong one. The layout now lives in the
+// project's settings/ - it IS a project setting - and a project switch saves
+// the old project's and loads the new one's, the same rule the scene and the
+// strings already follow. The old global file is still READ as a fallback, so
+// an existing install keeps its arrangement once, and then migrates itself.
+static std::string project_layout_path(void) {
+    if (!g_project) return std::string();
+    return std::string(dai_project_path(g_project)) + "/settings/editor_layout.txt";
+}
+
+static void layout_save_for_project(void) {
+    if (!g_panels_for_log || !g_project) return;
+    std::string path = project_layout_path();
+    size_t need = dai_editor_ui_layout_save(g_panels_for_log, nullptr, 0);
+    if (!need) return;
+    std::string txt(need + 1, '\0');
+    dai_editor_ui_layout_save(g_panels_for_log, &txt[0], txt.size());
+    FILE *f = std::fopen(path.c_str(), "wb");
+    if (!f) return;
+    std::fwrite(txt.c_str(), 1, need, f);
+    std::fclose(f);
+}
+
+static void layout_load_for_project(void) {
+    if (!g_panels_for_log) return;
+    std::string txt;
+    {
+        std::string path = project_layout_path();
+        FILE *f = path.empty() ? nullptr : std::fopen(path.c_str(), "rb");
+        // The first open of a project that predates per-project layouts: the
+        // old global file, so nothing anybody arranged is thrown away.
+        if (!f && g_project) {
+            char gp[640];
+            std::snprintf(gp, sizeof(gp), "%s/layout.txt", g_projects_root);
+            f = std::fopen(gp, "rb");
+        }
+        if (f) {
+            char chunk[1024]; size_t got;
+            while ((got = std::fread(chunk, 1, sizeof(chunk), f)) > 0) txt.append(chunk, got);
+            std::fclose(f);
+        }
+    }
+    if (!txt.empty() && dai_editor_ui_layout_load(g_panels_for_log, txt.c_str()) == DAI_OK)
+        return;
+    // Nothing stored (or a file that does not parse): the default for the
+    // KIND of project this is - a show opens as a show, a game as a game.
+    dai_editor_ui_layout_reset(g_panels_for_log, 0.0f, 0.0f);
 }
 
 // ---- scenes as files -----------------------------------------------------
@@ -3565,26 +3628,11 @@ int main(int argc, char **argv) {
     g_ui_for_settings = ui;
     dai_editor_ui_project_settings_host(panels, draw_project_settings, nullptr);
 
-    // The layout is the user's; it belongs on disk next to the projects, not
-    // in the binary. Loading it before the first frame means the editor opens
-    // the way it was left.
-    {
-        char lpath[512];
-        std::snprintf(lpath, sizeof(lpath), "%s/layout.txt", g_projects_root);
-        FILE *lf = std::fopen(lpath, "rb");
-        if (lf) {
-            std::string txt;
-            char chunk[1024];
-            size_t got;
-            while ((got = std::fread(chunk, 1, sizeof(chunk), lf)) > 0) txt.append(chunk, got);
-            std::fclose(lf);
-            if (g_diag_on > 0) {
-                std::printf("layout.txt (%u bytes):\n%s\n", (unsigned)txt.size(), txt.c_str());
-                std::fflush(stdout);
-            }
-            dai_editor_ui_layout_load(panels, txt.c_str());
-        }
-    }
+    // The layout is the user's and the PROJECT's: it lives in the project's
+    // settings/ now (see layout_load_for_project), so a show and a game no
+    // longer overwrite each other's arrangement. Loaded before the first
+    // frame, so the editor opens the way this project was left.
+    layout_load_for_project();
 
     // The asset layer: a mounted folder of glTF/JS, hot reloaded, bound to the
     // document sync so "asset crate.glb" on a node actually resolves.
@@ -4320,6 +4368,37 @@ int main(int argc, char **argv) {
         // the same staleness the menu check above already relies on.
         dai_editor_ui_viewport(panels, &ci);
 
+        // A droneshow preview flies like the scene view: the same struct the
+        // scene camera just read, handed to the show while the pointer is
+        // over its viewport - and kept coming while a look or a pan is held,
+        // because a gesture that ends at the panel edge is a gesture that
+        // sticks. dai_ui itself never sees a held key, which is why this is
+        // the host's job and not the panel's.
+        if (g_show_ui) {
+            float vrx = 0, vry = 0, vrw = 0, vrh = 0;
+            dai_editor_ui_viewport_rect(panels, &vrx, &vry, &vrw, &vrh);
+            static int nav_held = 0;
+            int over_vp = ci.mouse_x >= vrx && ci.mouse_x < vrx + vrw &&
+                          ci.mouse_y >= vry && ci.mouse_y < vry + vrh;
+            int want = (over_vp && (raw_right || ci.mouse_middle || ci.key_focus)) ||
+                       (nav_held && (raw_right || ci.mouse_middle));
+            if (want) {
+                dai_show_nav_input ni{};
+                ni.mouse_x      = ci.mouse_x;
+                ni.mouse_y      = ci.mouse_y;
+                ni.mouse_right  = raw_right;
+                ni.mouse_middle = ci.mouse_middle;
+                ni.key_w = ci.key_w; ni.key_a = ci.key_a;
+                ni.key_s = ci.key_s; ni.key_d = ci.key_d;
+                ni.key_q = ci.key_q; ni.key_e = ci.key_e;
+                ni.key_shift = ci.key_shift;
+                ni.key_focus = ci.key_focus;
+                ni.dt = dt;
+                dai_show_ui_nav(g_show_ui, &ni);
+            }
+            nav_held = raw_right || ci.mouse_middle;
+        }
+
         diag_step("ui begin");
         // The OS clipboard, in - and whatever a widget copied, out. One
         // frame's round trip, so Ctrl+C in the script editor lands in the
@@ -4996,15 +5075,7 @@ int main(int argc, char **argv) {
         if (g_diag_frames > 0) { --g_diag_frames; std::printf("[step] frame done\n"); }
     }
 
-    {
-        char lpath[512];
-        std::snprintf(lpath, sizeof(lpath), "%s/layout.txt", g_projects_root);
-        size_t need = dai_editor_ui_layout_save(panels, nullptr, 0);
-        std::string txt(need + 1, '\0');
-        dai_editor_ui_layout_save(panels, &txt[0], txt.size());
-        FILE *lf = std::fopen(lpath, "wb");
-        if (lf) { std::fwrite(txt.c_str(), 1, need, lf); std::fclose(lf); }
-    }
+    layout_save_for_project();
     {   // ...and which scripts were open in it.
         char spath[512];
         std::snprintf(spath, sizeof(spath), "%s/scripts_open.txt", g_projects_root);
