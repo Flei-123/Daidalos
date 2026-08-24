@@ -604,6 +604,22 @@ DAI_API uint32_t dai_show_formation_from_image(dai_show *sh, const char *name,
                                                const uint8_t *rgba, uint32_t w, uint32_t h,
                                                float width_m, uint8_t threshold,
                                                uint32_t count, char *err, size_t err_len);
+/* THE START OF THE SHOW, said out loud.
+ *
+ * A show has no implicit launch pad: the first figure of a step is where its
+ * drones begin, and drone d begins on point d of it. That is fine for a
+ * simulation and wrong for a field, where the drones stand on the ground in
+ * rows before anybody presses play. This builds that: a grid at ground level
+ * (min_ground_m), `spacing` metres apart - never tighter than min_distance -
+ * centred on the show origin, with exactly as many points as the step's
+ * figures have, inserted as that step's FIRST figure. The first transition
+ * then becomes the climb, with the separator watching it like any other.
+ *
+ * `spacing` of 0 asks for 1.5 x min_distance, which is what an operator lays
+ * out by eye anyway. Returns the new formation's index. */
+DAI_API uint32_t dai_show_add_takeoff_grid(dai_show *sh, int group, float spacing,
+                                           char *err, size_t err_len);
+
 DAI_API uint32_t dai_show_formation_count(const dai_show *sh);
 DAI_API int      dai_show_formation_get(const dai_show *sh, uint32_t i,
                                         dai_show_formation_info *out);
@@ -706,6 +722,18 @@ DAI_API int dai_show_formation_set_group(dai_show *sh, uint32_t i, int group);
  * transform and transition survive; the plan does not. */
 DAI_API int dai_show_formation_replace_points(dai_show *sh, uint32_t i,
                                               const dai_show_point *pts, uint32_t n);
+
+/* Which POINT of which formation drone `drone` is on at second `t`.
+ *
+ * The preview needs this to be honest about the clock: a drone in the middle
+ * of a transition is nowhere near the figure's resting pose, so a click that
+ * is answered against the resting pose selects the wrong drone - or nothing.
+ * `formation` and `point` name the point being flown INTO (the one it is
+ * standing on while a figure holds), and `settled` is 1 only while it stands
+ * still on it, which is the only moment moving that point means what a user
+ * expects. Needs a solved plan; returns 0 before the first solve. */
+DAI_API int dai_show_drone_point_at(const dai_show *sh, uint32_t drone, float t,
+                                    uint32_t *formation, uint32_t *point, int *settled);
 
 /* Which formation a moment on the timeline belongs to: the one being flown into
  * while a transition runs, and the one standing still while it holds. This is

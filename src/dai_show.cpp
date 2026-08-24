@@ -882,6 +882,53 @@ uint32_t dai_show_formation_from_image(dai_show *sh, const char *name,
     return idx;
 }
 
+uint32_t dai_show_add_takeoff_grid(dai_show *sh, int group, float spacing,
+                                   char *err, size_t err_len) {
+    if (err && err_len) err[0] = 0;
+    if (!sh || group < 0) return UINT32_MAX;
+    // How many drones this step flies: whatever its figures already fly. A
+    // grid of a different size would break the group audit at solve, which is
+    // a worse way to learn the same thing.
+    uint32_t count = 0;
+    uint32_t first_of_group = UINT32_MAX;
+    for (uint32_t i = 0; i < (uint32_t)sh->forms.size(); ++i) {
+        if (sh->forms[i].group != group) continue;
+        if (first_of_group == UINT32_MAX) first_of_group = i;
+        count = (uint32_t)sh->forms[i].pts.size();
+        break;
+    }
+    if (!count) count = sh->s.drone_count;
+    if (!count) { fail(err, err_len, "the fleet is empty - set a drone count first"); return UINT32_MAX; }
+
+    float gap = (spacing > 0.0f) ? spacing : sh->s.min_distance_m * 1.5f;
+    if (gap < sh->s.min_distance_m) gap = sh->s.min_distance_m;
+    // A square as near as the count allows: rows that differ by one are what
+    // a ground crew actually tapes out.
+    uint32_t side = 1;
+    while (side * side < count) ++side;
+    const float y = (sh->s.min_ground_m > 0.0f) ? sh->s.min_ground_m : 0.0f;
+    std::vector<dai_show_point> pts(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t gx = i % side, gz = i / side;
+        pts[i].x = ((float)gx - (float)(side - 1) * 0.5f) * gap;
+        pts[i].y = y;
+        pts[i].z = ((float)gz - (float)(side - 1) * 0.5f) * gap;
+        pts[i].r = 40; pts[i].g = 40; pts[i].b = 40; pts[i].w = 0;   // dark on the ground
+    }
+    uint32_t idx = dai_show_formation_add(sh, "Takeoff grid", "builtin://takeoff",
+                                          pts.data(), count, 2.0f);
+    if (idx == UINT32_MAX) return idx;
+    sh->forms[idx].group = group;
+    // To the FRONT of its step: a launch pad that is not first is a landing.
+    if (first_of_group != UINT32_MAX && idx > first_of_group)
+        dai_show_formation_move(sh, idx, (int)first_of_group - (int)idx);
+    dai_show_plan_destroy(sh->plan);
+    sh->plan = nullptr;
+    sh->conflicts.clear();
+    sh->tr_stats.clear();
+    return (first_of_group != UINT32_MAX) ? first_of_group : idx;
+}
+
 uint32_t dai_show_formation_count(const dai_show *sh) {
     return sh ? (uint32_t)sh->forms.size() : 0;
 }
@@ -902,6 +949,44 @@ int dai_show_formation_get(const dai_show *sh, uint32_t i, dai_show_formation_in
     out->colour[0] = f.ovr[0]; out->colour[1] = f.ovr[1];
     out->colour[2] = f.ovr[2]; out->colour[3] = f.ovr[3];
     out->group = f.group;
+    return 1;
+}
+
+int dai_show_drone_point_at(const dai_show *sh, uint32_t drone, float t,
+                            uint32_t *formation, uint32_t *point, int *settled) {
+    if (formation) *formation = UINT32_MAX;
+    if (point)     *point     = UINT32_MAX;
+    if (settled)   *settled   = 0;
+    if (!sh || !sh->plan || drone >= sh->plan->drones) return 0;
+    if (sh->key_src.size() != sh->plan->keys.size()) return 0;
+    const dai_show_plan *p = sh->plan;
+    uint32_t b = p->first[drone], e = p->first[drone + 1];
+    if (e == b) return 0;
+
+    // The same bracket dai_show_plan_sample finds, so the answer names the
+    // very segment the drawn dot was interpolated on. Anything else would
+    // point at a different drone than the one under the cursor.
+    uint32_t lo, hi;
+    if (t <= p->keys[b].t)          { lo = b;     hi = b; }
+    else if (t >= p->keys[e - 1].t) { lo = e - 1; hi = e - 1; }
+    else {
+        lo = b; hi = e - 1;
+        while (lo + 1 < hi) {
+            uint32_t mid = lo + (hi - lo) / 2;
+            if (p->keys[mid].t <= t) lo = mid; else hi = mid;
+        }
+    }
+    const KeySrc &dst = sh->key_src[hi];
+    const KeySrc &src = sh->key_src[lo];
+    if (dst.form >= sh->forms.size()) return 0;
+    if (formation) *formation = dst.form;
+    if (point)     *point     = dst.pb;
+    // Standing still: both ends of the bracket are the same point of the same
+    // figure, fully arrived. Mid-flight the point is a destination, not a
+    // place, and the caller has to be told the difference.
+    if (settled)
+        *settled = (src.form == dst.form && src.pb == dst.pb &&
+                    src.s >= 1.0f && dst.s >= 1.0f) ? 1 : 0;
     return 1;
 }
 

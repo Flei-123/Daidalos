@@ -793,5 +793,93 @@ int show_cases_edit(void) {
         dai_show_destroy(sh);
     }
 
+    // ---- [7q] which point a drone is on, at a second -----------------------
+    show_section("editing - drone_point_at answers where the dot actually is");
+    {
+        const uint32_t n = 16;
+        dai_show_settings s = edit_settings(n, 2.0f);
+        dai_show *sh = dai_show_create(&s);
+        std::vector<dai_show_point> a(n), b(n);
+        show_grid_formation(a.data(), n, 3.0f, dai_vec3{ -50.0f, 50.0f, 0.0f });
+        show_grid_formation(b.data(), n, 3.0f, dai_vec3{  50.0f, 50.0f, 0.0f });
+        dai_show_formation_add(sh, "left", "", a.data(), n, 5.0f);
+        dai_show_formation_add(sh, "right", "", b.data(), n, 5.0f);
+        char err[256] = { 0 };
+        CHECK(dai_show_solve(sh, err, sizeof(err)) == DAI_OK, "[7q] no solve: %s", err);
+        const dai_show_plan *pl = dai_show_get_plan(sh);
+
+        // Standing on the first figure: settled, and the point is the drone's
+        // own index (figure 0 is flown in drone order).
+        uint32_t f = 0, pt = 0; int settled = 0;
+        CHECK(dai_show_drone_point_at(sh, 3, 1.0f, &f, &pt, &settled),
+              "[7q] no answer while holding");
+        CHECK(f == 0 && pt == 3 && settled == 1,
+              "[7q] at 1 s drone 3 reported figure %u point %u settled %d",
+              f, pt, settled);
+
+        // And the answer AGREES with the drawn dot: the point it names, in the
+        // figure it names, is where the plan samples that drone. This is the
+        // whole contract - a click is answered against the sample.
+        dai_show_point live;
+        dai_show_plan_sample(pl, 3, 1.0f, &live);
+        const dai_show_point *fp = dai_show_formation_points(sh, f);
+        float dx = live.x - fp[pt].x, dy = live.y - fp[pt].y, dz = live.z - fp[pt].z;
+        CHECK(std::sqrt(dx * dx + dy * dy + dz * dz) < 0.01f,
+              "[7q] the named point is %.2f m from where the drone is drawn",
+              (double)std::sqrt(dx * dx + dy * dy + dz * dz));
+
+        // Mid-transition: still an answer, but NOT settled - the point is a
+        // destination, and dragging a destination would teleport the figure.
+        dai_show_formation_info i0, i1;
+        dai_show_formation_get(sh, 0, &i0);
+        dai_show_formation_get(sh, 1, &i1);
+        float mid = 0.5f * (i0.t_start + i0.hold_s + i1.t_start);
+        settled = 1;
+        CHECK(dai_show_drone_point_at(sh, 3, mid, &f, &pt, &settled),
+              "[7q] no answer mid-transition");
+        CHECK(f == 1, "[7q] mid-transition the destination is figure %u, expected 1", f);
+        CHECK(settled == 0, "[7q] a drone in flight was reported as standing still");
+        dai_show_destroy(sh);
+    }
+
+    // ---- [7r] the takeoff grid is the start, and it is legal ----------------
+    show_section("editing - a takeoff grid goes to the front of its step");
+    {
+        const uint32_t n = 16;
+        dai_show_settings s = edit_settings(n, 2.0f);
+        dai_show *sh = dai_show_create(&s);
+        std::vector<dai_show_point> a(n);
+        show_grid_formation(a.data(), n, 5.0f, dai_vec3{ 0.0f, 60.0f, 0.0f });
+        dai_show_formation_add(sh, "sphere", "", a.data(), n, 5.0f);
+        char err[256] = { 0 };
+        uint32_t gi = dai_show_add_takeoff_grid(sh, 0, 0.0f, err, sizeof(err));
+        CHECK(gi != UINT32_MAX, "[7r] no takeoff grid: %s", err);
+        CHECK(dai_show_formation_count(sh) == 2, "[7r] the grid did not get added");
+        dai_show_formation_info g0, g1;
+        dai_show_formation_get(sh, 0, &g0);
+        dai_show_formation_get(sh, 1, &g1);
+        CHECK(std::strcmp(g0.name, "Takeoff grid") == 0,
+              "[7r] the grid is not the first figure, '%s' is", g0.name);
+        CHECK(std::strcmp(g1.name, "sphere") == 0, "[7r] the figure after it is '%s'", g1.name);
+        CHECK(g0.point_count == n, "[7r] the grid flies %u drones, the step flies %u",
+              g0.point_count, n);
+        // On the ground, above the floor, and no two drones inside the minimum.
+        const dai_show_point *gp = dai_show_formation_points(sh, 0);
+        int on_ground = 1;
+        for (uint32_t i = 0; i < n; ++i)
+            if (gp[i].y < s.min_ground_m - 1e-3f || gp[i].y > s.min_ground_m + 1e-3f)
+                on_ground = 0;
+        CHECK(on_ground, "[7r] the grid is not standing on the ground");
+        float gap = dai_show_formation_min_spacing(sh, 0);
+        CHECK(gap >= s.min_distance_m - 1e-3f,
+              "[7r] the grid packs drones %.2f m apart, the floor is %.2f m",
+              (double)gap, (double)s.min_distance_m);
+        // And the show still solves, with the climb as its first transition.
+        std::memset(err, 0, sizeof(err));
+        CHECK(dai_show_solve(sh, err, sizeof(err)) == DAI_OK,
+              "[7r] a show that starts on the ground did not solve: %s", err);
+        dai_show_destroy(sh);
+    }
+
     return g_show_fail - before;
 }

@@ -50,11 +50,12 @@ const char *const TIMINGS[2]  = { "Sync", "Staggered" };
 const char *const FIGURES[3]  = { "Sphere", "Cube", "Ring" };
 // The hierarchy's add menu: the three builtins, and the image the storyboard
 // has a path for.
-const dai_ui_menu_item ADD_ITEMS[4] = {
+const dai_ui_menu_item ADD_ITEMS[5] = {
     { nullptr, "Sphere", nullptr, 0 },
     { nullptr, "Cube", nullptr, 0 },
     { nullptr, "Ring", nullptr, 0 },
     { nullptr, "From image path", nullptr, 0 },
+    { nullptr, "Takeoff grid (start)", nullptr, 0 },
 };
 
 // ---- fitting text to the column it has --------------------------------------
@@ -692,6 +693,27 @@ int project(const Cam &c, float px, float py, float pz, float *sx, float *sy, fl
     *sy = c.cy - c.f * ry / z;
     if (depth) *depth = z;
     return 1;
+}
+
+// Which drone stands on which point of formation `fi` at the current second.
+// The preview draws the FLEET - where the drones are now - while a figure's
+// own points are its resting pose. Mid-transition the two are hundreds of
+// metres apart, and a click answered against the resting pose picks a drone
+// that is not under the cursor. This is the bridge: point -> drone, so every
+// pick can be answered where the dot was actually drawn.
+void map_points_to_drones(dai_show_ui *u, uint32_t fi, uint32_t count,
+                          std::vector<uint32_t> &out) {
+    out.assign(count, 0xFFFFFFFFu);
+    const dai_show_plan *p = dai_show_get_plan(u->sh);
+    if (!p) return;                     // no plan: the preview IS the figure
+    uint32_t n = std::min<uint32_t>(dai_show_plan_drone_count(p), (uint32_t)u->fleet.size());
+    for (uint32_t d = 0; d < n; ++d) {
+        uint32_t f2 = 0, pt = 0;
+        int settled = 0;
+        if (!dai_show_drone_point_at(u->sh, d, u->time, &f2, &pt, &settled)) continue;
+        if (f2 != fi || pt >= count) continue;
+        out[pt] = d;
+    }
 }
 
 // The inverse of project(), at a known depth: where the pointer's ray crosses
@@ -1547,9 +1569,17 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                 uint32_t ostride = 1;
                 while (oi.point_count / ostride > 3000u) ++ostride;
                 sp.reserve(oi.point_count / ostride + 1);
+                // Around where the figure IS, not where it rests: during a
+                // transition an outline drawn from the resting pose sits in
+                // an empty part of the sky.
+                std::vector<uint32_t> omap;
+                map_points_to_drones(u, (uint32_t)u->sel_formation, oi.point_count, omap);
+                const uint32_t ofn = (uint32_t)u->fleet.size();
                 for (uint32_t k = 0; k < oi.point_count; k += ostride) {
                     float hx, hy;
-                    if (project(cam, op[k].x, op[k].y, op[k].z, &hx, &hy, nullptr))
+                    const dai_show_point &q = (k < omap.size() && omap[k] < ofn)
+                                                  ? u->fleet[omap[k]] : op[k];
+                    if (project(cam, q.x, q.y, q.z, &hx, &hy, nullptr))
                         sp.push_back(std::make_pair(hx, hy));
                 }
                 if (sp.size() >= 3) {
@@ -1827,20 +1857,36 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
 
         // ---- picking and painting points --------------------------------
         //
-        // Against the FORMATION's own points, not against the fleet: which
-        // drone stands on which point is the assignment's answer and it changes
-        // whenever the show is solved again. A colour hung on a drone number
-        // would walk across the figure; a colour hung on the point stays where
-        // it was painted.
+        // The COLOUR belongs to the point, and always will - which drone flies
+        // to which point is the assignment's answer and it moves on every
+        // solve. But the CLICK has to be answered where the dot was drawn,
+        // and the dot is the drone, at this second. So: hit test against the
+        // live fleet position of the drone standing on each point, and hand
+        // the point index to the painter. Before this the clickable dots sat
+        // in the figure's resting pose - which is where they are at t = 0 and
+        // nowhere else, so nothing was clickable during playback.
+        std::vector<uint32_t> pt_drone;
+        map_points_to_drones(u, fi, ginfo.point_count, pt_drone);
+        const dai_show_point *fpos = dai_show_formation_points(u->sh, fi);
+        const uint32_t fleet_n = (uint32_t)u->fleet.size();
+        // Where point `i` of this figure IS on screen right now.
+        auto point_screen = [&](uint32_t i, float *sx, float *sy) -> int {
+            if (i < pt_drone.size() && pt_drone[i] < fleet_n) {
+                const dai_show_point &lp = u->fleet[pt_drone[i]];
+                return project(cam, lp.x, lp.y, lp.z, sx, sy, nullptr);
+            }
+            if (!fpos) return 0;
+            return project(cam, fpos[i].x, fpos[i].y, fpos[i].z, sx, sy, nullptr);
+        };
         if (u->pick_on && inside && (pressed || (down && u->paint_on)) && !consumed) {
-            const dai_show_point *fp = dai_show_formation_points(u->sh, fi);
+            const dai_show_point *fp = fpos;
             if (fp && ginfo.point_count) {
                 std::vector<uint32_t> hit;
                 float best = u->brush_px;
                 uint32_t best_i = 0xFFFFFFFFu;
                 for (uint32_t i = 0; i < ginfo.point_count; ++i) {
                     float px2, py2;
-                    if (!project(cam, fp[i].x, fp[i].y, fp[i].z, &px2, &py2, nullptr)) continue;
+                    if (!point_screen(i, &px2, &py2)) continue;
                     float d = std::sqrt((px2 - mx) * (px2 - mx) + (py2 - my) * (py2 - my));
                     if (u->paint_on && d <= u->brush_px) hit.push_back(i);
                     if (d < best) { best = d; best_i = i; }
@@ -1861,12 +1907,11 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                 }
             }
         }
-        // The picked point, ringed, so "point 412" is a place and not a number.
+        // The picked point, ringed where the drone on it stands NOW - a ring
+        // left behind at the resting pose is a ring pointing at nothing.
         if (u->pick_on && u->sel_point < ginfo.point_count) {
-            const dai_show_point *fp = dai_show_formation_points(u->sh, fi);
             float px2, py2;
-            if (fp && project(cam, fp[u->sel_point].x, fp[u->sel_point].y,
-                              fp[u->sel_point].z, &px2, &py2, nullptr))
+            if (point_screen(u->sel_point, &px2, &py2))
                 ring(ui, px2, py2, 8.0f, 2.0f, COL_WARN);
         }
         if (u->pick_on && u->paint_on && inside)
@@ -1884,48 +1929,59 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     // the press is remembered and the gesture is named at four pixels.
     if (!u->pick_on) {
         if (pressed && inside && !consumed) {
-            // The nearest point of ANY figure in grab range is the drag
-            // candidate; the nearest fleet drone is the click candidate.
-            // They are usually the same dot, but mid-transition they are
-            // not, and grabbing is about the figure while clicking is about
-            // the drone.
-            float best = 9.0f;
-            int bf = -1; uint32_t bi = 0xFFFFFFFFu; float bd = 0.0f;
-            uint32_t fc2 = dai_show_formation_count(u->sh);
-            for (uint32_t f2 = 0; f2 < fc2; ++f2) {
-                dai_show_formation_info inf;
-                const dai_show_point *fp2 = dai_show_formation_points(u->sh, f2);
-                if (!fp2 || !dai_show_formation_get(u->sh, f2, &inf)) continue;
-                for (uint32_t k = 0; k < inf.point_count; ++k) {
-                    float hx, hy, hd;
-                    if (!project(cam, fp2[k].x, fp2[k].y, fp2[k].z, &hx, &hy, &hd))
-                        continue;
-                    float ddx = hx - mx, ddy = hy - my;
-                    float d = std::sqrt(ddx * ddx + ddy * ddy);
-                    if (d < best) { best = d; bf = (int)f2; bi = k; bd = hd; }
-                }
-            }
-            u->move_f = bf; u->move_i = bi; u->move_depth = bd; u->move_active = 0;
-            if (bf >= 0) {
-                // The grab offset, so the point under the cursor stays under
-                // the cursor instead of jumping its centre onto it.
-                const dai_show_point *fp2 = dai_show_formation_points(u->sh, (uint32_t)bf);
-                float gx, gy, gz;
-                unproject(cam, mx, my, bd, &gx, &gy, &gz);
-                u->move_off[0] = fp2[bi].x - gx;
-                u->move_off[1] = fp2[bi].y - gy;
-                u->move_off[2] = fp2[bi].z - gz;
-                consumed = 1;          // a grabbed point is never also an orbit
-            }
-            float bestd = 9.0f; uint32_t bdi = 0xFFFFFFFFu;
+            // ONE hit test, against what is drawn: the fleet, at this second.
+            // The nearest drone is the click candidate, and the point that
+            // drone is standing on is the drag candidate - which is the same
+            // dot, because there is only one dot. Testing the figure's
+            // resting pose instead was the bug: during playback the clickable
+            // spots stayed where the show starts.
+            float bestd = 9.0f; uint32_t bdi = 0xFFFFFFFFu; float bdepth = 0.0f;
             for (uint32_t k = 0; k < n; ++k) {
-                float hx, hy;
+                float hx, hy, hdep;
                 if (!project(cam, u->fleet[k].x, u->fleet[k].y, u->fleet[k].z,
-                             &hx, &hy, nullptr))
+                             &hx, &hy, &hdep))
                     continue;
                 float ddx = hx - mx, ddy = hy - my;
                 float d = std::sqrt(ddx * ddx + ddy * ddy);
-                if (d < bestd) { bestd = d; bdi = k; }
+                if (d < bestd) { bestd = d; bdi = k; bdepth = hdep; }
+            }
+            u->move_f = -1; u->move_i = 0xFFFFFFFFu; u->move_active = 0;
+            if (bdi != 0xFFFFFFFFu) {
+                uint32_t f2 = 0, pt = 0;
+                int settled = 0;
+                if (dai_show_drone_point_at(u->sh, bdi, u->time, &f2, &pt, &settled)) {
+                    // A point may only be dragged while its drone STANDS on
+                    // it. Mid-transition that point is a destination the drone
+                    // is still flying towards, and moving it would teleport
+                    // the figure out from under the pointer.
+                    if (settled) {
+                        u->move_f = (int)f2; u->move_i = pt; u->move_depth = bdepth;
+                        const dai_show_point &lp = u->fleet[bdi];
+                        float gx, gy, gz;
+                        unproject(cam, mx, my, bdepth, &gx, &gy, &gz);
+                        u->move_off[0] = lp.x - gx;
+                        u->move_off[1] = lp.y - gy;
+                        u->move_off[2] = lp.z - gz;
+                        consumed = 1;   // a grabbed point is never also an orbit
+                    }
+                } else if (dai_show_formation_count(u->sh)) {
+                    // No plan yet: the preview IS the selected figure, so the
+                    // fleet index is its point index.
+                    dai_show_formation_info inf;
+                    if (u->sel_formation >= 0 &&
+                        dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &inf) &&
+                        bdi < inf.point_count) {
+                        u->move_f = u->sel_formation; u->move_i = bdi;
+                        u->move_depth = bdepth;
+                        const dai_show_point &lp = u->fleet[bdi];
+                        float gx, gy, gz;
+                        unproject(cam, mx, my, bdepth, &gx, &gy, &gz);
+                        u->move_off[0] = lp.x - gx;
+                        u->move_off[1] = lp.y - gy;
+                        u->move_off[2] = lp.z - gz;
+                        consumed = 1;
+                    }
+                }
             }
             u->click_drone = bdi;
             u->click_x = mx; u->click_y = my;
@@ -2095,9 +2151,22 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
     if (dai_ui_right_pressed(ui) &&
         hmx >= x && hmx < x + w && hmy >= y && hmy < y + h)
         dai_ui_popup_open(&u->add_menu, hmx, hmy);
-    int apick = dai_ui_popup_menu(ui, &u->add_menu, ADD_ITEMS, 4);
+    int apick = dai_ui_popup_menu(ui, &u->add_menu, ADD_ITEMS, 5);
     if (apick >= 0 && apick < 3) { u->figure = apick; add_builtin(u); }
     else if (apick == 3)         { dai_ui_popup_open(&u->img_menu, hmx, hmy); }
+    else if (apick == 4) {
+        // Where the drones stand before anybody presses play. Added to the
+        // step the selected figure belongs to, at its front.
+        int grp = 0;
+        dai_show_formation_info gi;
+        if (u->sel_formation >= 0 &&
+            dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &gi))
+            grp = gi.group;
+        char gerr[256] = { 0 };
+        uint32_t gidx = dai_show_add_takeoff_grid(u->sh, grp, 0.0f, gerr, sizeof(gerr));
+        if (gidx == 0xFFFFFFFFu) say(u, 1, "%s", gerr[0] ? gerr : "no takeoff grid");
+        else { u->sel_formation = (int)gidx; say(u, 0, "takeoff grid added to step %d", grp + 1); }
+    }
     // The image import is a little window of its own, because a menu row is
     // not the place that can hold a path, a width and a threshold.
     if (u->img_menu.open) {
