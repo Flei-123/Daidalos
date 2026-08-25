@@ -50,12 +50,14 @@ const char *const TIMINGS[2]  = { "Sync", "Staggered" };
 const char *const FIGURES[3]  = { "Sphere", "Cube", "Ring" };
 // The hierarchy's add menu: the three builtins, and the image the storyboard
 // has a path for.
-const dai_ui_menu_item ADD_ITEMS[5] = {
+const dai_ui_menu_item ADD_ITEMS[7] = {
+    { nullptr, "Into this step", nullptr, 1 },   // a caption, not a command
     { nullptr, "Sphere", nullptr, 0 },
     { nullptr, "Cube", nullptr, 0 },
     { nullptr, "Ring", nullptr, 0 },
     { nullptr, "From image path", nullptr, 0 },
     { nullptr, "Takeoff grid (start)", nullptr, 0 },
+    { nullptr, "New step (flies in parallel)", nullptr, 0 },
 };
 
 // ---- fitting text to the column it has --------------------------------------
@@ -549,6 +551,12 @@ struct dai_show_ui {
     float image_width_m    = 60.0f;
     float image_threshold  = 128.0f;
     float image_points     = 0.0f;           // 0 = the whole fleet
+    // The inspector's own copy, for the figure it is looking at: unpacked
+    // from that figure's source once, so typing does not fight the document.
+    int   img_edit_for     = -1;
+    char  img_edit_path[256] = { 0 };
+    float img_edit_w       = 60.0f;
+    float img_edit_th      = 128.0f;
 };
 
 // The image readers live in the renderer's library (dai_inflate / dai_jpeg);
@@ -674,9 +682,15 @@ Cam camera_of(const dai_show_ui *u, float x, float y, float w, float h) {
     if (rl < 1e-6f) { r[0] = 1.0f; r[1] = 0.0f; r[2] = 0.0f; rl = 1.0f; }
     for (int i = 0; i < 3; ++i) c.rx[i] = r[i] / rl;
     c.rz[0] = fwd[0]; c.rz[1] = fwd[1]; c.rz[2] = fwd[2];
-    c.ry[0] = c.rz[1] * c.rx[2] - c.rz[2] * c.rx[1];
-    c.ry[1] = c.rz[2] * c.rx[0] - c.rz[0] * c.rx[2];
-    c.ry[2] = c.rz[0] * c.rx[1] - c.rz[1] * c.rx[0];
+    // right x forward, NOT forward x right. The other way round is exactly
+    // minus the world up - (fwd x up) x fwd = up, fwd x (fwd x up) = -up -
+    // so the whole preview was drawn upside down: the ground grid above the
+    // figures, the fence box under the floor, and a drag up moving a figure
+    // down. It looked plausible enough to survive for weeks, because a
+    // mirrored sky is still a sky.
+    c.ry[0] = c.rx[1] * c.rz[2] - c.rx[2] * c.rz[1];
+    c.ry[1] = c.rx[2] * c.rz[0] - c.rx[0] * c.rz[2];
+    c.ry[2] = c.rx[0] * c.rz[1] - c.rx[1] * c.rz[0];
     c.f  = 0.5f * h / std::tan(0.5f * 50.0f * PI / 180.0f);
     c.cx = x + w * 0.5f;
     c.cy = y + h * 0.5f;
@@ -2151,10 +2165,31 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
     if (dai_ui_right_pressed(ui) &&
         hmx >= x && hmx < x + w && hmy >= y && hmy < y + h)
         dai_ui_popup_open(&u->add_menu, hmx, hmy);
-    int apick = dai_ui_popup_menu(ui, &u->add_menu, ADD_ITEMS, 5);
-    if (apick >= 0 && apick < 3) { u->figure = apick; add_builtin(u); }
-    else if (apick == 3)         { dai_ui_popup_open(&u->img_menu, hmx, hmy); }
-    else if (apick == 4) {
+    int apick = dai_ui_popup_menu(ui, &u->add_menu, ADD_ITEMS, 7);
+    // A new step is a second timeline: its own figures, its own drones, all
+    // of it at the same time as the others. Adding one is adding a figure
+    // with a group nobody has used yet - so the fleet has to be shared out
+    // again, which the solve says out loud if the counts stop adding up.
+    if (apick == 6) {
+        int maxg = -1;
+        uint32_t fc3 = dai_show_formation_count(u->sh);
+        for (uint32_t k = 0; k < fc3; ++k) {
+            dai_show_formation_info gi3;
+            if (dai_show_formation_get(u->sh, k, &gi3) && gi3.group > maxg) maxg = gi3.group;
+        }
+        uint32_t was = dai_show_formation_count(u->sh);
+        add_builtin(u);
+        if (dai_show_formation_count(u->sh) > was) {
+            dai_show_formation_set_group(u->sh, was, maxg + 1);
+            u->sel_formation = (int)was;
+            say(u, 0, "step %d added - give its figures their share of the fleet",
+                maxg + 2);
+        }
+        apick = -1;
+    }
+    if (apick >= 1 && apick < 4) { u->figure = apick - 1; add_builtin(u); }
+    else if (apick == 4)         { dai_ui_popup_open(&u->img_menu, hmx, hmy); }
+    else if (apick == 5) {
         // Where the drones stand before anybody presses play. Added to the
         // step the selected figure belongs to, at its front.
         int grp = 0;
@@ -2441,9 +2476,33 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                 {
                     float pts_f = (float)info.point_count;
                     float hgt = widget_row(ui);
-                    int is_builtin = std::strncmp(info.source, "builtin://", 10) == 0;
+                    // The launch pad is not a figure you sample - it is a
+                    // grid whose size the STEP decides and whose only knob is
+                    // how far apart the drones stand. Offering it Surface /
+                    // Volume / Silhouette was nonsense the code could not
+                    // carry out and the user could not undo.
+                    int is_takeoff = std::strcmp(info.source, "builtin://takeoff") == 0;
+                    int is_builtin = !is_takeoff &&
+                                     std::strncmp(info.source, "builtin://", 10) == 0;
                     int is_image   = std::strncmp(info.source, "image://", 8) == 0;
-                    if (is_builtin || is_image) {
+                    if (is_takeoff) {
+                        char lay[80];
+                        std::snprintf(lay, sizeof(lay), "%u drones on the ground",
+                                      info.point_count);
+                        field_row(ui, "Grid", lay, bot);
+                        float gap = dai_show_formation_min_spacing(u->sh, fi);
+                        if (gap < 0.0f) gap = u->s.min_distance_m * 1.5f;
+                        if (fits(ui, bot, hgt)) {
+                            if (dai_ui_num_field(ui, "Spacing (m)", &gap, 0.1f,
+                                                 u->s.min_distance_m, 100.0f, "insgap")) {
+                                std::vector<dai_show_point> gp(info.point_count);
+                                if (dai_show_takeoff_points(u->sh, info.point_count, gap,
+                                                            gp.data()))
+                                    dai_show_formation_replace_points(u->sh, fi, gp.data(),
+                                                                      info.point_count);
+                            }
+                        } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
+                    } else if (is_builtin || is_image) {
                         if (fits(ui, bot, hgt)) {
                             if (dai_ui_num_field(ui, "Points", &pts_f, 1.0f, 1.0f,
                                                  (float)u->s.drone_count, "inspts") &&
@@ -2466,6 +2525,65 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                         std::snprintf(fixed, sizeof(fixed), "%u points (fixed at creation)",
                                       info.point_count);
                         field_row(ui, "Points", fixed, bot);
+                    }
+                    // WHICH picture, right here. The import window is for
+                    // adding one; changing your mind afterwards is an
+                    // inspector's job, and before this the only way to swap
+                    // the image was to delete the figure and start again.
+                    if (is_image) {
+                        // The path and the two numbers ride inside the source
+                        // string; they are unpacked into the panel's fields
+                        // the first time this figure is selected, so typing
+                        // in them does not fight the document every frame.
+                        if (u->img_edit_for != (int)fi) {
+                            u->img_edit_for = (int)fi;
+                            const char *q = info.source + 8;
+                            const char *qm = std::strchr(q, '?');
+                            size_t plen = qm ? (size_t)(qm - q) : std::strlen(q);
+                            if (plen >= sizeof(u->img_edit_path)) plen = sizeof(u->img_edit_path) - 1;
+                            std::memcpy(u->img_edit_path, q, plen);
+                            u->img_edit_path[plen] = 0;
+                            u->img_edit_w  = 60.0f;
+                            u->img_edit_th = 128.0f;
+                            if (qm) {
+                                float ww = 60.0f; int tt = 128;
+                                if (std::sscanf(qm + 1, "w=%f&th=%d", &ww, &tt) >= 1) {
+                                    u->img_edit_w  = ww;
+                                    u->img_edit_th = (float)tt;
+                                }
+                            }
+                        }
+                        float hi1 = widget_row(ui);
+                        if (fits(ui, bot, hi1))
+                            dai_ui_input_text(ui, "Image", u->img_edit_path,
+                                              sizeof(u->img_edit_path));
+                        else dai_ui_advance(ui, dai_ui_panel_width(ui), hi1);
+                        hi1 = widget_row(ui);
+                        if (fits(ui, bot, hi1))
+                            dai_ui_num_field(ui, "Width (m)", &u->img_edit_w, 1.0f,
+                                             2.0f, 2000.0f, "insimgw");
+                        else dai_ui_advance(ui, dai_ui_panel_width(ui), hi1);
+                        hi1 = widget_row(ui);
+                        if (fits(ui, bot, hi1))
+                            dai_ui_num_field(ui, "Threshold", &u->img_edit_th, 1.0f,
+                                             0.0f, 255.0f, "insimgt");
+                        else dai_ui_advance(ui, dai_ui_panel_width(ui), hi1);
+                        if (row_button(ui, bot, "Load this image")) {
+                            char nsrc[300];
+                            std::snprintf(nsrc, sizeof(nsrc), "image://%s?w=%.1f&th=%d",
+                                          u->img_edit_path, (double)u->img_edit_w,
+                                          (int)u->img_edit_th);
+                            if (resample_image(u, fi, nsrc, info.point_count)) {
+                                // The figure now IS that picture, so its source
+                                // has to say so - otherwise the next re-sample
+                                // would read the old file again.
+                                dai_show_formation_set_source(u->sh, fi, nsrc);
+                                const char *base = std::strrchr(u->img_edit_path, '/');
+                                if (!base) base = std::strrchr(u->img_edit_path, '\\');
+                                dai_show_formation_rename(u->sh, fi,
+                                                          base ? base + 1 : u->img_edit_path);
+                            }
+                        }
                     }
                     // Surface, volume or only the edges - the silhouette is
                     // the one that makes a cube read as a cube instead of a

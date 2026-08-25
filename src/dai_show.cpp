@@ -882,6 +882,26 @@ uint32_t dai_show_formation_from_image(dai_show *sh, const char *name,
     return idx;
 }
 
+uint32_t dai_show_takeoff_points(const dai_show *sh, uint32_t count,
+                                 float spacing, dai_show_point *out) {
+    if (!sh || !count || !out) return 0;
+    float gap = (spacing > 0.0f) ? spacing : sh->s.min_distance_m * 1.5f;
+    if (gap < sh->s.min_distance_m) gap = sh->s.min_distance_m;
+    // A square as near as the count allows: rows that differ by one are what
+    // a ground crew actually tapes out.
+    uint32_t side = 1;
+    while (side * side < count) ++side;
+    const float y = (sh->s.min_ground_m > 0.0f) ? sh->s.min_ground_m : 0.0f;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t gx = i % side, gz = i / side;
+        out[i].x = ((float)gx - (float)(side - 1) * 0.5f) * gap;
+        out[i].y = y;
+        out[i].z = ((float)gz - (float)(side - 1) * 0.5f) * gap;
+        out[i].r = 40; out[i].g = 40; out[i].b = 40; out[i].w = 0;  // dark on the ground
+    }
+    return count;
+}
+
 uint32_t dai_show_add_takeoff_grid(dai_show *sh, int group, float spacing,
                                    char *err, size_t err_len) {
     if (err && err_len) err[0] = 0;
@@ -900,21 +920,8 @@ uint32_t dai_show_add_takeoff_grid(dai_show *sh, int group, float spacing,
     if (!count) count = sh->s.drone_count;
     if (!count) { fail(err, err_len, "the fleet is empty - set a drone count first"); return UINT32_MAX; }
 
-    float gap = (spacing > 0.0f) ? spacing : sh->s.min_distance_m * 1.5f;
-    if (gap < sh->s.min_distance_m) gap = sh->s.min_distance_m;
-    // A square as near as the count allows: rows that differ by one are what
-    // a ground crew actually tapes out.
-    uint32_t side = 1;
-    while (side * side < count) ++side;
-    const float y = (sh->s.min_ground_m > 0.0f) ? sh->s.min_ground_m : 0.0f;
     std::vector<dai_show_point> pts(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        uint32_t gx = i % side, gz = i / side;
-        pts[i].x = ((float)gx - (float)(side - 1) * 0.5f) * gap;
-        pts[i].y = y;
-        pts[i].z = ((float)gz - (float)(side - 1) * 0.5f) * gap;
-        pts[i].r = 40; pts[i].g = 40; pts[i].b = 40; pts[i].w = 0;   // dark on the ground
-    }
+    if (!dai_show_takeoff_points(sh, count, spacing, pts.data())) return UINT32_MAX;
     uint32_t idx = dai_show_formation_add(sh, "Takeoff grid", "builtin://takeoff",
                                           pts.data(), count, 2.0f);
     if (idx == UINT32_MAX) return idx;
@@ -1037,6 +1044,12 @@ int dai_show_formation_rename(dai_show *sh, uint32_t i, const char *name) {
     if (!sh || i >= sh->forms.size() || !name) return 0;
     sh->forms[i].name = name;
     return 1;   // a name changes nothing the plan depends on
+}
+
+int dai_show_formation_set_source(dai_show *sh, uint32_t i, const char *source) {
+    if (!sh || i >= sh->forms.size() || !source) return 0;
+    sh->forms[i].source = source;
+    return 1;   // a note about provenance; the plan depends on none of it
 }
 
 int dai_show_formation_set_hold(dai_show *sh, uint32_t i, float hold_s) {

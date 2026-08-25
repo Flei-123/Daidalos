@@ -617,6 +617,12 @@ DAI_API uint32_t dai_show_formation_from_image(dai_show *sh, const char *name,
  *
  * `spacing` of 0 asks for 1.5 x min_distance, which is what an operator lays
  * out by eye anyway. Returns the new formation's index. */
+/* The launch pad's points on their own, so a grid already in a show can be
+ * re-laid at another spacing without being deleted and added back - which
+ * would lose its place in the step. Writes `count` points; returns them. */
+DAI_API uint32_t dai_show_takeoff_points(const dai_show *sh, uint32_t count,
+                                         float spacing, dai_show_point *out);
+
 DAI_API uint32_t dai_show_add_takeoff_grid(dai_show *sh, int group, float spacing,
                                            char *err, size_t err_len);
 
@@ -627,6 +633,9 @@ DAI_API const dai_show_point *dai_show_formation_points(const dai_show *sh, uint
 DAI_API int      dai_show_formation_remove(dai_show *sh, uint32_t i);
 DAI_API int      dai_show_formation_move(dai_show *sh, uint32_t i, int delta);
 DAI_API int      dai_show_formation_rename(dai_show *sh, uint32_t i, const char *name);
+/* Where the figure came from. Changing it changes nothing about the points -
+ * it is the note a re-sample reads to find the file again. */
+DAI_API int      dai_show_formation_set_source(dai_show *sh, uint32_t i, const char *source);
 DAI_API int      dai_show_formation_set_hold(dai_show *sh, uint32_t i, float hold_s);
 
 /* ---- moving a figure, and colouring it ----------------------------------- */

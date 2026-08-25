@@ -881,5 +881,40 @@ int show_cases_edit(void) {
         dai_show_destroy(sh);
     }
 
+    // ---- [7s] the launch pad can be re-laid without being replaced --------
+    show_section("editing - takeoff_points lays a legal grid at any spacing");
+    {
+        const uint32_t n = 25;
+        dai_show_settings s = edit_settings(n, 2.0f);
+        dai_show *sh = dai_show_create(&s);
+        std::vector<dai_show_point> a(n);
+        show_grid_formation(a.data(), n, 5.0f, dai_vec3{ 0.0f, 60.0f, 0.0f });
+        dai_show_formation_add(sh, "sphere", "", a.data(), n, 5.0f);
+        char err[256] = { 0 };
+        CHECK(dai_show_add_takeoff_grid(sh, 0, 0.0f, err, sizeof(err)) != UINT32_MAX,
+              "[7s] no grid: %s", err);
+
+        // Re-laid wider, in place: same figure, same step, new spacing.
+        std::vector<dai_show_point> wide(n);
+        CHECK(dai_show_takeoff_points(sh, n, 6.0f, wide.data()) == n,
+              "[7s] takeoff_points wrote the wrong count");
+        CHECK(dai_show_formation_replace_points(sh, 0, wide.data(), n),
+              "[7s] the grid could not be re-laid");
+        dai_show_formation_info gi;
+        dai_show_formation_get(sh, 0, &gi);
+        CHECK(std::strcmp(gi.name, "Takeoff grid") == 0, "[7s] the grid lost its name");
+        float gap = dai_show_formation_min_spacing(sh, 0);
+        CHECK(gap > 5.9f && gap < 6.1f, "[7s] asked for 6 m, laid %.2f m", (double)gap);
+
+        // A spacing under the minimum is raised to it, never obeyed: the grid
+        // is where the fleet stands for minutes, not a moment.
+        CHECK(dai_show_takeoff_points(sh, n, 0.1f, wide.data()) == n, "[7s] no points");
+        dai_show_formation_replace_points(sh, 0, wide.data(), n);
+        gap = dai_show_formation_min_spacing(sh, 0);
+        CHECK(gap >= s.min_distance_m - 1e-3f,
+              "[7s] a 0.1 m spacing was obeyed: the grid packs to %.2f m", (double)gap);
+        dai_show_destroy(sh);
+    }
+
     return g_show_fail - before;
 }

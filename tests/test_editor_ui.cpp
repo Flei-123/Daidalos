@@ -820,6 +820,23 @@ int main() {
               "the X handle was drawn at %.0f,%.0f, outside the %.0fx%.0f preview",
               (double)hx, (double)hy, (double)VW, (double)VH);
 
+        // UP IS UP. The Y handle points along world +Y from the same pivot the
+        // X handle starts at, so on a screen it has to be drawn HIGHER - a
+        // smaller y. For weeks it was drawn lower, because the camera's up
+        // basis was forward x right, which is minus the world up: the whole
+        // preview was a vertical mirror of itself, ground grid over the
+        // figures, and nobody could point at what was wrong.
+        {
+            float xhx = 0.0f, xhy = 0.0f, yhx = 0.0f, yhy = 0.0f;
+            int hx_ok = dai_show_ui_gizmo_handle(su, 0, &xhx, &xhy);
+            int hy_ok = dai_show_ui_gizmo_handle(su, 1, &yhx, &yhy);
+            CHECK(hx_ok && hy_ok, "the X and Y handles were not both drawn");
+            if (hx_ok && hy_ok)
+                CHECK(yhy < xhy - 1.0f,
+                      "the Y handle is drawn at y %.1f, the X handle at y %.1f - up is "
+                      "pointing down, the whole view is mirrored", (double)yhy, (double)xhy);
+        }
+
         if (have_handle) {
             dai_show_formation_info before;
             dai_show_formation_get(sh, 1, &before);
