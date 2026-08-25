@@ -94,6 +94,12 @@ DAI_API void     dai_show_ui_select_formation(dai_show_ui *u, uint32_t i);
 DAI_API uint32_t dai_show_ui_selected_formation(const dai_show_ui *u);
 DAI_API int      dai_show_ui_gizmo_handle(const dai_show_ui *u, int axis,
                                           float *sx, float *sy);
+/* The same reading for the handle on ONE selected drone's point. A drone is a
+ * selection of its own: picking one lets the figure go, so only one of these
+ * two ever answers at a time. */
+DAI_API int      dai_show_ui_point_handle(const dai_show_ui *u, int axis,
+                                          float *sx, float *sy);
+DAI_API int      dai_show_ui_selected_is_drone(const dai_show_ui *u);
 
 /* The point brush. `pick_on` makes a click in the preview select a point of the
  * selected figure; `paint_on` makes a drag colour every point under the brush.

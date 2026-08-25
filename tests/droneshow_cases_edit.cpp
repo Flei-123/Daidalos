@@ -916,6 +916,32 @@ int show_cases_edit(void) {
         dai_show_destroy(sh);
     }
 
+    // ---- [7v] the default minimum distance is one metre ------------------
+    // Justin's call, and the number a 250 mm show drone holding GPS station
+    // needs. It is checked because it is a DEFAULT: change it and every show
+    // file that never wrote the field reads back as a different show.
+    {
+        show_section("[7v] one metre apart, by default");
+        dai_show_settings d = dai_show_settings_default();
+        CHECK(d.min_distance_m == 1.0f, "[7v] the default minimum is %.2f m, not 1.00 m",
+              (double)d.min_distance_m);
+        dai_show *sh = dai_show_create(&d);
+        std::vector<dai_show_point> pts(9);
+        // A takeoff grid with no spacing asked for lays out at the minimum.
+        CHECK(dai_show_takeoff_points(sh, 9, 0.0f, pts.data()) == 9, "[7v] no grid points");
+        float best = 1e30f;
+        for (uint32_t i = 0; i < 9; ++i)
+            for (uint32_t j = i + 1; j < 9; ++j) {
+                float dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y, dz = pts[i].z - pts[j].z;
+                float dd = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (dd < best) best = dd;
+            }
+        CHECK(best > 0.99f && best < 1.01f,
+              "[7v] the default takeoff grid stands %.2f m apart, expected 1.00 m",
+              (double)best);
+        dai_show_destroy(sh);
+    }
+
     // ---- [7t] undo is a snapshot of the document -------------------------
     //
     // A show has no dai_doc under it, so undo is not a stack of commands: it

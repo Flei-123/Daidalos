@@ -603,7 +603,13 @@ extern "C" {
 dai_show_settings dai_show_settings_default(void) {
     dai_show_settings s;
     std::memset(&s, 0, sizeof(s));
-    s.min_distance_m       = 2.0f;    // the number every operator argues about first
+    // One metre, on Justin's call. It is the number every operator argues
+    // about first, and the honest answer is that it depends on the airframe:
+    // a 250 mm show drone holding GPS station needs about a metre, a big one
+    // needs three. The default is the small case because that is what this
+    // editor is used to design for, and every show file that says otherwise
+    // still says otherwise - the setting is saved whenever it differs.
+    s.min_distance_m       = 1.0f;
     s.v_max_ms             = 8.0f;
     s.a_max_ms2            = 4.0f;
     s.drone_count          = 100;
@@ -885,7 +891,9 @@ uint32_t dai_show_formation_from_image(dai_show *sh, const char *name,
 uint32_t dai_show_takeoff_points(const dai_show *sh, uint32_t count,
                                  float spacing, dai_show_point *out) {
     if (!sh || !count || !out) return 0;
-    float gap = (spacing > 0.0f) ? spacing : sh->s.min_distance_m * 1.5f;
+    // The default spacing IS the minimum distance: with a one metre minimum
+    // that is a one metre grid, which is what a ground crew tapes out.
+    float gap = (spacing > 0.0f) ? spacing : sh->s.min_distance_m;
     if (gap < sh->s.min_distance_m) gap = sh->s.min_distance_m;
     // A square as near as the count allows: rows that differ by one are what
     // a ground crew actually tapes out.
@@ -991,9 +999,15 @@ int dai_show_drone_point_at(const dai_show *sh, uint32_t drone, float t,
     // Standing still: both ends of the bracket are the same point of the same
     // figure, fully arrived. Mid-flight the point is a destination, not a
     // place, and the caller has to be told the difference.
+    // A bracket of ONE key is a drone that is simply there: before the first
+    // key (the show has not started, the fleet stands on figure one) and after
+    // the last (it stands where the show left it). Requiring the mix to have
+    // reached 1.0 at both ends called the whole of t = 0 "in flight" - and an
+    // editor opens at t = 0, so clicking a drone there offered no handle.
     if (settled)
-        *settled = (src.form == dst.form && src.pb == dst.pb &&
-                    src.s >= 1.0f && dst.s >= 1.0f) ? 1 : 0;
+        *settled = (lo == hi) ? 1
+                              : ((src.form == dst.form && src.pb == dst.pb &&
+                                  src.s >= 1.0f && dst.s >= 1.0f) ? 1 : 0);
     return 1;
 }
 
@@ -1114,6 +1128,11 @@ int dai_show_formation_get_transform(const dai_show *sh, uint32_t i, dai_show_tr
 
 int dai_show_formation_set_transform(dai_show *sh, uint32_t i, const dai_show_transform *xf) {
     if (!sh || !xf || i >= sh->forms.size()) return 0;
+    // Setting the transform a figure ALREADY has is not an edit, and it must
+    // not throw the plan away. A click that grabs a gizmo handle and lets go
+    // without moving writes exactly this - and it used to invalidate a solve
+    // that took ten seconds, silently, for nothing.
+    if (std::memcmp(&sh->forms[i].xf, xf, sizeof(dai_show_transform)) == 0) return 1;
     // A zero scale is not a very small figure, it is every drone in the fleet
     // at one coordinate - the collision the sampler exists to refuse, arrived
     // at through the inspector. Refused here rather than reported later.

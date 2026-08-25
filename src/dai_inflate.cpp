@@ -19,6 +19,9 @@
 #include <cstdlib>
 #include <cstdio>
 #include <vector>
+#ifdef _WIN32
+#  include <windows.h>
+#endif
 
 namespace daiimg {
 
@@ -521,9 +524,32 @@ bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
     return true;
 }
 
+
+// Opening a file whose PATH is UTF-8.
+//
+// On Windows fopen() interprets its argument in the machine's ANSI code page,
+// not UTF-8 - so a path containing an umlaut, a Cyrillic letter or an emoji
+// (which a picture folder may well have) simply does not open, and the caller
+// reports "cannot open" about a file that is plainly there. The file dialog
+// hands back UTF-16, this program carries UTF-8 everywhere, and the only place
+// the two have to meet is here.
+static FILE *open_utf8_rb(const char *path) {
+#ifdef _WIN32
+    int wn = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
+    if (wn > 0) {
+        std::vector<wchar_t> wp((size_t)wn);
+        if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wp.data(), wn) == wn) {
+            FILE *wf = _wfopen(wp.data(), L"rb");
+            if (wf) return wf;
+        }
+    }
+#endif
+    return std::fopen(path, "rb");
+}
+
 bool read_png_file(const char *path, std::vector<uint8_t> &rgba, uint32_t *w, uint32_t *h,
                    char *err, size_t err_len) {
-    FILE *f = std::fopen(path, "rb");
+    FILE *f = open_utf8_rb(path);
     if (!f) { if (err && err_len) std::snprintf(err, err_len, "cannot open %s", path); return false; }
     std::fseek(f, 0, SEEK_END); long n = std::ftell(f); std::fseek(f, 0, SEEK_SET);
     std::vector<uint8_t> buf((size_t)n);

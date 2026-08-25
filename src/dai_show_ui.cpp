@@ -466,6 +466,13 @@ struct dai_show_ui {
     int   framed_for = -1;                 // drone count the camera was fitted to
 
     int      sel_formation = 0;
+    // WHAT is selected, which is not the same question as which figure the
+    // panels are pointed at. Clicking one drone selects THE DRONE: the figure
+    // it belongs to is let go, its gizmo and its outline come off the screen,
+    // and the handle in the sky is the drone's own. Two things selected at
+    // once meant two gizmos on top of each other and no way to tell which one
+    // a drag was about to move.
+    int      sel_is_drone  = 0;
     int      sel_conflict  = -1;
     uint32_t sel_drone     = 0xFFFFFFFFu;
     uint32_t sel_drone_b   = 0xFFFFFFFFu;
@@ -538,7 +545,7 @@ struct dai_show_ui {
     // The image a figure can be sampled from. A path, a width, and how bright
     // a pixel has to be to earn a drone - all three plain fields, because a
     // file dialog is the host's luxury, not a panel's.
-    char  image_path[256]  = { 0 };
+    char  image_path[300]  = { 0 };
     float image_width_m    = 60.0f;
     float image_threshold  = 128.0f;
     float image_points     = 0.0f;           // 0 = the whole fleet
@@ -591,7 +598,7 @@ struct dai_show_ui {
     // The inspector's own copy, for the figure it is looking at: unpacked
     // from that figure's source once, so typing does not fight the document.
     int   img_edit_for     = -1;
-    char  img_edit_path[256] = { 0 };
+    char  img_edit_path[300] = { 0 };
     float img_edit_w       = 60.0f;
     float img_edit_th      = 128.0f;
 };
@@ -969,11 +976,57 @@ int resample_builtin(dai_show_ui *u, uint32_t fi, int shape, uint32_t count, int
     return 1;
 }
 
+// Reading a picture, whatever it is called. The extension decides the reader
+// and the comparison is case blind: a camera writes IMG_0001.JPG, and a figure
+// that fails because the letters are capitals is a figure nobody can explain.
+int read_image_file(const char *path, std::vector<uint8_t> &px, uint32_t *w,
+                    uint32_t *h, char *err, size_t err_len) {
+    const char *dot = std::strrchr(path, '.');
+    char ext[8] = { 0 };
+    if (dot) {
+        for (size_t i = 0; i + 1 < sizeof(ext) && dot[i]; ++i) {
+            char c = dot[i];
+            ext[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+        }
+    }
+    int jpeg = (!std::strcmp(ext, ".jpg") || !std::strcmp(ext, ".jpeg"));
+    return jpeg ? daiimg::read_jpeg_file(path, px, w, h, err, err_len)
+                : daiimg::read_png_file(path, px, w, h, err, err_len);
+}
+
+// Sample a picture, WIDENING it until the fleet fits.
+//
+// The sampler lays a grid of min_distance cells over the figure and lights the
+// bright ones, so how many drones a picture can hold is a property of its
+// width, not of the picture. Refusing "75 cells, 100 asked for" put the user in
+// front of two numbers and a guess; the count grows with the square of the
+// width, so the answer is arithmetic and belongs here. On success `width_m`
+// holds the width that worked - the caller writes it back into the source, or
+// the next re-sample would start from the number that failed.
+uint32_t image_sample_fit(dai_show_ui *u, const std::vector<uint8_t> &px,
+                          uint32_t w, uint32_t h, float *width_m, uint8_t th,
+                          uint32_t want, std::vector<dai_show_point> &out,
+                          char *err, size_t err_len) {
+    float wm = *width_m;
+    out.assign(want, dai_show_point{});
+    for (int attempt = 0; attempt < 14; ++attempt) {
+        uint32_t got = dai_show_image_sample(u->sh, px.data(), w, h, wm, th,
+                                             want, out.data(), err, err_len);
+        if (got) { *width_m = wm; return got; }
+        // A picture 40% of whose cells are lit needs sqrt(100/75) more width
+        // to light a third again as many. A flat 15% a step converges in a
+        // few tries without overshooting a logo into the next county.
+        wm *= 1.15f;
+        if (wm > 4000.0f) break;               // wider than any flying site
+    }
+    return 0;
+}
+
 // The same picture with another point count: the path and the parameters ride
 // inside the source string, so the file is simply read again.
 int resample_image(dai_show_ui *u, uint32_t fi, const char *source, uint32_t count) {
     if (std::strncmp(source, "image://", 8) != 0) return 0;
-    char path[256];
+    char path[300];
     float w_m = 60.0f; int th = 128;
     const char *q = source + 8;
     const char *qm = std::strchr(q, '?');
@@ -985,18 +1038,28 @@ int resample_image(dai_show_ui *u, uint32_t fi, const char *source, uint32_t cou
     std::vector<uint8_t> px;
     uint32_t w = 0, h = 0;
     char err[256] = { 0 };
-    const char *dot = std::strrchr(path, '.');
-    int jpeg = dot && (!strcmp(dot, ".jpg") || !strcmp(dot, ".jpeg") ||
-                       !strcmp(dot, ".JPG") || !strcmp(dot, ".JPEG"));
-    int ok = jpeg ? daiimg::read_jpeg_file(path, px, &w, &h, err, sizeof(err))
-                  : daiimg::read_png_file(path, px, &w, &h, err, sizeof(err));
-    if (!ok) { say(u, 1, "%s", err[0] ? err : "the image could not be read"); return 0; }
-    std::vector<dai_show_point> pts(count);
-    uint32_t got = dai_show_image_sample(u->sh, px.data(), w, h, w_m, (uint8_t)th,
-                                         count, pts.data(), err, sizeof(err));
+    if (!read_image_file(path, px, &w, &h, err, sizeof(err))) {
+        say(u, 1, "%s", err[0] ? err : "the image could not be read");
+        return 0;
+    }
+    std::vector<dai_show_point> pts;
+    float used = w_m;
+    uint32_t got = image_sample_fit(u, px, w, h, &used, (uint8_t)th, count, pts,
+                                    err, sizeof(err));
     if (!got) { say(u, 1, "%s", err[0] ? err : "the image gave no points"); return 0; }
     if (!dai_show_formation_replace_points(u->sh, fi, pts.data(), got)) return 0;
-    say(u, 0, "image re-sampled: %u points", got);
+    if (used > w_m + 0.05f) {
+        // The width that worked has to go back into the source, or the next
+        // re-sample starts again from the one that did not.
+        char nsrc[400];
+        std::snprintf(nsrc, sizeof(nsrc), "image://%s?w=%.1f&th=%d", path,
+                      (double)used, th);
+        dai_show_formation_set_source(u->sh, fi, nsrc);
+        say(u, 0, "image re-sampled: %u points, widened to %.1f m to fit them",
+            got, (double)used);
+    } else {
+        say(u, 0, "image re-sampled: %u points", got);
+    }
     return 1;
 }
 
@@ -1007,32 +1070,37 @@ void add_image(dai_show_ui *u) {
     std::vector<uint8_t> px;
     uint32_t w = 0, h = 0;
     char err[256] = { 0 };
-    const char *dot = std::strrchr(u->image_path, '.');
-    int jpeg = dot && (!strcmp(dot, ".jpg") || !strcmp(dot, ".jpeg") ||
-                       !strcmp(dot, ".JPG") || !strcmp(dot, ".JPEG"));
-    int ok = jpeg ? daiimg::read_jpeg_file(u->image_path, px, &w, &h, err, sizeof(err))
-                  : daiimg::read_png_file(u->image_path, px, &w, &h, err, sizeof(err));
-    if (!ok) { say(u, 1, "%s", err[0] ? err : "the image could not be read"); return; }
+    if (!read_image_file(u->image_path, px, &w, &h, err, sizeof(err))) {
+        say(u, 1, "%s", err[0] ? err : "the image could not be read");
+        return;
+    }
     const char *base = std::strrchr(u->image_path, '/');
     const char *leaf = base ? base + 1 : u->image_path;
     char name[DAI_SHOW_NAME_MAX];
     std::snprintf(name, sizeof(name), "%.*s", (int)sizeof(name) - 1, leaf);
+    uint8_t th = (uint8_t)std::max(0.0f, std::min(255.0f, u->image_threshold));
+    uint32_t want = (u->image_points >= 1.0f) ? (uint32_t)(u->image_points + 0.5f)
+                                              : u->s.drone_count;
+    // Widened until the fleet fits, rather than refused with two numbers and
+    // a suggestion. The width that worked is what the source records.
+    std::vector<dai_show_point> pts;
+    float used = u->image_width_m;
+    uint32_t got = image_sample_fit(u, px, w, h, &used, th, want, pts, err, sizeof(err));
+    if (!got) { say(u, 1, "%s", err[0] ? err : "the image gave no figure"); return; }
     char src[300];
     // The parameters travel inside the source string, so "the same picture,
     // but 300 drones" can re-read them instead of asking again.
     std::snprintf(src, sizeof(src), "image://%s?w=%.1f&th=%d", u->image_path,
-                  (double)u->image_width_m, (int)u->image_threshold);
-    uint8_t th = (uint8_t)std::max(0.0f, std::min(255.0f, u->image_threshold));
-    uint32_t want = (u->image_points >= 1.0f) ? (uint32_t)(u->image_points + 0.5f)
-                                              : u->s.drone_count;
-    uint32_t idx = dai_show_formation_from_image(u->sh, name, src, px.data(), w, h,
-                                                 u->image_width_m, th, want,
-                                                 err, sizeof(err));
-    if (idx == 0xFFFFFFFFu) { say(u, 1, "%s", err[0] ? err : "the image gave no figure"); return; }
+                  (double)used, (int)u->image_threshold);
+    uint32_t idx = dai_show_formation_add(u->sh, name, src, pts.data(), got, 4.0f);
+    if (idx == 0xFFFFFFFFu) { say(u, 1, "the figure could not be added"); return; }
+    dai_show_formation_set_sample_mode(u->sh, idx, DAI_SHOW_SAMPLE_SILHOUETTE);
     u->sel_formation = (int)idx;
-    dai_show_formation_info info;
-    dai_show_formation_get(u->sh, idx, &info);
-    say(u, 0, "formation \"%s\" added: %u points from %ux%u", name, info.point_count, w, h);
+    if (used > u->image_width_m + 0.05f)
+        say(u, 0, "\"%s\" added: %u drones from %ux%u, widened to %.1f m to fit them",
+            name, got, w, h, (double)used);
+    else
+        say(u, 0, "\"%s\" added: %u drones from %ux%u", name, got, w, h);
 }
 
 // Everything a figure has been edited into, undone at once: the transform, the
@@ -1248,6 +1316,9 @@ void dai_show_ui_select_formation(dai_show_ui *u, uint32_t i) {
     if (!u) return;
     if (i >= dai_show_formation_count(u->sh)) return;
     u->sel_formation = (int)i;
+    u->sel_is_drone  = 0;                  // the figure is what is selected now
+    u->sel_drone     = 0xFFFFFFFFu;
+    u->pt_f = -1; u->pt_i = 0xFFFFFFFFu;
     u->sel_point     = 0xFFFFFFFFu;
     u->colour_for    = -1;                 // the swatch re-reads this figure
 }
@@ -1262,6 +1333,15 @@ int dai_show_ui_gizmo_handle(const dai_show_ui *u, int axis, float *sx, float *s
     if (sy) *sy = u->giz_sy[axis];
     return 1;
 }
+
+int dai_show_ui_point_handle(const dai_show_ui *u, int axis, float *sx, float *sy) {
+    if (!u || axis < 0 || axis > 2 || !u->pt_gdrawn[axis]) return 0;
+    if (sx) *sx = u->pt_gsx[axis];
+    if (sy) *sy = u->pt_gsy[axis];
+    return 1;
+}
+
+int dai_show_ui_selected_is_drone(const dai_show_ui *u) { return u ? u->sel_is_drone : 0; }
 
 void dai_show_ui_pick_mode(dai_show_ui *u, int pick_on, int paint_on) {
     if (!u) return;
@@ -1794,7 +1874,8 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     // grows.
     {
         uint32_t fc_o = dai_show_formation_count(u->sh);
-        if (fc_o && u->sel_formation >= 0 && (uint32_t)u->sel_formation < fc_o) {
+        if (fc_o && !u->sel_is_drone &&
+            u->sel_formation >= 0 && (uint32_t)u->sel_formation < fc_o) {
             const dai_show_point *op = dai_show_formation_points(u->sh, (uint32_t)u->sel_formation);
             dai_show_formation_info oi;
             if (op && dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &oi) &&
@@ -1985,7 +2066,8 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     int consumed = 0;                       // the pointer belonged to a tool
 
     const uint32_t fcount = dai_show_formation_count(u->sh);
-    int have_fig = (fcount && u->sel_formation >= 0 && (uint32_t)u->sel_formation < fcount);
+    int have_fig = (fcount && !u->sel_is_drone &&
+                    u->sel_formation >= 0 && (uint32_t)u->sel_formation < fcount);
     dai_show_formation_info ginfo;
     if (have_fig && !dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &ginfo))
         have_fig = 0;
@@ -2176,7 +2258,7 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
             const dai_show_point &sp = pw[u->pt_i];
             float psx = 0.0f, psy = 0.0f, pdep = 0.0f;
             if (project(cam, sp.x, sp.y, sp.z, &psx, &psy, &pdep)) {
-                const float PHANDLE_PX = 46.0f;
+                const float PHANDLE_PX = 84.0f;   // the object gizmo's length
                 const float plen = PHANDLE_PX * pdep / cam.f;
                 const uint32_t PAXIS[3] = { rgba(0xE5, 0x53, 0x4B, 255),
                                             rgba(0x62, 0xC5, 0x54, 255),
@@ -2207,6 +2289,22 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                     if (!pdrawn[a2]) continue;
                     int lit = (u->pt_axis == a2) || (phot == a2);
                     dai_ui_line(ui, psx, psy, ptx[a2], pty[a2], lit ? 3.0f : 2.0f, PAXIS[a2]);
+                    // The same arrowhead the figure gizmo wears. A move handle
+                    // that looks different from the other move handle gets
+                    // treated as a different tool, and it is not one.
+                    float ux = ptx[a2] - psx, uy = pty[a2] - psy;
+                    float ul = std::sqrt(ux * ux + uy * uy);
+                    if (ul > 1.0f) {
+                        ux /= ul; uy /= ul;
+                        const float AL = lit ? 13.0f : 11.0f;
+                        const float AW = 0.45f;
+                        float pxn = -uy * AL * AW, pyn = ux * AL * AW;
+                        float bx2 = ptx[a2] - ux * AL, by2 = pty[a2] - uy * AL;
+                        dai_ui_line(ui, ptx[a2], pty[a2], bx2 + pxn, by2 + pyn,
+                                    lit ? 3.0f : 2.0f, PAXIS[a2]);
+                        dai_ui_line(ui, ptx[a2], pty[a2], bx2 - pxn, by2 - pyn,
+                                    lit ? 3.0f : 2.0f, PAXIS[a2]);
+                    }
                 }
                 if (pressed && phot >= 0) {
                     push_undo(u, "move point");
@@ -2272,9 +2370,11 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
             u->sel_drone   = 0xFFFFFFFFu;
             u->sel_drone_b = 0xFFFFFFFFu;
             u->pt_f = -1; u->pt_i = 0xFFFFFFFFu;
+            u->sel_is_drone = 0;              // the sky selects nothing at all
         } else {
             u->sel_drone   = bdi;
             u->sel_drone_b = 0xFFFFFFFFu;
+            u->sel_is_drone = 1;              // ...and the figure is let go
             uint32_t f2 = 0, pt = 0;
             int settled = 0;
             u->pt_f = -1; u->pt_i = 0xFFFFFFFFu;
@@ -2626,6 +2726,44 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
 
 void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h) {
     if (!u || !ui) return;
+    // The import window FIRST, outside the panel below it. It opens a panel of
+    // its own, and a panel opened inside another one leaves the outer layout
+    // standing at the inner one's cursor: the figure list came out beside the
+    // little window, half off its own panel. It draws on its own layer, so
+    // being first in the frame costs it nothing on screen.
+    // The image import is a little window of its own, because a menu row is
+    // not the place that can hold a path, a width and a threshold.
+    if (u->img_menu.open) {
+        dai_ui_popup_panel_begin(ui, &u->img_menu, 300.0f, 210.0f);
+        // The button FIRST, because typing a path is the fallback and not the
+        // way in. Nobody knows the full path of their own picture, and Import
+        // did nothing at all while the field was empty - which is how "adding
+        // an image does not work" came to be true.
+        if (dai_ui_button(ui, "Choose a file...")) u->want_browse = 1;
+        dai_ui_input_text(ui, "Image", u->image_path, sizeof(u->image_path));
+        dai_ui_num_field(ui, "Width (m)", &u->image_width_m, 1.0f, 2.0f, 2000.0f, "popimgw");
+        dai_ui_num_field(ui, "Threshold", &u->image_threshold, 1.0f, 0.0f, 255.0f, "popimgt");
+        dai_ui_num_field(ui, "Points (0 = fleet)", &u->image_points, 1.0f, 0.0f,
+                         (float)u->s.drone_count, "popimgn");
+        if (dai_ui_button(ui, "Import")) {
+            if (!u->image_path[0]) {
+                // Import with nothing chosen used to write a complaint to the
+                // status line at the far edge of the window, where nobody was
+                // looking. It opens the file dialog instead.
+                u->want_browse = 1;
+            } else {
+                push_undo(u, "add image");
+                uint32_t was_i = dai_show_formation_count(u->sh);
+                add_image(u);
+                if (dai_show_formation_count(u->sh) > was_i)
+                    u->sel_formation = (int)dai_show_formation_count(u->sh) - 1;
+                dai_ui_popup_close(&u->img_menu);
+            }
+        }
+        if (!u->image_path[0]) wrapped_label(ui, "no file chosen yet");
+        dai_ui_popup_panel_end(ui);
+    }
+
     dai_ui_panel_begin(ui, x, y, w, h, nullptr);
     const dai_ui_style *st = dai_ui_style_of(ui);
     uint32_t n = dai_show_formation_count(u->sh);
@@ -2711,38 +2849,6 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         uint32_t gidx = dai_show_add_takeoff_grid(u->sh, grp, 0.0f, gerr, sizeof(gerr));
         if (gidx == 0xFFFFFFFFu) say(u, 1, "%s", gerr[0] ? gerr : "no takeoff grid");
         else { u->sel_formation = (int)gidx; say(u, 0, "takeoff grid added to step %d", grp + 1); }
-    }
-    // The image import is a little window of its own, because a menu row is
-    // not the place that can hold a path, a width and a threshold.
-    if (u->img_menu.open) {
-        dai_ui_popup_panel_begin(ui, &u->img_menu, 300.0f, 210.0f);
-        // The button FIRST, because typing a path is the fallback and not the
-        // way in. Nobody knows the full path of their own picture, and Import
-        // did nothing at all while the field was empty - which is how "adding
-        // an image does not work" came to be true.
-        if (dai_ui_button(ui, "Choose a file...")) u->want_browse = 1;
-        dai_ui_input_text(ui, "Image", u->image_path, sizeof(u->image_path));
-        dai_ui_num_field(ui, "Width (m)", &u->image_width_m, 1.0f, 2.0f, 2000.0f, "popimgw");
-        dai_ui_num_field(ui, "Threshold", &u->image_threshold, 1.0f, 0.0f, 255.0f, "popimgt");
-        dai_ui_num_field(ui, "Points (0 = fleet)", &u->image_points, 1.0f, 0.0f,
-                         (float)u->s.drone_count, "popimgn");
-        if (dai_ui_button(ui, "Import")) {
-            if (!u->image_path[0]) {
-                // Import with nothing chosen used to write a complaint to the
-                // status line at the far edge of the window, where nobody was
-                // looking. It opens the file dialog instead.
-                u->want_browse = 1;
-            } else {
-                push_undo(u, "add image");
-                uint32_t was_i = dai_show_formation_count(u->sh);
-                add_image(u);
-                if (dai_show_formation_count(u->sh) > was_i)
-                    u->sel_formation = (int)dai_show_formation_count(u->sh) - 1;
-                dai_ui_popup_close(&u->img_menu);
-            }
-        }
-        if (!u->image_path[0]) wrapped_label(ui, "no file chosen yet");
-        dai_ui_popup_panel_end(ui);
     }
     if (!n) {
         wrapped_label(ui, "no figures yet - the + above adds one");
@@ -3059,7 +3165,7 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                         // step whose figures were resized afterwards kept a
                         // launch pad of the wrong size with no way to say so.
                         float gap = dai_show_formation_min_spacing(u->sh, fi);
-                        if (gap < 0.0f) gap = u->s.min_distance_m * 1.5f;
+                        if (gap < 0.0f) gap = u->s.min_distance_m;
                         float gcount = (float)info.point_count;
                         int regrid = 0;
                         if (fits(ui, bot, hgt)) {
@@ -3155,7 +3261,7 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                                              0.0f, 255.0f, "insimgt");
                         else dai_ui_advance(ui, dai_ui_panel_width(ui), hi1);
                         if (row_button(ui, bot, "Load this image")) {
-                            char nsrc[300];
+                            char nsrc[400];
                             std::snprintf(nsrc, sizeof(nsrc), "image://%s?w=%.1f&th=%d",
                                           u->img_edit_path, (double)u->img_edit_w,
                                           (int)u->img_edit_th);

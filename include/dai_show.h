@@ -554,7 +554,13 @@ DAI_API int dai_show_transform_is_identity(const dai_show_transform *t);
 
 typedef struct dai_show_formation_info {
     char     name[DAI_SHOW_NAME_MAX];
-    char     source[128];         /* the asset it was sampled from, or ""      */
+    char     source[320];         /* the asset it was sampled from, or ""
+                                   * 320 because an image figure carries its
+                                   * whole path in here plus its parameters,
+                                   * and a Windows path with a OneDrive folder
+                                   * in it eats 128 on its own - a truncated
+                                   * source re-samples from a file that does
+                                   * not exist. */
     uint32_t point_count;
     float    hold_s;              /* how long the figure stands still          */
     int      sample_mode;

@@ -1026,6 +1026,121 @@ int main() {
         dai_show_destroy(sh);
     }
 
+    // ---- one drone: its own selection, its own handle, its own undo -------
+    //
+    // Three things Justin asked for in one gesture. Clicking a drone must let
+    // the FIGURE go (two gizmos on screen and no way to tell which one a drag
+    // moves is worse than no gizmo), the handle it gets must be the same
+    // handle an object gets, and moving it must be undoable - a move you
+    // cannot take back is a move nobody dares to make.
+    {
+        std::printf("\n-- show: one drone is a selection of its own\n");
+        const float VX = 300.0f, VY = 40.0f, VW = 900.0f, VH = 600.0f;
+        dai_show_settings s = dai_show_settings_default();
+        s.drone_count = 16; s.min_distance_m = 2.0f; s.fps = 10; s.seed = 3u;
+        dai_show *sh = dai_show_create(&s);
+        dai_show_point a[16], b[16];
+        for (int i = 0; i < 16; ++i) {
+            a[i] = dai_show_point{};
+            a[i].x = (float)(i % 4) * 6.0f - 9.0f;
+            a[i].y = 40.0f;
+            a[i].z = (float)(i / 4) * 6.0f - 9.0f;
+            a[i].r = 200; a[i].g = 200; a[i].b = 200; a[i].w = 0;
+            b[i] = a[i];
+            b[i].y = 60.0f;
+        }
+        dai_show_formation_add(sh, "Grid", "builtin://grid", a, 16, 4.0f);
+        dai_show_formation_add(sh, "Grid up", "builtin://grid", b, 16, 4.0f);
+        char serr[256] = { 0 };
+        dai_show_solve(sh, serr, sizeof(serr));
+
+        dai_show_ui *su = dai_show_ui_create(sh);
+        dai_show_ui_modifiers(su, 0, 0, 0);
+        dai_show_ui_select_formation(su, 0);
+        dai_show_ui_seek(su, 0.0f);
+
+        auto frame = [&](float mxp, float myp, int mdown) {
+            dai_ui_input in{};
+            in.mouse_x = mxp; in.mouse_y = myp; in.mouse_down = mdown;
+            dai_ui_begin(ui, 1280, 720, &in);
+            dai_show_ui_viewport(su, ui, VX, VY, VW, VH);
+            dai_ui_end(ui);
+        };
+
+        // Where a drone actually IS on screen: the figure's gizmo is drawn
+        // from the pivot, so the first drone is found by walking the preview
+        // the way the user does - click, and see whether something answered.
+        // The X handle gives the scale of the picture; the drones sit around
+        // the pivot it starts from.
+        frame(10.0f, 10.0f, 0);
+        float px0 = 0.0f, py0 = 0.0f;
+        int found = 0;
+        // A coarse sweep: 30 px steps over the preview, pressing nothing -
+        // only the click below commits. The first spot that selects a drone
+        // is the one the rest of the case uses.
+        for (float yy = VY + 20.0f; yy < VY + VH - 140.0f && !found; yy += 12.0f)
+            for (float xx = VX + 20.0f; xx < VX + VW - 20.0f && !found; xx += 12.0f) {
+                frame(xx, yy, 0);
+                frame(xx, yy, 1);
+                frame(xx, yy, 0);
+                if (dai_show_ui_selected_drone(su) != 0xFFFFFFFFu) {
+                    found = 1; px0 = xx; py0 = yy;
+                }
+            }
+        CHECK(found, "no click anywhere in the preview ever selected a drone");
+        if (found) {
+            CHECK(dai_show_ui_selected_is_drone(su),
+                  "clicking a drone did not take the selection off the figure - two "
+                  "gizmos, and no way to tell which one a drag moves");
+
+            // The handle it gets is the object's handle: all three axes,
+            // drawn from the drone, the same length the figure gizmo uses.
+            float hx = 0.0f, hy = 0.0f;
+            int has = dai_show_ui_point_handle(su, 0, &hx, &hy);
+            CHECK(has, "a selected drone got no move handle");
+            uint32_t drone = dai_show_ui_selected_drone(su);
+            uint32_t f2 = 0, pt = 0; int settled = 0;
+            int known = has && dai_show_drone_point_at(sh, drone, dai_show_ui_time(su),
+                                                       &f2, &pt, &settled);
+            const dai_show_point *before =
+                (known && f2 < dai_show_formation_count(sh))
+                    ? dai_show_formation_points(sh, f2) : nullptr;
+            CHECK(!has || (before && pt < 16u),
+                  "the selected drone %u stands on no point the document knows", drone);
+            if (has && before && pt < 16u) {
+                float was_x = before[pt].x;
+
+                frame(hx, hy, 0);
+                frame(hx, hy, 1);
+                frame(hx + 50.0f, hy, 1);
+                frame(hx + 50.0f, hy, 0);
+
+                const dai_show_point *after = dai_show_formation_points(sh, f2);
+                CHECK(after && std::fabs(after[pt].x - was_x) > 0.05f,
+                      "dragging the drone's X handle fifty pixels moved it %.4f m",
+                      (double)(after ? after[pt].x - was_x : 0.0f));
+                CHECK(dai_show_ui_undo_depth(su) > 0,
+                      "moving one drone pushed no undo step - Ctrl+Z would do nothing");
+                CHECK(dai_show_ui_undo(su), "undo refused after a drone was moved");
+                const dai_show_point *back = dai_show_formation_points(sh, f2);
+                CHECK(back && std::fabs(back[pt].x - was_x) < 1e-3f,
+                      "undo left the drone at %.3f, it started at %.3f",
+                      (double)(back ? back[pt].x : 0.0f), (double)was_x);
+                CHECK(dai_show_ui_redo(su), "redo refused after undoing a drone move");
+            }
+
+            // Selecting a figure again takes the selection back off the drone.
+            dai_show_ui_select_formation(su, 1);
+            CHECK(!dai_show_ui_selected_is_drone(su),
+                  "selecting a figure left the drone selected as well");
+            CHECK(dai_show_ui_selected_drone(su) == 0xFFFFFFFFu,
+                  "selecting a figure kept a drone selected");
+        }
+
+        dai_show_ui_destroy(su);
+        dai_show_destroy(sh);
+    }
+
     // ---- the dope sheet: the two numbers a show is made of, dragged --------
     //
     // The timeline is not a slider any more: every figure is a bar with a
