@@ -50,15 +50,19 @@ const char *const TIMINGS[2]  = { "Sync", "Staggered" };
 const char *const FIGURES[3]  = { "Sphere", "Cube", "Ring" };
 // The hierarchy's add menu: the three builtins, and the image the storyboard
 // has a path for.
-const dai_ui_menu_item ADD_ITEMS[7] = {
+const dai_ui_menu_item ADD_ITEMS[10] = {
     { nullptr, "Into this step", nullptr, 1 },   // a caption, not a command
     { nullptr, "Sphere", nullptr, 0 },
     { nullptr, "Cube", nullptr, 0 },
     { nullptr, "Ring", nullptr, 0 },
-    { nullptr, "From image path", nullptr, 0 },
+    { nullptr, "From an image...", nullptr, 0 },
     { nullptr, "Takeoff grid (start)", nullptr, 0 },
     { nullptr, "New step (flies in parallel)", nullptr, 0 },
+    { nullptr, "This figure", nullptr, 1 },      // a caption, not a command
+    { nullptr, "Duplicate", nullptr, 0 },
+    { nullptr, "Delete", nullptr, 0 },
 };
+const int ADD_ITEM_COUNT = 10;
 
 // ---- fitting text to the column it has --------------------------------------
 //
@@ -498,19 +502,6 @@ struct dai_show_ui {
     float              gizmo_mx = 0.0f, gizmo_my = 0.0f;
     dai_show_transform gizmo_from;
 
-    // ---- one drone, one point --------------------------------------------
-    // A press that starts on a point is a candidate for two gestures, and
-    // only the next few pixels tell which: a CLICK (that drone is selected)
-    // or a DRAG (that one point moves). Deciding at press time would either
-    // eat the click or move a figure nobody meant to touch, so the press is
-    // remembered and the gesture is named once the pointer has travelled.
-    uint32_t click_drone = 0xFFFFFFFFu;      // fleet index under the press
-    float    click_x = 0.0f, click_y = 0.0f; // where the press started
-    int      move_f = -1;                    // formation the grabbed point is in
-    uint32_t move_i = 0xFFFFFFFFu;           // the point inside it
-    float    move_depth = 0.0f;              // camera depth the drag slides at
-    float    move_off[3] = { 0.0f, 0.0f, 0.0f }; // grab offset, against jumping
-    int      move_active = 0;                // the press became a drag (> 4 px)
 
     // ---- painting --------------------------------------------------------
     // Colour belongs to the POINT, never to the drone number: which drone flies
@@ -551,6 +542,52 @@ struct dai_show_ui {
     float image_width_m    = 60.0f;
     float image_threshold  = 128.0f;
     float image_points     = 0.0f;           // 0 = the whole fleet
+    // ---- what the host knows and dai_ui does not --------------------------
+    // Held modifier keys. They decide what a LEFT drag means, and a panel that
+    // guesses would guess wrong in the one editor everybody already knows:
+    // in a scene view a plain left drag SELECTS and Alt+drag orbits.
+    int   key_alt = 0, key_ctrl = 0, key_shift = 0;
+
+    // ---- undo, as snapshots ------------------------------------------------
+    // Snapshots of the whole document, taken where a GESTURE begins - one step
+    // per drag, not one per frame. Capped, because a snapshot of ten thousand
+    // points is not free; the oldest is dropped, which is the bargain every
+    // editor with a bounded history makes.
+    std::vector<dai_show_state *> undo;
+    std::vector<dai_show_state *> redo;
+    char  undo_what[64] = { 0 };
+    // A drag through a number field changes the document every frame; one undo
+    // step per frame would mean forty Ctrl+Z for one slider. The guard says
+    // "a push already happened while this button has been down".
+    int   undo_guard = 0;
+
+    // The host's file dialog, asked for from a panel that has no window.
+    int   want_browse = 0;        // 0 none, 1 the import window, 2 the inspector
+
+    // ---- the point handle --------------------------------------------------
+    // A point is MOVED the way a figure is: select it, then drag one axis
+    // handle. Dragging the dot itself was the old way, and it moved figures
+    // nobody meant to touch - a click and a drag began identically.
+    int      pt_f = -1;                      // formation of the selected point
+    uint32_t pt_i = 0xFFFFFFFFu;             // the point inside it
+    int      pt_axis = -1;                   // 0 X, 1 Y, 2 Z while dragging
+    float    pt_mx = 0.0f, pt_my = 0.0f;     // where the axis drag began
+    float    pt_from[3] = { 0.0f, 0.0f, 0.0f };
+    float    pt_gsx[3] = { 0.0f, 0.0f, 0.0f };
+    float    pt_gsy[3] = { 0.0f, 0.0f, 0.0f };
+    int      pt_gdrawn[3] = { 0, 0, 0 };
+
+    // ---- the dope sheet ----------------------------------------------------
+    // Blender's, one row per step: a bar per figure, a diamond at each end.
+    // Dragging the left diamond is the transit into the figure, dragging the
+    // right one is how long it holds - so the two numbers a show is made of
+    // are edited where they are SEEN, not typed into a panel in seconds.
+    int   tl_drag_f = -1;                    // the figure being dragged
+    int   tl_drag_end = 0;                   // 0 = its start, 1 = its end
+    float tl_drag_mx = 0.0f;                 // pointer x when the drag began
+    float tl_drag_v0 = 0.0f;                 // the value it began at
+    int   tl_scrub = 0;                      // the playhead is being dragged
+
     // The inspector's own copy, for the figure it is looking at: unpacked
     // from that figure's source once, so typing does not fight the document.
     int   img_edit_for     = -1;
@@ -576,6 +613,63 @@ void say(dai_show_ui *u, int bad, const char *fmt, ...) {
     vsnprintf(u->status, sizeof(u->status), fmt, ap);
     va_end(ap);
     u->status_bad = bad;
+}
+
+// ---- undo, and the one rule that makes it work ----------------------------
+//
+// push_undo is called BEFORE a change, at the moment a gesture begins. Two
+// pushes with no edit between them would put two identical states on the stack
+// and cost the user two Ctrl+Z for one mistake, so a push whose state already
+// matches the top is dropped. The comparison is the DOCUMENT's, not this
+// file's - a panel that decided for itself what "unchanged" means would
+// disagree with the document the day a field it had not heard of was added.
+const size_t UNDO_MAX = 40;
+
+void push_undo(dai_show_ui *u, const char *what) {
+    if (!u || !u->sh) return;
+    if (!u->undo.empty() && dai_show_state_equal(u->sh, u->undo.back())) {
+        if (what) std::snprintf(u->undo_what, sizeof(u->undo_what), "%s", what);
+        return;
+    }
+    dai_show_state *st = dai_show_snapshot(u->sh);
+    if (!st) return;
+    u->undo.push_back(st);
+    while (u->undo.size() > UNDO_MAX) {
+        dai_show_state_destroy(u->undo.front());
+        u->undo.erase(u->undo.begin());
+    }
+    for (size_t i = 0; i < u->redo.size(); ++i) dai_show_state_destroy(u->redo[i]);
+    u->redo.clear();
+    if (what) std::snprintf(u->undo_what, sizeof(u->undo_what), "%s", what);
+}
+
+// One undo step per GESTURE, for widgets that change the document every frame
+// they are dragged. The first change pushes; the rest of the drag does not.
+void edit_begin(dai_show_ui *u, dai_ui *ui, const char *what) {
+    int down = 0;
+    dai_ui_mouse(ui, nullptr, nullptr, &down, nullptr);
+    if (down && u->undo_guard) return;
+    push_undo(u, what);
+    if (down) u->undo_guard = 1;
+}
+
+// After an undo the selection may point at a figure that no longer exists - or
+// at a point of a figure that has fewer of them now.
+void clamp_selection(dai_show_ui *u) {
+    uint32_t n = dai_show_formation_count(u->sh);
+    if (!n) { u->sel_formation = 0; u->pt_f = -1; u->pt_i = 0xFFFFFFFFu; return; }
+    if (u->sel_formation < 0) u->sel_formation = 0;
+    if ((uint32_t)u->sel_formation >= n) u->sel_formation = (int)n - 1;
+    if (u->pt_f >= 0) {
+        dai_show_formation_info pi;
+        if ((uint32_t)u->pt_f >= n ||
+            !dai_show_formation_get(u->sh, (uint32_t)u->pt_f, &pi) ||
+            u->pt_i >= pi.point_count) {
+            u->pt_f = -1; u->pt_i = 0xFFFFFFFFu;
+        }
+    }
+    u->colour_for = -1;
+    u->img_edit_for = -1;
 }
 
 // The verdict at the right hand end of the status line, as text. Split out of
@@ -941,6 +1035,39 @@ void add_image(dai_show_ui *u) {
     say(u, 0, "formation \"%s\" added: %u points from %ux%u", name, info.point_count, w, h);
 }
 
+// Everything a figure has been edited into, undone at once: the transform, the
+// painted strokes, the one-colour override and the points themselves. The
+// points are the part that needs the source - a dragged point has no memory of
+// where it was, and the only honest "as it was" is the figure the sampler
+// makes from the same source with the same count.
+int reset_object(dai_show_ui *u, uint32_t fi) {
+    dai_show_formation_info info;
+    if (!dai_show_formation_get(u->sh, fi, &info)) return 0;
+    dai_show_transform id = dai_show_transform_identity();
+    dai_show_formation_set_transform(u->sh, fi, &id);
+    dai_show_formation_clear_strokes(u->sh, fi);
+    dai_show_formation_set_colour(u->sh, fi, 0, 255, 255, 255, 0);
+    if (!std::strcmp(info.source, "builtin://takeoff")) {
+        std::vector<dai_show_point> gp(info.point_count);
+        if (dai_show_takeoff_points(u->sh, info.point_count, 0.0f, gp.data()))
+            dai_show_formation_replace_points(u->sh, fi, gp.data(), info.point_count);
+        return 1;
+    }
+    if (!std::strncmp(info.source, "builtin://", 10)) {
+        int shape = 0;
+        const char *bn = info.source + 10;
+        for (int k = 0; k < 3; ++k) if (!std::strcmp(bn, FIGURES[k])) shape = k;
+        return resample_builtin(u, fi, shape, info.point_count, info.sample_mode);
+    }
+    if (!std::strncmp(info.source, "image://", 8))
+        return resample_image(u, fi, info.source, info.point_count);
+    // A mesh figure's triangles are the host's, not ours: the transform, the
+    // strokes and the colour are back, and the panel says what it could not do
+    // rather than pretending the points were rebuilt.
+    say(u, 1, "transform and colours reset - the points came from a mesh and stay");
+    return 1;
+}
+
 void add_builtin(dai_show_ui *u) {
     Soup soup;
     if (u->figure == 0)      figure_sphere(soup, 24, 32);
@@ -1006,7 +1133,12 @@ dai_show_ui *dai_show_ui_create(dai_show *sh) {
     return u;
 }
 
-void      dai_show_ui_destroy(dai_show_ui *u) { delete u; }
+void      dai_show_ui_destroy(dai_show_ui *u) {
+    if (!u) return;
+    for (size_t i = 0; i < u->undo.size(); ++i) dai_show_state_destroy(u->undo[i]);
+    for (size_t i = 0; i < u->redo.size(); ++i) dai_show_state_destroy(u->redo[i]);
+    delete u;
+}
 dai_show *dai_show_ui_doc(const dai_show_ui *u) { return u ? u->sh : nullptr; }
 
 void dai_show_ui_advance(dai_show_ui *u, float dt) {
@@ -1036,6 +1168,22 @@ void dai_show_ui_nav(dai_show_ui *u, const dai_show_nav_input *in) {
     // first frame of a hold only REMEMBERS the pointer - counting its journey
     // onto the viewport as a turn is how a camera ends up looking at its own
     // feet. The sign matches the left-drag orbit below: down looks down.
+    // Alt + right drag is the scene view's zoom: the eye walks in and out along
+    // its own line of sight, which is a different thing from the wheel (steps)
+    // and from flying (moves the focus).
+    if (in->mouse_right && in->key_alt) {
+        if (u->nav_rmb) {
+            float dz = (in->mouse_x - u->nav_mx) + (u->nav_my - in->mouse_y);
+            u->dist = std::max(2.0f, u->dist * (1.0f - dz * 0.004f));
+        }
+        u->nav_mx  = in->mouse_x;
+        u->nav_my  = in->mouse_y;
+        u->nav_rmb = 1;
+        u->nav_mmb = in->mouse_middle;
+        if (in->key_focus && !u->nav_f) u->framed_for = -1;
+        u->nav_f = in->key_focus;
+        return;
+    }
     if (in->mouse_right) {
         if (u->nav_rmb) {
             u->yaw   += (in->mouse_x - u->nav_mx) * 0.005f;
@@ -1139,6 +1287,75 @@ int dai_show_ui_take_export(dai_show_ui *u) {
     int f = u->want_export;
     u->want_export = 0;
     return f;
+}
+
+void dai_show_ui_modifiers(dai_show_ui *u, int alt, int ctrl, int shift) {
+    if (!u) return;
+    u->key_alt   = alt   ? 1 : 0;
+    u->key_ctrl  = ctrl  ? 1 : 0;
+    u->key_shift = shift ? 1 : 0;
+}
+
+void dai_show_ui_begin_edit(dai_show_ui *u, const char *what) { push_undo(u, what); }
+
+int dai_show_ui_undo(dai_show_ui *u) {
+    if (!u || u->undo.empty()) return 0;
+    dai_show_state *now = dai_show_snapshot(u->sh);
+    dai_show_state *st  = u->undo.back();
+    u->undo.pop_back();
+    dai_show_restore(u->sh, st);
+    dai_show_state_destroy(st);
+    if (now) u->redo.push_back(now);
+    clamp_selection(u);
+    say(u, 0, "undo%s%s", u->undo_what[0] ? ": " : "", u->undo_what);
+    return 1;
+}
+
+int dai_show_ui_redo(dai_show_ui *u) {
+    if (!u || u->redo.empty()) return 0;
+    dai_show_state *now = dai_show_snapshot(u->sh);
+    dai_show_state *st  = u->redo.back();
+    u->redo.pop_back();
+    dai_show_restore(u->sh, st);
+    dai_show_state_destroy(st);
+    if (now) u->undo.push_back(now);
+    clamp_selection(u);
+    say(u, 0, "redo");
+    return 1;
+}
+
+uint32_t dai_show_ui_undo_depth(const dai_show_ui *u) { return u ? (uint32_t)u->undo.size() : 0u; }
+uint32_t dai_show_ui_redo_depth(const dai_show_ui *u) { return u ? (uint32_t)u->redo.size() : 0u; }
+
+int dai_show_ui_delete_selected(dai_show_ui *u) {
+    if (!u) return 0;
+    uint32_t n = dai_show_formation_count(u->sh);
+    if (!n || u->sel_formation < 0 || (uint32_t)u->sel_formation >= n) return 0;
+    dai_show_formation_info info;
+    char name[64] = { 0 };
+    if (dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &info))
+        std::snprintf(name, sizeof(name), "%s", info.name);
+    push_undo(u, "delete");
+    if (!dai_show_formation_remove(u->sh, (uint32_t)u->sel_formation)) return 0;
+    if (u->sel_formation > 0) --u->sel_formation;
+    u->pt_f = -1; u->pt_i = 0xFFFFFFFFu;
+    u->sel_point = 0xFFFFFFFFu;
+    clamp_selection(u);
+    say(u, 0, "%s deleted", name[0] ? name : "figure");
+    return 1;
+}
+
+int dai_show_ui_take_browse(dai_show_ui *u) {
+    if (!u) return 0;
+    int b = u->want_browse;
+    u->want_browse = 0;
+    return b;
+}
+
+void dai_show_ui_set_image_path(dai_show_ui *u, const char *path) {
+    if (!u || !path || !path[0]) return;
+    std::snprintf(u->image_path, sizeof(u->image_path), "%s", path);
+    std::snprintf(u->img_edit_path, sizeof(u->img_edit_path), "%s", path);
 }
 
 void dai_show_ui_note(dai_show_ui *u, int bad, const char *text) {
@@ -1504,7 +1721,10 @@ void dai_show_ui_validation(dai_show_ui *u, dai_ui *ui, float x, float y, float 
 
 void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h) {
     if (!u || !ui || w < 40.0f || h < 60.0f) return;
-    const float TL = 40.0f;                       // the timeline strip below
+    // The strip is a dope sheet now, not a slider: it needs a ruler and a row
+    // per step. Sized from the viewport rather than fixed, so a short window
+    // does not end up all timeline and no sky.
+    const float TL = std::min(124.0f, std::max(58.0f, h * 0.30f));
     float vh = h - TL;
 
     refresh_fleet(u);
@@ -1798,7 +2018,12 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                 u->giz_sy[a] = tipy[a];
             }
             int hot = -1;
-            if (inside && u->gizmo_axis < 0) {
+            // While the brush is on, the gizmo does NOT grab. Its handles
+            // radiate from the figure's own pivot, which is exactly where the
+            // middle of a figure is - so painting near the centre of a shape
+            // grabbed an axis and moved the whole figure instead of colouring
+            // it. A tool that is switched on owns the pointer.
+            if (inside && u->gizmo_axis < 0 && !u->pick_on) {
                 float best = 9.0f;              // the grab radius, in pixels
                 for (int a = 0; a < 3; ++a) {
                     if (!drawn[a]) continue;
@@ -1831,6 +2056,7 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
             ring(ui, osx, osy, 4.0f, 1.5f, rgba(0xF5, 0xF5, 0xF5, 200));
 
             if (pressed && hot >= 0) {
+                push_undo(u, "move figure");
                 u->gizmo_axis = hot;
                 u->gizmo_mx   = mx;
                 u->gizmo_my   = my;
@@ -1906,6 +2132,7 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                     if (d < best) { best = d; best_i = i; }
                 }
                 if (u->paint_on && !hit.empty()) {
+                    if (pressed) push_undo(u, "paint");
                     // Painted AT the playhead: a stroke, so the colour begins
                     // at the second on the timeline the user is watching and
                     // the show keeps whatever came before it.
@@ -1931,100 +2158,142 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
         if (u->pick_on && u->paint_on && inside)
             ring(ui, mx, my, u->brush_px, 1.0f, rgba(0xF5, 0xF5, 0xF5, 110));
     }
+
+    // ---- the handle on one point -------------------------------------------
+    //
+    // A single drone's point is moved the way a figure is moved: SELECT it
+    // with a click, then drag one axis handle. Dragging the dot itself is what
+    // this used to do, and a click and a drag began identically - so every
+    // click that wandered four pixels moved a point, and every point that was
+    // moved had to be aimed in a perspective view with no axis to slide along.
+    // The handles are half the figure gizmo's length, so the two are never
+    // mistaken for one another when both are on screen.
+    if (u->pt_f >= 0 && (uint32_t)u->pt_f < dai_show_formation_count(u->sh)) {
+        dai_show_formation_info pinf;
+        const dai_show_point *pw = dai_show_formation_points(u->sh, (uint32_t)u->pt_f);
+        if (pw && dai_show_formation_get(u->sh, (uint32_t)u->pt_f, &pinf) &&
+            u->pt_i < pinf.point_count) {
+            const dai_show_point &sp = pw[u->pt_i];
+            float psx = 0.0f, psy = 0.0f, pdep = 0.0f;
+            if (project(cam, sp.x, sp.y, sp.z, &psx, &psy, &pdep)) {
+                const float PHANDLE_PX = 46.0f;
+                const float plen = PHANDLE_PX * pdep / cam.f;
+                const uint32_t PAXIS[3] = { rgba(0xE5, 0x53, 0x4B, 255),
+                                            rgba(0x62, 0xC5, 0x54, 255),
+                                            rgba(0x4A, 0x90, 0xE2, 255) };
+                float ptx[3], pty[3];
+                int   pdrawn[3] = { 0, 0, 0 };
+                for (int a2 = 0; a2 < 3; ++a2) {
+                    pdrawn[a2] = project(cam,
+                                         sp.x + (a2 == 0 ? plen : 0.0f),
+                                         sp.y + (a2 == 1 ? plen : 0.0f),
+                                         sp.z + (a2 == 2 ? plen : 0.0f),
+                                         &ptx[a2], &pty[a2], nullptr);
+                    u->pt_gdrawn[a2] = pdrawn[a2];
+                    u->pt_gsx[a2] = ptx[a2];
+                    u->pt_gsy[a2] = pty[a2];
+                }
+                int phot = -1;
+                if (inside && u->pt_axis < 0 && u->gizmo_axis < 0 && !u->pick_on) {
+                    float best = 8.0f;
+                    for (int a2 = 0; a2 < 3; ++a2) {
+                        if (!pdrawn[a2]) continue;
+                        float d = dist_to_segment(mx, my, psx, psy, ptx[a2], pty[a2]);
+                        if (d < best) { best = d; phot = a2; }
+                    }
+                }
+                ring(ui, psx, psy, 6.0f, 2.0f, COL_WARN);
+                for (int a2 = 0; a2 < 3; ++a2) {
+                    if (!pdrawn[a2]) continue;
+                    int lit = (u->pt_axis == a2) || (phot == a2);
+                    dai_ui_line(ui, psx, psy, ptx[a2], pty[a2], lit ? 3.0f : 2.0f, PAXIS[a2]);
+                }
+                if (pressed && phot >= 0) {
+                    push_undo(u, "move point");
+                    u->pt_axis = phot;
+                    u->pt_mx = mx; u->pt_my = my;
+                    u->pt_from[0] = sp.x; u->pt_from[1] = sp.y; u->pt_from[2] = sp.z;
+                    consumed = 1;
+                }
+                if (!down) u->pt_axis = -1;
+                if (u->pt_axis >= 0) {
+                    consumed = 1;
+                    const int a2 = u->pt_axis;
+                    float q0x, q0y, q1x, q1y;
+                    if (project(cam, u->pt_from[0], u->pt_from[1], u->pt_from[2],
+                                &q0x, &q0y, nullptr) &&
+                        project(cam, u->pt_from[0] + (a2 == 0 ? 1.0f : 0.0f),
+                                     u->pt_from[1] + (a2 == 1 ? 1.0f : 0.0f),
+                                     u->pt_from[2] + (a2 == 2 ? 1.0f : 0.0f),
+                                &q1x, &q1y, nullptr)) {
+                        float ddx = q1x - q0x, ddy = q1y - q0y;
+                        float l2 = ddx * ddx + ddy * ddy;
+                        if (l2 > 1e-4f) {
+                            float metres = ((mx - u->pt_mx) * ddx +
+                                            (my - u->pt_my) * ddy) / l2;
+                            float np[3] = { u->pt_from[0], u->pt_from[1], u->pt_from[2] };
+                            np[a2] += metres;
+                            dai_show_formation_set_point_world(u->sh, (uint32_t)u->pt_f,
+                                                               u->pt_i, np[0], np[1], np[2]);
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        u->pt_gdrawn[0] = u->pt_gdrawn[1] = u->pt_gdrawn[2] = 0;
+    }
     dai_ui_clip_end(ui);
 
-    // ---- one drone, one point ---------------------------------------------
+    // ---- selecting one drone -----------------------------------------------
     //
-    // Outside pick mode a press on the sky is a candidate for two gestures
-    // and only the next few pixels tell which: a CLICK - that drone is
-    // selected, the inspector already knows how to talk about one - or a
-    // DRAG - that one point of the figure moves. Deciding at press time
-    // would either eat the click or move a figure nobody meant to touch, so
-    // the press is remembered and the gesture is named at four pixels.
-    if (!u->pick_on) {
-        if (pressed && inside && !consumed) {
-            // ONE hit test, against what is drawn: the fleet, at this second.
-            // The nearest drone is the click candidate, and the point that
-            // drone is standing on is the drag candidate - which is the same
-            // dot, because there is only one dot. Testing the figure's
-            // resting pose instead was the bug: during playback the clickable
-            // spots stayed where the show starts.
-            float bestd = 9.0f; uint32_t bdi = 0xFFFFFFFFu; float bdepth = 0.0f;
-            for (uint32_t k = 0; k < n; ++k) {
-                float hx, hy, hdep;
-                if (!project(cam, u->fleet[k].x, u->fleet[k].y, u->fleet[k].z,
-                             &hx, &hy, &hdep))
-                    continue;
-                float ddx = hx - mx, ddy = hy - my;
-                float d = std::sqrt(ddx * ddx + ddy * ddy);
-                if (d < bestd) { bestd = d; bdi = k; bdepth = hdep; }
-            }
-            u->move_f = -1; u->move_i = 0xFFFFFFFFu; u->move_active = 0;
-            if (bdi != 0xFFFFFFFFu) {
-                uint32_t f2 = 0, pt = 0;
-                int settled = 0;
-                if (dai_show_drone_point_at(u->sh, bdi, u->time, &f2, &pt, &settled)) {
-                    // A point may only be dragged while its drone STANDS on
-                    // it. Mid-transition that point is a destination the drone
-                    // is still flying towards, and moving it would teleport
-                    // the figure out from under the pointer.
-                    if (settled) {
-                        u->move_f = (int)f2; u->move_i = pt; u->move_depth = bdepth;
-                        const dai_show_point &lp = u->fleet[bdi];
-                        float gx, gy, gz;
-                        unproject(cam, mx, my, bdepth, &gx, &gy, &gz);
-                        u->move_off[0] = lp.x - gx;
-                        u->move_off[1] = lp.y - gy;
-                        u->move_off[2] = lp.z - gz;
-                        consumed = 1;   // a grabbed point is never also an orbit
-                    }
-                } else if (dai_show_formation_count(u->sh)) {
-                    // No plan yet: the preview IS the selected figure, so the
-                    // fleet index is its point index.
-                    dai_show_formation_info inf;
-                    if (u->sel_formation >= 0 &&
-                        dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &inf) &&
-                        bdi < inf.point_count) {
-                        u->move_f = u->sel_formation; u->move_i = bdi;
-                        u->move_depth = bdepth;
-                        const dai_show_point &lp = u->fleet[bdi];
-                        float gx, gy, gz;
-                        unproject(cam, mx, my, bdepth, &gx, &gy, &gz);
-                        u->move_off[0] = lp.x - gx;
-                        u->move_off[1] = lp.y - gy;
-                        u->move_off[2] = lp.z - gz;
-                        consumed = 1;
-                    }
+    // A left click SELECTS, and that is all it does. Nothing is dragged out
+    // from under the pointer, so a click that wanders a few pixels is still a
+    // click - which is what everybody expects of a left button in a 3D view,
+    // and what this did not do: the same gesture used to drag the point the
+    // drone was standing on, so selecting a drone and deforming the figure
+    // were one motion.
+    //
+    // What gets selected is the drone AND, when that drone is standing still
+    // on a point, that point - which is what the handle above then moves.
+    // Clicking empty sky clears both, the way clicking empty space does in
+    // every hierarchy in this editor.
+    if (!u->pick_on && pressed && inside && !consumed) {
+        float bestd = 9.0f; uint32_t bdi = 0xFFFFFFFFu;
+        for (uint32_t k = 0; k < n; ++k) {
+            float hx, hy;
+            if (!project(cam, u->fleet[k].x, u->fleet[k].y, u->fleet[k].z, &hx, &hy, nullptr))
+                continue;
+            float ddx = hx - mx, ddy = hy - my;
+            float d = std::sqrt(ddx * ddx + ddy * ddy);
+            if (d < bestd) { bestd = d; bdi = k; }
+        }
+        if (bdi == 0xFFFFFFFFu) {
+            u->sel_drone   = 0xFFFFFFFFu;
+            u->sel_drone_b = 0xFFFFFFFFu;
+            u->pt_f = -1; u->pt_i = 0xFFFFFFFFu;
+        } else {
+            u->sel_drone   = bdi;
+            u->sel_drone_b = 0xFFFFFFFFu;
+            uint32_t f2 = 0, pt = 0;
+            int settled = 0;
+            u->pt_f = -1; u->pt_i = 0xFFFFFFFFu;
+            if (dai_show_drone_point_at(u->sh, bdi, u->time, &f2, &pt, &settled)) {
+                // Only where the drone STANDS: mid-flight the point it is
+                // heading for is somewhere else entirely, and a handle drawn
+                // there points at a place the click did not mean.
+                if (settled) { u->pt_f = (int)f2; u->pt_i = pt; }
+            } else if (dai_show_formation_count(u->sh)) {
+                // No plan yet: the preview IS the selected figure, so the
+                // fleet index is its point index.
+                dai_show_formation_info inf;
+                if (u->sel_formation >= 0 &&
+                    dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &inf) &&
+                    bdi < inf.point_count) {
+                    u->pt_f = u->sel_formation; u->pt_i = bdi;
                 }
             }
-            u->click_drone = bdi;
-            u->click_x = mx; u->click_y = my;
-        }
-        if (down && u->move_f >= 0 && !u->move_active) {
-            float tvx = mx - u->click_x, tvy = my - u->click_y;
-            if (tvx * tvx + tvy * tvy > 16.0f) u->move_active = 1;
-        }
-        if (down && u->move_active && u->move_f >= 0) {
-            float wx, wy, wz;
-            unproject(cam, mx, my, u->move_depth, &wx, &wy, &wz);
-            dai_show_formation_set_point_world(u->sh, (uint32_t)u->move_f, u->move_i,
-                                               wx + u->move_off[0], wy + u->move_off[1],
-                                               wz + u->move_off[2]);
             consumed = 1;
-        }
-        if (!down && (u->move_f >= 0 || u->click_drone != 0xFFFFFFFFu)) {
-            float tvx = mx - u->click_x, tvy = my - u->click_y;
-            if (!u->move_active && tvx * tvx + tvy * tvy <= 16.0f) {
-                if (u->click_drone != 0xFFFFFFFFu) {
-                    u->sel_drone   = u->click_drone;
-                    u->sel_drone_b = 0xFFFFFFFFu;
-                }
-                // The FIGURE selection is not the drone's business: picking
-                // one drone out of a formation must not throw away the shape
-                // the inspector and the outline are working on.
-            }
-            u->move_f = -1; u->move_i = 0xFFFFFFFFu; u->move_active = 0;
-            u->click_drone = 0xFFFFFFFFu;
         }
     }
 
@@ -2055,11 +2324,24 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
         }
     }
 
-    // Orbit and zoom. The gesture is the scene view's, because a second
-    // convention for turning a camera is a second thing to learn for nothing.
-    // A drag that a tool took is never also a camera move: grabbing an axis and
-    // spinning the world at the same time is the one thing a gizmo may not do.
-    if (pressed && inside && !consumed) { u->dragging = 1; u->drag_x = mx; u->drag_y = my; }
+    // Orbit and zoom, on the SCENE VIEW's gestures - which is what "like Unity"
+    // means, and what this did not do:
+    //
+    //   Alt + left drag   orbit                    (2D: slide the map)
+    //   middle drag       pan                      (through dai_show_ui_nav)
+    //   right drag        look, W A S D to fly     (same)
+    //   Alt + right drag  zoom
+    //   wheel             zoom
+    //   F                 frame it all
+    //
+    // A PLAIN left drag is NOT a camera gesture. It belongs to the selection,
+    // and taking it for an orbit is why clicking a drone and turning the world
+    // used to be the same motion: you could not click anything without
+    // spinning the sky.
+    if (pressed && inside && !consumed && u->key_alt) {
+        u->dragging = 1; u->drag_x = mx; u->drag_y = my;
+    }
+    if (!u->key_alt) u->dragging = 0;
     if (!down || consumed) u->dragging = 0;
     if (u->dragging) {
         if (u->view_2d) {
@@ -2084,14 +2366,66 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
         if (wheel != 0.0f) u->dist = std::max(10.0f, u->dist * (1.0f - 0.1f * wheel));
     }
 
-    // ---- the timeline ------------------------------------------------------
+    // ---- the timeline: a dope sheet, not a slider --------------------------
+    //
+    // Blender's, in the one way that matters: the two numbers a show is made
+    // of - how long a figure holds, how long the flight into it takes - are
+    // DRAGGED where they are seen instead of typed into a panel in seconds.
+    // One row per step, because steps run at the same time as each other; a
+    // bar per figure, a diamond at each end of it.
+    //
+    //   left diamond    the transit INTO this figure
+    //   right diamond   how long it holds
+    //   the bar         click to select the figure and seek to it
+    //   the ruler       drag to scrub
+    //
+    // The times are computed HERE from holds and transitions rather than read
+    // from the last solve, so the sheet is right on a show that has never been
+    // solved - which is every show for the first few minutes of its life.
     const dai_ui_style *st = dai_ui_style_of(ui);
     float ty = y + vh;
     dai_ui_rect(ui, x, ty, w, TL, st->chrome);
     dai_ui_rect(ui, x, ty, w, 1.0f, st->panel_border);
 
+    struct Bar { uint32_t fi; int group; float t0, t1; int first; float transit; float hold; };
+    std::vector<Bar> bars;
+    std::vector<int> groups;                 // step ids, in the order first seen
+    float dur_calc = 0.0f;
+    {
+        uint32_t fn2 = dai_show_formation_count(u->sh);
+        std::vector<float> gclock;           // parallel to `groups`
+        for (uint32_t i = 0; i < fn2; ++i) {
+            dai_show_formation_info info;
+            if (!dai_show_formation_get(u->sh, i, &info)) continue;
+            size_t gi = groups.size();
+            for (size_t k = 0; k < groups.size(); ++k)
+                if (groups[k] == info.group) { gi = k; break; }
+            if (gi == groups.size()) { groups.push_back(info.group); gclock.push_back(0.0f); }
+            Bar b;
+            b.fi = i; b.group = info.group;
+            // "First in its step" is about the STEP, not about the list: a
+            // figure is first when nothing before it shares its group.
+            b.first = 1;
+            for (size_t k = 0; k < bars.size(); ++k)
+                if (bars[k].group == info.group) { b.first = 0; break; }
+            dai_show_transition tr;
+            b.transit = 0.0f;
+            if (!b.first && dai_show_transition_get(u->sh, i, &tr)) b.transit = tr.duration_s;
+            b.hold = info.hold_s;
+            b.t0 = gclock[gi] + b.transit;
+            b.t1 = b.t0 + b.hold;
+            gclock[gi] = b.t1;
+            if (b.t1 > dur_calc) dur_calc = b.t1;
+            bars.push_back(b);
+        }
+    }
+    float dur = show_duration(u);
+    if (dur_calc > dur) dur = dur_calc;
+    if (dur < 1.0f) dur = 1.0f;
+
+    // The left gutter: Play, and the clock under it.
     float bw = 54.0f, bh = 22.0f;
-    float bx = x + 6.0f, by = ty + (TL - bh) * 0.5f;
+    float bx = x + 6.0f, by = ty + 5.0f;
     int over_btn = (mx >= bx && mx < bx + bw && my >= by && my < by + bh);
     dai_ui_rect(ui, bx, by, bw, bh, over_btn ? st->button_hover : st->button);
     const char *label = u->playing ? "Pause" : "Play";
@@ -2099,39 +2433,182 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                 by + (bh - dai_ui_text_height(ui)) * 0.5f, label, st->text);
     if (over_btn && pressed) u->playing = !u->playing;
 
-    char tstr[48];
-    float dur = show_duration(u);
-    std::snprintf(tstr, sizeof(tstr), "%6.2f / %.2f s", (double)u->time, (double)dur);
-    float tw = dai_ui_text_width(ui, tstr);
-    dai_ui_text(ui, x + w - tw - 8.0f, by + (bh - dai_ui_text_height(ui)) * 0.5f, tstr, st->text_dim);
+    char tstr[64];
+    std::snprintf(tstr, sizeof(tstr), "%.2f / %.2f s", (double)u->time, (double)dur);
+    if (by + bh + 4.0f + dai_ui_text_height(ui) < ty + TL)
+        dai_ui_text(ui, bx, by + bh + 4.0f, tstr, st->text_dim);
 
-    float sx0 = bx + bw + 10.0f;
-    float sx1 = x + w - tw - 16.0f;
-    float sy0 = ty + TL * 0.5f - 5.0f;
-    if (sx1 > sx0 + 20.0f) {
-        dai_ui_rect(ui, sx0, sy0, sx1 - sx0, 10.0f, st->track);
-        // Where the figures are. A storyboard with no marks on the timeline is
-        // a storyboard you have to count seconds against.
-        uint32_t fn = dai_show_formation_count(u->sh);
-        for (uint32_t i = 0; i < fn; ++i) {
-            dai_show_formation_info info;
-            if (!dai_show_formation_get(u->sh, i, &info)) continue;
-            float fx = sx0 + (sx1 - sx0) * std::min(1.0f, info.t_start / dur);
-            dai_ui_rect(ui, fx, sy0 - 4.0f, 1.0f, 18.0f, st->accent);
+    const float TX0 = bx + bw + 12.0f;
+    const float TX1 = x + w - 10.0f;
+    const float PPS = (TX1 > TX0 + 20.0f) ? (TX1 - TX0) / dur : 0.0f;   // px per second
+
+    if (PPS > 0.0f) {
+        const float RULER_H = 16.0f;
+        const float ruler_y = ty + 3.0f;
+        // Ticks at a spacing that stays legible: the first of 1, 2, 5, 10, 30,
+        // 60, 300 seconds that leaves at least 60 px between two labels.
+        const float CAND[7] = { 1.0f, 2.0f, 5.0f, 10.0f, 30.0f, 60.0f, 300.0f };
+        float tick = CAND[6];
+        for (int k = 0; k < 7; ++k) if (CAND[k] * PPS >= 60.0f) { tick = CAND[k]; break; }
+        for (float t = 0.0f; t <= dur + 0.001f; t += tick) {
+            float px2 = TX0 + t * PPS;
+            dai_ui_rect(ui, px2, ruler_y + RULER_H - 5.0f, 1.0f, 5.0f, st->panel_border);
+            char lab[24];
+            std::snprintf(lab, sizeof(lab), "%g", (double)t);
+            dai_ui_text(ui, px2 + 2.0f, ruler_y, lab, st->text_dim);
         }
-        // And where it goes wrong.
+
+        const float rows_y = ruler_y + RULER_H + 2.0f;
+        // Sixteen steps are allowed, so the rows SHRINK rather than spill out
+        // of the strip and over the sky above it.
+        float room = (ty + TL) - rows_y - 3.0f;
+        float row_h = 18.0f;
+        if (!groups.empty() && (float)groups.size() * row_h > room)
+            row_h = room / (float)groups.size();
+        if (row_h < 6.0f) row_h = 6.0f;
+
+        const uint32_t BAR_COL = rgba(0x3D, 0x6E, 0xA8, 235);
+        const uint32_t BAR_SEL = rgba(0xF5, 0xD7, 0x60, 245);
+        const uint32_t TRN_COL = rgba(0x4A, 0x52, 0x64, 220);
+        const float    GRAB    = 5.0f;         // half-width of a diamond, px
+
+        // What the pointer is on, decided BEFORE anything is drawn hot, so a
+        // diamond and the bar under it cannot both claim the same press.
+        int hover_f = -1, hover_end = 0;
+        if (u->tl_drag_f < 0) {
+            for (size_t k = 0; k < bars.size(); ++k) {
+                float ry = rows_y;
+                for (size_t g = 0; g < groups.size(); ++g)
+                    if (groups[g] == bars[k].group) { ry = rows_y + (float)g * row_h; break; }
+                if (my < ry - 2.0f || my > ry + row_h + 2.0f) continue;
+                float x0 = TX0 + bars[k].t0 * PPS, x1 = TX0 + bars[k].t1 * PPS;
+                if (std::fabs(mx - x1) <= GRAB + 2.0f) { hover_f = (int)k; hover_end = 1; break; }
+                if (!bars[k].first && std::fabs(mx - x0) <= GRAB + 2.0f) {
+                    hover_f = (int)k; hover_end = 0; break;
+                }
+            }
+        }
+
+        for (size_t k = 0; k < bars.size(); ++k) {
+            const Bar &b = bars[k];
+            float ry = rows_y;
+            for (size_t g = 0; g < groups.size(); ++g)
+                if (groups[g] == b.group) { ry = rows_y + (float)g * row_h; break; }
+            float x0 = TX0 + b.t0 * PPS, x1 = TX0 + b.t1 * PPS;
+            // The flight in, as a thinner bar - a show is mostly transitions,
+            // and a sheet that draws only the holds hides where the time goes.
+            if (!b.first) {
+                float xt = TX0 + (b.t0 - b.transit) * PPS;
+                dai_ui_rect(ui, xt, ry + row_h * 0.35f, std::max(1.0f, x0 - xt),
+                            std::max(1.0f, row_h * 0.3f), TRN_COL);
+            }
+            int sel = ((int)b.fi == u->sel_formation);
+            dai_ui_rect(ui, x0, ry + 2.0f, std::max(2.0f, x1 - x0),
+                        std::max(2.0f, row_h - 4.0f), sel ? BAR_SEL : BAR_COL);
+            dai_show_formation_info ni;
+            if (x1 - x0 > 26.0f && dai_ui_text_height(ui) < row_h - 2.0f &&
+                dai_show_formation_get(u->sh, b.fi, &ni)) {
+                char nm[64];
+                std::snprintf(nm, sizeof(nm), "%s", ni.name);
+                ellide(ui, nm, x1 - x0 - 6.0f);
+                dai_ui_text(ui, x0 + 3.0f, ry + (row_h - dai_ui_text_height(ui)) * 0.5f,
+                            nm, sel ? rgba(0x18, 0x18, 0x18, 255) : st->text);
+            }
+            // The two handles, as diamonds: the keyframe shape every timeline
+            // in the business uses, so nobody has to be told it can be dragged.
+            float cy2 = ry + row_h * 0.5f;
+            for (int e = 0; e < 2; ++e) {
+                if (e == 0 && b.first) continue;      // nothing flies into it
+                float hx = (e == 0) ? x0 : x1;
+                int lit = (hover_f == (int)k && hover_end == e) ||
+                          (u->tl_drag_f == (int)b.fi && u->tl_drag_end == e);
+                uint32_t hc = lit ? rgba(0xFF, 0xFF, 0xFF, 255)
+                                  : rgba(0xD8, 0xDE, 0xE9, 235);
+                float th = lit ? 2.0f : 1.5f;
+                dai_ui_line(ui, hx, cy2 - GRAB, hx + GRAB, cy2, th, hc);
+                dai_ui_line(ui, hx + GRAB, cy2, hx, cy2 + GRAB, th, hc);
+                dai_ui_line(ui, hx, cy2 + GRAB, hx - GRAB, cy2, th, hc);
+                dai_ui_line(ui, hx - GRAB, cy2, hx, cy2 - GRAB, th, hc);
+            }
+        }
+
+        // Conflicts, on the ruler, where they were before.
         for (uint32_t i = 0; i < cn; ++i) {
             dai_show_conflict c;
             if (!dai_show_conflict_at(u->sh, i, &c)) continue;
-            float fx = sx0 + (sx1 - sx0) * std::min(1.0f, c.time_s / dur);
-            dai_ui_rect(ui, fx, sy0, 2.0f, 10.0f, COL_CONFLICT);
+            dai_ui_rect(ui, TX0 + std::min(c.time_s, dur) * PPS,
+                        ruler_y + RULER_H - 6.0f, 2.0f, 6.0f, COL_CONFLICT);
         }
-        float px = sx0 + (sx1 - sx0) * std::min(1.0f, u->time / dur);
-        dai_ui_rect(ui, px - 1.0f, sy0 - 6.0f, 3.0f, 22.0f, st->text);
-        int over_bar = (mx >= sx0 && mx <= sx1 && my >= ty && my < ty + TL);
-        if (over_bar && down) {
-            u->time    = dur * (mx - sx0) / (sx1 - sx0);
-            u->playing = 0;
+
+        // The playhead, over everything.
+        dai_ui_rect(ui, TX0 + std::min(u->time, dur) * PPS - 1.0f, ty + 2.0f,
+                    2.0f, TL - 4.0f, st->text);
+
+        // ---- the gestures --------------------------------------------------
+        const int in_strip = (mx >= TX0 - 8.0f && mx <= TX1 + 8.0f &&
+                              my >= ty && my < ty + TL);
+        if (pressed && in_strip) {
+            if (hover_f >= 0) {
+                const Bar &b = bars[hover_f];
+                push_undo(u, hover_end ? "hold" : "transit");
+                u->tl_drag_f   = (int)b.fi;
+                u->tl_drag_end = hover_end;
+                u->tl_drag_mx  = mx;
+                u->tl_drag_v0  = hover_end ? b.hold : b.transit;
+                u->sel_formation = (int)b.fi;
+                u->playing = 0;
+            } else if (my < rows_y) {
+                u->tl_scrub = 1;                    // the ruler scrubs
+                u->playing  = 0;
+            } else {
+                // A press on a bar selects that figure and seeks to it; a
+                // press on empty track scrubs, which is what the whole strip
+                // did before and what a hand reaches for out of habit.
+                int on_bar = -1;
+                for (size_t k = 0; k < bars.size(); ++k) {
+                    float ry = rows_y;
+                    for (size_t g = 0; g < groups.size(); ++g)
+                        if (groups[g] == bars[k].group) { ry = rows_y + (float)g * row_h; break; }
+                    if (my < ry || my > ry + row_h) continue;
+                    if (mx >= TX0 + bars[k].t0 * PPS && mx <= TX0 + bars[k].t1 * PPS) {
+                        on_bar = (int)k; break;
+                    }
+                }
+                if (on_bar >= 0) {
+                    u->sel_formation = (int)bars[on_bar].fi;
+                    u->time    = bars[on_bar].t0;
+                    u->playing = 0;
+                } else {
+                    u->tl_scrub = 1;
+                    u->playing  = 0;
+                }
+            }
+        }
+        if (!down) { u->tl_drag_f = -1; u->tl_scrub = 0; }
+        if (u->tl_scrub && down)
+            u->time = std::max(0.0f, std::min(dur, (mx - TX0) / PPS));
+        if (u->tl_drag_f >= 0 && down) {
+            // A quarter of a second is the grid a show is written on, and
+            // Shift takes the snap off for the rare case that needs less.
+            float secs = u->tl_drag_v0 + (mx - u->tl_drag_mx) / PPS;
+            if (!u->key_shift) secs = std::floor(secs * 4.0f + 0.5f) * 0.25f;
+            uint32_t fi2 = (uint32_t)u->tl_drag_f;
+            if (u->tl_drag_end) {
+                if (secs < 0.0f)   secs = 0.0f;
+                if (secs > 600.0f) secs = 600.0f;
+                dai_show_formation_set_hold(u->sh, fi2, secs);
+            } else {
+                // Below half a second a transition is a teleport and the plan
+                // builder refuses it, so the drag stops there rather than
+                // writing a number the solver will throw back.
+                if (secs < 0.5f)   secs = 0.5f;
+                if (secs > 600.0f) secs = 600.0f;
+                dai_show_transition tr;
+                if (dai_show_transition_get(u->sh, fi2, &tr)) {
+                    tr.duration_s = secs;
+                    dai_show_transition_set(u->sh, fi2, &tr);
+                }
+            }
         }
     }
 }
@@ -2165,11 +2642,35 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
     if (dai_ui_right_pressed(ui) &&
         hmx >= x && hmx < x + w && hmy >= y && hmy < y + h)
         dai_ui_popup_open(&u->add_menu, hmx, hmy);
-    int apick = dai_ui_popup_menu(ui, &u->add_menu, ADD_ITEMS, 7);
+    int apick = dai_ui_popup_menu(ui, &u->add_menu, ADD_ITEMS, ADD_ITEM_COUNT);
     // A new step is a second timeline: its own figures, its own drones, all
     // of it at the same time as the others. Adding one is adding a figure
     // with a group nobody has used yet - so the fleet has to be shared out
     // again, which the solve says out loud if the counts stop adding up.
+    if (apick == 8) {                       // duplicate the selected figure
+        uint32_t fc4 = dai_show_formation_count(u->sh);
+        if (u->sel_formation >= 0 && (uint32_t)u->sel_formation < fc4) {
+            dai_show_formation_info di;
+            const dai_show_point *dp =
+                dai_show_formation_local_points(u->sh, (uint32_t)u->sel_formation);
+            if (dp && dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &di)) {
+                push_undo(u, "duplicate");
+                char dn[80];
+                std::snprintf(dn, sizeof(dn), "%s copy", di.name);
+                uint32_t ni = dai_show_formation_add(u->sh, dn, di.source, dp,
+                                                     di.point_count, di.hold_s);
+                if (ni != 0xFFFFFFFFu) {
+                    dai_show_formation_set_group(u->sh, ni, di.group);
+                    dai_show_formation_set_transform(u->sh, ni, &di.xf);
+                    dai_show_formation_set_sample_mode(u->sh, ni, di.sample_mode);
+                    u->sel_formation = (int)ni;
+                    say(u, 0, "%s added", dn);
+                }
+            }
+        }
+        apick = -1;
+    }
+    if (apick == 9) { dai_show_ui_delete_selected(u); apick = -1; }
     if (apick == 6) {
         int maxg = -1;
         uint32_t fc3 = dai_show_formation_count(u->sh);
@@ -2178,6 +2679,7 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
             if (dai_show_formation_get(u->sh, k, &gi3) && gi3.group > maxg) maxg = gi3.group;
         }
         uint32_t was = dai_show_formation_count(u->sh);
+        push_undo(u, "new step");
         add_builtin(u);
         if (dai_show_formation_count(u->sh) > was) {
             dai_show_formation_set_group(u->sh, was, maxg + 1);
@@ -2187,7 +2689,14 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         }
         apick = -1;
     }
-    if (apick >= 1 && apick < 4) { u->figure = apick - 1; add_builtin(u); }
+    if (apick >= 1 && apick < 4) {
+        push_undo(u, "add figure");
+        u->figure = apick - 1;
+        add_builtin(u);
+        uint32_t nf = dai_show_formation_count(u->sh);
+        if (nf) u->sel_formation = (int)nf - 1;   // what you just added is what
+                                                 // the inspector should show
+    }
     else if (apick == 4)         { dai_ui_popup_open(&u->img_menu, hmx, hmy); }
     else if (apick == 5) {
         // Where the drones stand before anybody presses play. Added to the
@@ -2198,6 +2707,7 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
             dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &gi))
             grp = gi.group;
         char gerr[256] = { 0 };
+        push_undo(u, "takeoff grid");
         uint32_t gidx = dai_show_add_takeoff_grid(u->sh, grp, 0.0f, gerr, sizeof(gerr));
         if (gidx == 0xFFFFFFFFu) say(u, 1, "%s", gerr[0] ? gerr : "no takeoff grid");
         else { u->sel_formation = (int)gidx; say(u, 0, "takeoff grid added to step %d", grp + 1); }
@@ -2205,16 +2715,33 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
     // The image import is a little window of its own, because a menu row is
     // not the place that can hold a path, a width and a threshold.
     if (u->img_menu.open) {
-        dai_ui_popup_panel_begin(ui, &u->img_menu, 280.0f, 170.0f);
+        dai_ui_popup_panel_begin(ui, &u->img_menu, 300.0f, 210.0f);
+        // The button FIRST, because typing a path is the fallback and not the
+        // way in. Nobody knows the full path of their own picture, and Import
+        // did nothing at all while the field was empty - which is how "adding
+        // an image does not work" came to be true.
+        if (dai_ui_button(ui, "Choose a file...")) u->want_browse = 1;
         dai_ui_input_text(ui, "Image", u->image_path, sizeof(u->image_path));
         dai_ui_num_field(ui, "Width (m)", &u->image_width_m, 1.0f, 2.0f, 2000.0f, "popimgw");
         dai_ui_num_field(ui, "Threshold", &u->image_threshold, 1.0f, 0.0f, 255.0f, "popimgt");
         dai_ui_num_field(ui, "Points (0 = fleet)", &u->image_points, 1.0f, 0.0f,
                          (float)u->s.drone_count, "popimgn");
         if (dai_ui_button(ui, "Import")) {
-            add_image(u);
-            dai_ui_popup_close(&u->img_menu);
+            if (!u->image_path[0]) {
+                // Import with nothing chosen used to write a complaint to the
+                // status line at the far edge of the window, where nobody was
+                // looking. It opens the file dialog instead.
+                u->want_browse = 1;
+            } else {
+                push_undo(u, "add image");
+                uint32_t was_i = dai_show_formation_count(u->sh);
+                add_image(u);
+                if (dai_show_formation_count(u->sh) > was_i)
+                    u->sel_formation = (int)dai_show_formation_count(u->sh) - 1;
+                dai_ui_popup_close(&u->img_menu);
+            }
         }
+        if (!u->image_path[0]) wrapped_label(ui, "no file chosen yet");
         dai_ui_popup_panel_end(ui);
     }
     if (!n) {
@@ -2321,6 +2848,9 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
 
 void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w, float h) {
     if (!u || !ui) return;
+    // A released button ends whatever gesture was coalescing its undo steps.
+    { int dnow = 0; dai_ui_mouse(ui, nullptr, nullptr, &dnow, nullptr);
+      if (!dnow) u->undo_guard = 0; }
     dai_ui_panel_begin(ui, x, y, w, h, nullptr);
     const dai_show_plan *plan = dai_show_get_plan(u->sh);
     const char *const LABELS[] = { "Position", "Colour", "Keyframes", "Nearest",
@@ -2401,6 +2931,16 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                 ellide(ui, head, dai_ui_panel_width(ui) - 24.0f);
                 dai_ui_section(ui, head);
 
+                // The launch pad is a MEASURED thing: its whole promise is
+                // that no two drones on the ground stand closer than the
+                // spacing the crew taped out. Scaling it breaks that promise
+                // silently - half scale is half the spacing, and a grid built
+                // at the minimum becomes a grid inside it. So the pad is
+                // offered a RIGID transform only: moving and turning keep
+                // every distance in a grid, scaling is the one operation that
+                // does not, which is exactly why it is not there. Its size is
+                // set by Spacing (m) below, which cannot go under the minimum.
+                const int xf_takeoff = std::strcmp(info.source, "builtin://takeoff") == 0;
                 dai_show_transform xf = info.xf;
                 float pos[3] = { xf.position.x, xf.position.y, xf.position.z };
                 float rot[3] = { xf.rotation_deg.x, xf.rotation_deg.y, xf.rotation_deg.z };
@@ -2408,8 +2948,20 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                 int moved = 0;
                 moved |= vec3_row(ui, bot, "Position", pos, 0.05f);
                 moved |= vec3_row(ui, bot, "Rotation", rot, 0.5f);
-                moved |= vec3_row(ui, bot, "Scale",    scl, 0.01f);
+                if (!xf_takeoff) {
+                    moved |= vec3_row(ui, bot, "Scale", scl, 0.01f);
+                } else {
+                    field_row(ui, "Scale", "fixed - use Spacing (m)", bot);
+                    if (scl[0] != 1.0f || scl[1] != 1.0f || scl[2] != 1.0f) {
+                        // A show saved before this rule existed may carry one.
+                        // Put it back rather than quietly drawing a grid whose
+                        // spacing is not the number the panel is showing.
+                        scl[0] = scl[1] = scl[2] = 1.0f;
+                        moved = 1;
+                    }
+                }
                 if (moved) {
+                    edit_begin(u, ui, "transform");
                     dai_show_transform nx;
                     nx.position     = dai_vec3{ pos[0], pos[1], pos[2] };
                     nx.rotation_deg = dai_vec3{ rot[0], rot[1], rot[2] };
@@ -2425,9 +2977,21 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                         say(u, 0, "%s moved", info.name);
                 }
                 if (row_button(ui, bot, "Reset the transform")) {
+                    push_undo(u, "reset transform");
                     dai_show_transform id = dai_show_transform_identity();
                     dai_show_formation_set_transform(u->sh, fi, &id);
                     say(u, 0, "%s put back where it was sampled", info.name);
+                }
+                // The transform is only half of what an edit can do to a
+                // figure: points get dragged one at a time, colours get
+                // painted, a sample mode gets changed. "Reset the object"
+                // takes ALL of it back by building the figure from its source
+                // again - the only definition of "as it was" that does not
+                // depend on how long ago it was.
+                if (row_button(ui, bot, "Reset the object")) {
+                    push_undo(u, "reset object");
+                    if (reset_object(u, fi))
+                        say(u, 0, "%s built again from its source", info.name);
                 }
 
                 // THE TRAP THE GIZMO OPENS, said out loud while it is being
@@ -2461,16 +3025,20 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                     float hold = info.hold_s;
                     float hgt = widget_row(ui);
                     if (fits(ui, bot, hgt)) {
-                        if (dai_ui_num_field(ui, "Hold (s)", &hold, 0.25f, 0.0f, 600.0f, "inshold"))
+                        if (dai_ui_num_field(ui, "Hold (s)", &hold, 0.25f, 0.0f, 600.0f, "inshold")) {
+                            edit_begin(u, ui, "hold");
                             dai_show_formation_set_hold(u->sh, fi, hold);
+                        }
                     } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
                 }
                 {
                     float grp = (float)info.group;
                     float hgt = widget_row(ui);
                     if (fits(ui, bot, hgt)) {
-                        if (dai_ui_num_field(ui, "Step", &grp, 1.0f, 1.0f, 16.0f, "insgrp"))
+                        if (dai_ui_num_field(ui, "Step", &grp, 1.0f, 1.0f, 16.0f, "insgrp")) {
+                            edit_begin(u, ui, "step");
                             dai_show_formation_set_group(u->sh, fi, (int)(grp - 0.5f));
+                        }
                     } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
                 }
                 {
@@ -2486,27 +3054,44 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                                      std::strncmp(info.source, "builtin://", 10) == 0;
                     int is_image   = std::strncmp(info.source, "image://", 8) == 0;
                     if (is_takeoff) {
-                        char lay[80];
-                        std::snprintf(lay, sizeof(lay), "%u drones on the ground",
-                                      info.point_count);
-                        field_row(ui, "Grid", lay, bot);
+                        // How many drones stand on it, and how far apart they
+                        // stand. The count used to be fixed at creation, so a
+                        // step whose figures were resized afterwards kept a
+                        // launch pad of the wrong size with no way to say so.
                         float gap = dai_show_formation_min_spacing(u->sh, fi);
                         if (gap < 0.0f) gap = u->s.min_distance_m * 1.5f;
+                        float gcount = (float)info.point_count;
+                        int regrid = 0;
+                        if (fits(ui, bot, hgt)) {
+                            if (dai_ui_num_field(ui, "Drones", &gcount, 1.0f, 1.0f,
+                                                 (float)u->s.drone_count, "insgcnt") &&
+                                (uint32_t)(gcount + 0.5f) != info.point_count)
+                                regrid = 1;
+                        } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
+                        hgt = widget_row(ui);
                         if (fits(ui, bot, hgt)) {
                             if (dai_ui_num_field(ui, "Spacing (m)", &gap, 0.1f,
-                                                 u->s.min_distance_m, 100.0f, "insgap")) {
-                                std::vector<dai_show_point> gp(info.point_count);
-                                if (dai_show_takeoff_points(u->sh, info.point_count, gap,
-                                                            gp.data()))
-                                    dai_show_formation_replace_points(u->sh, fi, gp.data(),
-                                                                      info.point_count);
-                            }
+                                                 u->s.min_distance_m, 100.0f, "insgap"))
+                                regrid = 1;
                         } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
+                        if (regrid) {
+                            edit_begin(u, ui, "takeoff grid");
+                            uint32_t want = (uint32_t)(gcount + 0.5f);
+                            if (want < 1u) want = 1u;
+                            std::vector<dai_show_point> gp(want);
+                            if (dai_show_takeoff_points(u->sh, want, gap, gp.data()))
+                                dai_show_formation_replace_points(u->sh, fi, gp.data(), want);
+                        }
+                        char lay[96];
+                        std::snprintf(lay, sizeof(lay), "%u on the ground, %.2f m apart",
+                                      info.point_count, (double)gap);
+                        field_row(ui, "Grid", lay, bot);
                     } else if (is_builtin || is_image) {
                         if (fits(ui, bot, hgt)) {
                             if (dai_ui_num_field(ui, "Points", &pts_f, 1.0f, 1.0f,
                                                  (float)u->s.drone_count, "inspts") &&
                                 (uint32_t)(pts_f + 0.5f) != info.point_count) {
+                                edit_begin(u, ui, "point count");
                                 if (is_builtin) {
                                     int shape = 0;
                                     const char *bn = info.source + 10;
@@ -2553,6 +3138,7 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                                 }
                             }
                         }
+                        if (row_button(ui, bot, "Choose a file...")) u->want_browse = 2;
                         float hi1 = widget_row(ui);
                         if (fits(ui, bot, hi1))
                             dai_ui_input_text(ui, "Image", u->img_edit_path,
@@ -2573,6 +3159,7 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                             std::snprintf(nsrc, sizeof(nsrc), "image://%s?w=%.1f&th=%d",
                                           u->img_edit_path, (double)u->img_edit_w,
                                           (int)u->img_edit_th);
+                            push_undo(u, "image");
                             if (resample_image(u, fi, nsrc, info.point_count)) {
                                 // The figure now IS that picture, so its source
                                 // has to say so - otherwise the next re-sample
@@ -2594,6 +3181,7 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                         if (fits(ui, bot, hgt2)) {
                             if (seg_row(ui, "Mode", &mode, SAMPLE_MODES, 3) &&
                                 mode != info.sample_mode) {
+                                push_undo(u, "sample mode");
                                 int shape = 0;
                                 const char *bn = info.source + 10;
                                 for (int k = 0; k < 3; ++k)
@@ -2642,7 +3230,10 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                             changed |= dai_ui_option(ui, "Assignment", &tr.assign_method,
                                                      ASSIGN_METHODS, 4);
                         else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
-                        if (changed) dai_show_transition_set(u->sh, fi, &tr);
+                        if (changed) {
+                            edit_begin(u, ui, "transition");
+                            dai_show_transition_set(u->sh, fi, &tr);
+                        }
                     }
                 }
 
@@ -2673,6 +3264,7 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                     } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
                 }
                 if (col_changed || was_on != u->figure_on) {
+                    edit_begin(u, ui, "colour");
                     dai_show_formation_set_colour(u->sh, fi, u->figure_on,
                                                   to_u8(u->figure_rgb[0]),
                                                   to_u8(u->figure_rgb[1]),
@@ -2692,8 +3284,10 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                 if (u->pick_on) {
                     check_row(ui, bot, "Paint while dragging", &u->paint_on);
                     colour_row(ui, bot, "Brush", u->paint_rgb, "showbrush");
-                    if (row_button(ui, bot, "Forget all painted colours"))
+                    if (row_button(ui, bot, "Forget all painted colours")) {
+                        push_undo(u, "clear paint");
                         dai_show_formation_clear_strokes(u->sh, fi);
+                    }
                     float bp = u->brush_px;
                     {
                         float hgt = widget_row(ui);

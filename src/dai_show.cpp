@@ -1998,4 +1998,69 @@ dai_show *dai_show_load(const char *path, char *err, size_t err_len) {
     return sh;
 }
 
+/* ---- undo: the document, copied ------------------------------------------
+ *
+ * The figures and the settings are the whole editable state of a show. The
+ * plan, the conflicts and the timings are derived from them by dai_show_solve
+ * and are deliberately NOT copied: a restored document is an unsolved one,
+ * the same state every other edit in this file leaves behind.
+ */
+struct dai_show_state {
+    dai_show_settings      s;
+    std::vector<Formation> forms;
+};
+
+dai_show_state *dai_show_snapshot(const dai_show *sh) {
+    if (!sh) return nullptr;
+    dai_show_state *st = new dai_show_state();
+    st->s     = sh->s;
+    st->forms = sh->forms;
+    return st;
+}
+
+int dai_show_restore(dai_show *sh, const dai_show_state *st) {
+    if (!sh || !st) return 0;
+    sh->s     = st->s;
+    sh->forms = st->forms;
+    dai_show_plan_destroy(sh->plan);
+    sh->plan = nullptr;
+    sh->conflicts.clear();
+    sh->tr_stats.clear();
+    sh->key_src.clear();
+    std::memset(&sh->timings, 0, sizeof(sh->timings));
+    return 1;
+}
+
+void dai_show_state_destroy(dai_show_state *st) { delete st; }
+
+static int form_equal(const Formation &a, const Formation &b) {
+    if (a.name != b.name || a.source != b.source) return 0;
+    if (a.local.size() != b.local.size()) return 0;
+    if (!a.local.empty() &&
+        std::memcmp(a.local.data(), b.local.data(),
+                    a.local.size() * sizeof(dai_show_point)) != 0) return 0;
+    if (std::memcmp(&a.xf, &b.xf, sizeof(a.xf)) != 0) return 0;
+    if (std::memcmp(&a.pivot, &b.pivot, sizeof(a.pivot)) != 0) return 0;
+    if (a.colour_override != b.colour_override) return 0;
+    if (std::memcmp(a.ovr, b.ovr, 4) != 0) return 0;
+    if (a.hold_s != b.hold_s || a.sample_mode != b.sample_mode || a.group != b.group) return 0;
+    if (!tr_equal(a.tr, b.tr)) return 0;
+    if (a.strokes.size() != b.strokes.size()) return 0;
+    for (size_t i = 0; i < a.strokes.size(); ++i) {
+        if (a.strokes[i].t != b.strokes[i].t) return 0;
+        if (std::memcmp(a.strokes[i].rgba, b.strokes[i].rgba, 4) != 0) return 0;
+        if (a.strokes[i].idx != b.strokes[i].idx) return 0;
+    }
+    return 1;
+}
+
+int dai_show_state_equal(const dai_show *sh, const dai_show_state *st) {
+    if (!sh || !st) return 0;
+    if (sh->forms.size() != st->forms.size()) return 0;
+    if (std::memcmp(&sh->s, &st->s, sizeof(dai_show_settings)) != 0) return 0;
+    for (size_t i = 0; i < sh->forms.size(); ++i)
+        if (!form_equal(sh->forms[i], st->forms[i])) return 0;
+    return 1;
+}
+
 } // extern "C"

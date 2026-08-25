@@ -916,5 +916,89 @@ int show_cases_edit(void) {
         dai_show_destroy(sh);
     }
 
+    // ---- [7t] undo is a snapshot of the document -------------------------
+    //
+    // A show has no dai_doc under it, so undo is not a stack of commands: it
+    // is a copy of the settings and the figures. Two things have to be true or
+    // the whole interface built on it is a lie - a restore has to put the
+    // points back exactly, and the derived plan has to be thrown away, because
+    // a plan that outlives the document it was solved from is the one bug in
+    // this program that could hurt somebody.
+    {
+        show_section("[7t] undo: snapshot, restore, and the plan it drops");
+        dai_show_settings s = dai_show_settings_default();
+        s.drone_count = 32; s.min_distance_m = 2.0f; s.seed = 11u;
+        dai_show *sh = dai_show_create(&s);
+        const uint32_t n = 32;
+        std::vector<dai_show_point> a(n), b(n);
+        show_grid_formation(a.data(), n, 5.0f, dai_vec3{ 0.0f, 40.0f, 0.0f });
+        show_grid_formation(b.data(), n, 5.0f, dai_vec3{ 0.0f, 70.0f, 0.0f });
+        dai_show_formation_add(sh, "one", "builtin://grid", a.data(), n, 4.0f);
+        dai_show_formation_add(sh, "two", "builtin://grid", b.data(), n, 4.0f);
+        char err[256] = { 0 };
+        CHECK(dai_show_solve(sh, err, sizeof(err)) == DAI_OK, "[7t] solve: %s", err);
+        CHECK(dai_show_get_plan(sh) != nullptr, "[7t] no plan to lose");
+
+        dai_show_state *snap = dai_show_snapshot(sh);
+        CHECK(snap != nullptr, "[7t] no snapshot");
+        CHECK(dai_show_state_equal(sh, snap),
+              "[7t] a snapshot taken this instant does not match the document");
+
+        // Move a figure, repaint it and change a hold: three different kinds
+        // of edit, so a snapshot that only copies geometry gets caught.
+        dai_show_transform xf = dai_show_transform_identity();
+        xf.position = dai_vec3{ 12.0f, 3.0f, -4.0f };
+        dai_show_formation_set_transform(sh, 1, &xf);
+        dai_show_formation_set_colour(sh, 1, 1, 255, 0, 0, 0);
+        dai_show_formation_set_hold(sh, 0, 9.5f);
+        CHECK(!dai_show_state_equal(sh, snap),
+              "[7t] three edits later the document still compares equal to its snapshot");
+
+        CHECK(dai_show_restore(sh, snap), "[7t] restore refused");
+        CHECK(dai_show_state_equal(sh, snap), "[7t] restore did not put the document back");
+        CHECK(dai_show_get_plan(sh) == nullptr,
+              "[7t] the plan survived a restore - it belongs to a document that is gone");
+        dai_show_formation_info fi0, fi1;
+        dai_show_formation_get(sh, 0, &fi0);
+        dai_show_formation_get(sh, 1, &fi1);
+        CHECK(fi0.hold_s == 4.0f, "[7t] the hold came back as %.2f, not 4.00", (double)fi0.hold_s);
+        CHECK(fi1.colour_override == 0, "[7t] the colour override survived the restore");
+        CHECK(dai_show_transform_is_identity(&fi1.xf), "[7t] the move survived the restore");
+        // Point for point, not just field for field.
+        const dai_show_point *back = dai_show_formation_points(sh, 1);
+        int same = 1;
+        for (uint32_t i = 0; i < n && same; ++i)
+            same = (back[i].x == b[i].x && back[i].y == b[i].y && back[i].z == b[i].z);
+        CHECK(same, "[7t] a restored figure's points are not the points it was built from");
+        dai_show_state_destroy(snap);
+        dai_show_destroy(sh);
+    }
+
+    // ---- [7u] a stroke is part of the state ------------------------------
+    // Painting at the playhead writes a stroke, and a stroke is an edit like
+    // any other: an undo that forgets it would leave colour behind that no
+    // panel can now remove.
+    {
+        show_section("[7u] painted colour is part of what undo covers");
+        dai_show_settings s = dai_show_settings_default();
+        s.drone_count = 16; s.min_distance_m = 2.0f; s.seed = 5u;
+        dai_show *sh = dai_show_create(&s);
+        const uint32_t n = 16;
+        std::vector<dai_show_point> a(n);
+        show_grid_formation(a.data(), n, 5.0f, dai_vec3{ 0.0f, 40.0f, 0.0f });
+        dai_show_formation_add(sh, "one", "builtin://grid", a.data(), n, 4.0f);
+        dai_show_state *snap = dai_show_snapshot(sh);
+        uint32_t idx[3] = { 0, 1, 2 };
+        CHECK(dai_show_formation_paint_at(sh, 0, 1.0f, idx, 3, 255, 0, 0, 0),
+              "[7u] the paint stroke was refused");
+        CHECK(!dai_show_state_equal(sh, snap),
+              "[7u] a paint stroke does not show up in the document's state, so undo "
+              "would not take it back");
+        dai_show_restore(sh, snap);
+        CHECK(dai_show_state_equal(sh, snap), "[7u] the stroke survived the restore");
+        dai_show_state_destroy(snap);
+        dai_show_destroy(sh);
+    }
+
     return g_show_fail - before;
 }

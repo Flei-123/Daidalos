@@ -394,6 +394,33 @@ dai_result dai_window_present(dai_window *w) {
 
 int dai_window_key_down(dai_window *w, uint32_t keysym) { return (w && w->keys[key_slot(keysym)]) ? 1 : 0; }
 
+
+// No portable file dialog on Linux, so the desktop's own is asked for by
+// name: zenity on GNOME, kdialog on KDE. Neither present means 0, and the
+// caller keeps its plain path field - which is the same contract the
+// clipboard bridge above has.
+uint32_t dai_window_pick_file(dai_window *w, const char *title,
+                              const char *filter, char *out, uint32_t max) {
+    (void)w;
+    if (!out || !max) return 0;
+    out[0] = 0;
+    const char *t = (title && title[0]) ? title : "Open";
+    char cmd[1024];
+    std::snprintf(cmd, sizeof(cmd),
+                  "command -v zenity >/dev/null 2>&1 && "
+                  "zenity --file-selection --title='%s' 2>/dev/null || "
+                  "(command -v kdialog >/dev/null 2>&1 && kdialog --getopenfilename 2>/dev/null)",
+                  t);
+    (void)filter;
+    FILE *f = popen(cmd, "r");
+    if (!f) return 0;
+    size_t n = fread(out, 1, max - 1, f);
+    pclose(f);
+    out[n] = 0;
+    while (n && (out[n - 1] == '\n' || out[n - 1] == '\r')) out[--n] = 0;
+    return (uint32_t)n;
+}
+
 float dai_window_wheel(dai_window *w) {
     if (!w) return 0.0f;
     float v = w->wheel;

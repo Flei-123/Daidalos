@@ -930,6 +930,195 @@ int main() {
         dai_show_destroy(sh);
     }
 
+    // ---- the show viewport: what a LEFT drag means ------------------------
+    //
+    // Three things that were one gesture before and are three now: a left drag
+    // on empty sky does nothing to the camera, Alt+left orbits, and a left
+    // click selects a drone without dragging the point it stands on. The old
+    // behaviour made every click a small deformation of the figure.
+    {
+        std::printf("\n-- show: the left button selects, Alt turns the camera\n");
+        const float VX = 300.0f, VY = 40.0f, VW = 900.0f, VH = 600.0f;
+        dai_show_settings s = dai_show_settings_default();
+        s.drone_count = 16; s.min_distance_m = 2.0f; s.fps = 10; s.seed = 3u;
+        dai_show *sh = dai_show_create(&s);
+        dai_show_point a[16], b[16];
+        for (int i = 0; i < 16; ++i) {
+            a[i] = dai_show_point{};
+            a[i].x = (float)(i % 4) * 6.0f - 9.0f;
+            a[i].y = 40.0f;
+            a[i].z = (float)(i / 4) * 6.0f - 9.0f;
+            a[i].r = 200; a[i].g = 200; a[i].b = 200; a[i].w = 0;
+            b[i] = a[i];
+            b[i].y = 60.0f;
+        }
+        dai_show_formation_add(sh, "Grid", "builtin://grid", a, 16, 4.0f);
+        dai_show_formation_add(sh, "Grid up", "builtin://grid", b, 16, 4.0f);
+        char serr[256] = { 0 };
+        dai_show_solve(sh, serr, sizeof(serr));
+        dai_show_ui *su = dai_show_ui_create(sh);
+        dai_show_ui_select_formation(su, 0);
+        dai_show_ui_seek(su, 0.0f);
+
+        auto frame = [&](float mxp, float myp, int mdown) {
+            dai_ui_input in{};
+            in.mouse_x = mxp; in.mouse_y = myp; in.mouse_down = mdown;
+            dai_ui_begin(ui, 1280, 720, &in);
+            dai_show_ui_viewport(su, ui, VX, VY, VW, VH);
+            dai_ui_end(ui);
+        };
+        // A patch of sky well away from the figure and away from the gizmo, so
+        // nothing is grabbed by accident.
+        const float SKY_X = VX + 60.0f, SKY_Y = VY + 60.0f;
+
+        // 1. No Alt: a left drag across the sky must not turn the camera. The
+        //    proof is what is DRAWN - if the camera moved, the X handle moved
+        //    with it.
+        dai_show_ui_modifiers(su, 0, 0, 0);
+        dai_show_ui_select_formation(su, 1);
+        frame(SKY_X, SKY_Y, 0);
+        float ax = 0.0f, ay = 0.0f;
+        int got_a = dai_show_ui_gizmo_handle(su, 0, &ax, &ay);
+        frame(SKY_X, SKY_Y, 1);
+        frame(SKY_X + 200.0f, SKY_Y + 40.0f, 1);
+        frame(SKY_X + 200.0f, SKY_Y + 40.0f, 0);
+        frame(SKY_X, SKY_Y, 0);
+        float bx = 0.0f, by = 0.0f;
+        int got_b = dai_show_ui_gizmo_handle(su, 0, &bx, &by);
+        CHECK(got_a && got_b, "the gizmo handle was not drawn either side of the drag");
+        CHECK(std::fabs(ax - bx) < 0.5f && std::fabs(ay - by) < 0.5f,
+              "a plain left drag turned the camera: the handle moved from %.1f,%.1f to "
+              "%.1f,%.1f - the left button belongs to the selection",
+              (double)ax, (double)ay, (double)bx, (double)by);
+
+        // 2. With Alt held, the same drag DOES orbit.
+        dai_show_ui_modifiers(su, 1, 0, 0);
+        frame(SKY_X, SKY_Y, 0);
+        frame(SKY_X, SKY_Y, 1);
+        frame(SKY_X + 200.0f, SKY_Y + 40.0f, 1);
+        frame(SKY_X + 200.0f, SKY_Y + 40.0f, 0);
+        frame(SKY_X, SKY_Y, 0);
+        float cx2 = 0.0f, cy2 = 0.0f;
+        int got_c = dai_show_ui_gizmo_handle(su, 0, &cx2, &cy2);
+        CHECK(got_c && (std::fabs(cx2 - bx) > 1.0f || std::fabs(cy2 - by) > 1.0f),
+              "Alt + left drag did not turn the camera - the handle stayed at %.1f,%.1f",
+              (double)bx, (double)by);
+        dai_show_ui_modifiers(su, 0, 0, 0);
+
+        // 3. Delete, and undo bringing it back. The count is the whole proof.
+        {
+            uint32_t was = dai_show_formation_count(sh);
+            dai_show_ui_select_formation(su, 1);
+            CHECK(dai_show_ui_delete_selected(su), "delete refused to remove a figure");
+            CHECK(dai_show_formation_count(sh) == was - 1u,
+                  "delete left %u figures, expected %u",
+                  dai_show_formation_count(sh), was - 1u);
+            CHECK(dai_show_ui_undo_depth(su) > 0, "delete pushed no undo step");
+            CHECK(dai_show_ui_undo(su), "undo refused after a delete");
+            CHECK(dai_show_formation_count(sh) == was,
+                  "undo left %u figures, expected %u back", dai_show_formation_count(sh), was);
+            CHECK(dai_show_ui_redo(su) && dai_show_formation_count(sh) == was - 1u,
+                  "redo did not delete it again");
+            dai_show_ui_undo(su);
+        }
+
+        dai_show_ui_destroy(su);
+        dai_show_destroy(sh);
+    }
+
+    // ---- the dope sheet: the two numbers a show is made of, dragged --------
+    //
+    // The timeline is not a slider any more: every figure is a bar with a
+    // diamond at each end, and dragging the right one is its hold. The test
+    // grabs the handle where the strip PUTS it (the layout is documented in
+    // dai_show_ui_viewport: a 54 px Play button at x+6, then the track out to
+    // x+w-10, the whole show across it) and checks the document changed.
+    {
+        std::printf("\n-- show: dragging a keyframe changes the show\n");
+        const float VX = 0.0f, VY = 0.0f, VW = 1000.0f, VH = 500.0f;
+        dai_show_settings s = dai_show_settings_default();
+        s.drone_count = 16; s.min_distance_m = 2.0f; s.fps = 10; s.seed = 3u;
+        dai_show *sh = dai_show_create(&s);
+        dai_show_point a[16], b[16];
+        for (int i = 0; i < 16; ++i) {
+            a[i] = dai_show_point{};
+            a[i].x = (float)(i % 4) * 6.0f - 9.0f;
+            a[i].y = 40.0f;
+            a[i].z = (float)(i / 4) * 6.0f - 9.0f;
+            a[i].r = 200; a[i].g = 200; a[i].b = 200; a[i].w = 0;
+            b[i] = a[i];
+            b[i].y = 60.0f;
+        }
+        dai_show_formation_add(sh, "Grid", "builtin://grid", a, 16, 6.0f);
+        dai_show_formation_add(sh, "Grid up", "builtin://grid", b, 16, 6.0f);
+        char serr[256] = { 0 };
+        dai_show_solve(sh, serr, sizeof(serr));
+        dai_show_ui *su = dai_show_ui_create(sh);
+        dai_show_ui_modifiers(su, 0, 0, 0);
+
+        auto frame = [&](float mxp, float myp, int mdown) {
+            dai_ui_input in{};
+            in.mouse_x = mxp; in.mouse_y = myp; in.mouse_down = mdown;
+            dai_ui_begin(ui, 1280, 720, &in);
+            dai_show_ui_viewport(su, ui, VX, VY, VW, VH);
+            dai_ui_end(ui);
+        };
+
+        const float TL   = 124.0f < (VH * 0.30f) ? 124.0f : (VH * 0.30f > 58.0f ? VH * 0.30f : 58.0f);
+        const float ty   = VY + VH - TL;
+        const float TX0  = VX + 6.0f + 54.0f + 12.0f;
+        const float TX1  = VX + VW - 10.0f;
+
+        // The show's own duration, the way the strip computes it: holds plus
+        // the flight between them.
+        dai_show_formation_info f0, f1;
+        dai_show_formation_get(sh, 0, &f0);
+        dai_show_formation_get(sh, 1, &f1);
+        dai_show_transition tr1;
+        dai_show_transition_get(sh, 1, &tr1);
+        float dur = f0.hold_s + tr1.duration_s + f1.hold_s;
+        const dai_show_plan *pl = dai_show_get_plan(sh);
+        if (pl && dai_show_plan_duration(pl) > dur) dur = dai_show_plan_duration(pl);
+        const float PPS = (TX1 - TX0) / dur;
+
+        // The first figure's bar ends at its hold; the diamond is there, on
+        // the first row of the sheet.
+        float end_x = TX0 + f0.hold_s * PPS;
+        float row_y = ty + 3.0f + 16.0f + 2.0f + 9.0f;      // ruler, then half a row
+
+        float hold_before = f0.hold_s;
+        frame(end_x, row_y, 0);
+        frame(end_x, row_y, 1);
+        frame(end_x + 3.0f * PPS, row_y, 1);
+        frame(end_x + 3.0f * PPS, row_y, 0);
+        dai_show_formation_get(sh, 0, &f0);
+        CHECK(f0.hold_s > hold_before + 2.0f,
+              "dragging the hold diamond three seconds to the right made the hold %.2f s, "
+              "it was %.2f s", (double)f0.hold_s, (double)hold_before);
+        CHECK(dai_show_ui_undo_depth(su) > 0, "the drag pushed no undo step");
+        // ONE step for the whole drag, not one per frame.
+        CHECK(dai_show_ui_undo_depth(su) == 1,
+              "one drag left %u undo steps - a drag is one step",
+              dai_show_ui_undo_depth(su));
+        dai_show_ui_undo(su);
+        dai_show_formation_get(sh, 0, &f0);
+        CHECK(std::fabs(f0.hold_s - hold_before) < 1e-3f,
+              "undo left the hold at %.2f s, expected %.2f s",
+              (double)f0.hold_s, (double)hold_before);
+
+        // A press on the ruler scrubs to the second under the pointer.
+        float mid_x = TX0 + (TX1 - TX0) * 0.5f;
+        frame(mid_x, ty + 6.0f, 0);
+        frame(mid_x, ty + 6.0f, 1);
+        frame(mid_x, ty + 6.0f, 0);
+        CHECK(std::fabs(dai_show_ui_time(su) - dur * 0.5f) < dur * 0.08f,
+              "a click halfway along the ruler seeked to %.2f s of %.2f s",
+              (double)dai_show_ui_time(su), (double)dur);
+
+        dai_show_ui_destroy(su);
+        dai_show_destroy(sh);
+    }
+
     dai_editor_ui_destroy(panels);
     dai_editor_destroy(ed);
     dai_doc_sync_destroy(sync);

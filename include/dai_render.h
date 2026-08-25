@@ -449,6 +449,18 @@ DAI_API void dai_window_size(dai_window *w, uint32_t *width, uint32_t *height);
 DAI_API int  dai_window_clipboard_set(dai_window *w, const char *utf8);
 DAI_API uint32_t dai_window_clipboard_get(dai_window *w, char *out, uint32_t max);
 
+/* The system's "open file" dialog, blocking, UTF-8 out. `filter` is a
+ * semicolon list of extensions without dots ("png;jpg;jpeg") or NULL for any
+ * file; `title` may be NULL. Returns the number of bytes written, 0 when the
+ * user cancelled OR when the platform has no dialog - a caller must therefore
+ * keep whatever way in it had before, which here is the plain path field.
+ *
+ * This exists because a path field is not a way to open a file. Nobody knows
+ * the full path of their own picture, and on Windows nobody types
+ * backslashes into a text box correctly the first time. */
+DAI_API uint32_t dai_window_pick_file(dai_window *w, const char *title,
+                                      const char *filter, char *out, uint32_t max);
+
 /* The pointer shape. The values ARE dai_ui_cursor_kind's, so a host can pass
  * dai_ui_cursor(ui) straight through without a translation table - the UI is
  * the only thing that knows which widget is under the pointer, and the window

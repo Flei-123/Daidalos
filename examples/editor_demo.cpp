@@ -4393,6 +4393,7 @@ int main(int argc, char **argv) {
                 ni.key_q = ci.key_q; ni.key_e = ci.key_e;
                 ni.key_shift = ci.key_shift;
                 ni.key_focus = ci.key_focus;
+                ni.key_alt   = ci.key_alt;
                 ni.dt = dt;
                 dai_show_ui_nav(g_show_ui, &ni);
             }
@@ -4739,6 +4740,33 @@ int main(int argc, char **argv) {
         // rate of the machine it is being watched on.
         if (g_show_ui) {
             dai_show_ui_advance(g_show_ui, dt);
+            // What a LEFT drag means depends on Alt, and dai_ui never sees a
+            // held key - so the host, which does, tells the panels.
+            dai_show_ui_modifiers(g_show_ui, ci.key_alt, ctrl, ci.key_shift);
+
+            // Undo, redo and Delete, on the keys they are on everywhere else
+            // in this editor. A show has no dai_doc under it, so these go to
+            // the show's own stack rather than to dai_editor_undo.
+            if (!typing) {
+                if (ctrl && pressed(3)) dai_show_ui_undo(g_show_ui);
+                if (ctrl && pressed(4)) dai_show_ui_redo(g_show_ui);
+                if (!ctrl && pressed(5)) dai_show_ui_delete_selected(g_show_ui);
+            }
+
+            // The file dialog a panel cannot open for itself: the panel says
+            // it wants one, the window layer raises the system's, the path
+            // goes back. The same split the export row already uses.
+            {
+                int want_pick = dai_show_ui_take_browse(g_show_ui);
+                if (want_pick) {
+                    char picked[1024] = { 0 };
+                    if (dai_window_pick_file(win, "Choose an image", "png;jpg;jpeg",
+                                             picked, sizeof(picked)) && picked[0])
+                        dai_show_ui_set_image_path(g_show_ui, picked);
+                    else
+                        dai_show_ui_note(g_show_ui, 0, "no file chosen");
+                }
+            }
 
             // A click on the export row only records the wish - the writing is
             // done here, where the project's folder is known. The outcome is

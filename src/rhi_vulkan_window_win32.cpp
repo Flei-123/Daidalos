@@ -19,10 +19,12 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>          /* DragAcceptFiles / DragQueryFile: WM_DROPFILES */
+#include <commdlg.h>            /* GetOpenFileNameW: the file picker */
 #include <vulkan/vulkan_win32.h>
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 struct dai_window {
     dai_renderer *r = nullptr;
@@ -532,6 +534,67 @@ uint32_t dai_window_clipboard_get(dai_window *w, char *out, uint32_t max) {
     }
     CloseClipboard();
     return n;
+}
+
+uint32_t dai_window_pick_file(dai_window *w, const char *title,
+                              const char *filter, char *out, uint32_t max) {
+    if (!out || !max) return 0;
+    out[0] = 0;
+    // The filter is a double-NUL terminated pair list: description, pattern.
+    wchar_t wfilter[256];
+    int fi = 0;
+    auto put_w = [&](const char *utf8) {
+        int n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wfilter + fi,
+                                    (int)(256 - fi));
+        if (n > 0) fi += n - 1;              // keep writing over the NUL
+    };
+    if (filter && filter[0]) {
+        put_w("Files (");
+        // "png;jpg" -> "*.png;*.jpg", said twice: once for the human, once
+        // for the dialog.
+        std::string pat;
+        const char *p = filter;
+        while (*p) {
+            const char *e = std::strchr(p, ';');
+            std::string ext(p, e ? (size_t)(e - p) : std::strlen(p));
+            if (!pat.empty()) pat += ";";
+            pat += "*." + ext;
+            if (!e) break;
+            p = e + 1;
+        }
+        put_w(pat.c_str());
+        put_w(")");
+        wfilter[fi++] = 0;
+        put_w(pat.c_str());
+        wfilter[fi++] = 0;
+    }
+    put_w("All files (*.*)");
+    wfilter[fi++] = 0;
+    put_w("*.*");
+    wfilter[fi++] = 0;
+    wfilter[fi++] = 0;
+
+    wchar_t wtitle[128] = { 0 };
+    if (title && title[0])
+        MultiByteToWideChar(CP_UTF8, 0, title, -1, wtitle, 128);
+
+    wchar_t path[1024] = { 0 };
+    OPENFILENAMEW ofn;
+    std::memset(&ofn, 0, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner   = w ? w->hwnd : nullptr;
+    ofn.lpstrFilter = wfilter;
+    ofn.lpstrFile   = path;
+    ofn.nMaxFile    = 1024;
+    ofn.lpstrTitle  = wtitle[0] ? wtitle : nullptr;
+    // NOCHANGEDIR: a dialog that moves the process's working directory turns
+    // every relative path the editor holds into a different file.
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR |
+                OFN_EXPLORER;
+    if (!GetOpenFileNameW(&ofn)) return 0;
+    int n = WideCharToMultiByte(CP_UTF8, 0, path, -1, out, (int)max, nullptr, nullptr);
+    if (n <= 0) { out[0] = 0; return 0; }
+    return (uint32_t)(n - 1);
 }
 
 uint32_t dai_window_text(dai_window *w, uint32_t *out, uint32_t max) {

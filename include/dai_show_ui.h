@@ -166,9 +166,43 @@ typedef struct dai_show_nav_input {
     int   key_w, key_a, key_s, key_d, key_q, key_e;
     int   key_shift;
     int   key_focus;                  /* F, held - the call edge-triggers it */
+    int   key_alt;                    /* Alt held: right drag dollies instead
+                                       * of looking, the scene view's zoom */
     float dt;                         /* seconds since the last call */
 } dai_show_nav_input;
 DAI_API void dai_show_ui_nav(dai_show_ui *u, const dai_show_nav_input *in);
+
+/* ---- modifiers -----------------------------------------------------------
+ * dai_ui reports the pointer, never a held key, so the host feeds the three
+ * that change what a drag MEANS. Alt+drag orbits the camera; a plain left drag
+ * belongs to the selection, exactly as in the game editor's scene view. */
+DAI_API void dai_show_ui_modifiers(dai_show_ui *u, int alt, int ctrl, int shift);
+
+/* ---- undo ----------------------------------------------------------------
+ * The panels own the stack because they are what knows where a gesture BEGAN:
+ * a gizmo drag is one step however many frames it took. dai_show_snapshot does
+ * the copying. `depth` is how many steps can still be taken back, so a host
+ * can grey out a menu item honestly. */
+DAI_API int  dai_show_ui_undo(dai_show_ui *u);
+DAI_API int  dai_show_ui_redo(dai_show_ui *u);
+DAI_API uint32_t dai_show_ui_undo_depth(const dai_show_ui *u);
+DAI_API uint32_t dai_show_ui_redo_depth(const dai_show_ui *u);
+/* One undo step, taken before the caller changes something. Used by the host
+ * for edits it makes itself. */
+DAI_API void dai_show_ui_begin_edit(dai_show_ui *u, const char *what);
+
+/* Delete: the selected figure, or - when a drone's point is selected and the
+ * figure is not - nothing, because a fleet drone is not a thing you can
+ * remove. Returns 1 when something went. */
+DAI_API int dai_show_ui_delete_selected(dai_show_ui *u);
+
+/* ---- the file the panel cannot open --------------------------------------
+ * A panel has no window handle, so it cannot raise the system's file dialog.
+ * It says it WANTS one: the host calls take_browse once a frame, gets 1 when
+ * the user pressed Browse, opens the dialog itself and hands the path back.
+ * The same split dai_show_ui_take_export already uses. */
+DAI_API int  dai_show_ui_take_browse(dai_show_ui *u);
+DAI_API void dai_show_ui_set_image_path(dai_show_ui *u, const char *path);
 
 DAI_API void dai_show_ui_panels(dai_show_ui *u, dai_ui *ui, struct dai_dock *dock);
 

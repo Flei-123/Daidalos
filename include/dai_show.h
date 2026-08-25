@@ -807,6 +807,25 @@ DAI_API dai_result dai_show_save(const dai_show *sh, const char *path,
                                  char *err, size_t err_len);
 DAI_API dai_show  *dai_show_load(const char *path, char *err, size_t err_len);
 
+/* ---- undo -----------------------------------------------------------------
+ *
+ * A show has no dai_doc under it - the formations ARE the document - so undo
+ * is a snapshot of that document rather than a stack of commands. The whole
+ * editable state is the settings and the figures; the plan is derived and is
+ * therefore NOT in the snapshot: restoring one throws the plan away, which is
+ * exactly what every other edit here already does.
+ *
+ * Copying the figures copies their points, and a fleet of ten thousand is a
+ * few hundred kilobytes per step - which is why the interface caps its stack
+ * rather than keeping every edit of a session. */
+typedef struct dai_show_state dai_show_state;
+DAI_API dai_show_state *dai_show_snapshot(const dai_show *sh);
+DAI_API int             dai_show_restore(dai_show *sh, const dai_show_state *st);
+DAI_API void            dai_show_state_destroy(dai_show_state *st);
+/* Same figures, same settings? Used to skip pushing an undo step for a
+ * gesture that changed nothing. */
+DAI_API int             dai_show_state_equal(const dai_show *sh, const dai_show_state *st);
+
 #ifdef __cplusplus
 }
 #endif

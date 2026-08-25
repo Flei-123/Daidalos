@@ -161,7 +161,7 @@ fi
 # layer calls back into dai_gltf_*, and a static archive is only scanned
 # once at the position it is written. One extra name, no extra bytes.
 LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a $ASSETS $OUT/libdaidalos.a \
-      ${TALOS_LINK:-} $JOLT_LINK -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 \
+      ${TALOS_LINK:-} $JOLT_LINK -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 -lcomdlg32 \
       "$QJS_WIN" -static -static-libgcc -static-libstdc++ -lpthread"
 
 echo "-- programs"

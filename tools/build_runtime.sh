@@ -151,7 +151,7 @@ build_windows() {
 
     LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a \
           ${TALOS_LINK:-} -L$JOLT_LIB_WIN -lJolt -L$OUT -lvulkan-1 -lwinhttp -lgdi32 \
-          -luser32 -lshell32 $SCRIPT_OBJ -static -static-libgcc -static-libstdc++ -lpthread"
+          -luser32 -lshell32 -lcomdlg32 $SCRIPT_OBJ -static -static-libgcc -static-libstdc++ -lpthread"
 
     # -mwindows is the whole Windows finish: SUBSYSTEM:WINDOWS, so a double
     # clicked game does not flash a black console box behind its window. The
