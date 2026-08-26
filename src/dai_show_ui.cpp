@@ -50,19 +50,18 @@ const char *const TIMINGS[2]  = { "Sync", "Staggered" };
 const char *const FIGURES[3]  = { "Sphere", "Cube", "Ring" };
 // The hierarchy's add menu: the three builtins, and the image the storyboard
 // has a path for.
-const dai_ui_menu_item ADD_ITEMS[10] = {
+const dai_ui_menu_item ADD_ITEMS[9] = {
     { nullptr, "Into this step", nullptr, 1 },   // a caption, not a command
     { nullptr, "Sphere", nullptr, 0 },
     { nullptr, "Cube", nullptr, 0 },
     { nullptr, "Ring", nullptr, 0 },
     { nullptr, "Image", nullptr, 0 },
     { nullptr, "Takeoff grid (start)", nullptr, 0 },
-    { nullptr, "New step (flies in parallel)", nullptr, 0 },
     { nullptr, "This figure", nullptr, 1 },      // a caption, not a command
     { nullptr, "Duplicate", nullptr, 0 },
     { nullptr, "Delete", nullptr, 0 },
 };
-const int ADD_ITEM_COUNT = 10;
+const int ADD_ITEM_COUNT = 9;
 
 // ---- fitting text to the column it has --------------------------------------
 //
@@ -465,6 +464,8 @@ struct dai_show_ui {
     float vp_x = 0.0f, vp_y = 0.0f, vp_w = 0.0f, vp_h = 0.0f;  // last drawn preview
     dai_show_ui_log_fn log_fn = nullptr;   // the Console, when a host wires one
     void *log_user = nullptr;
+    int   active_group = 0;   // the step new figures land in - the one whose
+                              // header is lit in the storyboard
     int   look_seen = 0;      // the viewport itself saw the right button held
     float look_hx = 0.0f, look_hy = 0.0f;  // the host's pointer, last frame
     float nav_mx = 0.0f, nav_my = 0.0f;
@@ -955,8 +956,14 @@ void add_formation(dai_show_ui *u, const dai_show_sample_desc *desc,
     char err[256] = { 0 };
     uint32_t idx = dai_show_formation_from_mesh(u->sh, name, source, desc, err, sizeof(err));
     if (idx == 0xFFFFFFFFu) { say(u, 1, "%s", err[0] ? err : "the figure could not be sampled"); return; }
+    // Into the step that is CURRENT, not into whatever step the show happens
+    // to end in: the storyboard's lit header is the answer to "where does the
+    // next figure go", and it is the only answer there is now that the Step
+    // field is gone.
+    dai_show_formation_set_group(u->sh, idx, u->active_group < 0 ? 0 : u->active_group);
     u->sel_formation = (int)idx;
-    say(u, 0, "formation \"%s\" added: %u points", name, desc->count);
+    say(u, 0, "formation \"%s\" added to step %d: %u points",
+        name, (u->active_group < 0 ? 0 : u->active_group) + 1, desc->count);
 }
 
 // The three builtin shapes as a descriptor, shared by "add" and by "the same
@@ -2948,7 +2955,7 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
     // of it at the same time as the others. Adding one is adding a figure
     // with a group nobody has used yet - so the fleet has to be shared out
     // again, which the solve says out loud if the counts stop adding up.
-    if (apick == 8) {                       // duplicate the selected figure
+    if (apick == 7) {                       // duplicate the selected figure
         uint32_t fc4 = dai_show_formation_count(u->sh);
         if (u->sel_formation >= 0 && (uint32_t)u->sel_formation < fc4) {
             dai_show_formation_info di;
@@ -2971,25 +2978,14 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         }
         apick = -1;
     }
-    if (apick == 9) { dai_show_ui_delete_selected(u); apick = -1; }
-    if (apick == 6) {
-        int maxg = -1;
-        uint32_t fc3 = dai_show_formation_count(u->sh);
-        for (uint32_t k = 0; k < fc3; ++k) {
-            dai_show_formation_info gi3;
-            if (dai_show_formation_get(u->sh, k, &gi3) && gi3.group > maxg) maxg = gi3.group;
-        }
-        uint32_t was = dai_show_formation_count(u->sh);
-        push_undo(u, "new step");
-        add_builtin(u);
-        if (dai_show_formation_count(u->sh) > was) {
-            dai_show_formation_set_group(u->sh, was, maxg + 1);
-            u->sel_formation = (int)was;
-            say(u, 0, "step %d added - give its figures their share of the fleet",
-                maxg + 2);
-        }
-        apick = -1;
-    }
+    if (apick == 8) { dai_show_ui_delete_selected(u); apick = -1; }
+    // There is no "new step" command any more, and no Step field in the
+    // inspector. A step is not a setting: it is WHERE a figure was put. The
+    // storyboard always ends in an empty step, clicking it makes it the one
+    // new figures land in, and the moment something lands there the next
+    // empty step appears under it. Steps therefore only ever exist because
+    // they hold something - which is the rule a director already has in his
+    // head, and one less number to keep consistent by hand.
     if (apick >= 1 && apick < 4) {
         push_undo(u, "add figure");
         u->figure = apick - 1;
@@ -3024,11 +3020,7 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
     else if (apick == 5) {
         // Where the drones stand before anybody presses play. Added to the
         // step the selected figure belongs to, at its front.
-        int grp = 0;
-        dai_show_formation_info gi;
-        if (u->sel_formation >= 0 &&
-            dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &gi))
-            grp = gi.group;
+        int grp = u->active_group < 0 ? 0 : u->active_group;
         char gerr[256] = { 0 };
         push_undo(u, "takeoff grid");
         uint32_t gidx = dai_show_add_takeoff_grid(u->sh, grp, 0.0f, gerr, sizeof(gerr));
@@ -3066,10 +3058,14 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
             std::snprintf(gh, sizeof(gh), "Step %d", info.group + 1);
             float hx2 = 0.0f, hy2 = 0.0f;
             dai_ui_cursor_pos(ui, &hx2, &hy2);
-            if (hy2 >= top - 0.5f && hy2 + pitch <= bottom + 0.5f)
-                dai_ui_text(ui, hx2 + 2.0f,
-                            hy2 + (pitch - dai_ui_text_height(ui)) * 0.5f, gh, st->text_dim);
-            dai_ui_advance(ui, w - 16.0f, pitch - st->spacing);
+            if (hy2 >= top - 0.5f && hy2 + pitch <= bottom + 0.5f) {
+                // A header is a BUTTON: clicking it says "this is the step I am
+                // working in", and the next figure lands there. Lit when it is
+                // that step - the storyboard is the only place the answer
+                // lives now that the inspector's Step field is gone.
+                if (dai_ui_toggle_button(ui, gh, info.group == u->active_group))
+                    u->active_group = info.group;
+            } else dai_ui_advance(ui, w - 16.0f, pitch - st->spacing);
         }
         // The lit row is the figure the TIMELINE is standing in, not the one
         // the storyboard happens to be editing - two panels lighting up two
@@ -3109,9 +3105,32 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         }
         if (dai_ui_toggle_button(ui, row, here)) {
             u->sel_formation = (int)i;
+            u->active_group  = info.group;
             u->time          = info.t_start;
             u->playing       = 0;
         }
+    }
+
+    // ...and the empty step at the end, always. This is how a new step is made
+    // now: click it, add a figure, and the next empty one appears below. No
+    // command, no number to type, and no way to end up with a step that holds
+    // nothing but its own name.
+    {
+        int maxg = -1;
+        for (uint32_t k = 0; k < n; ++k) {
+            dai_show_formation_info gi3;
+            if (dai_show_formation_get(u->sh, k, &gi3) && gi3.group > maxg) maxg = gi3.group;
+        }
+        int empty_group = maxg + 1;
+        if (u->active_group > empty_group) u->active_group = empty_group;
+        char eh[80];
+        std::snprintf(eh, sizeof(eh), "Step %d   (empty)", empty_group + 1);
+        float ex2 = 0.0f, ey2 = 0.0f;
+        dai_ui_cursor_pos(ui, &ex2, &ey2);
+        if (ey2 >= top - 0.5f && ey2 + pitch <= bottom + 0.5f) {
+            if (dai_ui_toggle_button(ui, eh, u->active_group == empty_group))
+                u->active_group = empty_group;
+        } else dai_ui_advance(ui, w - 16.0f, pitch - st->spacing);
     }
     dai_ui_scroll_end(ui);
 
@@ -3145,10 +3164,10 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
     dai_ui_panel_begin(ui, x, y, w, h, nullptr);
     const dai_show_plan *plan = dai_show_get_plan(u->sh);
     const char *const LABELS[] = { "Position", "Colour", "Keyframes", "Nearest",
-                                   "Hold (s)", "Step", "Points", "Mode",
+                                   "Hold (s)", "Points", "Mode",
                                    "Transit (s)", "Profile", "Timing", "Spread (s)",
                                    "Assignment" };
-    float label_was = fit_labels(ui, LABELS, 13);
+    float label_was = fit_labels(ui, LABELS, 12);
 
     // Everything below scrolls, and everything below stops at `bot`. The panel
     // is a fifth of the frame wide when a show is open, which is narrow enough
@@ -3319,16 +3338,6 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                         if (dai_ui_num_field(ui, "Hold (s)", &hold, 0.25f, 0.0f, 600.0f, "inshold")) {
                             edit_begin(u, ui, "hold");
                             dai_show_formation_set_hold(u->sh, fi, hold);
-                        }
-                    } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
-                }
-                {
-                    float grp = (float)info.group;
-                    float hgt = widget_row(ui);
-                    if (fits(ui, bot, hgt)) {
-                        if (dai_ui_num_field(ui, "Step", &grp, 1.0f, 1.0f, 16.0f, "insgrp")) {
-                            edit_begin(u, ui, "step");
-                            dai_show_formation_set_group(u->sh, fi, (int)(grp - 0.5f));
                         }
                     } else dai_ui_advance(ui, dai_ui_panel_width(ui), hgt);
                 }

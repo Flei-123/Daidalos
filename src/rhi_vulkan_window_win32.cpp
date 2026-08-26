@@ -166,6 +166,16 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // window is concerned. It will never see the KEYUP that follows, and a
     // key stuck down is an editor that walks by itself and eats every
     // shortcut - which is exactly how "I suddenly cannot move" happens.
+    // Deactivated - by Alt+Tab, by a click in another program, by the shell.
+    // Same rule as losing focus: let go of the mouse. Windows does NOT send
+    // WM_KILLFOCUS in every one of those paths.
+    case WM_ACTIVATE:
+        if (LOWORD(wp) == WA_INACTIVE) {
+            std::memset(w->keys, 0, sizeof(w->keys));
+            w->buttons = 0;
+            if (GetCapture() == hwnd) ReleaseCapture();
+        }
+        return 0;
     case WM_KILLFOCUS:
         std::memset(w->keys, 0, sizeof(w->keys));
         w->buttons = 0;
@@ -657,6 +667,15 @@ int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {
             if (GetAsyncKeyState(vk_r) & 0x8000) b |= 1u << 3;
             w->buttons = b;
         }
+        // NOTHING held any more? Then this window must not be holding the
+        // mouse either. A capture that outlives its button is the worst bug
+        // this file can produce: the window swallows every click on the whole
+        // desktop, so the taskbar stops answering, other programs stop
+        // answering, and the right button appears to be broken EVERYWHERE.
+        // The button-up handlers release it too; this is the safety net for
+        // the ups that never arrive - the ones a lost focus, an Alt+Tab or a
+        // shell menu ate.
+        if (!b && GetCapture() == w->hwnd) ReleaseCapture();
         *buttons = b;
     }
     return 1;
