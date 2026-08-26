@@ -58,6 +58,12 @@ DAI_API dai_show    *dai_show_ui_doc(const dai_show_ui *u);
  * delta. The solver never sees it: what the viewport shows is a function of a
  * time value, and that value is a number in a struct like any other. */
 DAI_API void  dai_show_ui_advance(dai_show_ui *u, float dt);
+/* Solve whenever the document has changed and nothing is being dragged. The
+ * plan is a cache that every edit throws away, so "is there a plan" is the
+ * dirty flag; the panel keeps a snapshot so a solve that FAILED is not retried
+ * against an unchanged document sixty times a second. */
+DAI_API int   dai_show_ui_auto_solve(const dai_show_ui *u);
+DAI_API void  dai_show_ui_set_auto_solve(dai_show_ui *u, int on);
 DAI_API float dai_show_ui_time(const dai_show_ui *u);
 DAI_API void  dai_show_ui_seek(dai_show_ui *u, float t);
 DAI_API int   dai_show_ui_playing(const dai_show_ui *u);

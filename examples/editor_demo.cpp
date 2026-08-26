@@ -3695,6 +3695,7 @@ int main(int argc, char **argv) {
     int prev_mouse_x = 0, prev_mouse_y = 0, mouse_seen = 0;
 
     int update_reported = 0;
+    int update_ready_said = 0;
     while (dai_window_poll(win) || !quit_is_ok(win, doc)) {
         if (!update_reported && g_update.state != 0) {
             update_reported = 1;
@@ -3705,7 +3706,19 @@ int main(int argc, char **argv) {
                 dai_editor_ui_log(g_panels_for_log, (g_update.state >= 2) ? 1 : 0,
                                   g_update.note);
         }
-        if (g_update.state == 3) break;   // staged and verified: hand over
+        // A STAGED update is applied when the editor is closed, not the second
+        // it finishes downloading. Breaking out of the loop here shut the
+        // program down while somebody was working in it - and from the outside
+        // an editor that vanishes on its own while it sits in the background
+        // is indistinguishable from a crash. The swap script is started after
+        // the loop, on the way out, which is where it belonged all along.
+        if (g_update.state == 3 && !update_ready_said) {
+            update_ready_said = 1;
+            update_log("update: staged - it will be applied when you close Daidalos");
+            if (g_panels_for_log)
+                dai_editor_ui_log(g_panels_for_log, 0,
+                                  "update ready - it is applied when you close Daidalos");
+        }
         auto now = std::chrono::high_resolution_clock::now();
         float dt = std::chrono::duration<float>(now - last).count();
         last = now;
@@ -4380,9 +4393,17 @@ int main(int argc, char **argv) {
             static int nav_held = 0;
             int over_vp = ci.mouse_x >= vrx && ci.mouse_x < vrx + vrw &&
                           ci.mouse_y >= vry && ci.mouse_y < vry + vrh;
-            int want = (over_vp && (raw_right || ci.mouse_middle || ci.key_focus)) ||
-                       (nav_held && (raw_right || ci.mouse_middle));
-            if (want) {
+            (void)over_vp;
+            // Fed EVERY frame. The gate used to be "is the pointer over the
+            // viewport", computed here out of a rectangle in panel space and a
+            // pointer divided by the display scale - and when those two spaces
+            // disagreed by so much as a pixel the right button did nothing at
+            // all, which is precisely what happened. The panel itself knows
+            // what the pointer is over: it holds the coordinates the widgets
+            // were drawn in. Turning the camera has moved in there; what is
+            // left here is what dai_ui cannot see - held keys and the middle
+            // button.
+            {
                 dai_show_nav_input ni{};
                 ni.mouse_x      = ci.mouse_x;
                 ni.mouse_y      = ci.mouse_y;
@@ -4398,6 +4419,7 @@ int main(int argc, char **argv) {
                 dai_show_ui_nav(g_show_ui, &ni);
             }
             nav_held = raw_right || ci.mouse_middle;
+            (void)nav_held;
         }
 
         diag_step("ui begin");

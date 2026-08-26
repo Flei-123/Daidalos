@@ -55,7 +55,7 @@ const dai_ui_menu_item ADD_ITEMS[10] = {
     { nullptr, "Sphere", nullptr, 0 },
     { nullptr, "Cube", nullptr, 0 },
     { nullptr, "Ring", nullptr, 0 },
-    { nullptr, "From an image...", nullptr, 0 },
+    { nullptr, "Image", nullptr, 0 },
     { nullptr, "Takeoff grid (start)", nullptr, 0 },
     { nullptr, "New step (flies in parallel)", nullptr, 0 },
     { nullptr, "This figure", nullptr, 1 },      // a caption, not a command
@@ -595,6 +595,27 @@ struct dai_show_ui {
     float tl_drag_v0 = 0.0f;                 // the value it began at
     int   tl_scrub = 0;                      // the playhead is being dragged
 
+    // ---- solving without being asked --------------------------------------
+    // The plan is a cache: every edit throws it away, and until it is rebuilt
+    // the preview is only the figure being edited. Pressing Solve after every
+    // change is bookkeeping the program can do itself - but not blindly: a
+    // solve that failed must not be retried sixty times a second, and a solve
+    // in the middle of a drag would fight the drag. So: only when the document
+    // has CHANGED since the last attempt, only when no button is down, and
+    // never twice within four tenths of a second.
+    int             auto_solve = 0;
+    dai_show_state *auto_last  = nullptr;   // the document the last attempt saw
+    float           auto_wait  = 0.0f;
+    int             pointer_down = 0;       // a button is down in the viewport
+
+    // The right button, looking around. Handled in the viewport rather than in
+    // dai_show_ui_nav because dai_ui reports the button in the SAME coordinates
+    // the panel is drawn in - the host's copy travels through a DPI scale and a
+    // viewport rectangle, and either of those being half a pixel out is a
+    // camera that does not turn at all.
+    int   look_on = 0;
+    float look_mx = 0.0f, look_my = 0.0f;
+
     // The inspector's own copy, for the figure it is looking at: unpacked
     // from that figure's source once, so typing does not fight the document.
     int   img_edit_for     = -1;
@@ -1026,6 +1047,10 @@ uint32_t image_sample_fit(dai_show_ui *u, const std::vector<uint8_t> &px,
 // inside the source string, so the file is simply read again.
 int resample_image(dai_show_ui *u, uint32_t fi, const char *source, uint32_t count) {
     if (std::strncmp(source, "image://", 8) != 0) return 0;
+    if (source[8] == 0 || source[8] == '?') {
+        say(u, 1, "no picture chosen yet - use \"Choose a picture\" in the inspector");
+        return 0;
+    }
     char path[300];
     float w_m = 60.0f; int th = 128;
     const char *q = source + 8;
@@ -1205,16 +1230,54 @@ void      dai_show_ui_destroy(dai_show_ui *u) {
     if (!u) return;
     for (size_t i = 0; i < u->undo.size(); ++i) dai_show_state_destroy(u->undo[i]);
     for (size_t i = 0; i < u->redo.size(); ++i) dai_show_state_destroy(u->redo[i]);
+    if (u->auto_last) dai_show_state_destroy(u->auto_last);
     delete u;
 }
 dai_show *dai_show_ui_doc(const dai_show_ui *u) { return u ? u->sh : nullptr; }
 
 void dai_show_ui_advance(dai_show_ui *u, float dt) {
-    if (!u || !u->playing) return;
-    u->time += dt;
-    float dur = show_duration(u);
-    if (u->time > dur) u->time = 0.0f;          // a show loops in the preview
+    if (!u) return;
+    if (u->playing) {
+        u->time += dt;
+        float dur = show_duration(u);
+        if (u->time > dur) u->time = 0.0f;      // a show loops in the preview
+    }
+    // Solve without being asked, when the document has moved on since the last
+    // attempt. plan == nullptr IS the dirty flag - every edit in dai_show.cpp
+    // throws the plan away - and the snapshot comparison is what stops a
+    // failed solve from being retried forever over an unchanged document.
+    if (u->auto_solve && !u->pointer_down && dai_show_formation_count(u->sh)) {
+        u->auto_wait -= (dt > 0.0f ? dt : 0.0f);
+        if (!dai_show_get_plan(u->sh) && u->auto_wait <= 0.0f) {
+            int changed = !u->auto_last || !dai_show_state_equal(u->sh, u->auto_last);
+            if (changed) {
+                if (u->auto_last) dai_show_state_destroy(u->auto_last);
+                u->auto_last = dai_show_snapshot(u->sh);
+                char aerr[256] = { 0 };
+                dai_result ar = dai_show_solve(u->sh, aerr, sizeof(aerr));
+                if (ar == DAI_OK) {
+                    dai_show_validate_show(u->sh);
+                    dai_show_timings t = dai_show_get_timings(u->sh);
+                    say(u, t.last_validate.conflicts ? 1 : 0,
+                        "auto solve: %.0f ms, %u conflict%s",
+                        t.sample_ms + t.assign_ms + t.layer_ms + t.validate_ms,
+                        t.last_validate.conflicts, plural(t.last_validate.conflicts));
+                    // NOT re-framed: pressing Solve re-frames on purpose,
+                    // but a camera that jumps every time the program tidies
+                    // up after an edit is a camera nobody can work in.
+                    const dai_show_plan *ap = dai_show_get_plan(u->sh);
+                    if (ap && u->time > dai_show_plan_duration(ap)) u->time = 0.0f;
+                } else {
+                    say(u, 1, "%s", aerr[0] ? aerr : "the show could not be solved");
+                }
+                u->auto_wait = 0.4f;
+            }
+        }
+    }
 }
+int  dai_show_ui_auto_solve(const dai_show_ui *u) { return u ? u->auto_solve : 0; }
+void dai_show_ui_set_auto_solve(dai_show_ui *u, int on) { if (u) u->auto_solve = on ? 1 : 0; }
+
 float dai_show_ui_time(const dai_show_ui *u) { return u ? u->time : 0.0f; }
 void  dai_show_ui_seek(dai_show_ui *u, float t) {
     if (!u) return;
@@ -1236,31 +1299,10 @@ void dai_show_ui_nav(dai_show_ui *u, const dai_show_nav_input *in) {
     // first frame of a hold only REMEMBERS the pointer - counting its journey
     // onto the viewport as a turn is how a camera ends up looking at its own
     // feet. The sign matches the left-drag orbit below: down looks down.
-    // Alt + right drag is the scene view's zoom: the eye walks in and out along
-    // its own line of sight, which is a different thing from the wheel (steps)
-    // and from flying (moves the focus).
-    if (in->mouse_right && in->key_alt) {
-        if (u->nav_rmb) {
-            float dz = (in->mouse_x - u->nav_mx) + (u->nav_my - in->mouse_y);
-            u->dist = std::max(2.0f, u->dist * (1.0f - dz * 0.004f));
-        }
-        u->nav_mx  = in->mouse_x;
-        u->nav_my  = in->mouse_y;
-        u->nav_rmb = 1;
-        u->nav_mmb = in->mouse_middle;
-        if (in->key_focus && !u->nav_f) u->framed_for = -1;
-        u->nav_f = in->key_focus;
-        return;
-    }
-    if (in->mouse_right) {
-        if (u->nav_rmb) {
-            u->yaw   += (in->mouse_x - u->nav_mx) * 0.005f;
-            u->pitch += (in->mouse_y - u->nav_my) * 0.005f;
-            u->pitch  = std::max(-1.5f, std::min(1.5f, u->pitch));
-        }
-        u->nav_mx = in->mouse_x;
-        u->nav_my = in->mouse_y;
-    }
+    // Turning the camera is the VIEWPORT's job now (dai_show_ui_viewport reads
+    // the right button through dai_ui, in the coordinates it draws in). What
+    // is left here is what dai_ui cannot see: held keys, and the middle button
+    // the host reports.
 
     // Fly: only while looking, the scene view's rule - W A S D without the
     // right button is typing, not walking. The step scales with `dist`, so a
@@ -1572,6 +1614,21 @@ void dai_show_ui_parameters(dai_show_ui *u, dai_ui *ui, float x, float y, float 
     dai_ui_panel_begin(ui, x, rep_y, w, (y + h) - rep_y, nullptr);
     dai_ui_rect(ui, x + 6.0f, rep_y, w - 12.0f, 1.0f, dai_ui_style_of(ui)->panel_border);
     if (dai_ui_button(ui, "Solve show")) solve_now(u);
+    // ...or have it done for you. Every edit throws the plan away, so without
+    // this the preview falls back to the figure being edited until somebody
+    // remembers to press the button - and a show is easier to judge moving
+    // than still. It waits for the drag to end and never repeats a solve over
+    // a document that has not changed.
+    {
+        int on = u->auto_solve;
+        if (dai_ui_checkbox(ui, "Solve after every change", &on)) {
+            u->auto_solve = on;
+            if (!on && u->auto_last) {
+                dai_show_state_destroy(u->auto_last);
+                u->auto_last = nullptr;
+            }
+        }
+    }
     // The export row, beside Solve rather than under it: the one thing the
     // whole panel is for may never scroll away. A click only RECORDS the wish -
     // the host writes the file, because the host is the one that knows the
@@ -2424,6 +2481,41 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
         }
     }
 
+    // ---- the right button: look around -------------------------------------
+    //
+    // Handled HERE and not in dai_show_ui_nav, because dai_ui reports the
+    // button in the very coordinates this panel draws in. The host's copy
+    // travels through a DPI divisor and a viewport rectangle before it is
+    // compared with anything, and either of those being slightly off is a
+    // camera that never turns - which is exactly what it did.
+    //
+    // The first frame of a hold only REMEMBERS the pointer: counting its
+    // journey onto the viewport as a turn is how a camera ends up looking at
+    // its own feet.
+    {
+        int rdown = dai_ui_right_down(ui);
+        if (rdown) {
+            if (u->look_on) {
+                if (u->key_alt) {
+                    // Alt + right drag is the scene view's zoom.
+                    float dz = (mx - u->look_mx) + (u->look_my - my);
+                    u->dist = std::max(2.0f, u->dist * (1.0f - dz * 0.004f));
+                } else {
+                    u->yaw   += (mx - u->look_mx) * 0.005f;
+                    u->pitch += (my - u->look_my) * 0.005f;
+                    u->pitch  = std::max(-1.5f, std::min(1.5f, u->pitch));
+                }
+            } else if (inside) {
+                u->look_on = 1;                 // the hold began over the sky
+            }
+            u->look_mx = mx; u->look_my = my;
+            if (u->look_on) consumed = 1;
+        } else {
+            u->look_on = 0;
+        }
+    }
+    u->pointer_down = down;            // an auto solve waits for the drag to end
+
     // Orbit and zoom, on the SCENE VIEW's gestures - which is what "like Unity"
     // means, and what this did not do:
     //
@@ -2835,7 +2927,29 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         if (nf) u->sel_formation = (int)nf - 1;   // what you just added is what
                                                  // the inspector should show
     }
-    else if (apick == 4)         { dai_ui_popup_open(&u->img_menu, hmx, hmy); }
+    else if (apick == 4) {
+        // An image figure is an OBJECT first and a picture second. Adding one
+        // used to open a little window that asked for a path, a width and a
+        // threshold before anything existed at all - three questions in front
+        // of a thing that was not there yet. Now the figure is added straight
+        // away, holding a placeholder ring, and the picture is chosen in the
+        // inspector like every other property of it.
+        push_undo(u, "add image figure");
+        uint32_t was_i = dai_show_formation_count(u->sh);
+        int keep = u->figure;
+        u->figure = 2;                          // a ring, so it is visible
+        add_builtin(u);
+        u->figure = keep;
+        if (dai_show_formation_count(u->sh) > was_i) {
+            dai_show_formation_rename(u->sh, was_i, "Image");
+            // The empty source is what makes the inspector show the picture
+            // fields: no file yet, and it says so.
+            dai_show_formation_set_source(u->sh, was_i, "image://?w=60.0&th=128");
+            u->sel_formation = (int)was_i;
+            u->img_edit_for  = -1;
+            say(u, 0, "image figure added - choose a picture in the inspector");
+        }
+    }
     else if (apick == 5) {
         // Where the drones stand before anybody presses play. Added to the
         // step the selected figure belongs to, at its front.
@@ -3244,7 +3358,9 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                                 }
                             }
                         }
-                        if (row_button(ui, bot, "Choose a file...")) u->want_browse = 2;
+                        if (row_button(ui, bot, u->img_edit_path[0] ? "Choose another file..."
+                                                                     : "Choose a picture..."))
+                            u->want_browse = 2;
                         float hi1 = widget_row(ui);
                         if (fits(ui, bot, hi1))
                             dai_ui_input_text(ui, "Image", u->img_edit_path,
@@ -3257,10 +3373,22 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
                         else dai_ui_advance(ui, dai_ui_panel_width(ui), hi1);
                         hi1 = widget_row(ui);
                         if (fits(ui, bot, hi1))
-                            dai_ui_num_field(ui, "Threshold", &u->img_edit_th, 1.0f,
+                            dai_ui_num_field(ui, "Brightness", &u->img_edit_th, 1.0f,
                                              0.0f, 255.0f, "insimgt");
                         else dai_ui_advance(ui, dai_ui_panel_width(ui), hi1);
+                        // What the number MEANS, in the panel, because
+                        // "Threshold" on its own is a word, not an
+                        // instruction. 0-255 is the brightness of a pixel;
+                        // anything brighter than this gets a drone, so a low
+                        // number takes almost the whole picture and a high one
+                        // keeps only the brightest parts of it.
+                        wrapped_label(ui, "pixels brighter than this get a drone "
+                                          "(0 = all, 255 = none)");
+                        if (!u->img_edit_path[0])
+                            wrapped_label(ui, "no picture chosen yet - the button above "
+                                              "opens the file dialog");
                         if (row_button(ui, bot, "Load this image")) {
+                            if (!u->img_edit_path[0]) u->want_browse = 2;
                             char nsrc[400];
                             std::snprintf(nsrc, sizeof(nsrc), "image://%s?w=%.1f&th=%d",
                                           u->img_edit_path, (double)u->img_edit_w,
@@ -3442,7 +3570,7 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
     dai_ui_section(ui, "Drone");
     uint32_t n = plan ? dai_show_plan_drone_count(plan) : 0;
     if (!plan || !n) {
-        stat_line(ui, bot, "no plan yet - press Solve in Show Parameters");
+        stat_line(ui, bot, "no plan yet - press Solve in Settings");
         return;
     }
     if (u->sel_drone >= n) {
@@ -3597,14 +3725,12 @@ void dai_show_ui_panels(dai_show_ui *u, dai_ui *ui, struct dai_dock *dock) {
     // into the Console (both are the program talking back). The storyboard
     // panel is gone - the hierarchy lists the figures under their steps and
     // the inspector edits the selected one, which is all it ever did.
-    dai_dock_add_tab(dock, "Show Parameters", "Inspector");
+    // The show's own settings are not a panel of their own any more: they are
+    // THE settings of a droneshow project, so they live in the Settings panel
+    // where a user goes looking for settings. dai_editor_ui draws them there.
     dai_dock_add_tab(dock, "Validation", "Console");
 
     float px, py, pw, ph;
-    if (dai_dock_panel(dock, "Show Parameters", &px, &py, &pw, &ph)) {
-        dai_show_ui_parameters(u, ui, px, py, pw, ph);
-        dai_dock_panel_end(dock);
-    }
     if (dai_dock_panel(dock, "Validation", &px, &py, &pw, &ph)) {
         dai_show_ui_validation(u, ui, px, py, pw, ph);
         dai_dock_panel_end(dock);

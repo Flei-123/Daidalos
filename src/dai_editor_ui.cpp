@@ -124,6 +124,9 @@ struct dai_editor_ui {
     // which is the whole point of adding a project type this way instead of
     // forking the editor.
     dai_show_ui *show = nullptr;
+    // Which half of the Settings panel a droneshow project is looking at:
+    // 0 the show's own numbers, 1 the editor's preferences.
+    int          show_settings_tab = 0;
     // Which type the project picker would create. Read by the host through
     // dai_editor_ui_project_new_kind when its create callback fires.
     int proj_new_kind = 0;
@@ -5036,15 +5039,19 @@ void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
         // game layout apologising.
         dai_dock_add(p->dock, "Scene", DAI_DOCK_NONE, 0.0f);
         dai_dock_add(p->dock, "Storyboard", DAI_DOCK_LEFT, 0.22f);
-        dai_dock_add(p->dock, "Show Parameters", DAI_DOCK_RIGHT, 0.24f);
+        dai_dock_add(p->dock, "Inspector", DAI_DOCK_RIGHT, 0.24f);
         dai_dock_add(p->dock, "Validation", DAI_DOCK_BOTTOM, 0.26f);
         dai_dock_add_tab(p->dock, "Hierarchy", "Storyboard");
-        dai_dock_add_tab(p->dock, "Inspector", "Show Parameters");
+        // The show's numbers are the project's settings, so they are in the
+        // Settings panel - one tab beside the inspector, not a panel of its
+        // own called something only this program knows.
+        dai_dock_add_tab(p->dock, "Settings", "Inspector");
+        p->settings_open = 1;
         dai_dock_add_tab(p->dock, "Console", "Validation");
         dai_dock_add_tab(p->dock, "Project", "Validation");
         dai_dock_add_tab(p->dock, "Script", "Scene");
         dai_dock_focus(p->dock, "Storyboard");
-        dai_dock_focus(p->dock, "Show Parameters");
+        dai_dock_focus(p->dock, "Inspector");
         dai_dock_focus(p->dock, "Validation");
         p->layout_ready = true;
         p->layout_w = vw; p->layout_h = vh;
@@ -7709,7 +7716,7 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         // Tabs, not new splits: the show panels live where their meaning
         // already lives - the show's numbers beside the inspector, its
         // verdicts beside the log. The figures themselves ARE the hierarchy.
-        dai_dock_add_tab(p->dock, "Show Parameters", "Inspector");
+        dai_dock_add_tab(p->dock, "Settings", "Inspector");
         dai_dock_add_tab(p->dock, "Validation", "Console");
     }
 
@@ -7816,10 +7823,46 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         dai_dock_panel_end(p->dock);
     }
     if (dai_dock_panel(p->dock, "Settings", &px, &py, &pw, &ph)) {
-        dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
-        settings_body(p);
-        play_dim(p, px, py, pw, ph);
-        dai_ui_panel_end(ui);
+        if (p->show) {
+            // A droneshow project's settings ARE the show's numbers - the
+            // fleet, the minimum distance, the speed limits, the fence. The
+            // editor's own preferences are still here, one button away.
+            //
+            // The two buttons are drawn by hand rather than with a panel of
+            // their own: dai_show_ui_parameters opens a panel for the
+            // rectangle it is given, and a panel inside a panel leaves the
+            // outer layout standing at the inner one's cursor.
+            const dai_ui_style *st = dai_ui_style_of(ui);
+            const float HH = 24.0f;
+            float bw = (pw - 12.0f) * 0.5f;
+            float mx = 0.0f, my = 0.0f; int pressed = 0;
+            dai_ui_mouse(ui, &mx, &my, nullptr, &pressed);
+            const char *names[2] = { "Show", "Editor" };
+            for (int t = 0; t < 2; ++t) {
+                float bx = px + 4.0f + (float)t * (bw + 4.0f), by = py + 3.0f;
+                int over = (mx >= bx && mx < bx + bw && my >= by && my < by + HH - 4.0f);
+                int on   = (p->show_settings_tab == t);
+                dai_ui_rect(ui, bx, by, bw, HH - 4.0f,
+                            on ? st->accent : (over ? st->button_hover : st->button));
+                dai_ui_text(ui, bx + (bw - dai_ui_text_width(ui, names[t])) * 0.5f,
+                            by + (HH - 4.0f - dai_ui_text_height(ui)) * 0.5f,
+                            names[t], on ? st->chrome : st->text);
+                if (over && pressed) p->show_settings_tab = t;
+            }
+            if (p->show_settings_tab == 0) {
+                dai_show_ui_parameters(p->show, ui, px, py + HH, pw, ph - HH);
+            } else {
+                dai_ui_panel_begin(ui, px, py + HH, pw, ph - HH, nullptr);
+                settings_body(p);
+                dai_ui_panel_end(ui);
+            }
+            play_dim(p, px, py, pw, ph);
+        } else {
+            dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
+            settings_body(p);
+            play_dim(p, px, py, pw, ph);
+            dai_ui_panel_end(ui);
+        }
         dai_dock_panel_end(p->dock);
     } else if (p->settings_open && !dai_dock_visible(p->dock, "Settings") &&
                !dai_dock_is_open(p->dock, "Settings")) {
