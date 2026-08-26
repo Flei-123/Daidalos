@@ -572,8 +572,11 @@ typedef struct dai_show_formation_info {
     int      colour_override;     /* 1 = the whole figure is `colour`          */
     uint8_t  colour[4];           /* r, g, b, w of that override               */
     /* Appended last, same rule as above. */
-    int      group;               /* same id = one after another; other id =  */
-                                  /* at the same time, over its own drones     */
+    int      group;               /* which STEP (chapter) the figure is in.    */
+                                  /* Steps run in ascending order, one after   */
+                                  /* another, and so do the figures inside a   */
+                                  /* step: a show is one running order flown   */
+                                  /* by the whole fleet.                       */
 } dai_show_formation_info;
 
 DAI_API dai_show *dai_show_create(const dai_show_settings *s);
@@ -723,13 +726,12 @@ DAI_API uint32_t dai_show_image_sample(dai_show *sh,
                                        uint32_t count, dai_show_point *out,
                                        char *err, size_t err_len);
 
-/* Puts formation `i` into group `g` (>= 0). Formations that share a group fly
- * one after another, as they always have; formations in different groups fly
- * AT THE SAME TIME, each group over its own slice of the fleet. Inside one
- * group every formation must have the same point count, and the counts of the
- * groups sum to the fleet - a drone can neither be left in the air nor be in
- * two places. Both are checked at solve, with the offenders named. The plan
- * is thrown away: who flies when has changed. */
+/* Puts formation `i` into step `g` (>= 0). A STEP is a chapter of the running
+ * order: steps are flown in ascending order, and the figures inside a step are
+ * flown in list order - so the whole storyboard is one sequence, top to
+ * bottom, danced by the whole fleet. Every figure therefore needs exactly as
+ * many points as there are drones; that is checked at solve and the offender
+ * is named. The plan is thrown away: who flies when has changed. */
 DAI_API int dai_show_formation_set_group(dai_show *sh, uint32_t i, int group);
 
 /* Replaces the points of formation `i` - what "the same figure, but 300

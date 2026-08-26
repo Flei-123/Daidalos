@@ -914,18 +914,14 @@ uint32_t dai_show_add_takeoff_grid(dai_show *sh, int group, float spacing,
                                    char *err, size_t err_len) {
     if (err && err_len) err[0] = 0;
     if (!sh || group < 0) return UINT32_MAX;
-    // How many drones this step flies: whatever its figures already fly. A
-    // grid of a different size would break the group audit at solve, which is
-    // a worse way to learn the same thing.
-    uint32_t count = 0;
+    // The pad holds the whole fleet, because every figure does: a show is one
+    // fleet flying one running order.
     uint32_t first_of_group = UINT32_MAX;
     for (uint32_t i = 0; i < (uint32_t)sh->forms.size(); ++i) {
         if (sh->forms[i].group != group) continue;
         if (first_of_group == UINT32_MAX) first_of_group = i;
-        count = (uint32_t)sh->forms[i].pts.size();
-        break;
     }
-    if (!count) count = sh->s.drone_count;
+    uint32_t count = sh->s.drone_count;   // the pad holds the WHOLE fleet
     if (!count) { fail(err, err_len, "the fleet is empty - set a drone count first"); return UINT32_MAX; }
 
     std::vector<dai_show_point> pts(count);
@@ -1415,44 +1411,35 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
     const uint32_t n = sh->s.drone_count;
     if (n == 0)             { fail(err, err_len, "the fleet is empty"); return DAI_ERR_STATE; }
     if (sh->forms.empty())  { fail(err, err_len, "the storyboard has no formations"); return DAI_ERR_STATE; }
-    // ---- the group audit ----------------------------------------------------
-    // The storyboard is one list, but the show it describes can be several
-    // timelines at once: formations that share a group id fly one after
-    // another, as they always have, and two different groups fly at the same
-    // time, each over its own slice of the fleet. The slices are handed out
-    // in group id order, so which drone numbers a group owns stays stable
-    // from solve to solve as long as the counts do.
-    std::vector<int> gids;
-    for (size_t i = 0; i < sh->forms.size(); ++i) {
-        int g = sh->forms[i].group;
-        if (std::find(gids.begin(), gids.end(), g) == gids.end()) gids.push_back(g);
-    }
-    std::sort(gids.begin(), gids.end());
-
-    std::vector<std::vector<uint32_t> > members(gids.size());
-    std::vector<uint32_t> goff(gids.size()), gcount(gids.size());
-    uint32_t accounted = 0;
-    for (size_t gi = 0; gi < gids.size(); ++gi) {
-        for (uint32_t i = 0; i < (uint32_t)sh->forms.size(); ++i)
-            if (sh->forms[i].group == gids[gi]) members[gi].push_back(i);
-        uint32_t c = (uint32_t)sh->forms[members[gi][0]].pts.size();
-        for (size_t k = 1; k < members[gi].size(); ++k) {
-            const Formation &mf = sh->forms[members[gi][k]];
-            if (mf.pts.size() != c) {
-                fail(err, err_len,
-                     "'%s' has %u points, but group %d flies %u - one group, one count",
-                     mf.name.c_str(), (unsigned)mf.pts.size(), gids[gi], (unsigned)c);
-                return DAI_ERR_STATE;
-            }
+    // ---- the running order --------------------------------------------------
+    //
+    // A show is a SEQUENCE. The storyboard lists figures from top to bottom
+    // and that is the order they are flown in: figure, flight, figure. A STEP
+    // is a chapter of that list - it groups figures that belong together and
+    // it is what the hierarchy shows as a parent - but it is NOT a second
+    // timeline. Steps run one after another, and so do the figures inside
+    // them.
+    //
+    // It used to be the other way round: two steps flew AT THE SAME TIME over
+    // half the fleet each. Nobody reading a storyboard expects that, and the
+    // arithmetic it forced ("your steps must add up to the fleet") was a bill
+    // for a feature nobody had asked for.
+    std::vector<uint32_t> order(sh->forms.size());
+    for (uint32_t i = 0; i < (uint32_t)sh->forms.size(); ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(),
+                     [&](uint32_t a, uint32_t b) {
+                         return sh->forms[a].group < sh->forms[b].group;
+                     });
+    // Every figure is flown by the WHOLE fleet, so every figure needs exactly
+    // as many points as there are drones. Said here, once, naming the figure -
+    // this is the mistake a new show makes most often.
+    for (size_t k = 0; k < order.size(); ++k) {
+        const Formation &mf = sh->forms[order[k]];
+        if (mf.pts.size() != (size_t)n) {
+            fail(err, err_len, "'%s' has %u points, the fleet is %u - one figure, one fleet",
+                 mf.name.c_str(), (unsigned)mf.pts.size(), (unsigned)n);
+            return DAI_ERR_STATE;
         }
-        goff[gi]   = accounted;
-        gcount[gi] = c;
-        accounted += c;
-    }
-    if (accounted != n) {
-        fail(err, err_len, "the groups fly %u drones between them, the fleet is %u",
-             (unsigned)accounted, (unsigned)n);
-        return DAI_ERR_STATE;
     }
 
     std::vector<std::vector<dai_show_key> > keys((size_t)n);
@@ -1466,15 +1453,13 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
     int      endpoint_named   = 0;
     char     endpoint_note[192] = { 0 };
 
-    // Every group is its own little show over its own drone numbers, with its
-    // own cursor on the timeline - which is what "the groups fly at the same
-    // time" means in practice: nobody waits for anybody.
-    for (size_t gi = 0; gi < gids.size(); ++gi) {
-    const uint32_t off = goff[gi];
-    const uint32_t ng  = gcount[gi];
-    const std::vector<uint32_t> &mem = members[gi];
+    // One clock, one fleet, one list. `mi` walks the running order.
+    {
+    const uint32_t off = 0;
+    const uint32_t ng  = n;
+    const std::vector<uint32_t> &mem = order;
 
-    std::vector<uint32_t>       cur_pt(ng);     // which point of the current figure
+    std::vector<uint32_t>       cur_pt(ng);
     std::vector<dai_show_point> cur(sh->forms[mem[0]].pts);
     std::vector<dai_show_point> nxt(ng);
     std::vector<uint32_t>       perm(ng);
@@ -1483,7 +1468,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
     for (uint32_t d = 0; d < ng; ++d) {
         keys[off + d].reserve(mem.size() * 3 + 2);
         ksrc[off + d].reserve(mem.size() * 3 + 2);
-        cur_pt[d] = d;                  // a group's first figure is flown in order
+        cur_pt[d] = d;                  // the first figure is flown in order
         dai_show_key k;
         k.t = 0.0f; k.p = cur[d]; k.profile = DAI_SHOW_PROFILE_LINEAR;
         keys[off + d].push_back(k);
@@ -1518,19 +1503,13 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         sh->timings.assign_ms += t1 - t0;
         if (ar != DAI_OK) {
             fail(err, err_len, "assignment failed for formation %u", (unsigned)i);
-            aggregate(&sh->timings, sh->tr_stats);   // what got as far as failing
+            aggregate(&sh->timings, sh->tr_stats);
             return DAI_ERR_STATE;
         }
         astats.solve_ms = t1 - t0;
         sh->tr_stats[i].assign = astats;
         sh->tr_stats[i].valid  = 1;
 
-        // v_max and a_max are limits, not preferences: a duration that cannot
-        // hold them is raised to the one that can, and the caller is told which
-        // transition was stretched. Flying the number the director typed and
-        // reporting the violation afterwards would be the wrong way round.
-        // Measured on the longest leg the assignment actually produced, which
-        // is why this sits after it and not before.
         float longest = 0.0f;
         for (uint32_t d = 0; d < ng; ++d) {
             const dai_show_point &b = nxt[perm[d]];
@@ -1553,10 +1532,6 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         lstats.solve_ms = t1 - t0;
         sh->tr_stats[i].layer = lstats;
         if (lr == DAI_ERR_STATE) unresolved_total += lstats.unresolved;
-        // A formation that parks pairs inside min_distance is not a transition
-        // the separator failed at - but it is a show that must not go out, so
-        // it is carried up to the caller as its own answer with the place it
-        // has to be fixed named: the formation, and the first pair in it.
         if (lstats.endpoint_pairs > 0) {
             endpoint_total += lstats.endpoint_pairs;
             if (!endpoint_named) {
@@ -1571,9 +1546,6 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
             }
         }
 
-        // Stage 4 turns the legs into keyframes. The detour is a curve, so it
-        // is cut into pieces small enough that the line the plan interpolates
-        // is the curve the separator proved - a straight leg needs one key.
         t0 = now_ms();
         float t_arrive = legs[0].t_end;
         for (uint32_t d = 0; d < ng; ++d) t_arrive = std::max(t_arrive, legs[d].t_end);
@@ -1585,7 +1557,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
             const uint32_t fi = (uint32_t)i;
             const float    span = g.t_end - g.t_start;
             dai_show_key k;
-            if (g.t_start > keys[off + d].back().t) {    // staggered or delayed: wait first
+            if (g.t_start > keys[off + d].back().t) {
                 k.t = g.t_start; k.p = a; k.profile = DAI_SHOW_PROFILE_LINEAR;
                 keys[off + d].push_back(k);
                 ksrc[off + d].push_back(KeySrc{ fi, fprev, pa, pb, 0.0f });
@@ -1598,15 +1570,13 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
                 else daishow::leg_point(&g, &a, &b, k.t, &k.p);
                 k.profile = (steps == 1) ? g.profile : DAI_SHOW_PROFILE_LINEAR;
                 keys[off + d].push_back(k);
-                // The same fraction leg_point mixed the colour at, from the
-                // same function - not a second opinion about the easing.
                 float uu = (span > 0.0f) ? (k.t - g.t_start) / span : 1.0f;
                 if (uu < 0.0f) uu = 0.0f;
                 if (uu > 1.0f) uu = 1.0f;
                 float mix = (st == steps) ? 1.0f : daishow::ease_profile(g.profile, uu);
                 ksrc[off + d].push_back(KeySrc{ fi, fprev, pa, pb, mix });
             }
-            if (t_arrive > g.t_end) {                    // hold formation until the last one lands
+            if (t_arrive > g.t_end) {
                 k.t = t_arrive; k.p = b; k.profile = DAI_SHOW_PROFILE_LINEAR;
                 keys[off + d].push_back(k);
                 ksrc[off + d].push_back(KeySrc{ fi, fprev, pa, pb, 1.0f });
@@ -1624,7 +1594,7 @@ dai_result dai_show_solve(dai_show *sh, char *err, size_t err_len) {
         f.t_start = t_arrive;
         t_cursor  = t_arrive + f.hold_s;
     }
-    }                                          // the group's little show is planned
+    }                                          // the running order is planned
 
     aggregate(&sh->timings, sh->tr_stats);
 

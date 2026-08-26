@@ -572,25 +572,26 @@ int show_cases_edit(void) {
         dai_show_destroy(sh);
     }
 
-    // ---- [7m] groups fly at the same time, over their own drones -----------
-    show_section("editing - groups run in parallel, each over its own slice");
+    // ---- [7m] steps run one after another ----------------------------------
+    show_section("editing - steps are chapters of one running order");
     {
-        const uint32_t n = 40;
+        const uint32_t n = 25;
         dai_show_settings s = edit_settings(n, 2.0f);
         dai_show *sh = dai_show_create(&s);
-        // Two figures of 25 in group 0, one figure of 15 in group 1.
-        std::vector<dai_show_point> a(25), b(25), c(15);
-        show_grid_formation(a.data(), 25, 3.0f, dai_vec3{ -20.0f, 50.0f, 0.0f });
-        show_grid_formation(b.data(), 25, 3.0f, dai_vec3{  20.0f, 50.0f, 0.0f });
-        show_grid_formation(c.data(), 15, 3.0f, dai_vec3{   0.0f, 70.0f, 0.0f });
-        dai_show_formation_add(sh, "a", "", a.data(), 25, 2.0f);
-        dai_show_formation_add(sh, "b", "", b.data(), 25, 2.0f);
-        dai_show_formation_add(sh, "c", "", c.data(), 15, 2.0f);
+        // Three figures, all flown by the whole fleet: two in step 1, one in
+        // step 2. A show is a sequence, and a step is a chapter of it.
+        std::vector<dai_show_point> a(n), b(n), c(n);
+        show_grid_formation(a.data(), n, 3.0f, dai_vec3{ -20.0f, 50.0f, 0.0f });
+        show_grid_formation(b.data(), n, 3.0f, dai_vec3{  20.0f, 50.0f, 0.0f });
+        show_grid_formation(c.data(), n, 3.0f, dai_vec3{   0.0f, 70.0f, 0.0f });
+        dai_show_formation_add(sh, "a", "", a.data(), n, 2.0f);
+        dai_show_formation_add(sh, "b", "", b.data(), n, 2.0f);
+        dai_show_formation_add(sh, "c", "", c.data(), n, 2.0f);
         CHECK(dai_show_formation_set_group(sh, 2, 1), "[7m] set_group was refused");
 
         char err[256] = { 0 };
         dai_result r = dai_show_solve(sh, err, sizeof(err));
-        CHECK(r == DAI_OK, "[7m] a legal two-group show did not solve: %s", err);
+        CHECK(r == DAI_OK, "[7m] a two-step show did not solve: %s", err);
         if (r == DAI_OK) {
             const dai_show_plan *pl = dai_show_get_plan(sh);
             CHECK(dai_show_plan_drone_count(pl) == n,
@@ -599,51 +600,39 @@ int show_cases_edit(void) {
             dai_show_formation_get(sh, 0, &ia);
             dai_show_formation_get(sh, 1, &ib);
             dai_show_formation_get(sh, 2, &ic);
-            CHECK(ia.t_start == 0.0f && ic.t_start == 0.0f,
-                  "[7m] the second group waited for the first - that is serial, not parallel");
-            CHECK(ib.t_start > 0.0f,
-                  "[7m] the second figure of group 0 did not come after the first");
-            // The groups' drones are different drones: at t=0 nobody stands
-            // on anybody.
-            dai_show_point pa, pc;
-            dai_show_plan_sample(pl, 0, 0.0f, &pa);
-            dai_show_plan_sample(pl, 25, 0.0f, &pc);
-            float gx = pa.x - pc.x, gy = pa.y - pc.y, gz = pa.z - pc.z;
-            CHECK(gx * gx + gy * gy + gz * gz > 1.0f,
-                  "[7m] drone 0 and drone 25 start on the same spot");
+            CHECK(ia.t_start == 0.0f, "[7m] the first figure does not start the show");
+            CHECK(ib.t_start > ia.t_start,
+                  "[7m] the second figure of step 1 did not come after the first");
+            CHECK(ic.t_start > ib.t_start,
+                  "[7m] step 2 started at %.2f s, before step 1 was done at %.2f s - "
+                  "steps run one after another", (double)ic.t_start, (double)ib.t_start);
         }
         dai_show_destroy(sh);
     }
 
-    // ---- [7m2] the audit says who is wrong, in words ------------------------
-    show_section("editing - the group audit names the offender");
+    // ---- [7m2] every figure is flown by the whole fleet ---------------------
+    show_section("editing - the audit names the figure with the wrong count");
     {
-        const uint32_t n = 40;
+        const uint32_t n = 25;
         dai_show_settings s = edit_settings(n, 2.0f);
         dai_show *sh = dai_show_create(&s);
-        std::vector<dai_show_point> a(25), b(20);
-        show_grid_formation(a.data(), 25, 3.0f, dai_vec3{ 0.0f, 50.0f, 0.0f });
-        show_grid_formation(b.data(), 20, 3.0f, dai_vec3{ 0.0f, 60.0f, 0.0f });
-        dai_show_formation_add(sh, "alpha", "", a.data(), 25, 2.0f);
-        dai_show_formation_add(sh, "beta", "", b.data(), 20, 2.0f);
+        std::vector<dai_show_point> a(n), bb(20);
+        show_grid_formation(a.data(), n, 3.0f, dai_vec3{ 0.0f, 50.0f, 0.0f });
+        show_grid_formation(bb.data(), 20, 3.0f, dai_vec3{ 0.0f, 60.0f, 0.0f });
+        dai_show_formation_add(sh, "alpha", "", a.data(), n, 2.0f);
+        dai_show_formation_add(sh, "beta", "", bb.data(), 20, 2.0f);
         char err[256] = { 0 };
         dai_result r = dai_show_solve(sh, err, sizeof(err));
-        CHECK(r != DAI_OK, "[7m2] two counts in one group solved anyway");
+        CHECK(r != DAI_OK, "[7m2] a figure of 20 in a fleet of 25 solved anyway");
         CHECK(std::strstr(err, "beta") != nullptr,
-              "[7m2] the error does not name the figure that breaks the group: %s", err);
+              "[7m2] the error does not name the figure with the wrong count: %s", err);
 
-        // Same counts, but the sum is not the fleet: nobody may be left over.
-        dai_show_destroy(sh);
-        sh = dai_show_create(&s);
-        std::vector<dai_show_point> c(20), d(20);
-        show_grid_formation(c.data(), 20, 3.0f, dai_vec3{ 0.0f, 50.0f, 0.0f });
-        show_grid_formation(d.data(), 20, 3.0f, dai_vec3{ 0.0f, 60.0f, 0.0f });
-        dai_show_formation_add(sh, "c", "", c.data(), 20, 2.0f);
-        dai_show_formation_add(sh, "d", "", d.data(), 20, 2.0f);
+        // ...and putting it in a step of its own does NOT excuse it: a step is
+        // not a second fleet.
         dai_show_formation_set_group(sh, 1, 1);
         std::memset(err, 0, sizeof(err));
         r = dai_show_solve(sh, err, sizeof(err));
-        CHECK(r == DAI_OK, "[7m2] two groups of 20 over a fleet of 40 did not solve: %s", err);
+        CHECK(r != DAI_OK, "[7m2] a short figure in its own step solved anyway");
         dai_show_destroy(sh);
     }
 

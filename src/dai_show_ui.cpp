@@ -2048,74 +2048,101 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
 
     // ---- the ground grid ----------------------------------------------------
     //
-    // A scene view's grid, not a fixed sheet at the origin. Three things were
-    // wrong with the fixed one and all three showed up the moment you flew
-    // close: it was cut to the fence (so it ended in mid air), its squares
-    // were 20 m across (so from two metres up there was nothing left to see
-    // between them), and every line with one end behind the camera was thrown
-    // away whole (so it fell apart square by square as you moved).
+    // The one every 3D editor draws, and for the reason they all draw it: the
+    // floor has to say how big things are without ever being looked at
+    // directly. Three rules, and the last one is why the earlier attempts
+    // looked wrong when you moved:
     //
-    // Now: the spacing FOLLOWS the distance in 1-2-5 steps, the grid is laid
-    // around the point being looked at rather than around the origin, and the
-    // lines are clipped instead of dropped. A finer grid fades in underneath
-    // the coarse one, the way every editor does it, so the scale never jumps.
+    //   1. TWO scales at once - a fine grid and a ten-times-coarser one over
+    //      it - laid on the world, always at whole metres.
+    //   2. A disc around the CAMERA, faded out at its rim, so the lines stop
+    //      before they pile up into a grey wall at the horizon.
+    //   3. The switch between scales is a FADE, not a jump: as you climb, the
+    //      fine grid dissolves and the coarse one is already there. A grid
+    //      that swaps its spacing in one frame reads as the world changing
+    //      size, which is exactly what "it changes so weirdly" describes.
     {
-        // One decade per ~50 px of screen: pick the 1/2/5 step whose squares
-        // are still readable from here.
-        // The scale that matters is how far the EYE is from the ground it is
-        // looking at, not how far it is from the focus: hovering 60 m up with
-        // the focus an arm's length away is still a wide view of the floor,
-        // and sizing the grid off `dist` alone left three lines on screen.
-        float ground = std::max(std::fabs(cam.ey), 2.0f);
-        float scale  = std::max(u->dist, ground);
-        float want = scale * 0.12f;
-        float dec  = std::pow(10.0f, std::floor(std::log10(std::max(0.05f, want))));
-        float m    = want / dec;
-        float step = (m < 2.0f) ? dec : (m < 5.0f ? dec * 2.0f : dec * 5.0f);
-        if (step < 0.5f) step = 0.5f;
+        // How far the eye is from the floor it is looking at. Height alone is
+        // wrong looking along the ground, distance alone is wrong hovering
+        // over it, so: whichever is bigger.
+        float ground = std::max(std::fabs(cam.ey), 1.0f);
+        float scale  = std::max(std::max(u->dist, ground), 2.0f);
 
-        // How far out to draw: enough to reach the horizon at this height,
-        // capped so a distant view does not draw ten thousand lines.
-        float reach = std::max(scale * 8.0f, 60.0f);
-        int   lines = (int)(reach / step);
-        if (lines > 220) { step *= 5.0f; lines = (int)(reach / step); }
-        if (lines > 220) lines = 220;
-        reach = (float)lines * step;
+        // decade = the coarse spacing, `frac` how far between two decades we
+        // are. frac is the fade.
+        float lg    = std::log10(scale * 0.06f);
+        float base  = std::floor(lg);
+        float frac  = lg - base;                 // 0 .. 1
+        float fine  = std::pow(10.0f, base);
+        if (fine < 0.1f) fine = 0.1f;
 
-        // Centred on what the camera is LOOKING at, snapped to the step so the
-        // lines do not crawl while the camera moves.
-        float cx0 = std::floor(u->focus_x / step) * step;
-        float cz0 = std::floor(u->focus_z / step) * step;
+        // The disc: about 90 fine cells across, which is what fits on a screen
+        // before the far ones are a pixel apart.
+        const float R_FINE   = fine * 45.0f;
+        const float R_COARSE = fine * 450.0f;
+        // Centred under the EYE, snapped to the spacing so the lines stand
+        // still in the world while the camera moves through them.
+        auto draw_level = [&](float step, float R, float alpha) {
+            if (alpha <= 0.01f) return;
+            int a8 = (int)(alpha * 255.0f + 0.5f);
+            if (a8 > 255) a8 = 255;
+            float cx0 = std::floor(cam.ex / step) * step;
+            float cz0 = std::floor(cam.ez / step) * step;
+            int lines = (int)(R / step);
+            if (lines > 120) lines = 120;
+            const int SEG = 8;                   // pieces per line, for the fade
+            for (int k = -lines; k <= lines; ++k) {
+                float off = (float)k * step;
+                // Two lines per k: one along X, one along Z.
+                for (int axis = 0; axis < 2; ++axis) {
+                    for (int sgi = 0; sgi < SEG; ++sgi) {
+                        float t0 = -R + (2.0f * R) * (float)sgi / (float)SEG;
+                        float t1 = -R + (2.0f * R) * (float)(sgi + 1) / (float)SEG;
+                        float mid = (t0 + t1) * 0.5f;
+                        // Distance of this piece from the eye, on the floor.
+                        float dxr = (axis == 0) ? off : mid;
+                        float dzr = (axis == 0) ? mid : off;
+                        float d = std::sqrt(dxr * dxr + dzr * dzr);
+                        float fade = 1.0f - d / R;
+                        if (fade <= 0.02f) continue;
+                        fade *= fade;            // soft rim, hard centre
+                        int aa = (int)((float)a8 * fade + 0.5f);
+                        if (aa < 6) continue;
+                        float p0[3], p1[3];
+                        if (axis == 0) {
+                            p0[0] = cx0 + off; p0[1] = 0.0f; p0[2] = cz0 + t0;
+                            p1[0] = cx0 + off; p1[1] = 0.0f; p1[2] = cz0 + t1;
+                        } else {
+                            p0[0] = cx0 + t0; p0[1] = 0.0f; p0[2] = cz0 + off;
+                            p1[0] = cx0 + t1; p1[1] = 0.0f; p1[2] = cz0 + off;
+                        }
+                        float ax, ay, bx2, by2;
+                        if (project_segment(cam, p0, p1, &ax, &ay, &bx2, &by2))
+                            dai_ui_line(ui, ax, ay, bx2, by2, 1.0f,
+                                        rgba(0x8A, 0x97, 0xB0, aa));
+                    }
+                }
+            }
+        };
+        // The fine grid fades OUT as the decade is climbed; the coarse one is
+        // the same grid one decade up, so it is always fully there.
+        draw_level(fine,          R_FINE,   0.30f * (1.0f - frac));
+        draw_level(fine * 10.0f,  R_COARSE, 0.42f);
 
-        // Two levels: the fine one, and every fifth line brighter. The bright
-        // ones are what the eye measures distance with.
-        const uint32_t COL_FINE = rgba(0x25, 0x2B, 0x36, 255);
-        for (int k = -lines; k <= lines; ++k) {
-            float g = (float)k * step;
-            int major = ((int)std::floor((cx0 + g) / step + 0.5f)) % 5 == 0;
-            uint32_t col = major ? COL_GRID : COL_FINE;
-            float a1[3] = { cx0 + g, 0.0f, cz0 - reach };
-            float b1[3] = { cx0 + g, 0.0f, cz0 + reach };
-            float ax, ay, bx2, by2;
-            if (project_segment(cam, a1, b1, &ax, &ay, &bx2, &by2))
-                dai_ui_line(ui, ax, ay, bx2, by2, 1.0f, col);
-            int majz = ((int)std::floor((cz0 + g) / step + 0.5f)) % 5 == 0;
-            float a2[3] = { cx0 - reach, 0.0f, cz0 + g };
-            float b2[3] = { cx0 + reach, 0.0f, cz0 + g };
-            if (project_segment(cam, a2, b2, &ax, &ay, &bx2, &by2))
-                dai_ui_line(ui, ax, ay, bx2, by2, 1.0f, majz ? COL_GRID : COL_FINE);
-        }
-        // The two axes through the origin, so "where is zero" is never a guess.
+        // The two axes through the origin, in the colours the gizmo uses, so
+        // "where is zero, and which way is X" never needs a label.
         {
             float ax, ay, bx2, by2;
-            float xa[3] = { cx0 - reach, 0.0f, 0.0f }, xb[3] = { cx0 + reach, 0.0f, 0.0f };
+            float R = R_COARSE;
+            float xa[3] = { cam.ex - R, 0.0f, 0.0f }, xb[3] = { cam.ex + R, 0.0f, 0.0f };
             if (project_segment(cam, xa, xb, &ax, &ay, &bx2, &by2))
-                dai_ui_line(ui, ax, ay, bx2, by2, 1.4f, rgba(0x7A, 0x3A, 0x3A, 255));
-            float za[3] = { 0.0f, 0.0f, cz0 - reach }, zb[3] = { 0.0f, 0.0f, cz0 + reach };
+                dai_ui_line(ui, ax, ay, bx2, by2, 1.2f, rgba(0x9E, 0x4B, 0x4B, 150));
+            float za[3] = { 0.0f, 0.0f, cam.ez - R }, zb[3] = { 0.0f, 0.0f, cam.ez + R };
             if (project_segment(cam, za, zb, &ax, &ay, &bx2, &by2))
-                dai_ui_line(ui, ax, ay, bx2, by2, 1.4f, rgba(0x33, 0x55, 0x8A, 255));
+                dai_ui_line(ui, ax, ay, bx2, by2, 1.2f, rgba(0x46, 0x6E, 0xA8, 150));
         }
     }
+
     // The fence, drawn as the box it is.
     if (u->s.fence_half_x > 0.0f && u->s.fence_top_m > 0.0f) {
         const float fx = u->s.fence_half_x, fz = u->s.fence_half_z, ft = u->s.fence_top_m;
@@ -2809,7 +2836,7 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     // Blender's, in the one way that matters: the two numbers a show is made
     // of - how long a figure holds, how long the flight into it takes - are
     // DRAGGED where they are seen instead of typed into a panel in seconds.
-    // One row per step, because steps run at the same time as each other; a
+    // One row per step, because a step is a chapter of the running order; a
     // bar per figure, a diamond at each end of it.
     //
     //   left diamond    the transit INTO this figure
@@ -2830,29 +2857,36 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     std::vector<int> groups;                 // step ids, in the order first seen
     float dur_calc = 0.0f;
     {
+        // ONE clock, one running order: the steps in ascending order, the
+        // figures inside them in list order, each flown after the last. This
+        // is the same arithmetic the solver does, repeated here so a show that
+        // has never been solved still draws a truthful sheet.
         uint32_t fn2 = dai_show_formation_count(u->sh);
-        std::vector<float> gclock;           // parallel to `groups`
-        for (uint32_t i = 0; i < fn2; ++i) {
+        std::vector<uint32_t> ord;
+        for (uint32_t i = 0; i < fn2; ++i) ord.push_back(i);
+        std::stable_sort(ord.begin(), ord.end(), [&](uint32_t a, uint32_t b) {
+            dai_show_formation_info ia, ib;
+            if (!dai_show_formation_get(u->sh, a, &ia)) return false;
+            if (!dai_show_formation_get(u->sh, b, &ib)) return false;
+            return ia.group < ib.group;
+        });
+        float clock = 0.0f;
+        for (size_t k = 0; k < ord.size(); ++k) {
             dai_show_formation_info info;
-            if (!dai_show_formation_get(u->sh, i, &info)) continue;
-            size_t gi = groups.size();
-            for (size_t k = 0; k < groups.size(); ++k)
-                if (groups[k] == info.group) { gi = k; break; }
-            if (gi == groups.size()) { groups.push_back(info.group); gclock.push_back(0.0f); }
+            if (!dai_show_formation_get(u->sh, ord[k], &info)) continue;
+            if (std::find(groups.begin(), groups.end(), info.group) == groups.end())
+                groups.push_back(info.group);
             Bar b;
-            b.fi = i; b.group = info.group;
-            // "First in its step" is about the STEP, not about the list: a
-            // figure is first when nothing before it shares its group.
-            b.first = 1;
-            for (size_t k = 0; k < bars.size(); ++k)
-                if (bars[k].group == info.group) { b.first = 0; break; }
+            b.fi = ord[k]; b.group = info.group;
+            b.first = (k == 0);
             dai_show_transition tr;
             b.transit = 0.0f;
-            if (!b.first && dai_show_transition_get(u->sh, i, &tr)) b.transit = tr.duration_s;
+            if (k > 0 && dai_show_transition_get(u->sh, ord[k], &tr))
+                b.transit = tr.duration_s;
             b.hold = info.hold_s;
-            b.t0 = gclock[gi] + b.transit;
+            b.t0 = clock + b.transit;
             b.t1 = b.t0 + b.hold;
-            gclock[gi] = b.t1;
+            clock = b.t1;
             if (b.t1 > dur_calc) dur_calc = b.t1;
             bars.push_back(b);
         }
@@ -3119,8 +3153,8 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         hmx >= x && hmx < x + w && hmy >= y && hmy < y + h)
         dai_ui_popup_open(&u->add_menu, hmx, hmy);
     int apick = dai_ui_popup_menu(ui, &u->add_menu, ADD_ITEMS, ADD_ITEM_COUNT);
-    // A new step is a second timeline: its own figures, its own drones, all
-    // of it at the same time as the others. Adding one is adding a figure
+    // A new step is the next chapter: it runs AFTER the one above it, over the
+    // same fleet. Adding one is adding a figure
     // with a group nobody has used yet - so the fleet has to be shared out
     // again, which the solve says out loud if the counts stop adding up.
     if (apick == 7) {                       // duplicate the selected figure
@@ -3379,12 +3413,12 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         dai_ui_cursor_pos(ui, &ex2, &ey2);
         if (ey2 >= top - 0.5f && ey2 + pitch <= bottom + 0.5f) {
             hheads.push_back(HHead{ empty_group, ey2 });
-            int act = (u->active_group == empty_group);
-            if (!act) dai_ui_rect(ui, x + 1.0f, ey2, w - 2.0f, ROW_H, COL_STEP);
-            draw_row(ey2, 14.0f, eh, "empty", act, st->text_dim);
-            if (lpressed && row_hit(ey2)) u->active_group = empty_group;
-        }
-        dai_ui_advance(ui, w - 16.0f, ROW_H);
+            int act  = (u->active_group == empty_group);
+            int eopen = 1;
+            dai_ui_tree_label_color(ui, act ? st->accent : st->text_dim);
+            if (dai_ui_tree_item_icon(ui, DAI_ICON_FOLDER, eh, 0, 1, &eopen, 0) & 1)
+                u->active_group = empty_group;
+        } else dai_ui_advance(ui, w - 16.0f, ROW_H);
     }
     // ---- where the carried row would land ---------------------------------
     //
