@@ -4415,6 +4415,9 @@ int main(int argc, char **argv) {
                 ni.key_shift = ci.key_shift;
                 ni.key_focus = ci.key_focus;
                 ni.key_alt   = ci.key_alt;
+                ni.can_fly   = !type_lock;   // the panel decides "over the
+                                             // preview" itself, from the
+                                             // rectangle it drew into
                 ni.dt = dt;
                 dai_show_ui_nav(g_show_ui, &ni);
             }

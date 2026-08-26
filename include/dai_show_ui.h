@@ -181,8 +181,24 @@ typedef struct dai_show_nav_input {
     int   key_alt;                    /* Alt held: right drag dollies instead
                                        * of looking, the scene view's zoom */
     float dt;                         /* seconds since the last call */
+    int   can_fly;                    /* no text field owns the keyboard; when the
+                                       * pointer is also over the preview and no
+                                       * text field owns the keyboard: W A S D
+                                       * then walk WITHOUT the right button
+                                       * being held. A right button that never
+                                       * arrives (a touchpad, a shell that ate
+                                       * the click) must not be the only way
+                                       * to move through a show. */
 } dai_show_nav_input;
 DAI_API void dai_show_ui_nav(dai_show_ui *u, const dai_show_nav_input *in);
+
+/* Where the show's output goes. There is no Validation panel any more: a
+ * conflict, a solve time, a figure that would not sample - all of it is the
+ * program talking back, and the program has one place for that, the Console.
+ * The host hands over a sink and gets every line the show would have printed
+ * into a panel. level 0 is news, 1 is a fault. */
+typedef void (*dai_show_ui_log_fn)(void *user, int level, const char *text);
+DAI_API void dai_show_ui_log_sink(dai_show_ui *u, dai_show_ui_log_fn fn, void *user);
 
 /* ---- modifiers -----------------------------------------------------------
  * dai_ui reports the pointer, never a held key, so the host feeds the three

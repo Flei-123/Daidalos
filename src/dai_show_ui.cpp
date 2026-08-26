@@ -462,6 +462,11 @@ struct dai_show_ui {
     // absolutes - an absolute look accumulates whatever the pointer did over
     // a panel on the way in.
     int   nav_rmb = 0, nav_mmb = 0, nav_f = 0;
+    float vp_x = 0.0f, vp_y = 0.0f, vp_w = 0.0f, vp_h = 0.0f;  // last drawn preview
+    dai_show_ui_log_fn log_fn = nullptr;   // the Console, when a host wires one
+    void *log_user = nullptr;
+    int   look_seen = 0;      // the viewport itself saw the right button held
+    float look_hx = 0.0f, look_hy = 0.0f;  // the host's pointer, last frame
     float nav_mx = 0.0f, nav_my = 0.0f;
     int   framed_for = -1;                 // drone count the camera was fitted to
 
@@ -639,6 +644,7 @@ void say(dai_show_ui *u, int bad, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(u->status, sizeof(u->status), fmt, ap);
+    if (u->log_fn) u->log_fn(u->log_user, bad ? 1 : 0, u->status);
     va_end(ap);
     u->status_bad = bad;
 }
@@ -1207,6 +1213,37 @@ void solve_now(dai_show_ui *u) {
     else
         say(u, 0, "solved in %.0f ms - no conflicts (%u shown)",
             t.sample_ms + t.assign_ms + t.layer_ms + t.validate_ms, cn);
+    // The list itself, into the Console - this is what the Validation panel
+    // used to hold, and a fault that is only counted is a fault nobody can
+    // act on. Capped: forty lines is a page, and a show with more than forty
+    // conflicts has ONE problem, not forty.
+    if (u->log_fn && cn) {
+        static const char *KIND[5] = { "too close", "too fast", "too hard",
+                                       "outside the fence", "below the ground" };
+        uint32_t lim = cn < 40u ? cn : 40u;
+        for (uint32_t i = 0; i < lim; ++i) {
+            dai_show_conflict c{};
+            if (!dai_show_conflict_at(u->sh, i, &c)) continue;
+            char line[224];
+            const char *k = (c.kind >= 0 && c.kind < 5) ? KIND[c.kind] : "fault";
+            if (c.b != c.a)
+                std::snprintf(line, sizeof(line),
+                              "%6.2fs  drone %u and %u %s: %.2f (limit %.2f)",
+                              (double)c.time_s, c.a, c.b, k,
+                              (double)c.value, (double)c.limit);
+            else
+                std::snprintf(line, sizeof(line),
+                              "%6.2fs  drone %u %s: %.2f (limit %.2f)",
+                              (double)c.time_s, c.a, k,
+                              (double)c.value, (double)c.limit);
+            u->log_fn(u->log_user, 1, line);
+        }
+        if (cn > lim) {
+            char more[96];
+            std::snprintf(more, sizeof(more), "... and %u more", cn - lim);
+            u->log_fn(u->log_user, 1, more);
+        }
+    }
     u->framed_for = -1;
     if (u->time > dai_show_plan_duration(dai_show_get_plan(u->sh))) u->time = 0.0f;
 }
@@ -1214,6 +1251,11 @@ void solve_now(dai_show_ui *u) {
 } // namespace
 
 extern "C" {
+
+void dai_show_ui_log_sink(dai_show_ui *u, dai_show_ui_log_fn fn, void *user) {
+    if (!u) return;
+    u->log_fn = fn; u->log_user = user;
+}
 
 dai_show_ui *dai_show_ui_create(dai_show *sh) {
     if (!sh) return nullptr;
@@ -1308,7 +1350,13 @@ void dai_show_ui_nav(dai_show_ui *u, const dai_show_nav_input *in) {
     // right button is typing, not walking. The step scales with `dist`, so a
     // show framed from 300 m crosses the sky briskly and a figure inspected
     // from 20 m creeps. Shift hurries, as everywhere.
-    if (in->mouse_right) {
+    // Over the preview? Tested against the rectangle the viewport itself was
+    // last drawn into, in the very coordinates it draws in - the host's own
+    // guess at that rectangle is what broke the right button before.
+    int over_preview = (u->vp_w > 1.0f &&
+                        in->mouse_x >= u->vp_x && in->mouse_x < u->vp_x + u->vp_w &&
+                        in->mouse_y >= u->vp_y && in->mouse_y < u->vp_y + u->vp_h);
+    if (in->mouse_right || (in->can_fly && over_preview)) {
         float fw = (float)(in->key_w - in->key_s);
         float sd = (float)(in->key_d - in->key_a);
         float up = (float)(in->key_e - in->key_q);
@@ -1321,6 +1369,26 @@ void dai_show_ui_nav(dai_show_ui *u, const dai_show_nav_input *in) {
             if (u->focus_y < 0.5f) u->focus_y = 0.5f;   // the floor is the floor
         }
     }
+    // The look, ONE more time - from the button the HOST reports, and only
+    // when the viewport did not see it itself. Two paths for one gesture is
+    // deliberate: dai_ui gets the button through its input struct, the host
+    // reads it from the system, and a fault anywhere in either path leaves a
+    // preview that cannot be turned at all. Whichever arrives, the camera
+    // moves; both arriving is not double speed, because this half stands down
+    // the moment the panel reports it took the drag.
+    if (in->mouse_right && !u->look_seen && over_preview) {
+        if (u->nav_rmb) {
+            if (in->key_alt) {
+                float dz = (in->mouse_x - u->look_hx) + (u->look_hy - in->mouse_y);
+                u->dist = std::max(2.0f, u->dist * (1.0f - dz * 0.004f));
+            } else {
+                u->yaw   += (in->mouse_x - u->look_hx) * 0.005f;
+                u->pitch += (in->mouse_y - u->look_hy) * 0.005f;
+                u->pitch  = std::max(-1.5f, std::min(1.5f, u->pitch));
+            }
+        }
+    }
+    u->look_hx = in->mouse_x; u->look_hy = in->mouse_y;
     u->nav_rmb = in->mouse_right;
 
     // Pan: the middle button slides the focus across the view plane, scaled by
@@ -1864,6 +1932,7 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     const float TL = std::min(124.0f, std::max(58.0f, h * 0.30f));
     float vh = h - TL;
 
+    u->vp_x = x; u->vp_y = y; u->vp_w = w; u->vp_h = h - TL;
     refresh_fleet(u);
     if (u->framed_for != (int)u->fleet.size()) frame_plan(u);
 
@@ -2494,6 +2563,8 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     // its own feet.
     {
         int rdown = dai_ui_right_down(ui);
+        u->look_seen = rdown ? 1 : 0;   // the fallback in dai_show_ui_nav only
+                                        // turns the camera when THIS did not
         if (rdown) {
             if (u->look_on) {
                 if (u->key_alt) {
@@ -3728,13 +3799,13 @@ void dai_show_ui_panels(dai_show_ui *u, dai_ui *ui, struct dai_dock *dock) {
     // The show's own settings are not a panel of their own any more: they are
     // THE settings of a droneshow project, so they live in the Settings panel
     // where a user goes looking for settings. dai_editor_ui draws them there.
-    dai_dock_add_tab(dock, "Validation", "Console");
-
-    float px, py, pw, ph;
-    if (dai_dock_panel(dock, "Validation", &px, &py, &pw, &ph)) {
-        dai_show_ui_validation(u, ui, px, py, pw, ph);
-        dai_dock_panel_end(dock);
-    }
+    // The Validation panel is gone. Every fault it listed is written to the
+    // Console the moment a solve produces it, and the status line keeps the
+    // verdict - so the faults live where the rest of the program's output
+    // lives instead of in a panel of their own. dai_show_ui_validation is
+    // still exported: the tests read it, and a host that wants the list in a
+    // rectangle can still draw it.
+    (void)u; (void)ui; (void)dock;
 }
 
 } // extern "C"

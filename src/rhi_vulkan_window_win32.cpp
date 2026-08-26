@@ -171,8 +171,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         w->buttons = 0;
         if (GetCapture() == hwnd) ReleaseCapture();
         return 0;
+    // The capture moving on does NOT mean the buttons came up. It happens
+    // while a button is held (a menu opening, a drag entering another window),
+    // and clearing the buttons here is a camera that stops mid gesture. What
+    // is actually held is asked of the system in dai_window_mouse.
     case WM_CAPTURECHANGED:
-        w->buttons = 0;
         return 0;
     case WM_CHAR: {
         // Control characters arrive here too (backspace, tab, enter) - the
@@ -631,7 +634,31 @@ int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {
     const double sy = (w->height && r->height) ? (double)r->height / (double)w->height : 1.0;
     if (x) *x = (int)((double)w->mouse_x * sx);
     if (y) *y = (int)((double)w->mouse_y * sy);
-    if (buttons) *buttons = w->buttons;
+    // The TRUTH about the buttons, asked of the system rather than remembered
+    // from messages. A message stream can lose a button in half a dozen ways -
+    // WM_CAPTURECHANGED while a button is held, a down that arrived while a
+    // menu had the input, a click swallowed by the shell - and every one of
+    // them ends the same way: the editor believes the right button is not
+    // held, so the camera never turns and nothing at all appears to happen.
+    // Only while this window is the foreground one; a background window that
+    // reads the global button state would fly its camera around while somebody
+    // clicks in another program. GetSystemMetrics(SM_SWAPBUTTON) is honoured
+    // because on a left handed mouse the physical right button reports as
+    // VK_LBUTTON and vice versa.
+    if (buttons) {
+        uint32_t b = w->buttons;
+        if (GetForegroundWindow() == w->hwnd) {
+            const int swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+            const int vk_l = swapped ? VK_RBUTTON : VK_LBUTTON;
+            const int vk_r = swapped ? VK_LBUTTON : VK_RBUTTON;
+            b = 0;
+            if (GetAsyncKeyState(vk_l) & 0x8000) b |= 1u << 1;
+            if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) b |= 1u << 2;
+            if (GetAsyncKeyState(vk_r) & 0x8000) b |= 1u << 3;
+            w->buttons = b;
+        }
+        *buttons = b;
+    }
     return 1;
 }
 

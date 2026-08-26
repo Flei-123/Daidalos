@@ -4784,6 +4784,11 @@ int dai_editor_ui_viewport(dai_editor_ui *p, const dai_editor_cam_input *in) {
     // host feeds it dai_show_ui_nav for flying. Running the game camera here
     // anyway would put a "create cube" menu under every right-button look.
     if (p->show) {
+        // The right button means "I am flying now" in a show too: whatever
+        // field still had the keyboard gives it up, or W A S D go on being
+        // typed into a number box and the preview never moves. This used to
+        // sit below the early return, so it never ran for a show at all.
+        if (in->mouse_right && !p->prev_right_down) dai_ui_text_defocus(p->ui);
         p->prev_right_down = in->mouse_right != 0;
         p->prev_viewport_down = in->mouse_left != 0;
         return 0;
@@ -5040,19 +5045,18 @@ void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
         dai_dock_add(p->dock, "Scene", DAI_DOCK_NONE, 0.0f);
         dai_dock_add(p->dock, "Storyboard", DAI_DOCK_LEFT, 0.22f);
         dai_dock_add(p->dock, "Inspector", DAI_DOCK_RIGHT, 0.24f);
-        dai_dock_add(p->dock, "Validation", DAI_DOCK_BOTTOM, 0.26f);
+        dai_dock_add(p->dock, "Console", DAI_DOCK_BOTTOM, 0.26f);
         dai_dock_add_tab(p->dock, "Hierarchy", "Storyboard");
         // The show's numbers are the project's settings, so they are in the
         // Settings panel - one tab beside the inspector, not a panel of its
         // own called something only this program knows.
         dai_dock_add_tab(p->dock, "Settings", "Inspector");
         p->settings_open = 1;
-        dai_dock_add_tab(p->dock, "Console", "Validation");
-        dai_dock_add_tab(p->dock, "Project", "Validation");
+        dai_dock_add_tab(p->dock, "Project", "Console");
         dai_dock_add_tab(p->dock, "Script", "Scene");
         dai_dock_focus(p->dock, "Storyboard");
         dai_dock_focus(p->dock, "Inspector");
-        dai_dock_focus(p->dock, "Validation");
+        dai_dock_focus(p->dock, "Console");
         p->layout_ready = true;
         p->layout_w = vw; p->layout_h = vh;
         return;
@@ -7717,7 +7721,12 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         // already lives - the show's numbers beside the inspector, its
         // verdicts beside the log. The figures themselves ARE the hierarchy.
         dai_dock_add_tab(p->dock, "Settings", "Inspector");
-        dai_dock_add_tab(p->dock, "Validation", "Console");
+        // No Validation panel: a conflict is the program talking back, and the
+        // program already has one place for that - the Console. Two lists of
+        // the same faults is one list nobody reads. A layout saved from an
+        // older build may still name it; dai_dock_close makes sure the tab
+        // does not sit there empty.
+        dai_dock_close(p->dock, "Validation");
     }
 
     dai_dock_begin(p->dock, ui, 0.0f, TOP, vw, vh - TOP - BOTTOM);
@@ -8560,9 +8569,16 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
     run_context_menus(p);
 }
 
+static void show_log_sink(void *user, int level, const char *text) {
+    dai_editor_ui_log((dai_editor_ui *)user, level, text);
+}
+
 void dai_editor_ui_show_host(dai_editor_ui *p, struct dai_show_ui *show) {
     if (!p) return;
     p->show = show;
+    // Everything the show says lands in the Console, which is why there is no
+    // Validation panel any more.
+    if (show) dai_show_ui_log_sink(show, show_log_sink, p);
 }
 struct dai_show_ui *dai_editor_ui_show(const dai_editor_ui *p) { return p ? p->show : nullptr; }
 

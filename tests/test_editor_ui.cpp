@@ -1234,6 +1234,94 @@ int main() {
         dai_show_destroy(sh);
     }
 
+    // ---- moving through a show without the right button ---------------------
+    //
+    // W A S D used to walk only WHILE the right button was held. On a machine
+    // where that button never reaches the program - a touchpad, a shell that
+    // eats it, a lost capture - that rule leaves a preview nobody can move
+    // through at all, which is exactly what was reported. So: the pointer over
+    // the preview and no text field owning the keyboard is enough.
+    {
+        const float VX = 300.0f, VY = 40.0f, VW = 900.0f, VH = 600.0f;
+        dai_show_settings s2 = dai_show_settings_default();
+        s2.drone_count = 9; s2.min_distance_m = 2.0f; s2.fps = 10; s2.seed = 5u;
+        dai_show *sh = dai_show_create(&s2);
+        dai_show_point a[9];
+        for (int i = 0; i < 9; ++i) {
+            a[i] = dai_show_point{};
+            a[i].x = (float)(i % 3) * 6.0f - 6.0f; a[i].y = 40.0f;
+            a[i].z = (float)(i / 3) * 6.0f - 6.0f;
+            a[i].r = 200; a[i].g = 200; a[i].b = 200;
+        }
+        dai_show_formation_add(sh, "Grid", "builtin://grid", a, 9, 4.0f);
+        char e2[256] = { 0 };
+        dai_show_solve(sh, e2, sizeof(e2));
+        dai_show_ui *su = dai_show_ui_create(sh);
+        dai_show_ui_select_formation(su, 0);
+
+        auto vframe = [&](float mxp, float myp, int rdown) {
+            dai_ui_input in{};
+            in.mouse_x = mxp; in.mouse_y = myp; in.right_down = rdown;
+            dai_ui_begin(ui, 1280, 720, &in);
+            dai_show_ui_viewport(su, ui, VX, VY, VW, VH);
+            dai_ui_end(ui);
+        };
+        float cx2 = VX + VW * 0.5f, cy2 = VY + VH * 0.4f;
+        vframe(cx2, cy2, 0);            // draws once, so the panel knows its rect
+
+        float hx0 = 0.0f, hy0 = 0.0f;
+        dai_show_ui_gizmo_handle(su, 0, &hx0, &hy0);
+        dai_show_nav_input ni{};
+        ni.mouse_x = cx2; ni.mouse_y = cy2;
+        // SIDEWAYS, not forward: flying straight at the figure keeps it in the
+        // middle of the screen, where a check would see nothing move.
+        ni.key_d = 1; ni.can_fly = 1; ni.dt = 1.0f / 60.0f;
+        for (int i = 0; i < 10; ++i) dai_show_ui_nav(su, &ni);
+        vframe(cx2, cy2, 0);
+        float hx1 = 0.0f, hy1 = 0.0f;
+        dai_show_ui_gizmo_handle(su, 0, &hx1, &hy1);
+        CHECK(std::fabs(hx1 - hx0) + std::fabs(hy1 - hy0) > 1.0f,
+              "D did not move the show camera without the right button held");
+
+        // ...and holding W with the pointer OUTSIDE the preview must not.
+        vframe(10.0f, 10.0f, 0);
+        dai_show_ui_gizmo_handle(su, 0, &hx0, &hy0);
+        ni.mouse_x = 10.0f; ni.mouse_y = 10.0f;
+        for (int i = 0; i < 10; ++i) dai_show_ui_nav(su, &ni);
+        vframe(10.0f, 10.0f, 0);
+        dai_show_ui_gizmo_handle(su, 0, &hx1, &hy1);
+        CHECK(std::fabs(hx1 - hx0) + std::fabs(hy1 - hy0) < 0.5f,
+              "D walked the camera while the pointer was over a panel");
+
+        // The right button reported by the HOST alone - dai_ui never sees it -
+        // still looks around. Two paths for one gesture, because the whole
+        // complaint was that a right drag did nothing.
+        vframe(cx2, cy2, 0);
+        dai_show_ui_gizmo_handle(su, 0, &hx0, &hy0);
+        dai_show_nav_input li{};
+        li.dt = 1.0f / 60.0f; li.mouse_right = 1;
+        li.mouse_x = cx2; li.mouse_y = cy2;
+        dai_show_ui_nav(su, &li);       // first frame only remembers
+        li.mouse_x = cx2 + 120.0f;
+        dai_show_ui_nav(su, &li);
+        vframe(cx2, cy2, 0);
+        dai_show_ui_gizmo_handle(su, 0, &hx1, &hy1);
+        CHECK(std::fabs(hx1 - hx0) + std::fabs(hy1 - hy0) > 1.0f,
+              "a right drag reported by the host alone did not turn the camera");
+
+        // Every fault goes to the log sink now - there is no Validation panel
+        // left to read them in.
+        {
+            static int lines = 0;
+            lines = 0;
+            dai_show_ui_log_sink(su, [](void *, int, const char *) { ++lines; }, nullptr);
+            dai_show_ui_note(su, 1, "a fault the console must hear about");
+            CHECK(lines > 0, "the show wrote nothing to the console sink");
+        }
+        dai_show_ui_destroy(su);
+        dai_show_destroy(sh);
+    }
+
     dai_editor_ui_destroy(panels);
     dai_editor_destroy(ed);
     dai_doc_sync_destroy(sync);
