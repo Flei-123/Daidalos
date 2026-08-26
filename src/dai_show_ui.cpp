@@ -50,7 +50,7 @@ const char *const TIMINGS[2]  = { "Sync", "Staggered" };
 const char *const FIGURES[3]  = { "Sphere", "Cube", "Ring" };
 // The hierarchy's add menu: the three builtins, and the image the storyboard
 // has a path for.
-const dai_ui_menu_item ADD_ITEMS[9] = {
+const dai_ui_menu_item ADD_ITEMS[11] = {
     { nullptr, "Into this step", nullptr, 1 },   // a caption, not a command
     { nullptr, "Sphere", nullptr, 0 },
     { nullptr, "Cube", nullptr, 0 },
@@ -60,8 +60,10 @@ const dai_ui_menu_item ADD_ITEMS[9] = {
     { nullptr, "This figure", nullptr, 1 },      // a caption, not a command
     { nullptr, "Duplicate", nullptr, 0 },
     { nullptr, "Delete", nullptr, 0 },
+    { nullptr, "Move up", nullptr, 0 },
+    { nullptr, "Move down", nullptr, 0 },
 };
-const int ADD_ITEM_COUNT = 9;
+const int ADD_ITEM_COUNT = 11;
 
 // ---- fitting text to the column it has --------------------------------------
 //
@@ -595,6 +597,19 @@ struct dai_show_ui {
     // Dragging the left diamond is the transit into the figure, dragging the
     // right one is how long it holds - so the two numbers a show is made of
     // are edited where they are SEEN, not typed into a panel in seconds.
+    // ---- the hierarchy: rows that can be carried ---------------------------
+    // A step is a PARENT and a figure is its child, so the two things a
+    // hierarchy must do are re-order and re-parent - and in every editor that
+    // has one, both are the same gesture: pick the row up and put it down
+    // somewhere else.
+    int   hi_drag_f   = -1;      // the figure the press landed on, -1 = none
+    int   hi_dragging = 0;       // ...and whether it has moved far enough
+    float hi_press_y  = 0.0f;    // where the press was, to tell click from drag
+    float hi_drop_y   = 0.0f;    // where the insertion line is drawn
+    int   hi_drop_at  = -1;      // insert BEFORE this figure index (n = at end)
+    int   hi_drop_grp = -1;      // ...into this step
+    int   hi_drop_ok  = 0;
+
     int   tl_drag_f = -1;                    // the figure being dragged
     int   tl_drag_end = 0;                   // 0 = its start, 1 = its end
     float tl_drag_mx = 0.0f;                 // pointer x when the drag began
@@ -1413,8 +1428,8 @@ void dai_show_ui_nav(dai_show_ui *u, const dai_show_nav_input *in) {
                 float dz = (in->mouse_x - u->look_hx) + (u->look_hy - in->mouse_y);
                 u->dist = std::max(2.0f, u->dist * (1.0f - dz * 0.004f));
             } else {
-                turn_head(u, (in->mouse_x - u->look_hx) * 0.005f,
-                             (in->mouse_y - u->look_hy) * 0.005f);
+                turn_head(u, -(in->mouse_x - u->look_hx) * 0.005f,
+                              (in->mouse_y - u->look_hy) * 0.005f);
             }
         }
     }
@@ -1475,6 +1490,24 @@ int dai_show_ui_eye(const dai_show_ui *u, float *xyz) {
     Cam c = camera_of(u, 0.0f, 0.0f, 100.0f, 100.0f);
     xyz[0] = c.ex; xyz[1] = c.ey; xyz[2] = c.ez;
     return 1;
+}
+
+int dai_show_ui_forward(const dai_show_ui *u, float *xyz) {
+    if (!u || !xyz) return 0;
+    Cam c = camera_of(u, 0.0f, 0.0f, 100.0f, 100.0f);
+    xyz[0] = c.rz[0]; xyz[1] = c.rz[1]; xyz[2] = c.rz[2];
+    return 1;
+}
+
+void dai_show_ui_deselect(dai_show_ui *u) {
+    if (!u) return;
+    u->sel_formation = -1;
+    u->sel_is_drone  = 0;
+    u->sel_drone     = 0xFFFFFFFFu;
+    u->sel_drone_b   = 0xFFFFFFFFu;
+    u->sel_point     = 0xFFFFFFFFu;
+    u->pt_f = -1; u->pt_i = 0xFFFFFFFFu;
+    u->colour_for    = -1;
 }
 
 uint32_t dai_show_ui_selected_formation(const dai_show_ui *u) {
@@ -2625,8 +2658,12 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                     float dz = (mx - u->look_mx) + (u->look_my - my);
                     u->dist = std::max(2.0f, u->dist * (1.0f - dz * 0.004f));
                 } else {
-                    turn_head(u, (mx - u->look_mx) * 0.005f,
-                                 (my - u->look_my) * 0.005f);
+                    // Mouse right = look right. The stored yaw runs the other
+                    // way round (the forward vector is built with -sin), so
+                    // the sign is flipped HERE rather than in the camera,
+                    // where every other gesture depends on it.
+                    turn_head(u, -(mx - u->look_mx) * 0.005f,
+                                  (my - u->look_my) * 0.005f);
                 }
             } else if (inside) {
                 u->look_on = 1;                 // the hold began over the sky
@@ -3024,6 +3061,20 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         apick = -1;
     }
     if (apick == 8) { dai_show_ui_delete_selected(u); apick = -1; }
+    if (apick == 9 || apick == 10) {        // move the selected figure a row
+        int dir = (apick == 9) ? -1 : 1;
+        uint32_t fc5 = dai_show_formation_count(u->sh);
+        if (u->sel_formation >= 0 && (uint32_t)u->sel_formation < fc5) {
+            push_undo(u, dir < 0 ? "move up" : "move down");
+            if (dai_show_formation_move(u->sh, (uint32_t)u->sel_formation, dir)) {
+                u->sel_formation += dir;
+                dai_show_formation_info mi;
+                if (dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &mi))
+                    u->active_group = mi.group;
+            }
+        }
+        apick = -1;
+    }
     // There is no "new step" command any more, and no Step field in the
     // inspector. A step is not a setting: it is WHERE a figure was put. The
     // storyboard always ends in an empty step, clicking it makes it the one
@@ -3090,6 +3141,18 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
     const float top = cy, bottom = cy + list_h;
     float t = u->time;
     int prev_group = -1;                     // forces the first header
+    // ---- carrying a row ----------------------------------------------------
+    // Where every row was drawn, so a drop can be answered against the rows a
+    // hand can actually see. Collected while drawing rather than computed
+    // from the model: a scrolled list is not the model's idea of an order.
+    struct HRow { uint32_t fi; int group; float y; };
+    std::vector<HRow> hrows;
+    struct HHead { int group; float y; };
+    std::vector<HHead> hheads;
+    float lmx = 0.0f, lmy = 0.0f; int ldown = 0, lpressed = 0;
+    dai_ui_mouse(ui, &lmx, &lmy, &ldown, &lpressed);
+    const int in_list = (lmx >= x && lmx < x + w && lmy >= top - 0.5f &&
+                         lmy <= bottom + 0.5f);
     dai_ui_scroll_begin(ui, "showfigs", list_h);
     for (uint32_t i = 0; i < n; ++i) {
         dai_show_formation_info info;
@@ -3108,6 +3171,7 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
                 // working in", and the next figure lands there. Lit when it is
                 // that step - the storyboard is the only place the answer
                 // lives now that the inspector's Step field is gone.
+                hheads.push_back(HHead{ info.group, hy2 });
                 if (dai_ui_toggle_button(ui, gh, info.group == u->active_group))
                     u->active_group = info.group;
             } else dai_ui_advance(ui, w - 16.0f, pitch - st->spacing);
@@ -3153,6 +3217,16 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
             dai_ui_advance(ui, w - 16.0f, pitch - st->spacing);
             continue;
         }
+        hrows.push_back(HRow{ i, info.group, ry });
+        // The press ARMS a carry; whether it becomes one is decided by how far
+        // the pointer then travels. A row that is merely clicked must stay a
+        // click, or nothing in a list can be selected without moving it.
+        if (lpressed && lmx >= x && lmx < x + w &&
+            lmy >= ry - 0.5f && lmy < ry + pitch) {
+            u->hi_drag_f   = (int)i;
+            u->hi_dragging = 0;
+            u->hi_press_y  = lmy;
+        }
         if (dai_ui_toggle_button(ui, row, here)) {
             u->sel_formation = (int)i;
             u->active_group  = info.group;
@@ -3178,9 +3252,85 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         float ex2 = 0.0f, ey2 = 0.0f;
         dai_ui_cursor_pos(ui, &ex2, &ey2);
         if (ey2 >= top - 0.5f && ey2 + pitch <= bottom + 0.5f) {
+            hheads.push_back(HHead{ empty_group, ey2 });
             if (dai_ui_toggle_button(ui, eh, u->active_group == empty_group))
                 u->active_group = empty_group;
         } else dai_ui_advance(ui, w - 16.0f, pitch - st->spacing);
+    }
+    // ---- where the carried row would land ---------------------------------
+    //
+    // A step is the PARENT: dropping onto a step header puts the figure into
+    // that step, dropping between two rows puts it there, in that step's
+    // order. Both are one gesture, and both are answered against the rows as
+    // DRAWN - the y the eye used is the y the decision uses.
+    // NOT cleared before the release is read: the frame the button comes up
+    // is the frame the drop happens, and wiping the target first is how a
+    // carry ends in nothing at all.
+    if (ldown) u->hi_drop_ok = 0;
+    if (u->hi_drag_f >= 0 && ldown) {
+        if (std::fabs(lmy - u->hi_press_y) > 4.0f) u->hi_dragging = 1;
+        if (u->hi_dragging && in_list) {
+            // A header claims its own row; a figure row is split down the
+            // middle - above the middle means before it, below means after.
+            int done = 0;
+            for (size_t k = 0; k < hheads.size() && !done; ++k) {
+                if (lmy < hheads[k].y - 0.5f || lmy >= hheads[k].y + pitch) continue;
+                u->hi_drop_grp = hheads[k].group;
+                // The front of that step, which for an empty one is the end
+                // of the list.
+                uint32_t at = (uint32_t)hrows.size();
+                for (size_t r = 0; r < hrows.size(); ++r)
+                    if (hrows[r].group == hheads[k].group) { at = hrows[r].fi; break; }
+                u->hi_drop_at = (int)at;
+                u->hi_drop_y  = hheads[k].y + pitch;
+                u->hi_drop_ok = 1;
+                done = 1;
+            }
+            for (size_t k = 0; k < hrows.size() && !done; ++k) {
+                if (lmy < hrows[k].y - 0.5f || lmy >= hrows[k].y + pitch) continue;
+                int after = (lmy > hrows[k].y + pitch * 0.5f);
+                u->hi_drop_grp = hrows[k].group;
+                u->hi_drop_at  = (int)hrows[k].fi + (after ? 1 : 0);
+                u->hi_drop_y   = hrows[k].y + (after ? pitch : 0.0f);
+                u->hi_drop_ok  = 1;
+                done = 1;
+            }
+            if (!done && !hrows.empty() && lmy > hrows.back().y) {
+                u->hi_drop_grp = hrows.back().group;
+                u->hi_drop_at  = (int)hrows.back().fi + 1;
+                u->hi_drop_y   = hrows.back().y + pitch;
+                u->hi_drop_ok  = 1;
+            }
+        }
+        if (u->hi_dragging && u->hi_drop_ok) {
+            // The line where it would go, and the row it came from, dimmed.
+            dai_ui_rect(ui, x + 8.0f, u->hi_drop_y - 1.0f, w - 20.0f, 2.0f, COL_OK);
+        }
+    }
+    if (u->hi_drag_f >= 0 && !ldown) {
+        int from = u->hi_drag_f;
+        int at   = u->hi_drop_at;
+        int grp  = u->hi_drop_grp;
+        int ok   = u->hi_dragging && u->hi_drop_ok;
+        u->hi_drag_f = -1; u->hi_dragging = 0; u->hi_drop_ok = 0;
+        uint32_t fcn = dai_show_formation_count(u->sh);
+        if (ok && from >= 0 && (uint32_t)from < fcn) {
+            dai_show_formation_info fi_old;
+            int same_group = dai_show_formation_get(u->sh, (uint32_t)from, &fi_old) &&
+                             fi_old.group == grp;
+            int j = at;
+            if (j > from) --j;              // it leaves its own place first
+            if (j < 0) j = 0;
+            if ((uint32_t)j >= fcn) j = (int)fcn - 1;
+            if (j != from || !same_group) {
+                push_undo(u, "move figure");
+                if (!same_group) dai_show_formation_set_group(u->sh, (uint32_t)from, grp);
+                if (j != from) dai_show_formation_move(u->sh, (uint32_t)from, j - from);
+                u->sel_formation = j;
+                u->active_group  = grp;
+                say(u, 0, "figure moved to step %d", grp + 1);
+            }
+        }
     }
     dai_ui_scroll_end(ui);
 

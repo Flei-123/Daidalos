@@ -1159,6 +1159,89 @@ int main() {
     // dai_show_ui_viewport: a 54 px Play button at x+6, then the track out to
     // x+w-10, the whole show across it) and checks the document changed.
     {
+    // ---- the hierarchy carries rows the way a scene hierarchy does ---------
+    //
+    // A step is the PARENT and a figure its child, so the list has to do the
+    // two things every hierarchy does: re-order inside a parent, and move a
+    // child to another parent. Both by carrying the row.
+    {
+        std::printf("\n-- show: the storyboard carries figures between steps\n");
+        const float PX = 0.0f, PY = 0.0f, PW = 320.0f, PH = 600.0f;
+        dai_show_settings s3 = dai_show_settings_default();
+        s3.drone_count = 8; s3.min_distance_m = 2.0f; s3.fps = 10; s3.seed = 7u;
+        dai_show *sh = dai_show_create(&s3);
+        dai_show_point a[4];
+        for (int i = 0; i < 4; ++i) {
+            a[i] = dai_show_point{};
+            a[i].x = (float)i * 5.0f; a[i].y = 30.0f; a[i].z = 0.0f;
+            a[i].r = a[i].g = a[i].b = 180;
+        }
+        dai_show_formation_add(sh, "One",   "builtin://grid", a, 4, 4.0f);
+        dai_show_formation_add(sh, "Two",   "builtin://grid", a, 4, 4.0f);
+        dai_show_formation_add(sh, "Three", "builtin://grid", a, 4, 4.0f);
+        // Three figures, two steps: 0 and 1 in step 1, the third in step 2.
+        dai_show_formation_set_group(sh, 2, 1);
+        dai_show_ui *su = dai_show_ui_create(sh);
+
+        auto pframe = [&](float mxp, float myp, int mdown) {
+            dai_ui_input in{};
+            in.mouse_x = mxp; in.mouse_y = myp; in.mouse_down = mdown;
+            dai_ui_begin(ui, 1280, 720, &in);
+            dai_show_ui_figures(su, ui, PX, PY, PW, PH);
+            dai_ui_end(ui);
+        };
+        // Row geometry is not guessed: the rows are found by clicking down the
+        // panel until the selection says which one was hit.
+        float row_y[3] = { -1.0f, -1.0f, -1.0f };
+        for (float yy = PY + 4.0f; yy < PY + PH; yy += 2.0f) {
+            dai_show_ui_deselect(su);   // otherwise the FIRST y "hits" whatever
+                                        // was selected before the scan began
+            pframe(PX + 40.0f, yy, 0);
+            pframe(PX + 40.0f, yy, 1);
+            pframe(PX + 40.0f, yy, 0);
+            if (dai_show_ui_has_selection(su)) {
+                uint32_t sel = dai_show_ui_selected_formation(su);
+                if (sel < 3 && row_y[sel] < 0.0f) row_y[sel] = yy;
+            }
+        }
+        CHECK(row_y[0] > 0.0f && row_y[1] > 0.0f && row_y[2] > 0.0f,
+              "the storyboard did not draw three clickable figure rows");
+
+        // Carry figure 0 down onto the third row, which lives in step 2. It
+        // must END there: the step it was dropped into is its parent now.
+        dai_show_formation_info before{};
+        dai_show_formation_get(sh, 0, &before);
+        CHECK(before.group == 0, "the fixture did not start in step 1");
+        pframe(PX + 40.0f, row_y[0], 0);
+        pframe(PX + 40.0f, row_y[0], 1);          // press: arms the carry
+        pframe(PX + 40.0f, row_y[2] + 6.0f, 1);   // move: past the middle
+        pframe(PX + 40.0f, row_y[2] + 6.0f, 1);
+        pframe(PX + 40.0f, row_y[2] + 6.0f, 0);   // release: the drop
+        int found = -1;
+        for (uint32_t i = 0; i < 3; ++i) {
+            dai_show_formation_info fi{};
+            if (dai_show_formation_get(sh, i, &fi) && std::strcmp(fi.name, "One") == 0)
+                found = (int)fi.group;
+        }
+        CHECK(found == 1, "the carried figure landed in step %d, expected step 2",
+              found + 1);
+
+        // ...and a plain click still selects rather than moves anything.
+        {
+            dai_show_formation_info fa{}, fb{};
+            dai_show_formation_get(sh, 0, &fa);
+            pframe(PX + 40.0f, row_y[1], 0);
+            pframe(PX + 40.0f, row_y[1], 1);
+            pframe(PX + 40.0f, row_y[1], 0);
+            dai_show_formation_get(sh, 0, &fb);
+            CHECK(std::strcmp(fa.name, fb.name) == 0,
+                  "a click on a row re-ordered the list: %s became %s",
+                  fa.name, fb.name);
+        }
+        dai_show_ui_destroy(su);
+        dai_show_destroy(sh);
+    }
+
         std::printf("\n-- show: dragging a keyframe changes the show\n");
         const float VX = 0.0f, VY = 0.0f, VW = 1000.0f, VH = 500.0f;
         dai_show_settings s = dai_show_settings_default();
@@ -1341,6 +1424,46 @@ int main() {
             CHECK(moved < 0.01f,
                   "a right drag moved the eye %.3f m - that is an orbit, not a look",
                   (double)moved);
+        }
+
+        // ---- and it turns the RIGHT way -------------------------------------
+        // Mouse right = look right. Measured on the view DIRECTION, not on a
+        // projected handle: a handle can leave the screen, and then the test
+        // is measuring nothing. "Right" is the camera's own right vector,
+        // built the way the camera builds it: forward x world-up.
+        {
+            // A FRESH camera: the checks above have already flown, orbited and
+            // pitched this one, and a view that is nearly straight down has no
+            // meaningful "right" to measure against.
+            dai_show_ui *cu = dai_show_ui_create(sh);
+            {   // one frame, so the panel knows the rectangle it draws in -
+                // the look path only fires over the preview.
+                dai_ui_input ci2{};
+                ci2.mouse_x = cx2; ci2.mouse_y = cy2;
+                dai_ui_begin(ui, 1280, 720, &ci2);
+                dai_show_ui_viewport(cu, ui, VX, VY, VW, VH);
+                dai_ui_end(ui);
+            }
+            float f0[3] = { 0, 0, 0 }, f1[3] = { 0, 0, 0 };
+            dai_show_ui_forward(cu, f0);
+            float up[3] = { 0.0f, 1.0f, 0.0f };
+            float r0[3] = { f0[1] * up[2] - f0[2] * up[1],
+                            f0[2] * up[0] - f0[0] * up[2],
+                            f0[0] * up[1] - f0[1] * up[0] };
+            float rl = std::sqrt(r0[0] * r0[0] + r0[1] * r0[1] + r0[2] * r0[2]);
+            if (rl > 1e-6f) { r0[0] /= rl; r0[1] /= rl; r0[2] /= rl; }
+            dai_show_nav_input yi{};
+            yi.dt = 1.0f / 60.0f; yi.mouse_right = 1;
+            yi.mouse_x = cx2; yi.mouse_y = cy2;
+            dai_show_ui_nav(cu, &yi);
+            yi.mouse_x = cx2 + 40.0f;          // the pointer goes RIGHT
+            dai_show_ui_nav(cu, &yi);
+            dai_show_ui_forward(cu, f1);
+            float d = f1[0] * r0[0] + f1[1] * r0[1] + f1[2] * r0[2];
+            CHECK(d > 0.05f,
+                  "dragging right turned the view LEFT (%.3f along its own "
+                  "right vector): the horizontal look is inverted", (double)d);
+            dai_show_ui_destroy(cu);
         }
 
         // ---- clicking empty sky selects NOTHING -----------------------------

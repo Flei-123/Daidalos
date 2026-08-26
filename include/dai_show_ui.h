@@ -104,6 +104,11 @@ DAI_API int      dai_show_ui_has_selection(const dai_show_ui *u);
 /* Where the preview is watched FROM, in world metres. Only the camera itself
    and the tests need it: a right drag must turn the head without moving it. */
 DAI_API int      dai_show_ui_eye(const dai_show_ui *u, float *xyz);
+/* Which way it is looking, as a unit vector. The companion to _eye: a right
+   drag must change THIS and leave the eye alone. */
+DAI_API int      dai_show_ui_forward(const dai_show_ui *u, float *xyz);
+/* Let everything go - the click on empty space, spelled as a call. */
+DAI_API void     dai_show_ui_deselect(dai_show_ui *u);
 DAI_API int      dai_show_ui_gizmo_handle(const dai_show_ui *u, int axis,
                                           float *sx, float *sy);
 /* The same reading for the handle on ONE selected drone's point. A drone is a
