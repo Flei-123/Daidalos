@@ -692,9 +692,12 @@ void edit_begin(dai_show_ui *u, dai_ui *ui, const char *what) {
 // at a point of a figure that has fewer of them now.
 void clamp_selection(dai_show_ui *u) {
     uint32_t n = dai_show_formation_count(u->sh);
-    if (!n) { u->sel_formation = 0; u->pt_f = -1; u->pt_i = 0xFFFFFFFFu; return; }
-    if (u->sel_formation < 0) u->sel_formation = 0;
-    if ((uint32_t)u->sel_formation >= n) u->sel_formation = (int)n - 1;
+    if (!n) { u->sel_formation = -1; u->pt_f = -1; u->pt_i = 0xFFFFFFFFu; return; }
+    // -1 is a legal state and MEANS something: nothing is selected, the way a
+    // scene view means it after a click on empty space. Clamping it up to 0
+    // was why an empty click re-selected the first figure a frame later.
+    if ((uint32_t)u->sel_formation >= n && u->sel_formation >= 0)
+        u->sel_formation = (int)n - 1;
     if (u->pt_f >= 0) {
         dai_show_formation_info pi;
         if ((uint32_t)u->pt_f >= n ||
@@ -824,6 +827,27 @@ Cam camera_of(const dai_show_ui *u, float x, float y, float w, float h) {
     c.cx = x + w * 0.5f;
     c.cy = y + h * 0.5f;
     return c;
+}
+
+// Turning the head, NOT orbiting the object. The preview is stored as an orbit
+// (focus + distance + angles), and simply changing the angles swings the eye
+// around the focus - Blender's middle-drag, and precisely what a right drag
+// must NOT do. Unity's right drag pivots about the EYE: the head turns, the
+// body stays. So the eye is measured before the turn and the focus is put back
+// in front of it afterwards, at the same distance. The orbit is preserved as a
+// representation; what changes is which end of it is nailed down.
+void turn_head(dai_show_ui *u, float dyaw, float dpitch) {
+    Cam c = camera_of(u, 0.0f, 0.0f, 100.0f, 100.0f);
+    float ex = c.ex, ey = c.ey, ez = c.ez;
+    u->yaw   += dyaw;
+    u->pitch += dpitch;
+    u->pitch  = std::max(-1.5f, std::min(1.5f, u->pitch));
+    float cp = std::cos(u->pitch), sp = std::sin(u->pitch);
+    float cyw = std::cos(u->yaw),  syw = std::sin(u->yaw);
+    float fwd[3] = { -syw * cp, -sp, -cyw * cp };
+    u->focus_x = ex + fwd[0] * u->dist;
+    u->focus_y = ey + fwd[1] * u->dist;
+    u->focus_z = ez + fwd[2] * u->dist;
 }
 
 int project(const Cam &c, float px, float py, float pz, float *sx, float *sy, float *depth) {
@@ -1389,9 +1413,8 @@ void dai_show_ui_nav(dai_show_ui *u, const dai_show_nav_input *in) {
                 float dz = (in->mouse_x - u->look_hx) + (u->look_hy - in->mouse_y);
                 u->dist = std::max(2.0f, u->dist * (1.0f - dz * 0.004f));
             } else {
-                u->yaw   += (in->mouse_x - u->look_hx) * 0.005f;
-                u->pitch += (in->mouse_y - u->look_hy) * 0.005f;
-                u->pitch  = std::max(-1.5f, std::min(1.5f, u->pitch));
+                turn_head(u, (in->mouse_x - u->look_hx) * 0.005f,
+                             (in->mouse_y - u->look_hy) * 0.005f);
             }
         }
     }
@@ -1438,6 +1461,20 @@ void dai_show_ui_select_formation(dai_show_ui *u, uint32_t i) {
     u->pt_f = -1; u->pt_i = 0xFFFFFFFFu;
     u->sel_point     = 0xFFFFFFFFu;
     u->colour_for    = -1;                 // the swatch re-reads this figure
+}
+
+int dai_show_ui_has_selection(const dai_show_ui *u) {
+    if (!u) return 0;
+    if (u->sel_is_drone) return u->sel_drone != 0xFFFFFFFFu;
+    return u->sel_formation >= 0 &&
+           (uint32_t)u->sel_formation < dai_show_formation_count(u->sh);
+}
+
+int dai_show_ui_eye(const dai_show_ui *u, float *xyz) {
+    if (!u || !xyz) return 0;
+    Cam c = camera_of(u, 0.0f, 0.0f, 100.0f, 100.0f);
+    xyz[0] = c.ex; xyz[1] = c.ey; xyz[2] = c.ez;
+    return 1;
 }
 
 uint32_t dai_show_ui_selected_formation(const dai_show_ui *u) {
@@ -2201,6 +2238,9 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     const uint32_t fcount = dai_show_formation_count(u->sh);
     int have_fig = (fcount && !u->sel_is_drone &&
                     u->sel_formation >= 0 && (uint32_t)u->sel_formation < fcount);
+    // Nothing selected: forget where the handles WERE. A stale handle position
+    // is a lie any caller (and any test) would read as "the gizmo is there".
+    if (!have_fig) { u->giz_drawn[0] = u->giz_drawn[1] = u->giz_drawn[2] = 0; }
     dai_show_formation_info ginfo;
     if (have_fig && !dai_show_formation_get(u->sh, (uint32_t)u->sel_formation, &ginfo))
         have_fig = 0;
@@ -2489,7 +2529,10 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     // on a point, that point - which is what the handle above then moves.
     // Clicking empty sky clears both, the way clicking empty space does in
     // every hierarchy in this editor.
-    if (!u->pick_on && pressed && inside && !consumed) {
+    // Alt held means the left button belongs to the CAMERA (orbit), so it
+    // neither selects nor clears - otherwise every orbit that began over empty
+    // sky dropped the selection the orbit was meant to look at.
+    if (!u->pick_on && pressed && inside && !consumed && !u->key_alt) {
         float bestd = 9.0f; uint32_t bdi = 0xFFFFFFFFu;
         for (uint32_t k = 0; k < n; ++k) {
             float hx, hy;
@@ -2504,6 +2547,9 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
             u->sel_drone_b = 0xFFFFFFFFu;
             u->pt_f = -1; u->pt_i = 0xFFFFFFFFu;
             u->sel_is_drone = 0;              // the sky selects nothing at all
+            u->sel_formation = -1;            // ...and that includes the figure
+            u->sel_point     = 0xFFFFFFFFu;
+            u->colour_for    = -1;
         } else {
             u->sel_drone   = bdi;
             u->sel_drone_b = 0xFFFFFFFFu;
@@ -2579,9 +2625,8 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
                     float dz = (mx - u->look_mx) + (u->look_my - my);
                     u->dist = std::max(2.0f, u->dist * (1.0f - dz * 0.004f));
                 } else {
-                    u->yaw   += (mx - u->look_mx) * 0.005f;
-                    u->pitch += (my - u->look_my) * 0.005f;
-                    u->pitch  = std::max(-1.5f, std::min(1.5f, u->pitch));
+                    turn_head(u, (mx - u->look_mx) * 0.005f,
+                                 (my - u->look_my) * 0.005f);
                 }
             } else if (inside) {
                 u->look_on = 1;                 // the hold began over the sky
@@ -3074,7 +3119,12 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         // the click as well as the playhead.
         dai_show_formation_info next;
         int has_next = (i + 1u < n) && dai_show_formation_get(u->sh, i + 1u, &next);
-        int here = (t >= info.t_start - 0.001f) && (!has_next || t < next.t_start);
+        // Lit = SELECTED, the way every hierarchy in this editor lights a row.
+        // It used to light whichever figure the playhead happened to stand in,
+        // so clicking a row lit a different one and the list looked as if it
+        // ignored the click. The playhead still has a home: the timeline.
+        int here = ((int)i == u->sel_formation);
+        (void)has_next; (void)t;
         // Detail is dropped from the RIGHT before anything is cut: docked at a
         // tenth of the frame the row still has to say which figure it is, and
         // "1. Sp..." says nothing at all. The count and the timestamp are the
@@ -3230,8 +3280,13 @@ void dai_show_ui_inspector(dai_show_ui *u, dai_ui *ui, float x, float y, float w
     // again - a different cloud, a different assignment, a different show.
     {
         uint32_t fcount = dai_show_formation_count(u->sh);
-        if (fcount) {
-            if (u->sel_formation < 0) u->sel_formation = 0;
+        if (fcount && u->sel_formation < 0) {
+            // Nothing selected is a state to SHOW, not one to quietly undo.
+            dai_ui_section(ui, "Nothing selected");
+            stat_line(ui, bot, "click a figure in the storyboard, or a drone");
+            stat_line(ui, bot, "in the preview");
+        }
+        if (fcount && u->sel_formation >= 0) {
             if ((uint32_t)u->sel_formation >= fcount) u->sel_formation = (int)fcount - 1;
             const uint32_t fi = (uint32_t)u->sel_formation;
             dai_show_formation_info info;

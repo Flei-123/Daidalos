@@ -3783,6 +3783,14 @@ int main(int argc, char **argv) {
             dai_window_key_down(win, (uint32_t)DAI_KEY_0 + 2),   // the enum names 0 and 9; between them it is ASCII
         };
         auto pressed = [&](int i) { return keys[i] && !prev_keys[i]; };
+        // The show's keys are read HUNDREDS of lines below - after prev_keys
+        // has already been overwritten with this frame's state, which made
+        // every `pressed()` down there permanently false. Delete never
+        // deleted, Ctrl+Z never undid. The edges are latched here, where they
+        // are still true, and used further down.
+        const int ev_show_undo = pressed(3);
+        const int ev_show_redo = pressed(4);
+        const int ev_show_del  = pressed(5);
         // While a field is being typed into, the keyboard belongs to the field.
         // Otherwise renaming an object to "Wide Crate" switches the gizmo to
         // rotate, duplicates the selection and starts play mode on the way.
@@ -4773,9 +4781,9 @@ int main(int argc, char **argv) {
             // in this editor. A show has no dai_doc under it, so these go to
             // the show's own stack rather than to dai_editor_undo.
             if (!typing) {
-                if (ctrl && pressed(3)) dai_show_ui_undo(g_show_ui);
-                if (ctrl && pressed(4)) dai_show_ui_redo(g_show_ui);
-                if (!ctrl && pressed(5)) dai_show_ui_delete_selected(g_show_ui);
+                if (ctrl && ev_show_undo) dai_show_ui_undo(g_show_ui);
+                if (ctrl && ev_show_redo) dai_show_ui_redo(g_show_ui);
+                if (!ctrl && ev_show_del)  dai_show_ui_delete_selected(g_show_ui);
             }
 
             // The file dialog a panel cannot open for itself: the panel says

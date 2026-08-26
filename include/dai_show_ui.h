@@ -98,6 +98,12 @@ DAI_API int      dai_show_ui_selected_conflict(const dai_show_ui *u);
  * its own arithmetic rather than the gizmo the user grabs. */
 DAI_API void     dai_show_ui_select_formation(dai_show_ui *u, uint32_t i);
 DAI_API uint32_t dai_show_ui_selected_formation(const dai_show_ui *u);
+/* Whether ANYTHING is selected at all. A click on empty sky selects nothing,
+   and "nothing" is a state the panels show rather than a zero they invent. */
+DAI_API int      dai_show_ui_has_selection(const dai_show_ui *u);
+/* Where the preview is watched FROM, in world metres. Only the camera itself
+   and the tests need it: a right drag must turn the head without moving it. */
+DAI_API int      dai_show_ui_eye(const dai_show_ui *u, float *xyz);
 DAI_API int      dai_show_ui_gizmo_handle(const dai_show_ui *u, int axis,
                                           float *sx, float *sy);
 /* The same reading for the handle on ONE selected drone's point. A drone is a

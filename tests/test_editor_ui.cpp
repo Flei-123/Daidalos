@@ -974,35 +974,45 @@ int main() {
         // 1. No Alt: a left drag across the sky must not turn the camera. The
         //    proof is what is DRAWN - if the camera moved, the X handle moved
         //    with it.
+        // Measured on the CAMERA rather than on the gizmo handle: a plain
+        // click on empty sky now clears the selection, and an unselected
+        // figure has no handle to compare. The eye is the thing the claim is
+        // about anyway - "the left button does not turn the camera".
         dai_show_ui_modifiers(su, 0, 0, 0);
         dai_show_ui_select_formation(su, 1);
         frame(SKY_X, SKY_Y, 0);
-        float ax = 0.0f, ay = 0.0f;
-        int got_a = dai_show_ui_gizmo_handle(su, 0, &ax, &ay);
+        float e_a[3] = { 0, 0, 0 }, e_b[3] = { 0, 0, 0 }, e_c[3] = { 0, 0, 0 };
+        dai_show_ui_eye(su, e_a);
         frame(SKY_X, SKY_Y, 1);
         frame(SKY_X + 200.0f, SKY_Y + 40.0f, 1);
         frame(SKY_X + 200.0f, SKY_Y + 40.0f, 0);
         frame(SKY_X, SKY_Y, 0);
-        float bx = 0.0f, by = 0.0f;
-        int got_b = dai_show_ui_gizmo_handle(su, 0, &bx, &by);
-        CHECK(got_a && got_b, "the gizmo handle was not drawn either side of the drag");
-        CHECK(std::fabs(ax - bx) < 0.5f && std::fabs(ay - by) < 0.5f,
-              "a plain left drag turned the camera: the handle moved from %.1f,%.1f to "
-              "%.1f,%.1f - the left button belongs to the selection",
-              (double)ax, (double)ay, (double)bx, (double)by);
+        dai_show_ui_eye(su, e_b);
+        float d_plain = std::fabs(e_a[0] - e_b[0]) + std::fabs(e_a[1] - e_b[1]) +
+                        std::fabs(e_a[2] - e_b[2]);
+        CHECK(d_plain < 0.01f,
+              "a plain left drag moved the camera %.3f m - the left button "
+              "belongs to the selection", (double)d_plain);
+        // ...and it selected nothing, because it landed on nothing.
+        CHECK(!dai_show_ui_has_selection(su),
+              "a drag across empty sky kept the figure selected");
 
-        // 2. With Alt held, the same drag DOES orbit.
+        // 2. With Alt held, the same drag DOES orbit - and leaves the
+        //    selection alone, because it is a camera gesture.
+        dai_show_ui_select_formation(su, 1);
         dai_show_ui_modifiers(su, 1, 0, 0);
         frame(SKY_X, SKY_Y, 0);
         frame(SKY_X, SKY_Y, 1);
         frame(SKY_X + 200.0f, SKY_Y + 40.0f, 1);
         frame(SKY_X + 200.0f, SKY_Y + 40.0f, 0);
         frame(SKY_X, SKY_Y, 0);
-        float cx2 = 0.0f, cy2 = 0.0f;
-        int got_c = dai_show_ui_gizmo_handle(su, 0, &cx2, &cy2);
-        CHECK(got_c && (std::fabs(cx2 - bx) > 1.0f || std::fabs(cy2 - by) > 1.0f),
-              "Alt + left drag did not turn the camera - the handle stayed at %.1f,%.1f",
-              (double)bx, (double)by);
+        dai_show_ui_eye(su, e_c);
+        float d_alt = std::fabs(e_c[0] - e_b[0]) + std::fabs(e_c[1] - e_b[1]) +
+                      std::fabs(e_c[2] - e_b[2]);
+        CHECK(d_alt > 1.0f, "Alt + left drag did not turn the camera (%.3f m)",
+              (double)d_alt);
+        CHECK(dai_show_ui_has_selection(su),
+              "an Alt orbit over empty sky dropped the selection");
         dai_show_ui_modifiers(su, 0, 0, 0);
 
         // 3. Delete, and undo bringing it back. The count is the whole proof.
@@ -1308,6 +1318,48 @@ int main() {
         dai_show_ui_gizmo_handle(su, 0, &hx1, &hy1);
         CHECK(std::fabs(hx1 - hx0) + std::fabs(hy1 - hy0) > 1.0f,
               "a right drag reported by the host alone did not turn the camera");
+
+        // ---- the right drag turns the HEAD, it does not orbit the figure ----
+        //
+        // Unity's rule, and the whole complaint: a right drag in a scene view
+        // pivots about the EYE. The preview is stored as an orbit, so simply
+        // adding to yaw swung the eye around the focus - Blender's gesture on
+        // Unity's button. The eye must therefore stand still to the millimetre
+        // while the view swings.
+        {
+            float e0[3] = { 0.0f, 0.0f, 0.0f }, e1[3] = { 0.0f, 0.0f, 0.0f };
+            dai_show_ui_eye(su, e0);
+            dai_show_nav_input ti{};
+            ti.dt = 1.0f / 60.0f; ti.mouse_right = 1;
+            ti.mouse_x = cx2; ti.mouse_y = cy2;
+            dai_show_ui_nav(su, &ti);            // first frame only remembers
+            ti.mouse_x = cx2 + 200.0f; ti.mouse_y = cy2 + 60.0f;
+            dai_show_ui_nav(su, &ti);
+            dai_show_ui_eye(su, e1);
+            float moved = std::fabs(e1[0] - e0[0]) + std::fabs(e1[1] - e0[1]) +
+                          std::fabs(e1[2] - e0[2]);
+            CHECK(moved < 0.01f,
+                  "a right drag moved the eye %.3f m - that is an orbit, not a look",
+                  (double)moved);
+        }
+
+        // ---- clicking empty sky selects NOTHING -----------------------------
+        {
+            dai_show_ui_select_formation(su, 0);
+            CHECK(dai_show_ui_has_selection(su), "select_formation selected nothing");
+            // A press far from every drone, inside the preview: the top-left
+            // corner of the viewport, where a 9-point grid at y=40 is not.
+            dai_ui_input ce{};
+            ce.mouse_x = VX + 8.0f; ce.mouse_y = VY + 8.0f;
+            ce.mouse_down = 1;
+            dai_ui_begin(ui, 1280, 720, &ce);
+            dai_show_ui_viewport(su, ui, VX, VY, VW, VH);
+            dai_ui_end(ui);
+            CHECK(!dai_show_ui_has_selection(su),
+                  "a click on empty sky kept a selection");
+            CHECK(!dai_show_ui_delete_selected(su),
+                  "Delete removed a figure while nothing was selected");
+        }
 
         // Every fault goes to the log sink now - there is no Validation panel
         // left to read them in.

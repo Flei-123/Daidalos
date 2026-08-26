@@ -1,0 +1,287 @@
+-- physics backend availability
+-- engine core (no Jolt include path - this is the leak test)
+-- physics backend: null
+-- physics backend: jolt
+-- physics backend: talos (/root/projects/talos)
+-- audio
+-- scene layer
+src/dai_dock.cpp:363:6: warning: 'void {anonymous}::unclose(dai_dock*, const std::string&)' defined but not used [-Wunused-function]
+  363 | void unclose(dai_dock *d, const std::string &title) {
+      |      ^~~~~~~
+-- drone show (sampling, assignment, layering, validation, export)
+-- scene document (editor truth: stable ids, generic undo)
+-- shaders
+-- renderer: vulkan 1.3
+src/rhi_vulkan.cpp: In function 'dai_renderer* dai_render_create(const dai_render_desc*, char*, size_t)':
+src/rhi_vulkan.cpp:430:62: warning: ' (Vulkan ' directive output may be truncated writing 9 bytes into a region of size between 1 and 256 [-Wformat-truncation=]
+  430 |     std::snprintf(r->device_name, sizeof(r->device_name), "%s (Vulkan %u.%u.%u)",
+      |                                                              ^~~~~~~~~
+src/rhi_vulkan.cpp:430:59: note: directive argument in the range [0, 127]
+  430 |     std::snprintf(r->device_name, sizeof(r->device_name), "%s (Vulkan %u.%u.%u)",
+      |                                                           ^~~~~~~~~~~~~~~~~~~~~~
+src/rhi_vulkan.cpp:430:59: note: directive argument in the range [0, 1023]
+src/rhi_vulkan.cpp:430:59: note: directive argument in the range [0, 4095]
+src/rhi_vulkan.cpp:430:18: note: 'snprintf' output between 16 and 279 bytes into a destination of size 256
+  430 |     std::snprintf(r->device_name, sizeof(r->device_name), "%s (Vulkan %u.%u.%u)",
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  431 |         props.deviceName, VK_API_VERSION_MAJOR(props.apiVersion),
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  432 |         VK_API_VERSION_MINOR(props.apiVersion), VK_API_VERSION_PATCH(props.apiVersion));
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/rhi_vulkan_texture.cpp: In function 'bool vk_init_default_material(dai_renderer*)':
+src/rhi_vulkan_texture.cpp:418:23: warning: variable 'd' set but not used [-Wunused-but-set-variable]
+  418 |     dai_material_desc d = dai_material_desc_default();
+      |                       ^
+-- window backend: X11
+src/dai_ui.cpp: In function 'int dai_ui_color(dai_ui*, const char*, float*, const char*)':
+src/dai_ui.cpp:1048:9: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |         ^~
+src/dai_ui.cpp:1048:33: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |                                 ^~
+src/dai_ui.cpp:964:33: warning: unused variable 'BAR' [-Wunused-variable]
+  964 |     const float WHEEL = 132.0f, BAR = 18.0f, GAP = 8.0f;
+      |                                 ^~~
+src/dai_editor_ui.cpp: In function 'int dai_editor_ui_asset_selected(const dai_editor_ui*)':
+src/dai_editor_ui.cpp:4889:5: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+ 4889 |     if (p && (p->asset_sel < 0 || p->asset_sel >= (int)p->assets.size())) return -1; return p ? p->asset_sel : -1; }
+      |     ^~
+src/dai_editor_ui.cpp:4889:86: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+ 4889 |     if (p && (p->asset_sel < 0 || p->asset_sel >= (int)p->assets.size())) return -1; return p ? p->asset_sel : -1; }
+      |                                                                                      ^~~~~~
+src/dai_editor_ui.cpp: In function 'void run_context_menus(dai_editor_ui*)':
+src/dai_editor_ui.cpp:5777:39: warning: unused variable 'COMP_MENU' [-Wunused-variable]
+ 5777 |         static const dai_ui_menu_item COMP_MENU[3] = {
+      |                                       ^~~~~~~~~
+src/dai_editor_ui.cpp: At global scope:
+src/dai_editor_ui.cpp:4530:12: warning: 'int view_tab(dai_editor_ui*, float, float, float, float, const char*, int)' defined but not used [-Wunused-function]
+ 4530 | static int view_tab(dai_editor_ui *p, float x, float y, float w, float h,
+      |            ^~~~~~~~
+src/dai_editor_ui.cpp: In function 'int dai_editor_ui_script_save(dai_editor_ui*)':
+src/dai_editor_ui.cpp:1948:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1948 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 2096 |         dai_editor_ui_toast(p, msg, 1.5f);
+      |                                ~~~              
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'int dai_editor_ui_script_save(dai_editor_ui*)' at src/dai_editor_ui.cpp:2096:28:
+src/dai_editor_ui.cpp:1948:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1948 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void inspector_body(dai_editor_ui*)':
+src/dai_editor_ui.cpp:3563:49: warning: '%s' directive output may be truncated writing up to 1142 bytes into a region of size 227 [-Wformat-truncation=]
+ 3562 |                     std::snprintf(line, sizeof(line),
+      |                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3563 |                                   "no entry for %s in the current language - it will show the key",
+      |                                   ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3564 |                                   r.text + 1);
+      |                                   ~~~~~~~~~~~    
+src/dai_editor_ui.cpp:3562:34: note: 'snprintf' output between 61 and 1203 bytes into a destination of size 240
+ 3562 |                     std::snprintf(line, sizeof(line),
+      |                     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~
+ 3563 |                                   "no entry for %s in the current language - it will show the key",
+      |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3564 |                                   r.text + 1);
+      |                                   ~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void run_context_menus(dai_editor_ui*)':
+src/dai_editor_ui.cpp:1948:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1948 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 5498 |                 dai_editor_ui_toast(p, msg, 2.0f);
+      |                                        ~~~      
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'void run_context_menus(dai_editor_ui*)' at src/dai_editor_ui.cpp:5498:36:
+src/dai_editor_ui.cpp:1948:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1948 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void dai_editor_ui_frame(dai_editor_ui*, float, float)':
+src/dai_editor_ui.cpp:1948:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1948 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 8269 |                         dai_editor_ui_toast(p, im, 1.5f);
+      |                                                ~~
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'void dai_editor_ui_frame(dai_editor_ui*, float, float)' at src/dai_editor_ui.cpp:8269:44:
+src/dai_editor_ui.cpp:1948:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1948 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void dai_editor_ui_frame(dai_editor_ui*, float, float)':
+src/dai_editor_ui.cpp:1948:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1948 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 6341 |         dai_editor_ui_toast(p, msg, 1.6f);
+      |                                ~~~              
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'void project_move(dai_editor_ui*, const std::string&, const std::string&)' at src/dai_editor_ui.cpp:6341:28,
+    inlined from 'void dai_editor_ui_frame(dai_editor_ui*, float, float)' at src/dai_editor_ui.cpp:8182:33:
+src/dai_editor_ui.cpp:1948:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1948 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_show_ui.cpp: In function 'void dai_show_ui_viewport(dai_show_ui*, dai_ui*, float, float, float, float)':
+src/dai_show_ui.cpp:1753:38: warning: 'tipx' may be used uninitialized [-Wmaybe-uninitialized]
+ 1753 |                 u->giz_sx[a] = tipx[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:1745:19: note: 'tipx' declared here
+ 1745 |             float tipx[3], tipy[3];
+      |                   ^~~~
+src/dai_show_ui.cpp:1754:38: warning: 'tipy' may be used uninitialized [-Wmaybe-uninitialized]
+ 1754 |                 u->giz_sy[a] = tipy[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:1745:28: note: 'tipy' declared here
+ 1745 |             float tipx[3], tipy[3];
+      |                            ^~~~
+src/dai_show_ui.cpp:1753:38: warning: 'tipx' may be used uninitialized [-Wmaybe-uninitialized]
+ 1753 |                 u->giz_sx[a] = tipx[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:1745:19: note: 'tipx' declared here
+ 1745 |             float tipx[3], tipy[3];
+      |                   ^~~~
+src/dai_show_ui.cpp:1754:38: warning: 'tipy' may be used uninitialized [-Wmaybe-uninitialized]
+ 1754 |                 u->giz_sy[a] = tipy[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:1745:28: note: 'tipy' declared here
+ 1745 |             float tipx[3], tipy[3];
+      |                            ^~~~
+src/dai_show_ui.cpp:1753:38: warning: 'tipx' may be used uninitialized [-Wmaybe-uninitialized]
+ 1753 |                 u->giz_sx[a] = tipx[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:1745:19: note: 'tipx' declared here
+ 1745 |             float tipx[3], tipy[3];
+      |                   ^~~~
+src/dai_show_ui.cpp:1754:38: warning: 'tipy' may be used uninitialized [-Wmaybe-uninitialized]
+ 1754 |                 u->giz_sy[a] = tipy[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:1745:28: note: 'tipy' declared here
+ 1745 |             float tipx[3], tipy[3];
+      |                            ^~~~
+-- embedded include/dai_native.h (23166 bytes) -> build/dai_native_header.cpp
+embedded 11 shaders -> build/dai_shaders_embed.cpp
+-- assets: Mnemosyne + glTF (/root/projects/mnemosyne)
+-- leak test: no talos.h outside src/physics_talos.cpp
+-- leak test: no Vulkan outside src/rhi_vulkan*
+-- leak test: engine + scene link without a renderer
+-- scripting: quickjs
+-- tests
+live transform: rotation follows the body
+live transform: the centre offset is undone with the BODY's rotation
+play drag: the object moves from its live pose, not the document's
+edit drag: still one undo step on the document
+penetration: two boxes must not stand inside each other
+  worst box/box overlap 0.0353 m, worst box/ground overlap 0.0687 m
+mesh freeze: pinning the mesh does not resize it
+cylinder: a real collider, not a box wearing a cylinder mesh
+  pushed at 5 m/s it rolled 21.32 m (a box collider slides ~2 m)
+cylinder: survives save/load, and a bad shape is refused
+a node without a body still moves while playing
+freeze constraints: a locked axis does not move
+
+61 passed, 0 failed
+tests/test_objmodel.cpp: In function 'void fp_mouse(double*, double*, int*, void*)':
+tests/test_objmodel.cpp:112:5: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+  112 |     if (dx) *dx = 0; if (dy) *dy = 0; if (b) *b = 0;
+      |     ^~
+tests/test_objmodel.cpp:112:22: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+  112 |     if (dx) *dx = 0; if (dy) *dy = 0; if (b) *b = 0;
+      |                      ^~
+drone show pipeline
+
+stage 1 - sampling: the minimum distance is a guarantee
+
+stage 2 - assignment: exact, auction, clustered
+  n = 512   exact 6846.60 m (13.3 ms)   auction 6846.60 m (+0.00%, 34.2 ms)
+  n = 1536   cluster 22524.41 m (+2.33%, 13.5 ms, 4 clusters, 30 seam swaps)
+
+[3a] constructed crossings, separated and then measured
+
+[3b] what cannot be separated is reported, not hidden
+
+[3c] the profiles are the shapes they claim to be
+
+[3d] v_max and a_max hold, and min_duration is the boundary
+
+[3e] staggered departures, and everyone home on time
+
+[3f] the plan is keyframes, and it stays keyframes
+  plan for 10000 drones x 8 keys: 1.87 MB (materialised ticks: 3433 MB)
+
+[3g] a solved show reports the planted conflict, and only that
+
+[3g] the sampled show - the one on the screenshots - is clean too
+
+[3i] a fault in the formation is counted as one, not as a crossing
+
+[3j] a formation packed under the floor is reported, not signed off
+
+[3k] three faults in one figure are counted, reported and listed as three
+
+[3l] a crossing is never re-filed as a formation fault
+
+[3m] a formation fault next to a detour is still not the transition's
+
+[3h] a leg across the whole field is not lost by the broadphase
+
+validation - a collision that was put there on purpose
+
+validation - each rule, broken once
+
+validation - each rule alone: which pair, how much, against what, when
+
+validation - the grid agrees with every-pair, and does far less work
+
+export - out and back in, key for key
+
+export - the .skyc, read back and flown, is flyable
+  flown from the file: 0.400 m closest, 8.000 m/s fastest, 2.501 m/s2 hardest, over 85.6 s at 10 Hz x 4
+
+editing - a figure that was never moved is untouched
+
+editing - moving a figure moves the world, not the model
+
+editing - a scale shrinks the figure where it stands
+
+editing - ninety degrees about Y is ninety degrees about Y
+
+editing - the spacing after the move, measured not assumed
+
+editing - a move throws the solve away, a swatch does not
+
+editing - three levels of colour, in the right order
+
+editing - a repainted plan is the plan a fresh solve would build
+
+editing - the transform and the colour go through the file
+
+editing - set_point_world lands where it says, rotated or not
+
+editing - groups run in parallel, each over its own slice
+
+editing - the group audit names the offender
+
+editing - from_image lights the right cells
+
+editing - replace_points re-samples in place
+
+editing - a stroke starts at its second, not at the first frame
+  FAIL [7p] the stroke repainted a second BEFORE its time: 64 0 150
+  FAIL [7p] the stroke did not burn at 15 s: 191 0 50
+  FAIL [7p] the later stroke did not win at 15 s
+  FAIL [7p] the earlier stroke was lost at 12 s
+  FAIL [7p] the stroke did not survive the round trip: 191 0 50
+
+determinism - the same input, twice, byte for byte
+
+timings - the show total is the sum of its transitions
+
+scaling - measured, not claimed (milliseconds)
+    drones     sample     assign      layer    profile   validate    plan MB   check MB    ticks
+       100      17.96       2.05       1.45       0.01      10.93       0.01       0.02      701   (32 ms wall)
+      1000     102.85     495.76      16.37       0.31     192.55       0.14       0.21      946   (808 ms wall)
+     10000    1107.88     281.37    2386.35       2.29    4480.32       1.87       2.44     2437   (8263 ms wall)
+
+FAILED: 451 checks, 5 failures
+exit=1

@@ -1,0 +1,874 @@
+-- building WITHOUT audio
+-- physics backend availability
+-- engine core (no Jolt include path - this is the leak test)
+-- physics backend: null
+-- physics backend: jolt
+-- physics backend: talos (/root/projects/talos)
+-- audio
+-- scene layer
+src/dai_dock.cpp:363:6: warning: 'void {anonymous}::unclose(dai_dock*, const std::string&)' defined but not used [-Wunused-function]
+  363 | void unclose(dai_dock *d, const std::string &title) {
+      |      ^~~~~~~
+-- drone show (sampling, assignment, layering, validation, export)
+-- scene document (editor truth: stable ids, generic undo)
+-- shaders
+-- renderer: vulkan 1.3
+src/rhi_vulkan.cpp: In function 'dai_renderer* dai_render_create(const dai_render_desc*, char*, size_t)':
+src/rhi_vulkan.cpp:430:62: warning: ' (Vulkan ' directive output may be truncated writing 9 bytes into a region of size between 1 and 256 [-Wformat-truncation=]
+  430 |     std::snprintf(r->device_name, sizeof(r->device_name), "%s (Vulkan %u.%u.%u)",
+      |                                                              ^~~~~~~~~
+src/rhi_vulkan.cpp:430:59: note: directive argument in the range [0, 127]
+  430 |     std::snprintf(r->device_name, sizeof(r->device_name), "%s (Vulkan %u.%u.%u)",
+      |                                                           ^~~~~~~~~~~~~~~~~~~~~~
+src/rhi_vulkan.cpp:430:59: note: directive argument in the range [0, 1023]
+src/rhi_vulkan.cpp:430:59: note: directive argument in the range [0, 4095]
+src/rhi_vulkan.cpp:430:18: note: 'snprintf' output between 16 and 279 bytes into a destination of size 256
+  430 |     std::snprintf(r->device_name, sizeof(r->device_name), "%s (Vulkan %u.%u.%u)",
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  431 |         props.deviceName, VK_API_VERSION_MAJOR(props.apiVersion),
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  432 |         VK_API_VERSION_MINOR(props.apiVersion), VK_API_VERSION_PATCH(props.apiVersion));
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/rhi_vulkan_texture.cpp: In function 'bool vk_init_default_material(dai_renderer*)':
+src/rhi_vulkan_texture.cpp:418:23: warning: variable 'd' set but not used [-Wunused-but-set-variable]
+  418 |     dai_material_desc d = dai_material_desc_default();
+      |                       ^
+-- window backend: X11
+src/dai_ui.cpp: In function 'int dai_ui_color(dai_ui*, const char*, float*, const char*)':
+src/dai_ui.cpp:1048:9: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |         ^~
+src/dai_ui.cpp:1048:33: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |                                 ^~
+src/dai_ui.cpp:964:33: warning: unused variable 'BAR' [-Wunused-variable]
+  964 |     const float WHEEL = 132.0f, BAR = 18.0f, GAP = 8.0f;
+      |                                 ^~~
+src/dai_editor_ui.cpp: In function 'int dai_editor_ui_asset_selected(const dai_editor_ui*)':
+src/dai_editor_ui.cpp:4897:5: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+ 4897 |     if (p && (p->asset_sel < 0 || p->asset_sel >= (int)p->assets.size())) return -1; return p ? p->asset_sel : -1; }
+      |     ^~
+src/dai_editor_ui.cpp:4897:86: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+ 4897 |     if (p && (p->asset_sel < 0 || p->asset_sel >= (int)p->assets.size())) return -1; return p ? p->asset_sel : -1; }
+      |                                                                                      ^~~~~~
+src/dai_editor_ui.cpp: In function 'void run_context_menus(dai_editor_ui*)':
+src/dai_editor_ui.cpp:5788:39: warning: unused variable 'COMP_MENU' [-Wunused-variable]
+ 5788 |         static const dai_ui_menu_item COMP_MENU[3] = {
+      |                                       ^~~~~~~~~
+src/dai_editor_ui.cpp: At global scope:
+src/dai_editor_ui.cpp:4533:12: warning: 'int view_tab(dai_editor_ui*, float, float, float, float, const char*, int)' defined but not used [-Wunused-function]
+ 4533 | static int view_tab(dai_editor_ui *p, float x, float y, float w, float h,
+      |            ^~~~~~~~
+src/dai_editor_ui.cpp: In function 'int dai_editor_ui_script_save(dai_editor_ui*)':
+src/dai_editor_ui.cpp:1951:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 2099 |         dai_editor_ui_toast(p, msg, 1.5f);
+      |                                ~~~              
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'int dai_editor_ui_script_save(dai_editor_ui*)' at src/dai_editor_ui.cpp:2099:28:
+src/dai_editor_ui.cpp:1951:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void inspector_body(dai_editor_ui*)':
+src/dai_editor_ui.cpp:3566:49: warning: '%s' directive output may be truncated writing up to 1142 bytes into a region of size 227 [-Wformat-truncation=]
+ 3565 |                     std::snprintf(line, sizeof(line),
+      |                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3566 |                                   "no entry for %s in the current language - it will show the key",
+      |                                   ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3567 |                                   r.text + 1);
+      |                                   ~~~~~~~~~~~    
+src/dai_editor_ui.cpp:3565:34: note: 'snprintf' output between 61 and 1203 bytes into a destination of size 240
+ 3565 |                     std::snprintf(line, sizeof(line),
+      |                     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~
+ 3566 |                                   "no entry for %s in the current language - it will show the key",
+      |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3567 |                                   r.text + 1);
+      |                                   ~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void run_context_menus(dai_editor_ui*)':
+src/dai_editor_ui.cpp:1951:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 5509 |                 dai_editor_ui_toast(p, msg, 2.0f);
+      |                                        ~~~      
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'void run_context_menus(dai_editor_ui*)' at src/dai_editor_ui.cpp:5509:36:
+src/dai_editor_ui.cpp:1951:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void dai_editor_ui_frame(dai_editor_ui*, float, float)':
+src/dai_editor_ui.cpp:1951:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 8321 |                         dai_editor_ui_toast(p, im, 1.5f);
+      |                                                ~~
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'void dai_editor_ui_frame(dai_editor_ui*, float, float)' at src/dai_editor_ui.cpp:8321:44:
+src/dai_editor_ui.cpp:1951:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void dai_editor_ui_frame(dai_editor_ui*, float, float)':
+src/dai_editor_ui.cpp:1951:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 6352 |         dai_editor_ui_toast(p, msg, 1.6f);
+      |                                ~~~              
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'void project_move(dai_editor_ui*, const std::string&, const std::string&)' at src/dai_editor_ui.cpp:6352:28,
+    inlined from 'void dai_editor_ui_frame(dai_editor_ui*, float, float)' at src/dai_editor_ui.cpp:8234:33:
+src/dai_editor_ui.cpp:1951:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_show_ui.cpp: In function 'void dai_show_ui_figures(dai_show_ui*, dai_ui*, float, float, float, float)':
+src/dai_show_ui.cpp:1131:46: warning: '%s' directive output may be truncated writing up to 299 bytes into a region of size 292 [-Wformat-truncation=]
+ 1131 |     std::snprintf(src, sizeof(src), "image://%s?w=%.1f&th=%d", u->image_path,
+      |                                              ^~
+In function 'void {anonymous}::add_image(dai_show_ui*)',
+    inlined from 'void dai_show_ui_figures(dai_show_ui*, dai_ui*, float, float, float, float)' at src/dai_show_ui.cpp:2927:26:
+src/dai_show_ui.cpp:1131:18: note: 'snprintf' output between 20 and 638 bytes into a destination of size 300
+ 1131 |     std::snprintf(src, sizeof(src), "image://%s?w=%.1f&th=%d", u->image_path,
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 1132 |                   (double)used, (int)u->image_threshold);
+      |                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_show_ui.cpp: In function 'void dai_show_ui_viewport(dai_show_ui*, dai_ui*, float, float, float, float)':
+src/dai_show_ui.cpp:2232:38: warning: 'tipx' may be used uninitialized [-Wmaybe-uninitialized]
+ 2232 |                 u->giz_sx[a] = tipx[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:19: note: 'tipx' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                   ^~~~
+src/dai_show_ui.cpp:2233:38: warning: 'tipy' may be used uninitialized [-Wmaybe-uninitialized]
+ 2233 |                 u->giz_sy[a] = tipy[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:28: note: 'tipy' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                            ^~~~
+src/dai_show_ui.cpp:2232:38: warning: 'tipx' may be used uninitialized [-Wmaybe-uninitialized]
+ 2232 |                 u->giz_sx[a] = tipx[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:19: note: 'tipx' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                   ^~~~
+src/dai_show_ui.cpp:2233:38: warning: 'tipy' may be used uninitialized [-Wmaybe-uninitialized]
+ 2233 |                 u->giz_sy[a] = tipy[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:28: note: 'tipy' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                            ^~~~
+src/dai_show_ui.cpp:2232:38: warning: 'tipx' may be used uninitialized [-Wmaybe-uninitialized]
+ 2232 |                 u->giz_sx[a] = tipx[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:19: note: 'tipx' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                   ^~~~
+src/dai_show_ui.cpp:2233:38: warning: 'tipy' may be used uninitialized [-Wmaybe-uninitialized]
+ 2233 |                 u->giz_sy[a] = tipy[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:28: note: 'tipy' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                            ^~~~
+src/dai_show_ui.cpp:2408:43: warning: 'ptx' may be used uninitialized [-Wmaybe-uninitialized]
+ 2408 |                     u->pt_gsx[a2] = ptx[a2];
+      |                                     ~~~~~~^
+src/dai_show_ui.cpp:2399:23: note: 'ptx' declared here
+ 2399 |                 float ptx[3], pty[3];
+      |                       ^~~
+src/dai_show_ui.cpp:2409:43: warning: 'pty' may be used uninitialized [-Wmaybe-uninitialized]
+ 2409 |                     u->pt_gsy[a2] = pty[a2];
+      |                                     ~~~~~~^
+src/dai_show_ui.cpp:2399:31: note: 'pty' declared here
+ 2399 |                 float ptx[3], pty[3];
+      |                               ^~~
+src/dai_show_ui.cpp:1975:28: warning: 'by2' may be used uninitialized [-Wmaybe-uninitialized]
+ 1975 |                 dai_ui_line(ui, ax, ay, bx2, by2, 1.0f, COL_HORIZON);
+      |                 ~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_show_ui.cpp:1969:32: note: 'by2' was declared here
+ 1969 |             float ax, ay, bx2, by2;
+      |                                ^~~
+src/dai_show_ui.cpp:1975:28: warning: 'bx2' may be used uninitialized [-Wmaybe-uninitialized]
+ 1975 |                 dai_ui_line(ui, ax, ay, bx2, by2, 1.0f, COL_HORIZON);
+      |                 ~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_show_ui.cpp:1969:27: note: 'bx2' was declared here
+ 1969 |             float ax, ay, bx2, by2;
+      |                           ^~~
+-- embedded include/dai_native.h (23166 bytes) -> build/dai_native_header.cpp
+embedded 11 shaders -> build/dai_shaders_embed.cpp
+-- assets: Mnemosyne + glTF (/root/projects/mnemosyne)
+-- leak test: no talos.h outside src/physics_talos.cpp
+-- leak test: no Vulkan outside src/rhi_vulkan*
+-- leak test: engine + scene link without a renderer
+-- scripting: quickjs
+-- tests
+live transform: rotation follows the body
+live transform: the centre offset is undone with the BODY's rotation
+play drag: the object moves from its live pose, not the document's
+edit drag: still one undo step on the document
+penetration: two boxes must not stand inside each other
+  worst box/box overlap 0.0353 m, worst box/ground overlap 0.0687 m
+mesh freeze: pinning the mesh does not resize it
+cylinder: a real collider, not a box wearing a cylinder mesh
+  pushed at 5 m/s it rolled 21.32 m (a box collider slides ~2 m)
+cylinder: survives save/load, and a bad shape is refused
+a node without a body still moves while playing
+freeze constraints: a locked axis does not move
+
+61 passed, 0 failed
+tests/test_objmodel.cpp: In function 'void fp_mouse(double*, double*, int*, void*)':
+tests/test_objmodel.cpp:112:5: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+  112 |     if (dx) *dx = 0; if (dy) *dy = 0; if (b) *b = 0;
+      |     ^~
+tests/test_objmodel.cpp:112:22: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+  112 |     if (dx) *dx = 0; if (dy) *dy = 0; if (b) *b = 0;
+      |                      ^~
+drone show pipeline
+
+stage 1 - sampling: the minimum distance is a guarantee
+
+stage 2 - assignment: exact, auction, clustered
+  n = 512   exact 6846.60 m (11.8 ms)   auction 6846.60 m (+0.00%, 36.7 ms)
+  n = 1536   cluster 22524.41 m (+2.33%, 13.5 ms, 4 clusters, 30 seam swaps)
+
+[3a] constructed crossings, separated and then measured
+
+[3b] what cannot be separated is reported, not hidden
+
+[3c] the profiles are the shapes they claim to be
+
+[3d] v_max and a_max hold, and min_duration is the boundary
+
+[3e] staggered departures, and everyone home on time
+
+[3f] the plan is keyframes, and it stays keyframes
+  plan for 10000 drones x 8 keys: 1.87 MB (materialised ticks: 3433 MB)
+
+[3g] a solved show reports the planted conflict, and only that
+
+[3g] the sampled show - the one on the screenshots - is clean too
+
+[3i] a fault in the formation is counted as one, not as a crossing
+
+[3j] a formation packed under the floor is reported, not signed off
+
+[3k] three faults in one figure are counted, reported and listed as three
+
+[3l] a crossing is never re-filed as a formation fault
+
+[3m] a formation fault next to a detour is still not the transition's
+
+[3h] a leg across the whole field is not lost by the broadphase
+
+validation - a collision that was put there on purpose
+
+validation - each rule, broken once
+
+validation - each rule alone: which pair, how much, against what, when
+
+validation - the grid agrees with every-pair, and does far less work
+
+export - out and back in, key for key
+
+export - the .skyc, read back and flown, is flyable
+  flown from the file: 0.400 m closest, 8.000 m/s fastest, 2.501 m/s2 hardest, over 85.6 s at 10 Hz x 4
+
+editing - a figure that was never moved is untouched
+
+editing - moving a figure moves the world, not the model
+
+editing - a scale shrinks the figure where it stands
+
+editing - ninety degrees about Y is ninety degrees about Y
+
+editing - the spacing after the move, measured not assumed
+
+editing - a move throws the solve away, a swatch does not
+
+editing - three levels of colour, in the right order
+
+editing - a repainted plan is the plan a fresh solve would build
+
+editing - the transform and the colour go through the file
+
+editing - set_point_world lands where it says, rotated or not
+
+editing - groups run in parallel, each over its own slice
+
+editing - the group audit names the offender
+
+editing - from_image lights the right cells
+
+editing - replace_points re-samples in place
+
+editing - a stroke starts at its second, not at the first frame
+
+editing - drone_point_at answers where the dot actually is
+
+editing - a takeoff grid goes to the front of its step
+
+editing - takeoff_points lays a legal grid at any spacing
+
+[7v] one metre apart, by default
+
+[7t] undo: snapshot, restore, and the plan it drops
+
+[7u] painted colour is part of what undo covers
+
+determinism - the same input, twice, byte for byte
+
+timings - the show total is the sum of its transitions
+
+scaling - measured, not claimed (milliseconds)
+    drones     sample     assign      layer    profile   validate    plan MB   check MB    ticks
+       100      15.13       1.89       1.13       0.01      10.35       0.01       0.02      701   (29 ms wall)
+      1000      89.81     429.07      13.27       0.13     160.37       0.14       0.21      946   (693 ms wall)
+     10000    1034.87     273.62    2203.34       1.90    4251.70       1.87       2.44     2437   (7771 ms wall)
+
+ok: 491 checks, 0 failures
+==================================
+ SVG
+==================================
+
+[1] Gefuelltes Rechteck
+
+[2] Linie mit Strichbreite
+
+[3] Loch (evenodd und nonzero)
+
+[4] Kurven
+
+[5] transform
+
+[6] fill=none, style=""
+
+[7] Dieselbe Quelle, zwei Groessen
+  Deckung 16px 6.4%, 48px 6.4%
+  voll gedeckte Pixel: 16px 1, 48px 106
+  check, 16x16:
+                    
+                    
+                    
+                    
+               .%.  
+              .%=   
+             .%=    
+       =    .%=     
+       #+  .%=      
+       .#+.%=       
+        .#@=        
+         .-         
+                    
+                    
+                    
+                    
+
+[8] Eingebautes Icon-Set
+  71 Icons, Atlas 256x256
+  play, aus dem Atlas:
+                    
+                    
+                    
+                    
+         #=         
+         %@#:       
+         %@@@+      
+         %@@@@%-    
+         %@@@@%-    
+         %@@@+      
+         %@#:       
+         #=         
+                    
+                    
+                    
+                    
+
+[9] Muell
+
+==================================
+  118 bestanden, 0 fehlgeschlagen
+==================================
+a box
+scale and position do not change the picture
+orientation
+tint
+empty and broken input
+indexed and non indexed agree
+primitive shapes
+prefab parts
+
+43 passed, 0 failed
+tests/test_render_visual.cpp: In function 'Box2D silhouette(const Frame&, float)':
+tests/test_render_visual.cpp:73:17: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+   73 |                 if ((int)x < b.x0) b.x0 = x; if ((int)x > b.x1) b.x1 = x;
+      |                 ^~
+tests/test_render_visual.cpp:73:46: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+   73 |                 if ((int)x < b.x0) b.x0 = x; if ((int)x > b.x1) b.x1 = x;
+      |                                              ^~
+tests/test_render_visual.cpp:74:17: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+   74 |                 if ((int)y < b.y0) b.y0 = y; if ((int)y > b.y1) b.y1 = y;
+      |                 ^~
+tests/test_render_visual.cpp:74:46: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+   74 |                 if ((int)y < b.y0) b.y0 = y; if ((int)y > b.y1) b.y1 = y;
+      |                                              ^~
+ok: 32 key codes match X11 exactly, 0 wrong
+32 passed, 0 failed
+src/dai_ui.cpp: In function 'int dai_ui_color(dai_ui*, const char*, float*, const char*)':
+src/dai_ui.cpp:1048:9: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |         ^~
+src/dai_ui.cpp:1048:33: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |                                 ^~
+src/dai_ui.cpp:964:33: warning: unused variable 'BAR' [-Wunused-variable]
+  964 |     const float WHEEL = 132.0f, BAR = 18.0f, GAP = 8.0f;
+      |                                 ^~~
+src/dai_editor_ui.cpp: In function 'int dai_editor_ui_asset_selected(const dai_editor_ui*)':
+src/dai_editor_ui.cpp:4897:5: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+ 4897 |     if (p && (p->asset_sel < 0 || p->asset_sel >= (int)p->assets.size())) return -1; return p ? p->asset_sel : -1; }
+      |     ^~
+src/dai_editor_ui.cpp:4897:86: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+ 4897 |     if (p && (p->asset_sel < 0 || p->asset_sel >= (int)p->assets.size())) return -1; return p ? p->asset_sel : -1; }
+      |                                                                                      ^~~~~~
+src/dai_editor_ui.cpp: In function 'void run_context_menus(dai_editor_ui*)':
+src/dai_editor_ui.cpp:5788:39: warning: unused variable 'COMP_MENU' [-Wunused-variable]
+ 5788 |         static const dai_ui_menu_item COMP_MENU[3] = {
+      |                                       ^~~~~~~~~
+src/dai_editor_ui.cpp: At global scope:
+src/dai_editor_ui.cpp:4533:12: warning: 'int view_tab(dai_editor_ui*, float, float, float, float, const char*, int)' defined but not used [-Wunused-function]
+ 4533 | static int view_tab(dai_editor_ui *p, float x, float y, float w, float h,
+      |            ^~~~~~~~
+src/dai_editor_ui.cpp: In function 'int dai_editor_ui_script_save(dai_editor_ui*)':
+src/dai_editor_ui.cpp:1951:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 2099 |         dai_editor_ui_toast(p, msg, 1.5f);
+      |                                ~~~              
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'int dai_editor_ui_script_save(dai_editor_ui*)' at src/dai_editor_ui.cpp:2099:28:
+src/dai_editor_ui.cpp:1951:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void inspector_body(dai_editor_ui*)':
+src/dai_editor_ui.cpp:3566:49: warning: '%s' directive output may be truncated writing up to 1142 bytes into a region of size 227 [-Wformat-truncation=]
+ 3565 |                     std::snprintf(line, sizeof(line),
+      |                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3566 |                                   "no entry for %s in the current language - it will show the key",
+      |                                   ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3567 |                                   r.text + 1);
+      |                                   ~~~~~~~~~~~    
+src/dai_editor_ui.cpp:3565:34: note: 'snprintf' output between 61 and 1203 bytes into a destination of size 240
+ 3565 |                     std::snprintf(line, sizeof(line),
+      |                     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~
+ 3566 |                                   "no entry for %s in the current language - it will show the key",
+      |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3567 |                                   r.text + 1);
+      |                                   ~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void run_context_menus(dai_editor_ui*)':
+src/dai_editor_ui.cpp:1951:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 5509 |                 dai_editor_ui_toast(p, msg, 2.0f);
+      |                                        ~~~      
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'void run_context_menus(dai_editor_ui*)' at src/dai_editor_ui.cpp:5509:36:
+src/dai_editor_ui.cpp:1951:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void dai_editor_ui_frame(dai_editor_ui*, float, float)':
+src/dai_editor_ui.cpp:1951:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 8321 |                         dai_editor_ui_toast(p, im, 1.5f);
+      |                                                ~~
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'void dai_editor_ui_frame(dai_editor_ui*, float, float)' at src/dai_editor_ui.cpp:8321:44:
+src/dai_editor_ui.cpp:1951:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_editor_ui.cpp: In function 'void dai_editor_ui_frame(dai_editor_ui*, float, float)':
+src/dai_editor_ui.cpp:1951:48: warning: '%s' directive output may be truncated writing up to 191 bytes into a region of size 160 [-Wformat-truncation=]
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |                                                ^~
+......
+ 6352 |         dai_editor_ui_toast(p, msg, 1.6f);
+      |                                ~~~              
+In function 'void dai_editor_ui_toast(dai_editor_ui*, const char*, float)',
+    inlined from 'void project_move(dai_editor_ui*, const std::string&, const std::string&)' at src/dai_editor_ui.cpp:6352:28,
+    inlined from 'void dai_editor_ui_frame(dai_editor_ui*, float, float)' at src/dai_editor_ui.cpp:8234:33:
+src/dai_editor_ui.cpp:1951:18: note: 'snprintf' output between 1 and 192 bytes into a destination of size 160
+ 1951 |     std::snprintf(p->toast, sizeof(p->toast), "%s", text ? text : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_dock.cpp:363:6: warning: 'void {anonymous}::unclose(dai_dock*, const std::string&)' defined but not used [-Wunused-function]
+  363 | void unclose(dai_dock *d, const std::string &title) {
+      |      ^~~~~~~
+src/dai_show_ui.cpp: In function 'void dai_show_ui_figures(dai_show_ui*, dai_ui*, float, float, float, float)':
+src/dai_show_ui.cpp:1131:46: warning: '%s' directive output may be truncated writing up to 299 bytes into a region of size 292 [-Wformat-truncation=]
+ 1131 |     std::snprintf(src, sizeof(src), "image://%s?w=%.1f&th=%d", u->image_path,
+      |                                              ^~
+In function 'void {anonymous}::add_image(dai_show_ui*)',
+    inlined from 'void dai_show_ui_figures(dai_show_ui*, dai_ui*, float, float, float, float)' at src/dai_show_ui.cpp:2927:26:
+src/dai_show_ui.cpp:1131:18: note: 'snprintf' output between 20 and 638 bytes into a destination of size 300
+ 1131 |     std::snprintf(src, sizeof(src), "image://%s?w=%.1f&th=%d", u->image_path,
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 1132 |                   (double)used, (int)u->image_threshold);
+      |                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_show_ui.cpp: In function 'void dai_show_ui_viewport(dai_show_ui*, dai_ui*, float, float, float, float)':
+src/dai_show_ui.cpp:2232:38: warning: 'tipx' may be used uninitialized [-Wmaybe-uninitialized]
+ 2232 |                 u->giz_sx[a] = tipx[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:19: note: 'tipx' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                   ^~~~
+src/dai_show_ui.cpp:2233:38: warning: 'tipy' may be used uninitialized [-Wmaybe-uninitialized]
+ 2233 |                 u->giz_sy[a] = tipy[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:28: note: 'tipy' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                            ^~~~
+src/dai_show_ui.cpp:2232:38: warning: 'tipx' may be used uninitialized [-Wmaybe-uninitialized]
+ 2232 |                 u->giz_sx[a] = tipx[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:19: note: 'tipx' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                   ^~~~
+src/dai_show_ui.cpp:2233:38: warning: 'tipy' may be used uninitialized [-Wmaybe-uninitialized]
+ 2233 |                 u->giz_sy[a] = tipy[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:28: note: 'tipy' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                            ^~~~
+src/dai_show_ui.cpp:2232:38: warning: 'tipx' may be used uninitialized [-Wmaybe-uninitialized]
+ 2232 |                 u->giz_sx[a] = tipx[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:19: note: 'tipx' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                   ^~~~
+src/dai_show_ui.cpp:2233:38: warning: 'tipy' may be used uninitialized [-Wmaybe-uninitialized]
+ 2233 |                 u->giz_sy[a] = tipy[a];
+      |                                ~~~~~~^
+src/dai_show_ui.cpp:2224:28: note: 'tipy' declared here
+ 2224 |             float tipx[3], tipy[3];
+      |                            ^~~~
+src/dai_show_ui.cpp:2408:43: warning: 'ptx' may be used uninitialized [-Wmaybe-uninitialized]
+ 2408 |                     u->pt_gsx[a2] = ptx[a2];
+      |                                     ~~~~~~^
+src/dai_show_ui.cpp:2399:23: note: 'ptx' declared here
+ 2399 |                 float ptx[3], pty[3];
+      |                       ^~~
+src/dai_show_ui.cpp:2409:43: warning: 'pty' may be used uninitialized [-Wmaybe-uninitialized]
+ 2409 |                     u->pt_gsy[a2] = pty[a2];
+      |                                     ~~~~~~^
+src/dai_show_ui.cpp:2399:31: note: 'pty' declared here
+ 2399 |                 float ptx[3], pty[3];
+      |                               ^~~
+src/dai_show_ui.cpp:1975:28: warning: 'by2' may be used uninitialized [-Wmaybe-uninitialized]
+ 1975 |                 dai_ui_line(ui, ax, ay, bx2, by2, 1.0f, COL_HORIZON);
+      |                 ~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_show_ui.cpp:1969:32: note: 'by2' was declared here
+ 1969 |             float ax, ay, bx2, by2;
+      |                                ^~~
+src/dai_show_ui.cpp:1975:28: warning: 'bx2' may be used uninitialized [-Wmaybe-uninitialized]
+ 1975 |                 dai_ui_line(ui, ax, ay, bx2, by2, 1.0f, COL_HORIZON);
+      |                 ~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/dai_show_ui.cpp:1969:27: note: 'bx2' was declared here
+ 1969 |             float ax, ay, bx2, by2;
+      |                           ^~~
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+
+6 passed, 0 failed
+src/dai_ui.cpp: In function 'int dai_ui_color(dai_ui*, const char*, float*, const char*)':
+src/dai_ui.cpp:1048:9: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |         ^~
+src/dai_ui.cpp:1048:33: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |                                 ^~
+src/dai_ui.cpp:964:33: warning: unused variable 'BAR' [-Wunused-variable]
+  964 |     const float WHEEL = 132.0f, BAR = 18.0f, GAP = 8.0f;
+      |                                 ^~~
+src/dai_ui.cpp: In function 'int dai_ui_color(dai_ui*, const char*, float*, const char*)':
+src/dai_ui.cpp:1048:9: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |         ^~
+src/dai_ui.cpp:1048:33: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |                                 ^~
+src/dai_ui.cpp:964:33: warning: unused variable 'BAR' [-Wunused-variable]
+  964 |     const float WHEEL = 132.0f, BAR = 18.0f, GAP = 8.0f;
+      |                                 ^~~
+click, type, enter
+second click places the caret
+home, arrows, backspace
+escape cancels
+click away commits
+what each field accepts
+ctrl+a
+a search box near the bottom edge keeps its caret
+a field that is no longer drawn lets go
+cursor shapes
+window edges
+array rows: drag the grip, the element moves
+segmented strip in a narrow panel
+
+45 passed, 0 failed
+src/dai_dock.cpp:363:6: warning: 'void {anonymous}::unclose(dai_dock*, const std::string&)' defined but not used [-Wunused-function]
+  363 | void unclose(dai_dock *d, const std::string &title) {
+      |      ^~~~~~~
+src/dai_ui.cpp: In function 'int dai_ui_color(dai_ui*, const char*, float*, const char*)':
+src/dai_ui.cpp:1048:9: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |         ^~
+src/dai_ui.cpp:1048:33: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |                                 ^~
+src/dai_ui.cpp:964:33: warning: unused variable 'BAR' [-Wunused-variable]
+  964 |     const float WHEEL = 132.0f, BAR = 18.0f, GAP = 8.0f;
+      |                                 ^~~
+default layout
+tabs
+tear off
+layout text
+close / reopen
+splitter
+  hierarchy 199 -> 280
+edge dock
+  inspector x 998 -> 199, scene x 199 -> 631
+tab dock
+lock pair
+  { v 0.7200 { h 0.7800 { leaf 1 "Hierarchy" "Game" "Scene" } { leaf 0 "Inspector" } } { leaf 0 "Project" } }  floats=0
+lock pair restore
+  { h 0.2000 { leaf 0 "Hierarchy" } { leaf 0 "Scene" "Game" } }  floats=0
+leaf menu
+drop window
+
+97 passed, 0 failed
+project + settings
+  layout, marker and startup scene: all present
+  is_valid: three directories, no more, no less
+  20 bad names refused, none of them created anything
+  settings round trip: byte identical, floats included
+  only non default values reach the file
+  unknown keys: read past, written back, never duplicated
+  missing file -> defaults, foreign file -> refused with defaults
+  cache/ deleted and reopened: repaired, project intact
+  list: 3 projects, sorted, junk folders ignored
+  prefs round trip, and last_project reopens
+  prefs path: $DAI_PREFS_DIR > $XDG_CONFIG_HOME > ~/.config
+  kinds: droneshow round trips, no kind line means game
+  show settings: only what changed, unknown keys handed back
+ok: 231 checks, 0 failures
+tests/test_editor_ui.cpp: In function 'int main()':
+tests/test_editor_ui.cpp:1076:15: warning: variable 'px0' set but not used [-Wunused-but-set-variable]
+ 1076 |         float px0 = 0.0f, py0 = 0.0f;
+      |               ^~~
+tests/test_editor_ui.cpp:1076:27: warning: variable 'py0' set but not used [-Wunused-but-set-variable]
+ 1076 |         float px0 = 0.0f, py0 = 0.0f;
+      |                           ^~~
+tests/test_editor_ui.cpp:72:14: warning: unused variable 'childA' [-Wunused-variable]
+   72 |     dai_node childA = dai_doc_add(doc, &r);
+      |              ^~~~~~
+what the scene can place
+
+39 passed, 0 failed
+-- diagnostics
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+   viewport rect: 230.0 60.0 1050.0x597.0 (frame 1600x900)
+edit       7 instances, 10374 ui verts -> build/editor_shots/editor_edit.png
+   viewport rect: 230.0 60.0 1050.0x597.0 (frame 1600x900)
+hover      7 instances, 10374 ui verts -> build/editor_shots/editor_hover.png
+   viewport rect: 230.0 60.0 1050.0x597.0 (frame 1600x900)
+rotate     7 instances, 10788 ui verts -> build/editor_shots/editor_rotate.png
+   viewport rect: 230.0 60.0 1050.0x597.0 (frame 1600x900)
+playing    7 instances, 10386 ui verts -> build/editor_shots/editor_playing.png
+   viewport rect: 230.0 60.0 1050.0x597.0 (frame 1600x900)
+flythrough 7 instances, 10374 ui verts -> build/editor_shots/editor_flythrough.png
+   viewport rect: 230.0 60.0 1050.0x597.0 (frame 1600x900)
+focus      7 instances, 10374 ui verts -> build/editor_shots/editor_focus.png
+   viewport rect: 230.0 60.0 1050.0x597.0 (frame 1600x900)
+game-mode  7 instances, 10374 ui verts -> .gauntlet-shots/09-game-mode-editor.png
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+project Fixture Game     kind game
+project Drone Show Demo  kind droneshow
+formation 0  Sphere   420 points
+formation 1  Ring     420 points
+formation 2  Cube     420 points
+formation 3  near miss injected between drones 172 and 173
+formation 4  point 64 lifted to 15 m over the 120 m ceiling, points 310 and 311 parked 1.2 m apart inside the 2.0 m floor
+solve 1 transition conflicts could not be separated: assign 113.6 ms, layer 2251.5 ms, validate 112.8 ms, 3 conflicts
+  conflict  0  t   80.60s  drones 172+216  kind 0  0.400 of 2.000 m
+  conflict  1  t  122.40s  drones 20+76  kind 0  1.200 of 2.000 m
+  conflict  2  t  125.60s  drones 200+200  kind 3  135.000 of 120.000 m
+exported into build/shot_projects/Drone Show Demo/assets: 3 files
+mesh assets/test/blender_scene.glb 2004 triangles -> selected in the storyboard
+.gauntlet-shots/01-start.png                   12276 ui vertices
+02-transition at t 20.05s - the middle of the 32.11s move out of 1. Sphere (t 0.00s) into 2. Ring (t 36.11s)
+  the fleet at that instant is 8.3 m off the Sphere it left and 11.9 m off the Ring it is flying to
+.gauntlet-shots/02-transition.png              12282 ui vertices
+02b-ring-formation   t  38.11s - 2. Ring, standing (hold 4.0s, the timeline is in figure 2)
+.gauntlet-shots/02b-ring-formation.png         12282 ui vertices
+02c-cube-formation   t  70.59s - 3. Cube, standing (hold 4.0s, the timeline is in figure 3)
+.gauntlet-shots/02c-cube-formation.png         12282 ui vertices
+conflict 1 at 122.40s between drones 20 and 76 (1.20 m)
+.gauntlet-shots/03-viewport-conflict.png       12480 ui vertices
+.gauntlet-shots/04-storyboard.png              4854 ui vertices
+.gauntlet-shots/05-parameters.png              4854 ui vertices
+no validation row took the click in the docked panel
+.gauntlet-shots/06-validation.png              4854 ui vertices
+Preview          alone in its dock: 1600 x  870 px at    0,   0
+.gauntlet-shots/07-preview-full.png            4854 ui vertices
+no validation row took the click
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+project Fixture Game     kind game
+project Drone Show Demo  kind droneshow
+formation 0  Sphere   420 points
+formation 1  Ring     420 points
+formation 2  Cube     420 points
+formation 3  near miss injected between drones 172 and 173
+formation 4  point 64 lifted to 15 m over the 120 m ceiling, points 310 and 311 parked 1.2 m apart inside the 2.0 m floor
+solve 1 transition conflicts could not be separated: assign 111.5 ms, layer 2110.2 ms, validate 106.0 ms, 3 conflicts
+  conflict  0  t   80.60s  drones 172+216  kind 0  0.400 of 2.000 m
+  conflict  1  t  122.40s  drones 20+76  kind 0  1.200 of 2.000 m
+  conflict  2  t  125.60s  drones 200+200  kind 3  135.000 of 120.000 m
+exported into build/shot_projects/Drone Show Demo/assets: 3 files
+mesh assets/test/blender_scene.glb 2004 triangles -> selected in the storyboard
+.gauntlet-shots/narrow-01-start.png            12084 ui vertices
+02-transition at t 20.05s - the middle of the 32.11s move out of 1. Sphere (t 0.00s) into 2. Ring (t 36.11s)
+  the fleet at that instant is 8.3 m off the Sphere it left and 11.9 m off the Ring it is flying to
+.gauntlet-shots/narrow-02-transition.png       12090 ui vertices
+02b-ring-formation   t  38.11s - 2. Ring, standing (hold 4.0s, the timeline is in figure 2)
+.gauntlet-shots/narrow-02b-ring-formation.png  12090 ui vertices
+02c-cube-formation   t  70.59s - 3. Cube, standing (hold 4.0s, the timeline is in figure 3)
+.gauntlet-shots/narrow-02c-cube-formation.png  12090 ui vertices
+conflict 1 at 122.40s between drones 20 and 76 (1.20 m)
+.gauntlet-shots/narrow-03-viewport-conflict.png 12288 ui vertices
+.gauntlet-shots/narrow-04-storyboard.png       4854 ui vertices
+.gauntlet-shots/narrow-05-parameters.png       4854 ui vertices
+no validation row took the click in the docked panel
+.gauntlet-shots/narrow-06-validation.png       4854 ui vertices
+Preview          alone in its dock: 1100 x  670 px at    0,   0
+.gauntlet-shots/narrow-07-preview-full.png     4854 ui vertices
+no validation row took the click
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+project Fixture Game     kind game
+project Drone Show Demo  kind droneshow
+formation 0  Sphere   420 points
+formation 1  Ring     420 points
+formation 2  Cube     420 points
+formation 3  near miss injected between drones 172 and 173
+formation 4  point 64 lifted to 15 m over the 120 m ceiling, points 310 and 311 parked 1.2 m apart inside the 2.0 m floor
+solve 1 transition conflicts could not be separated: assign 105.3 ms, layer 2094.2 ms, validate 106.8 ms, 3 conflicts
+  conflict  0  t   80.60s  drones 172+216  kind 0  0.400 of 2.000 m
+  conflict  1  t  122.40s  drones 20+76  kind 0  1.200 of 2.000 m
+  conflict  2  t  125.60s  drones 200+200  kind 3  135.000 of 120.000 m
+exported into build/shot_projects/Drone Show Demo/assets: 3 files
+mesh assets/test/blender_scene.glb 2004 triangles -> selected in the storyboard
+.gauntlet-shots/wide-01-start.png              12276 ui vertices
+02-transition at t 20.05s - the middle of the 32.11s move out of 1. Sphere (t 0.00s) into 2. Ring (t 36.11s)
+  the fleet at that instant is 8.3 m off the Sphere it left and 11.9 m off the Ring it is flying to
+.gauntlet-shots/wide-02-transition.png         12282 ui vertices
+02b-ring-formation   t  38.11s - 2. Ring, standing (hold 4.0s, the timeline is in figure 2)
+.gauntlet-shots/wide-02b-ring-formation.png    12282 ui vertices
+02c-cube-formation   t  70.59s - 3. Cube, standing (hold 4.0s, the timeline is in figure 3)
+.gauntlet-shots/wide-02c-cube-formation.png    12282 ui vertices
+conflict 1 at 122.40s between drones 20 and 76 (1.20 m)
+.gauntlet-shots/wide-03-viewport-conflict.png  12480 ui vertices
+.gauntlet-shots/wide-04-storyboard.png         5100 ui vertices
+.gauntlet-shots/wide-05-parameters.png         5100 ui vertices
+no validation row took the click in the docked panel
+.gauntlet-shots/wide-06-validation.png         5100 ui vertices
+Preview          alone in its dock: 1920 x 1050 px at    0,   0
+.gauntlet-shots/wide-07-preview-full.png       5100 ui vertices
+no validation row took the click
+-- examples
+examples/hello_daidalos.cpp: In function 'void write_wav(const char*, const std::vector<float>&, uint32_t)':
+examples/hello_daidalos.cpp:57:9: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+   57 |         if (s > 1.0f) s = 1.0f; if (s < -1.0f) s = -1.0f;
+      |         ^~
+examples/hello_daidalos.cpp:57:33: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+   57 |         if (s > 1.0f) s = 1.0f; if (s < -1.0f) s = -1.0f;
+      |                                 ^~
+examples/editor_demo.cpp:1638:5: warning: multi-line comment [-Wcomment]
+ 1638 |     // and the quoting is one level off, prints "C:\\Users\\justi\\AppData\\Local\\
+      |     ^
+examples/editor_demo.cpp: In function 'int open_asset_cb(const char*, const char*, void*)':
+examples/editor_demo.cpp:1682:82: warning: '%s' directive output may be truncated writing up to 699 bytes into a region of size between 441 and 1140 [-Wformat-truncation=]
+ 1682 |                   "(command -v code >/dev/null && code --goto '%s') || xdg-open '%s' &", full, full);
+      |                                                                                  ^~            ~~~~
+examples/editor_demo.cpp:1681:18: note: 'snprintf' output between 64 and 1462 bytes into a destination of size 1200
+ 1681 |     std::snprintf(cmd, sizeof(cmd),
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~
+ 1682 |                   "(command -v code >/dev/null && code --goto '%s') || xdg-open '%s' &", full, full);
+      |                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+examples/editor_demo.cpp: In function 'void update_worker()':
+examples/editor_demo.cpp:163:96: warning: '%s' directive output may be truncated writing up to 511 bytes into a region of size between 160 and 210 [-Wformat-truncation=]
+  163 |         std::snprintf(line, sizeof(line), "update: %s available (%llu bytes), downloading to \"%s.new\"",
+      |                                                                                                ^~
+  164 |                       g_update.info.version, (unsigned long long)g_update.info.size,
+  165 |                       g_update.exe_path);
+      |                       ~~~~~~~~~~~~~~~~~                                                         
+examples/editor_demo.cpp:163:22: note: 'snprintf' output between 52 and 613 bytes into a destination of size 256
+  163 |         std::snprintf(line, sizeof(line), "update: %s available (%llu bytes), downloading to \"%s.new\"",
+      |         ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  164 |                       g_update.info.version, (unsigned long long)g_update.info.size,
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  165 |                       g_update.exe_path);
+      |                       ~~~~~~~~~~~~~~~~~~
+In function 'void strings_use(const char*)',
+    inlined from 'int _ZL11loc_save_cbPv.part.0(void*)' at examples/editor_demo.cpp:2816:16:
+examples/editor_demo.cpp:2723:18: warning: 'snprintf' argument 4 overlaps destination object 'g_lang' [-Wrestrict]
+ 2723 |     std::snprintf(g_lang, sizeof(g_lang), "%s", code ? code : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+examples/editor_demo.cpp: In function 'int _ZL11loc_save_cbPv.part.0(void*)':
+examples/editor_demo.cpp:2684:13: note: destination object referenced by 'restrict'-qualified argument 1 was declared here
+ 2684 | static char g_lang[16] = { 0 };                 // "de", "" = no table loaded
+      |             ^~~~~~
+examples/editor_demo.cpp: In function 'int main(int, char**)':
+examples/editor_demo.cpp:3598:48: warning: '/scripts_open.txt' directive output may be truncated writing 17 bytes into a region of size between 1 and 512 [-Wformat-truncation=]
+ 3598 |         std::snprintf(spath, sizeof(spath), "%s/scripts_open.txt", g_projects_root);
+      |                                                ^~~~~~~~~~~~~~~~~
+examples/editor_demo.cpp:3598:22: note: 'snprintf' output between 18 and 529 bytes into a destination of size 512
+ 3598 |         std::snprintf(spath, sizeof(spath), "%s/scripts_open.txt", g_projects_root);
+      |         ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+examples/editor_demo.cpp:5134:48: warning: '/scripts_open.txt' directive output may be truncated writing 17 bytes into a region of size between 1 and 512 [-Wformat-truncation=]
+ 5134 |         std::snprintf(spath, sizeof(spath), "%s/scripts_open.txt", g_projects_root);
+      |                                                ^~~~~~~~~~~~~~~~~
+examples/editor_demo.cpp:5134:22: note: 'snprintf' output between 18 and 529 bytes into a destination of size 512
+ 5134 |         std::snprintf(spath, sizeof(spath), "%s/scripts_open.txt", g_projects_root);
+      |         ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+examples/editor_demo.cpp:3913:56: warning: '%s' directive output may be truncated writing up to 511 bytes into a region of size 186 [-Wformat-truncation=]
+ 3913 |                 std::snprintf(msg, sizeof(msg), "saved %s", base ? base + 1 : sp);
+      |                                                        ^~
+examples/editor_demo.cpp:3913:30: note: 'snprintf' output between 7 and 518 bytes into a destination of size 192
+ 3913 |                 std::snprintf(msg, sizeof(msg), "saved %s", base ? base + 1 : sp);
+      |                 ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+examples/editor_demo.cpp:4086:72: warning: '%s' directive output may be truncated writing up to 699 bytes into a region of size 512 [-Wformat-truncation=]
+ 4086 |                     std::snprintf(g_scene_path, sizeof(g_scene_path), "%s", full2);
+      |                                                                        ^~   ~~~~~
+examples/editor_demo.cpp:4086:34: note: 'snprintf' output between 1 and 700 bytes into a destination of size 512
+ 4086 |                     std::snprintf(g_scene_path, sizeof(g_scene_path), "%s", full2);
+      |                     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In function 'void strings_use(const char*)',
+    inlined from 'void draw_project_settings(void*)' at examples/editor_demo.cpp:2898:73:
+examples/editor_demo.cpp:2723:18: warning: 'snprintf' argument 4 overlaps destination object 'g_lang' [-Wrestrict]
+ 2723 |     std::snprintf(g_lang, sizeof(g_lang), "%s", code ? code : "");
+      |     ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+examples/editor_demo.cpp: In function 'void draw_project_settings(void*)':
+examples/editor_demo.cpp:2684:13: note: destination object referenced by 'restrict'-qualified argument 1 was declared here
+ 2684 | static char g_lang[16] = { 0 };                 // "de", "" = no table loaded
+      |             ^~~~~~
+-- ok
+   -rwxr-xr-x 1 root root 3724712 Aug 26 03:51 build/hello_daidalos
+   -rw-r--r-- 1 root root 1073022 Aug 26 03:45 build/libdaidalos.a
+   -rw-r--r-- 1 root root  237284 Aug 26 03:46 build/libdaidalos_assets.a
+   -rw-r--r-- 1 root root 1978566 Aug 26 03:46 build/libdaidalos_vk.a
+   -rwxr-xr-x 1 root root 3741736 Aug 26 03:46 build/test_daidalos

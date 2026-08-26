@@ -1,0 +1,51 @@
+-- vulkan import library
+   ok: build-win/libvulkan-1.a
+-- engine
+-- physics backend: talos (/root/projects/talos/build-win/libtalos.a)
+src/dai_editor_ui.cpp: In function 'int dai_editor_ui_asset_selected(const dai_editor_ui*)':
+src/dai_editor_ui.cpp:4889:5: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+ 4889 |     if (p && (p->asset_sel < 0 || p->asset_sel >= (int)p->assets.size())) return -1; return p ? p->asset_sel : -1; }
+      |     ^~
+src/dai_editor_ui.cpp:4889:86: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+ 4889 |     if (p && (p->asset_sel < 0 || p->asset_sel >= (int)p->assets.size())) return -1; return p ? p->asset_sel : -1; }
+      |                                                                                      ^~~~~~
+src/dai_editor_ui.cpp: In function 'void run_context_menus(dai_editor_ui*)':
+src/dai_editor_ui.cpp:5777:39: warning: unused variable 'COMP_MENU' [-Wunused-variable]
+ 5777 |         static const dai_ui_menu_item COMP_MENU[3] = {
+      |                                       ^~~~~~~~~
+src/dai_ui.cpp: In function 'int dai_ui_color(dai_ui*, const char*, float*, const char*)':
+src/dai_ui.cpp:1048:9: warning: this 'if' clause does not guard... [-Wmisleading-indentation]
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |         ^~
+src/dai_ui.cpp:1048:33: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the 'if'
+ 1048 |         if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+      |                                 ^~
+src/dai_ui.cpp:964:33: warning: unused variable 'BAR' [-Wunused-variable]
+  964 |     const float WHEEL = 132.0f, BAR = 18.0f, GAP = 8.0f;
+      |                                 ^~~
+   ok: build-win/libdaidalos.a
+-- renderer (vulkan, win32 surface)
+src/rhi_vulkan_texture.cpp: In function 'bool vk_init_default_material(dai_renderer*)':
+src/rhi_vulkan_texture.cpp:418:23: warning: variable 'd' set but not used [-Wunused-but-set-variable]
+  418 |     dai_material_desc d = dai_material_desc_default();
+      |                       ^
+embedded 11 shaders -> build-win/dai_shaders_embed.cpp
+-- embedded include/dai_native.h (23166 bytes) -> build-win/dai_native_header.cpp
+   ok: build-win/libdaidalos_vk.a
+-- assets (mnemosyne)
+   ok: build-win/libdaidalos_assets.a
+-- programs
+   ok: build-win/win_smoke.exe
+   ok: build-win/win_keytest.exe
+examples/editor_demo.cpp:1638:5: warning: multi-line comment [-Wcomment]
+ 1638 |     // and the quoting is one level off, prints "C:\\Users\\justi\\AppData\\Local\\
+      |     ^
+   ok: build-win/editor_demo.exe
+   ok: build-win/window_demo.exe
+-rwxr-xr-x 1 root root 1043080 Aug 14 12:04 build-win/dai_pack.exe
+-rwxr-xr-x 1 root root 4644674 Aug 14 12:04 build-win/daidalos_runtime.exe
+-rwxr-xr-x 1 root root 5401768 Aug 25 14:54 build-win/editor_demo.exe
+-rwxr-xr-x 1 root root 1093006 Aug 25 14:54 build-win/win_keytest.exe
+-rwxr-xr-x 1 root root 2404228 Aug 25 14:54 build-win/win_smoke.exe
+-rwxr-xr-x 1 root root 2401986 Aug 25 14:54 build-win/window_demo.exe
+-- ok
