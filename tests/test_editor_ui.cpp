@@ -1466,6 +1466,47 @@ int main() {
             dai_show_ui_destroy(cu);
         }
 
+        // ---- the ground grid survives being flown into ----------------------
+        //
+        // The old grid was a fixed sheet of 20 m squares drawn out to the
+        // fence, and every line with one end behind the eye was thrown away
+        // whole - so flying down into it made it fall apart. The measure is
+        // the amount of geometry the panel emits: from two metres up there
+        // must still be a grid, not a handful of stragglers.
+        {
+            auto ui_verts = [&]() {
+                const dai_ui_draw *d = nullptr;
+                uint32_t nb = dai_ui_draws(ui, &d);
+                uint32_t tot = 0;
+                for (uint32_t k = 0; k < nb; ++k) tot += d[k].count;
+                return tot;
+            };
+            dai_show_ui *gu = dai_show_ui_create(sh);
+            dai_ui_input gi{};
+            gi.mouse_x = cx2; gi.mouse_y = cy2;
+            dai_ui_begin(ui, 1280, 720, &gi);
+            dai_show_ui_viewport(gu, ui, VX, VY, VW, VH);
+            dai_ui_end(ui);
+            uint32_t far_v = ui_verts();
+
+            // Down to eye level, close in: the wheel's own zoom, twenty times.
+            for (int k = 0; k < 20; ++k) {
+                dai_ui_input wi{};
+                wi.mouse_x = cx2; wi.mouse_y = cy2; wi.wheel = 1.0f;
+                dai_ui_begin(ui, 1280, 720, &wi);
+                dai_show_ui_viewport(gu, ui, VX, VY, VW, VH);
+                dai_ui_end(ui);
+            }
+            dai_ui_begin(ui, 1280, 720, &gi);
+            dai_show_ui_viewport(gu, ui, VX, VY, VW, VH);
+            dai_ui_end(ui);
+            uint32_t near_v = ui_verts();
+            CHECK(near_v > far_v / 2u,
+                  "the grid collapsed when the camera came close: %u vertices "
+                  "from far away, %u from up close", far_v, near_v);
+            dai_show_ui_destroy(gu);
+        }
+
         // ---- clicking empty sky selects NOTHING -----------------------------
         {
             dai_show_ui_select_formation(su, 0);

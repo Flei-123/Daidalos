@@ -602,6 +602,7 @@ struct dai_show_ui {
     // hierarchy must do are re-order and re-parent - and in every editor that
     // has one, both are the same gesture: pick the row up and put it down
     // somewhere else.
+    uint32_t hi_collapsed = 0;   // one bit per step, folded away
     int   hi_drag_f   = -1;      // the figure the press landed on, -1 = none
     int   hi_dragging = 0;       // ...and whether it has moved far enough
     float hi_press_y  = 0.0f;    // where the press was, to tell click from drag
@@ -865,6 +866,15 @@ void turn_head(dai_show_ui *u, float dyaw, float dpitch) {
     u->focus_z = ez + fwd[2] * u->dist;
 }
 
+// A line drawn between two world points, CLIPPED at the near plane instead of
+// dropped. project() answers "is this point in front of the eye", which is the
+// right answer for a dot and the wrong one for a line: the moment one end of a
+// grid line passed behind the camera the whole line vanished, so flying down
+// into the grid made it fall apart square by square. A line with one end
+// behind the eye is still visible - it just has to be cut where it crosses.
+int project_segment(const Cam &c, const float *a, const float *b,
+                    float *x0, float *y0, float *x1, float *y1);
+
 int project(const Cam &c, float px, float py, float pz, float *sx, float *sy, float *depth) {
     float d[3] = { px - c.ex, py - c.ey, pz - c.ez };
     float z = d[0] * c.rz[0] + d[1] * c.rz[1] + d[2] * c.rz[2];
@@ -875,6 +885,25 @@ int project(const Cam &c, float px, float py, float pz, float *sx, float *sy, fl
     *sy = c.cy - c.f * ry / z;
     if (depth) *depth = z;
     return 1;
+}
+
+int project_segment(const Cam &c, const float *a, const float *b,
+                    float *x0, float *y0, float *x1, float *y1) {
+    const float NEAR = 0.5f;
+    float az = (a[0] - c.ex) * c.rz[0] + (a[1] - c.ey) * c.rz[1] + (a[2] - c.ez) * c.rz[2];
+    float bz = (b[0] - c.ex) * c.rz[0] + (b[1] - c.ey) * c.rz[1] + (b[2] - c.ez) * c.rz[2];
+    if (az < NEAR && bz < NEAR) return 0;          // wholly behind: nothing to draw
+    float pa[3] = { a[0], a[1], a[2] };
+    float pb[3] = { b[0], b[1], b[2] };
+    if (az < NEAR) {
+        float t = (NEAR - az) / (bz - az);
+        for (int i = 0; i < 3; ++i) pa[i] = a[i] + (b[i] - a[i]) * t;
+    } else if (bz < NEAR) {
+        float t = (NEAR - bz) / (az - bz);
+        for (int i = 0; i < 3; ++i) pb[i] = b[i] + (a[i] - b[i]) * t;
+    }
+    return project(c, pa[0], pa[1], pa[2], x0, y0, nullptr) &&
+           project(c, pb[0], pb[1], pb[2], x1, y1, nullptr);
 }
 
 // Which drone stands on which point of formation `fi` at the current second.
@@ -2017,18 +2046,75 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
     dai_ui_clip_begin(ui, x, y, w, vh);
     Cam cam = camera_of(u, x, y, w, vh);
 
-    // A ground grid, so height reads as height. 20 m squares out to the fence,
-    // which is also the cheapest way to show where the fence is.
-    float half = std::max(40.0f, std::max(u->s.fence_half_x, u->s.fence_half_z));
-    float step = (half > 400.0f) ? 100.0f : (half > 150.0f ? 50.0f : 20.0f);
-    for (float g = -half; g <= half + 0.01f; g += step) {
-        float ax, ay, bx2, by2;
-        if (project(cam, g, 0.0f, -half, &ax, &ay, nullptr) &&
-            project(cam, g, 0.0f,  half, &bx2, &by2, nullptr))
-            dai_ui_line(ui, ax, ay, bx2, by2, 1.0f, COL_GRID);
-        if (project(cam, -half, 0.0f, g, &ax, &ay, nullptr) &&
-            project(cam,  half, 0.0f, g, &bx2, &by2, nullptr))
-            dai_ui_line(ui, ax, ay, bx2, by2, 1.0f, COL_GRID);
+    // ---- the ground grid ----------------------------------------------------
+    //
+    // A scene view's grid, not a fixed sheet at the origin. Three things were
+    // wrong with the fixed one and all three showed up the moment you flew
+    // close: it was cut to the fence (so it ended in mid air), its squares
+    // were 20 m across (so from two metres up there was nothing left to see
+    // between them), and every line with one end behind the camera was thrown
+    // away whole (so it fell apart square by square as you moved).
+    //
+    // Now: the spacing FOLLOWS the distance in 1-2-5 steps, the grid is laid
+    // around the point being looked at rather than around the origin, and the
+    // lines are clipped instead of dropped. A finer grid fades in underneath
+    // the coarse one, the way every editor does it, so the scale never jumps.
+    {
+        // One decade per ~50 px of screen: pick the 1/2/5 step whose squares
+        // are still readable from here.
+        // The scale that matters is how far the EYE is from the ground it is
+        // looking at, not how far it is from the focus: hovering 60 m up with
+        // the focus an arm's length away is still a wide view of the floor,
+        // and sizing the grid off `dist` alone left three lines on screen.
+        float ground = std::max(std::fabs(cam.ey), 2.0f);
+        float scale  = std::max(u->dist, ground);
+        float want = scale * 0.12f;
+        float dec  = std::pow(10.0f, std::floor(std::log10(std::max(0.05f, want))));
+        float m    = want / dec;
+        float step = (m < 2.0f) ? dec : (m < 5.0f ? dec * 2.0f : dec * 5.0f);
+        if (step < 0.5f) step = 0.5f;
+
+        // How far out to draw: enough to reach the horizon at this height,
+        // capped so a distant view does not draw ten thousand lines.
+        float reach = std::max(scale * 8.0f, 60.0f);
+        int   lines = (int)(reach / step);
+        if (lines > 220) { step *= 5.0f; lines = (int)(reach / step); }
+        if (lines > 220) lines = 220;
+        reach = (float)lines * step;
+
+        // Centred on what the camera is LOOKING at, snapped to the step so the
+        // lines do not crawl while the camera moves.
+        float cx0 = std::floor(u->focus_x / step) * step;
+        float cz0 = std::floor(u->focus_z / step) * step;
+
+        // Two levels: the fine one, and every fifth line brighter. The bright
+        // ones are what the eye measures distance with.
+        const uint32_t COL_FINE = rgba(0x25, 0x2B, 0x36, 255);
+        for (int k = -lines; k <= lines; ++k) {
+            float g = (float)k * step;
+            int major = ((int)std::floor((cx0 + g) / step + 0.5f)) % 5 == 0;
+            uint32_t col = major ? COL_GRID : COL_FINE;
+            float a1[3] = { cx0 + g, 0.0f, cz0 - reach };
+            float b1[3] = { cx0 + g, 0.0f, cz0 + reach };
+            float ax, ay, bx2, by2;
+            if (project_segment(cam, a1, b1, &ax, &ay, &bx2, &by2))
+                dai_ui_line(ui, ax, ay, bx2, by2, 1.0f, col);
+            int majz = ((int)std::floor((cz0 + g) / step + 0.5f)) % 5 == 0;
+            float a2[3] = { cx0 - reach, 0.0f, cz0 + g };
+            float b2[3] = { cx0 + reach, 0.0f, cz0 + g };
+            if (project_segment(cam, a2, b2, &ax, &ay, &bx2, &by2))
+                dai_ui_line(ui, ax, ay, bx2, by2, 1.0f, majz ? COL_GRID : COL_FINE);
+        }
+        // The two axes through the origin, so "where is zero" is never a guess.
+        {
+            float ax, ay, bx2, by2;
+            float xa[3] = { cx0 - reach, 0.0f, 0.0f }, xb[3] = { cx0 + reach, 0.0f, 0.0f };
+            if (project_segment(cam, xa, xb, &ax, &ay, &bx2, &by2))
+                dai_ui_line(ui, ax, ay, bx2, by2, 1.4f, rgba(0x7A, 0x3A, 0x3A, 255));
+            float za[3] = { 0.0f, 0.0f, cz0 - reach }, zb[3] = { 0.0f, 0.0f, cz0 + reach };
+            if (project_segment(cam, za, zb, &ax, &ay, &bx2, &by2))
+                dai_ui_line(ui, ax, ay, bx2, by2, 1.4f, rgba(0x33, 0x55, 0x8A, 255));
+        }
     }
     // The fence, drawn as the box it is.
     if (u->s.fence_half_x > 0.0f && u->s.fence_top_m > 0.0f) {
@@ -3154,12 +3240,51 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
     const int in_list = (lmx >= x && lmx < x + w && lmy >= top - 0.5f &&
                          lmy <= bottom + 0.5f);
     dai_ui_scroll_begin(ui, "showfigs", list_h);
+
+    // ---- how a row is drawn -------------------------------------------------
+    //
+    // By hand, not as a toggle button. A hierarchy is not a column of buttons:
+    // a button says "press me", and thirty of them stacked say nothing at all
+    // - which is exactly what the storyboard looked like. A row is a strip of
+    // text with a highlight behind it when it is selected, a fainter one under
+    // the pointer, and children indented under their parent. Unity, Blender,
+    // every file manager ever written.
+    const float ROW_H = pitch - st->spacing;
+    const uint32_t COL_SEL   = st->accent;
+    const uint32_t COL_HOVER = rgba(0xFF, 0xFF, 0xFF, 18);
+    const uint32_t COL_STEP  = rgba(0xFF, 0xFF, 0xFF, 10);
+    auto row_hit = [&](float ry) {
+        return lmx >= x && lmx < x + w && lmy >= ry - 0.5f && lmy < ry + ROW_H;
+    };
+    // text, then a dimmer tail pushed to the right edge
+    auto draw_row = [&](float ry, float indent, const char *head, const char *tail,
+                        int selected, uint32_t head_col) {
+        int hov = row_hit(ry);
+        if (selected)  dai_ui_rect(ui, x + 1.0f, ry, w - 2.0f, ROW_H, COL_SEL);
+        else if (hov)  dai_ui_rect(ui, x + 1.0f, ry, w - 2.0f, ROW_H, COL_HOVER);
+        float ty2 = ry + (ROW_H - dai_ui_text_height(ui)) * 0.5f;
+        float tx2 = x + 6.0f + indent;
+        uint32_t tc = selected ? rgba(0xFF, 0xFF, 0xFF, 255) : head_col;
+        float room = (x + w - 8.0f) - tx2;
+        if (tail && tail[0]) {
+            float tw = dai_ui_text_width(ui, tail);
+            room -= tw + 8.0f;
+            dai_ui_text(ui, x + w - 8.0f - tw, ty2, tail,
+                        selected ? rgba(0xE0, 0xE8, 0xF4, 255) : st->text_dim);
+        }
+        char cut[224];
+        std::snprintf(cut, sizeof(cut), "%s", head);
+        ellide(ui, cut, room);
+        dai_ui_text(ui, tx2, ty2, cut, tc);
+        return hov;
+    };
+
     for (uint32_t i = 0; i < n; ++i) {
         dai_show_formation_info info;
         if (!dai_show_formation_get(u->sh, i, &info)) continue;
         // The step is the PARENT, the figure its child: everything sharing a
         // step number flies one after another, a new step starts a parallel
-        // timeline with its own drones. Said as a header row, not a manual.
+        // timeline with its own drones.
         if (info.group != prev_group) {
             prev_group = info.group;
             char gh[64];
@@ -3167,72 +3292,73 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
             float hx2 = 0.0f, hy2 = 0.0f;
             dai_ui_cursor_pos(ui, &hx2, &hy2);
             if (hy2 >= top - 0.5f && hy2 + pitch <= bottom + 0.5f) {
-                // A header is a BUTTON: clicking it says "this is the step I am
-                // working in", and the next figure lands there. Lit when it is
-                // that step - the storyboard is the only place the answer
-                // lives now that the inspector's Step field is gone.
                 hheads.push_back(HHead{ info.group, hy2 });
-                if (dai_ui_toggle_button(ui, gh, info.group == u->active_group))
-                    u->active_group = info.group;
-            } else dai_ui_advance(ui, w - 16.0f, pitch - st->spacing);
+                int folded = (info.group < 32) &&
+                             ((u->hi_collapsed >> info.group) & 1u);
+                int is_active = (info.group == u->active_group);
+                // The parent row: a disclosure triangle, the name, and how
+                // many figures hang off it. Faint fill so the tree reads as
+                // groups without shouting.
+                if (!is_active) dai_ui_rect(ui, x + 1.0f, hy2, w - 2.0f, ROW_H, COL_STEP);
+                uint32_t cnt = 0;
+                for (uint32_t k = 0; k < n; ++k) {
+                    dai_show_formation_info gk;
+                    if (dai_show_formation_get(u->sh, k, &gk) && gk.group == info.group) ++cnt;
+                }
+                char gt[32];
+                std::snprintf(gt, sizeof(gt), "%u", cnt);
+                draw_row(hy2, 14.0f, gh, gt, is_active, st->text);
+                // The triangle, drawn as one: pointing down when the step is
+                // open, right when it is folded.
+                {
+                    float ax2 = x + 8.0f, ay2 = hy2 + ROW_H * 0.5f;
+                    uint32_t tc = is_active ? rgba(0xFF, 0xFF, 0xFF, 255) : st->text_dim;
+                    if (folded) {
+                        dai_ui_line(ui, ax2, ay2 - 4.0f, ax2 + 4.0f, ay2, 1.4f, tc);
+                        dai_ui_line(ui, ax2 + 4.0f, ay2, ax2, ay2 + 4.0f, 1.4f, tc);
+                    } else {
+                        dai_ui_line(ui, ax2 - 3.0f, ay2 - 2.0f, ax2 + 1.0f, ay2 + 2.5f, 1.4f, tc);
+                        dai_ui_line(ui, ax2 + 1.0f, ay2 + 2.5f, ax2 + 5.0f, ay2 - 2.0f, 1.4f, tc);
+                    }
+                }
+                if (lpressed && row_hit(hy2)) {
+                    if (lmx < x + 18.0f && info.group < 32)
+                        u->hi_collapsed ^= (1u << info.group);   // the triangle folds
+                    else
+                        u->active_group = info.group;
+                }
+            }
+            dai_ui_advance(ui, w - 16.0f, ROW_H);   // visible or not, a row is a row
         }
-        // The lit row is the figure the TIMELINE is standing in, not the one
-        // the storyboard happens to be editing - two panels lighting up two
-        // different rows for two meanings of "selected" is how a reader stops
-        // believing either. Clicking a row seeks to it, so the light follows
-        // the click as well as the playhead.
-        dai_show_formation_info next;
-        int has_next = (i + 1u < n) && dai_show_formation_get(u->sh, i + 1u, &next);
-        // Lit = SELECTED, the way every hierarchy in this editor lights a row.
-        // It used to light whichever figure the playhead happened to stand in,
-        // so clicking a row lit a different one and the list looked as if it
-        // ignored the click. The playhead still has a home: the timeline.
+        // A folded step hides its children - and nothing else changes: the
+        // figures are still there, still fly, still solve.
+        if (info.group < 32 && ((u->hi_collapsed >> info.group) & 1u)) continue;
+
         int here = ((int)i == u->sel_formation);
-        (void)has_next; (void)t;
-        // Detail is dropped from the RIGHT before anything is cut: docked at a
-        // tenth of the frame the row still has to say which figure it is, and
-        // "1. Sp..." says nothing at all. The count and the timestamp are the
-        // parts a reader can get from the storyboard; the name is not.
-        char row[224], row_head[160], row_tail[64];
-        // Measured against the toggle button this row IS - panel width less
-        // its padding and the text inset - rather than against the whole-row
-        // estimate the wider panels use. In a tenth of the frame the two
-        // differ by twenty pixels, which is the difference between "1. Sphere"
-        // and "1. Sp...".
-        const float avail = dai_ui_panel_width(ui) - st->padding * 2.0f - 10.0f;
-        std::snprintf(row_head, sizeof(row_head), "   %u. %s  %u drones",
-                      i + 1u, info.name, info.point_count);
-        std::snprintf(row_tail, sizeof(row_tail), "  %.1f s", (double)info.t_start);
-        std::snprintf(row, sizeof(row), "%s%s", row_head, row_tail);
-        // The drone count is the first thing dropped, whole - it is the same
-        // for every figure of a fixed fleet. What follows is cut in the MIDDLE
-        // so the second the figure begins in survives the narrow column.
-        if (dai_ui_text_width(ui, row) > avail) {
-            std::snprintf(row_head, sizeof(row_head), "   %u. %s", i + 1u, info.name);
-            ellide_middle(ui, row, sizeof(row), row_head, row_tail, avail, 8);
-        }
+        char head[192], tail[64];
+        std::snprintf(head, sizeof(head), "%u. %s", i + 1u, info.name);
+        std::snprintf(tail, sizeof(tail), "%u  \xc2\xb7  %.1f s",
+                      info.point_count, (double)info.t_start);
         float rx = 0.0f, ry = 0.0f;
         dai_ui_cursor_pos(ui, &rx, &ry);
         if (ry < top - 0.5f || ry + pitch > bottom + 0.5f) {
-            dai_ui_advance(ui, w - 16.0f, pitch - st->spacing);
+            dai_ui_advance(ui, w - 16.0f, ROW_H);
             continue;
         }
         hrows.push_back(HRow{ i, info.group, ry });
         // The press ARMS a carry; whether it becomes one is decided by how far
-        // the pointer then travels. A row that is merely clicked must stay a
-        // click, or nothing in a list can be selected without moving it.
-        if (lpressed && lmx >= x && lmx < x + w &&
-            lmy >= ry - 0.5f && lmy < ry + pitch) {
+        // the pointer then travels. A row that is merely clicked stays a click.
+        if (lpressed && row_hit(ry)) {
             u->hi_drag_f   = (int)i;
             u->hi_dragging = 0;
             u->hi_press_y  = lmy;
-        }
-        if (dai_ui_toggle_button(ui, row, here)) {
             u->sel_formation = (int)i;
             u->active_group  = info.group;
             u->time          = info.t_start;
             u->playing       = 0;
         }
+        draw_row(ry, 30.0f, head, tail, here, st->text);
+        dai_ui_advance(ui, w - 16.0f, ROW_H);
     }
 
     // ...and the empty step at the end, always. This is how a new step is made
@@ -3248,14 +3374,17 @@ void dai_show_ui_figures(dai_show_ui *u, dai_ui *ui, float x, float y, float w, 
         int empty_group = maxg + 1;
         if (u->active_group > empty_group) u->active_group = empty_group;
         char eh[80];
-        std::snprintf(eh, sizeof(eh), "Step %d   (empty)", empty_group + 1);
+        std::snprintf(eh, sizeof(eh), "Step %d", empty_group + 1);
         float ex2 = 0.0f, ey2 = 0.0f;
         dai_ui_cursor_pos(ui, &ex2, &ey2);
         if (ey2 >= top - 0.5f && ey2 + pitch <= bottom + 0.5f) {
             hheads.push_back(HHead{ empty_group, ey2 });
-            if (dai_ui_toggle_button(ui, eh, u->active_group == empty_group))
-                u->active_group = empty_group;
-        } else dai_ui_advance(ui, w - 16.0f, pitch - st->spacing);
+            int act = (u->active_group == empty_group);
+            if (!act) dai_ui_rect(ui, x + 1.0f, ey2, w - 2.0f, ROW_H, COL_STEP);
+            draw_row(ey2, 14.0f, eh, "empty", act, st->text_dim);
+            if (lpressed && row_hit(ey2)) u->active_group = empty_group;
+        }
+        dai_ui_advance(ui, w - 16.0f, ROW_H);
     }
     // ---- where the carried row would land ---------------------------------
     //
