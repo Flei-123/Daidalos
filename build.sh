@@ -5,22 +5,17 @@
 #   ./build.sh noaudio    build without Aulos
 #
 # The interesting part is the "leak test": dai_engine.cpp is compiled WITHOUT
-# the Jolt include path. If a Jolt header ever sneaks into the engine core,
+# the Talos include path. If a Talos header ever sneaks into the engine core,
 # this build fails - which is the whole point of dai_physics.hpp.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-JOLT_SRC=${JOLT_SRC:-/root/projects/JoltPhysics}
-JOLT_LIB=${JOLT_LIB:-/root/projects/jolt-build}
-TALOS=${TALOS:-/root/projects/talos}
-AULOS=${AULOS:-/root/projects/aulos}
-MNEMOSYNE=${MNEMOSYNE:-/root/projects/mnemosyne}
+# Sibling repositories. Default: checked out next to this one
+# (../talos, ../aulos, ../mnemosyne); override with the environment.
+TALOS=${TALOS:-$PWD/../talos}
+AULOS=${AULOS:-$PWD/../aulos}
+MNEMOSYNE=${MNEMOSYNE:-$PWD/../mnemosyne}
 
-# These MUST match how libJolt.a was compiled. A mismatch is not a link error,
-# it is a runtime crash: the JPH_USE_* defines change the layout of Vec3/Mat44.
-JOLT_DEFS="-DJPH_DEBUG_RENDERER -DJPH_OBJECT_STREAM -DJPH_PROFILE_ENABLED \
- -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_CPU_COMPUTE -DJPH_USE_F16C -DJPH_USE_FMADD \
- -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DNDEBUG"
 ARCH="-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse"
 FLAGS="-std=c++17 -O3 -fno-rtti -fno-exceptions -ffp-contract=fast -pthread -Wall -Wno-unused-parameter"
 
@@ -37,24 +32,21 @@ mkdir -p build
 echo "-- physics backend availability"
 # Deciding this BEFORE the engine core is compiled, because dai_engine.cpp is
 # what refuses DAI_PHYSICS_TALOS when the backend was not linked in.
-if [ -f "${TALOS:-/root/projects/talos}/TalC/talos.h" ] && [ -f "${TALOS:-/root/projects/talos}/build/libtalos.a" ]; then
+if [ -f "$TALOS/TalC/talos.h" ] && [ -f "$TALOS/build/libtalos.a" ]; then
     ENGINE_DEFS=""
 else
     ENGINE_DEFS="-DDAI_NO_TALOS"
 fi
 
-echo "-- engine core (no Jolt include path - this is the leak test)"
+echo "-- engine core (no Talos include path - this is the leak test)"
 g++ $FLAGS $ARCH $ENGINE_DEFS -Iinclude -Isrc -c src/dai_engine.cpp -o build/dai_engine.o
 
 echo "-- physics backend: null"
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/physics_null.cpp -o build/physics_null.o
 
-echo "-- physics backend: jolt"
-g++ $FLAGS $ARCH $JOLT_DEFS -Iinclude -Isrc -I"$JOLT_SRC" -c src/physics_jolt.cpp -o build/physics_jolt.o
-
-# Second real backend: Talos through its C API. Optional the same way audio is
+# Real backend: Talos through its C API. Optional the same way audio is
 # - without it the engine still builds and DAI_PHYSICS_TALOS is refused rather
-# than silently answered with Jolt.
+# than silently answered by another backend.
 TALOS_OBJ=""
 TALOS_LIB=""
 if [ -f "$TALOS/TalC/talos.h" ] && [ -f "$TALOS/build/libtalos.a" ]; then
@@ -81,7 +73,7 @@ g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc.cpp -o build/dai_doc.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_text.cpp -o build/dai_doc_text.o
 g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_sync.cpp -o build/dai_doc_sync.o
 
-ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o ${TALOS_OBJ} \
+ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o ${TALOS_OBJ} \
        build/dai_audio.o build/dai_scene.o build/dai_input.o build/dai_editor.o \
        build/dai_doc.o build/dai_doc_text.o build/dai_doc_sync.o build/dai_project.o
 
@@ -200,11 +192,11 @@ else
     echo "-- assets: skipped (no Mnemosyne at $MNEMOSYNE)"
 fi
 
-LIBS="build/libdaidalos.a $AUDIO_LIB ${TALOS_LIB:-} -L$JOLT_LIB -lJolt -lpthread -lm"
-VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB ${TALOS_LIB:-} -L$JOLT_LIB -lJolt -lvulkan ${X11_LIB:-} -lpthread -lm"
+LIBS="build/libdaidalos.a $AUDIO_LIB ${TALOS_LIB:-} -lpthread -lm"
+VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB ${TALOS_LIB:-} -lvulkan ${X11_LIB:-} -lpthread -lm"
 
 # --- backend leak tests -------------------------------------------------
-# Same idea as the Jolt one, for the renderer: the RHI must be swappable for
+# Same idea as the physics one, for the renderer: the RHI must be swappable for
 # D3D12/Metal/an emitter into someone else's engine by replacing rhi_*.cpp.
 echo "-- leak test: no talos.h outside src/physics_talos.cpp"
 if grep -l "talos\.h\|tal_world\|tal_body_id" src/*.cpp src/*.hpp include/*.h 2>/dev/null | grep -v "^src/physics_talos.cpp"; then

@@ -112,6 +112,7 @@ struct JointSlot {
     dai_vec3        axis_local1{ 0, 1, 0 };
     dai_quat        rel_ref{ 0, 0, 0, 1 };   // conj(q1) * q2 at creation
     float           slide_ref = 0.0f;        // dot(p2 - p1, axis) at creation
+    dai_vec3        anchor_world{};          // the world anchor when body 2 is the world
     tal_motor_settings motor{};
 };
 
@@ -421,6 +422,7 @@ public:
         j.c = c;
         j.slot_a = sa;
         j.slot_b = anchored ? UINT32_MAX : sb;
+        j.anchor_world = d.anchor;
         j.motor = cs.motor;
 
         dai_quat q1 = DQ(tal_body_get_rotation(world, a));
@@ -489,7 +491,9 @@ public:
             return true;
         }
         dai_vec3 p1 = D(tal_body_get_position(world, a));
-        dai_vec3 p2 = anchored ? p1 : D(tal_body_get_position(world, slots[j.slot_b].id));
+        // Anchored to the world: the second point is the fixed anchor, not p1
+        // (p1 - p1 made every world-anchored slider report position 0).
+        dai_vec3 p2 = anchored ? j.anchor_world : D(tal_body_get_position(world, slots[j.slot_b].id));
         position = dot(sub(p2, p1), axis) - j.slide_ref;
         speed = dot(sub(v2, v1), axis);
         return true;

@@ -1,0 +1,35 @@
+name: CI
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: daidalos }
+      - uses: actions/checkout@v4
+        with: { repository: Flei-123/Talos, path: talos }
+      - uses: actions/checkout@v4
+        with: { repository: Flei-123/Aulos, path: aulos }
+      - uses: actions/checkout@v4
+        with: { repository: Flei-123/Mnemosyne, path: mnemosyne }
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev libx11-dev glslang-tools xvfb
+      - name: Build siblings
+        run: |
+          (cd talos && TAL_LIB_ONLY=1 ./build.sh release)
+          (cd aulos && ./build.sh)
+      - name: build.sh (reference build with leak tests)
+        working-directory: daidalos
+        run: ./build.sh
+      - name: Tests without a display
+        working-directory: daidalos
+        run: |
+          ./build/test_daidalos
+          ./build/test_merge
+          ./build/test_font
+          ./build/test_image /tmp/pngfix
+          [ -x build/test_talos ] && ./build/test_talos
+          DAI_SHADER_DIR=shaders ./build/test_render_visual /tmp
+      - name: CMake configure + core build
+        working-directory: daidalos
+        run: cmake -B build-cmake -DTALOS_DIR=$PWD/../talos -DAULOS_DIR=$PWD/../aulos -DMNEMOSYNE_DIR=$PWD/../mnemosyne && cmake --build build-cmake -j --target daidalos hello_daidalos test_daidalos && ctest --test-dir build-cmake -R test_daidalos --output-on-failure

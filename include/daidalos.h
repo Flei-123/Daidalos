@@ -1,7 +1,7 @@
 /*
  * Daidalos - a deterministic C++ game engine core.
  *
- *   Jolt Physics  ->  rigid body simulation        (vendored, not written here)
+ *   Talos         ->  rigid body simulation        (own engine, separate repo)
  *   Aulos         ->  event driven game audio      (vendored, not written here)
  *   Daidalos      ->  deterministic tick, world state, snapshots, rollback,
  *                     input queue, audio decoupling, renderer interface
@@ -68,20 +68,19 @@ typedef struct dai_quat { float x, y, z, w; } dai_quat;
 
 /* Which physics backend the world runs on. DAI_PHYSICS_NULL exists to prove
  * the abstraction holds: it has gravity and a floor, nothing else. If the
- * engine ever stops building or running against it, Jolt has leaked out of
- * physics_jolt.cpp. */
+ * engine ever stops building or running against it, Talos has leaked out of
+ * physics_talos.cpp. */
 typedef enum dai_physics_backend {
-    /* Talos (github.com/Flei-123/talos) through its C API. Same contract as
-     * Jolt: bodies, joints, contacts, raycasts, save/restore. A saved backend
+    /* Talos (github.com/Flei-123/Talos) through its C API: bodies, joints,
+     * contacts, raycasts, save/restore. A saved backend
      * state is NOT portable between backends - that has always been true and
      * is why dai_save writes body descriptions, not a physics blob.
      *
      * Talos is value 0 on purpose: a zero-initialised dai_config runs Talos.
-     * It is our own engine and the default since 0.2.1 - Jolt stays linked as
-     * the reference backend the test suite cross-checks Talos against. */
+     * It is our own engine and the default since 0.2.1. Value 2 used to be a
+     * Jolt backend; it was removed in 0.2.2 and the value is not reused. */
     DAI_PHYSICS_TALOS = 0,
-    DAI_PHYSICS_NULL = 1,
-    DAI_PHYSICS_JOLT = 2
+    DAI_PHYSICS_NULL = 1
 } dai_physics_backend;
 
 typedef struct dai_config {
@@ -91,8 +90,8 @@ typedef struct dai_config {
     uint32_t physics_threads;   /* 0 -> hardware_concurrency-1, 1 -> single threaded  */
     uint32_t snapshot_ring;     /* 0 -> 64. How many ticks back a rollback can reach. */
     uint64_t seed;              /* seeds the deterministic RNG                        */
-    uint32_t velocity_steps;    /* 0 -> 10 (Jolt default)                             */
-    uint32_t position_steps;    /* 0 -> 2  (Jolt default)                             */
+    uint32_t velocity_steps;    /* 0 -> 10 velocity iterations                        */
+    uint32_t position_steps;    /* 0 -> 2  position iterations                        */
     /* audio - optional, pass audio_bank = NULL to run the engine silent      */
     const char *asset_root;
     const char *audio_bank;

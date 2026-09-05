@@ -1,18 +1,17 @@
 // Daidalos - the physics boundary.
 //
 // This header is the contract between the engine and whatever actually
-// simulates rigid bodies. It contains NO third party type. No JPH::Vec3, no
-// JPH::BodyID, no Jolt header. Gameplay and engine code only ever see
+// simulates rigid bodies. It contains NO physics library type - no tal_*
+// handle, no Talos header. Gameplay and engine code only ever see
 // dai_vec3 / dai_quat / uint32_t slot indices.
 //
-// Three implementations exist:
-//   physics_jolt.cpp  - Jolt Physics
-//   physics_talos.cpp - Talos, through its C API
+// Two implementations exist:
+//   physics_talos.cpp - Talos, the author's own deterministic engine, C API
 //   physics_null.cpp  - gravity only, no collisions
 //
-// Two real backends is what turns "swappable" from a claim into a fact: the
-// null backend proves nothing leaked into the header, the second real one
-// proves the header is actually sufficient to run a game.
+// The null backend is what turns "swappable" from a claim into a fact: it
+// proves nothing leaked into the header. (Until 09/2026 a Jolt backend was
+// the second real one; it was removed so the engine has no foreign physics.)
 //
 // The null backend is not a toy: it is the leak test. If the engine still
 // compiles and runs against it, no physics detail has escaped this header.
@@ -75,7 +74,7 @@ public:
     virtual bool raycast(dai_vec3 from, dai_vec3 dir, float max_distance, RayHit &out) const = 0;
 
     // Contacts of the last step, already sorted deterministically by the
-    // backend. Jolt reports them from several threads in an arbitrary order;
+    // backend. A threaded backend reports them in an arbitrary order;
     // handing that straight to gameplay would be a desync waiting to happen.
     virtual uint32_t poll_contacts(ContactEvent *out, uint32_t max) = 0;
 
@@ -96,7 +95,6 @@ public:
     virtual uint32_t active_bodies() const = 0;
 };
 
-IPhysicsBackend *create_jolt_backend();
 IPhysicsBackend *create_null_backend();
 IPhysicsBackend *create_talos_backend();
 
