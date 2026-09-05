@@ -27,6 +27,7 @@ jobs:
           ./build/test_daidalos
           ./build/test_merge
           ./build/test_font
+          python3 tools/make_png_fixtures.py /tmp/pngfix
           ./build/test_image /tmp/pngfix
           [ -x build/test_talos ] && ./build/test_talos
           # lavapipe (mesa-vulkan-drivers) renders in software; 77 = no device
