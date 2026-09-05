@@ -6,7 +6,7 @@ libraries are fetched at build time and keep their own licences:
 | Library | Used for | Licence |
 |---|---|---|
 | Vulkan headers / loader | renderer (`thirdparty/win/vulkan-1.def`) | Apache-2.0 (headers), MIT-style loader |
-| Talos | the default physics backend (`src/physics_talos.cpp`) | GPL-3.0-or-later, same author |
+| Talos | the physics engine (`src/physics_talos.cpp`) | MPL-2.0, same author |
 
 The Daidalos source itself is GPL-3.0-or-later with the attribution term of
 GPL section 7(b) -- see LICENSE and NOTICE.
