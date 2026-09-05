@@ -23,7 +23,7 @@ The simulation is a pure function of state and input. It never reads the clock,
 the audio system, the renderer, or an unseeded random number. That is what makes
 rollback netcode possible - and it is the thing you cannot add afterwards.
 
-MIT licensed.
+Licensed under GPL-3.0-or-later with an attribution requirement — see LICENSE and NOTICE.
 
 ---
 
