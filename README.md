@@ -122,8 +122,8 @@ engine has to be complete without it.
 What does NOT port yet is the renderer - Vulkan has no browser equivalent. A
 web build needs a WebGPU backend behind `dai_render.h`, which is precisely the
 swap the RHI boundary exists for: one new `rhi_*.cpp`, nothing else changes.
-Jolt itself compiles to wasm (upstream supports Emscripten), so a full browser
-build is a build system exercise rather than a redesign.
+Talos is plain C++17 without OS dependencies, so it compiles to wasm as well:
+a full browser build is a build system exercise rather than a redesign.
 
 ## Layers
 
@@ -991,8 +991,8 @@ A window alone on an edge gets all of it.
 **Removing a component does not remove the model.** Unchecking Box Collider
 used to make the mesh vanish, because the entity WAS the body. Rendering and
 physics are separate now: `dai_scene_spawn_render` gives a physics-less node
-a picture and a transform, `no_collider` becomes a physics **sensor** (Jolt
-`mIsSensor`, Talos `is_sensor` - which also gives Is Trigger its real
+a picture and a transform, `no_collider` becomes a physics **sensor** (Talos
+`is_sensor` - which also gives Is Trigger its real
 behaviour: reports overlaps, blocks nothing), `no_rigidbody` becomes static.
 
 **Duplicate keeps the colour.** The palette colour comes from the node id, the
