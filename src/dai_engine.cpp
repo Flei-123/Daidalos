@@ -9,7 +9,7 @@
 //   * the sim never reads wall clock time, only tick numbers
 //   * the sim never reads the audio or render system
 //   * every mutation is recorded as a tick stamped command
-//   * this file contains NO physics library type. Look for a Jolt include
+//   * this file contains NO physics library type. Look for a Talos include
 //     here: there is none, and there must never be one.
 
 #include "dai_internal.hpp"
@@ -229,7 +229,7 @@ void save_snapshot(dai_world *w) {
 
 extern "C" {
 
-const char *dai_version(void) { return "daidalos 0.2.1 (backends: talos, jolt, null)"; }
+const char *dai_version(void) { return "daidalos 0.2.2 (backends: talos, null)"; }
 
 dai_result dai_create(const dai_config *cfg_in, dai_world **out) {
     if (!out) return DAI_ERR_INVALID_ARG;
@@ -248,30 +248,17 @@ dai_result dai_create(const dai_config *cfg_in, dai_world **out) {
     w->input_ring = std::max(256u, w->snap_ring * 4);
     w->rng.seed(w->cfg.seed ? w->cfg.seed : 0x9e3779b97f4a7c15ULL);
 
-    // DAI_NO_JOLT drops the Jolt backend from the link entirely. That is what
-    // makes the WebAssembly build possible today (and it is a second, stricter
-    // version of the leak test: the engine has to be complete without it).
+    // Talos is the zero-config default. A build without it (DAI_NO_TALOS, e.g.
+    // WebAssembly today) cannot refuse the default - every zero-initialised
+    // config would fail - so it falls back to the null backend; the caller can
+    // always check dai_backend_name() to see what it actually got.
     if (w->cfg.backend == DAI_PHYSICS_NULL) {
         w->phys = create_null_backend();
-    } else if (w->cfg.backend == DAI_PHYSICS_TALOS) {
+    } else {
 #ifdef DAI_NO_TALOS
-        // Talos is the zero-config default now, so a build without it cannot
-        // refuse the default - every zero-initialised config would fail.
-        // Fall back to Jolt (or null): the caller can always check
-        // dai_backend_name() to see what it actually got.
-#ifdef DAI_NO_JOLT
         w->phys = create_null_backend();
-#else
-        w->phys = create_jolt_backend();
-#endif
 #else
         w->phys = create_talos_backend();
-#endif
-    } else {
-#ifdef DAI_NO_JOLT
-        w->phys = create_null_backend();
-#else
-        w->phys = create_jolt_backend();
 #endif
     }
     if (!w->phys) { delete w; return DAI_ERR_OUT_OF_MEMORY; }

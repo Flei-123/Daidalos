@@ -14,36 +14,20 @@
 #   a name list (thirdparty/win/vulkan-1.def, see tools/make_vulkan_def.sh) is
 #   enough to link against it. A user needs nothing installed.
 #
-#   Jolt: built once by tools/build_jolt_win.sh with the -posix mingw variants,
 #   because the default win32 thread model has no std::mutex.
 #
 #   ./build_win.sh   ->   build-win/*.exe
 set -e
 
 CXX=${CXX:-x86_64-w64-mingw32-g++-posix}
-JOLT_SRC=${JOLT_SRC:-/root/projects/JoltPhysics}
-JOLT_LIB=${JOLT_LIB:-/root/projects/jolt-build-win}
-MNEMOSYNE=${MNEMOSYNE:-/root/projects/mnemosyne}
-TALOS=${TALOS:-/root/projects/talos}
+MNEMOSYNE=${MNEMOSYNE:-$PWD/../mnemosyne}
+TALOS=${TALOS:-$PWD/../talos}
 TALOS_WIN_LIB=${TALOS_WIN_LIB:-$TALOS/build-win/libtalos.a}
 OUT=build-win
 
 FLAGS="-std=c++17 -O2 -fno-rtti -fno-exceptions -Wall -Wno-unused-function -DUNICODE -D_UNICODE -DDAI_NO_AUDIO"
-# EXACTLY the defines libJolt.a was built with, and the same -m flags. Jolt's
-# headers change structure layout on JPH_PROFILE_ENABLED and JPH_DEBUG_RENDERER,
-# so a caller compiled without them links fine and then crashes on the first
-# call - which is precisely what happened here. Read them back out of the
-# library's own flags.make if this ever needs checking:
-#   grep -oE '\-DJPH_[A-Z0-9_]+' jolt-build-win/CMakeFiles/Jolt.dir/flags.make
-JOLT_DEFS="-DJPH_DEBUG_RENDERER -DJPH_OBJECT_STREAM -DJPH_PROFILE_ENABLED \
- -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_CPU_COMPUTE -DJPH_USE_F16C -DJPH_USE_FMADD \
- -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DNDEBUG"
 ARCH="-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse"
 
-if [ ! -f "$JOLT_LIB/libJolt.a" ]; then
-    echo "!! no Windows Jolt at $JOLT_LIB - run tools/build_jolt_win.sh first"
-    exit 1
-fi
 
 mkdir -p "$OUT"
 
@@ -81,7 +65,7 @@ echo "-- engine"
 CORE="dai_engine dai_scene dai_input dai_doc dai_doc_text dai_doc_sync dai_editor \
       dai_editor_ui dai_meshgen dai_image dai_inflate dai_json dai_gltf dai_gltf_geom \
       dai_gltf_write dai_fracture dai_particles dai_font dai_svg dai_icons dai_ui dai_dock dai_project dai_update \
-      dai_audio physics_jolt physics_null"
+      dai_audio physics_null"
 # dai_script needs the vendored QuickJS headers; the define lets the editor
 # compile its runner only when scripting is actually linked.
 CORE="$CORE dai_script"
@@ -104,7 +88,7 @@ else
 fi
 OBJS=""
 for f in $CORE; do
-    $CXX $FLAGS $ARCH $JOLT_DEFS $TALOS_DEFS -Iinclude -Isrc -I"$JOLT_SRC" -I"$VKINC" -c "src/$f.cpp" -o "$OUT/$f.o"
+    $CXX $FLAGS $ARCH $TALOS_DEFS -Iinclude -Isrc -I"$VKINC" -c "src/$f.cpp" -o "$OUT/$f.o"
     OBJS="$OBJS $OUT/$f.o"
 done
 x86_64-w64-mingw32-ar rcs "$OUT/libdaidalos.a" $OBJS $EXTRA_OBJS
@@ -144,7 +128,7 @@ fi
 # -static so the .exe runs on a machine with no mingw runtime beside it. The
 # whole point is handing over one file.
 LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a $ASSETS \
-      ${TALOS_LINK:-} -L$JOLT_LIB -lJolt -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 \
+      ${TALOS_LINK:-} -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 \
       "$QJS_WIN" -static -static-libgcc -static-libstdc++ -lpthread"
 
 echo "-- programs"

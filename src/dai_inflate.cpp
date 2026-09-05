@@ -1,6 +1,6 @@
 // DEFLATE decoder (RFC 1951) and PNG reader (RFC 2083), written from scratch.
 //
-// The engine has no third party dependency except Jolt, and that is not
+// The engine has no third party dependency, and that is not
 // vanity: every dependency is a build system, a licence and a supply chain
 // problem on every platform you ever port to. Inflate is ~200 lines, and it
 // is verified against zlib-produced files in tests/test_image.cpp.

@@ -49,7 +49,7 @@ static void tick_cb(dai_world *w, dai_tick t, void *user) {
     }
 }
 
-static int g_backend = DAI_PHYSICS_JOLT;
+static int g_backend = DAI_PHYSICS_TALOS;
 
 static dai_world *make_world(Game *g, uint64_t seed = 1234, uint32_t hz = 60, const char *bank = nullptr) {
     dai_config cfg{};
@@ -350,7 +350,7 @@ static void test_null_backend() {
 
     Game ga, gb;
     dai_world *a = make_world(&ga), *b = make_world(&gb);
-    if (!a || !b) { CHECK(false, "no world"); g_backend = DAI_PHYSICS_JOLT; return; }
+    if (!a || !b) { CHECK(false, "no world"); g_backend = DAI_PHYSICS_TALOS; return; }
     std::printf("  Backend: %s\n", dai_backend_name(a));
     CHECK(std::strcmp(dai_backend_name(a), "null") == 0, "wrong backend: %s", dai_backend_name(a));
 
@@ -383,11 +383,11 @@ static void test_null_backend() {
     CHECK(got == 1, "raycast found nothing on the null backend");
 
     dai_destroy(a); dai_destroy(b);
-    g_backend = DAI_PHYSICS_JOLT;
+    g_backend = DAI_PHYSICS_TALOS;
 }
 
-static void test_queries_jolt() {
-    std::printf("\n[10] Raycast und Kontakte auf dem Jolt-Backend\n");
+static void test_queries_talos() {
+    std::printf("\n[10] Raycast und Kontakte auf dem Talos-Backend\n");
     Game g; dai_world *w = make_world(&g);
     if (!w) { CHECK(false, "no world"); return; }
     for (int i = 0; i < 5; ++i) dai_step(w);   // few ticks: the pile must still be awake
@@ -413,7 +413,7 @@ static void test_queries_jolt() {
     // an impulse that is merely non zero can still be nonsense.
     {
         dai_config cfg{};
-        cfg.backend = DAI_PHYSICS_JOLT;
+        cfg.backend = DAI_PHYSICS_TALOS;
         cfg.tick_hz = 240;                 // fine ticks: less overshoot into the floor
         cfg.max_bodies = 16; cfg.physics_threads = 1; cfg.snapshot_ring = 8; cfg.seed = 5;
         dai_world *iw = nullptr;
@@ -496,14 +496,17 @@ static void test_hinge_motor() {
     dai_body_desc arm{};
     arm.shape = DAI_SHAPE_BOX; arm.motion = DAI_DYNAMIC;
     arm.half_extent = { 1.5f, 0.15f, 0.15f };
-    arm.position = { 1.5f, 3.0f, 0 }; arm.rotation = { 0,0,0,1 };
+    // Pivot 6 m up so the 3 m arm swings freely. At 3 m its tip drags across
+    // the floor and the test measures the torque needed to tear a resting beam
+    // loose, not the motor.
+    arm.position = { 1.5f, 6.0f, 0 }; arm.rotation = { 0,0,0,1 };
     arm.no_sleeping = 1; arm.density = 500.0f;
     dai_body a = dai_body_create(w, &arm);
 
     dai_joint_desc jd{};
     jd.type = DAI_JOINT_HINGE;
     jd.a = a; jd.b = DAI_INVALID_BODY;               // anchored to the world
-    jd.anchor = { 0, 3.0f, 0 };
+    jd.anchor = { 0, 6.0f, 0 };
     jd.axis = { 0, 0, 1 };                            // rotates in the XY plane
     jd.normal_axis = { 1, 0, 0 };
     jd.max_motor_force = 40000.0f;   // 135 kg arm: 4000 Nm stalls, measured
@@ -635,7 +638,7 @@ int main() {
     test_interpolation_and_stats();
     test_perf();
     test_null_backend();
-    test_queries_jolt();
+    test_queries_talos();
     test_hinge_motor();
     test_slider_piston();
     test_joint_rollback();

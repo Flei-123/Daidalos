@@ -30,10 +30,17 @@ Licensed under GPL-3.0-or-later with an attribution requirement — see LICENSE 
 ## Build and run
 
 ```bash
+# Sibling libraries (optional, all by the same author). build.sh looks for them
+# next to this checkout; override with TALOS=, AULOS=, MNEMOSYNE=.
+git clone https://github.com/Flei-123/Talos     ../talos     && (cd ../talos     && ./build.sh release)
+git clone https://github.com/Flei-123/Aulos     ../aulos     && (cd ../aulos     && ./build.sh)
+git clone https://github.com/Flei-123/Mnemosyne ../mnemosyne
+
 ./build.sh                     # engine + backends + renderer + tests + examples
 ./build.sh noaudio             # without Aulos
+cmake -B build-cmake && cmake --build build-cmake -j   # or: CMake, same layers
 
-./build/test_daidalos                                    # 48 simulation assertions
+./build/test_daidalos                                    # 51 simulation assertions
 ./build/test_merge                                       # 45 merge/split assertions
 ./build/test_font                                        # 16 font assertions
 DAI_SHADER_DIR=shaders ./build/test_ui /tmp              # 19 UI assertions
