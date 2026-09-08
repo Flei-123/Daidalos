@@ -1,0 +1,14 @@
+daidalos-material 1
+# The walls. Raufaser is a paper texture, so it is fine and its repeat is
+# small; the blend is soft because a room corner is where two projections meet
+# and a hard edge there is exactly the seam this feature removes.
+color 0.86 0.84 0.8
+roughness 0.85
+metallic 0
+emissive 0
+base_color_map textures/raufaser_wand_basecolor.png
+orm_map textures/raufaser_wand_orm.png
+normal_map textures/raufaser_wand_normal.png
+triplanar 1
+triplanar_scale 1.5
+triplanar_blend 4

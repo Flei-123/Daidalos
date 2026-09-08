@@ -18,9 +18,27 @@
  *     color 0.82 0.24 0.20
  *     roughness 0.35
  *
- * Deliberately small. Textures, shader graphs and blend modes are not here
- * because the renderer does not have them yet, and a file format that promises
- * fields nothing reads is a file format people stop trusting.
+ * Deliberately small. Blend modes and shader graphs are not here because the
+ * renderer does not have them, and a file format that promises fields nothing
+ * reads is a file format people stop trusting.
+ *
+ * What IS here, because the renderer does have it: the three maps of the
+ * glTF metallic-roughness model (docs/MATERIALS.md), and the WORLD PROJECTION
+ * that lets a wall built out of boxes and CSG wear one of them without a UV
+ * unwrap:
+ *
+ *     daidalos-material 1
+ *     color 0.82 0.8 0.76
+ *     base_color_map Textures/raufaser_basecolor.png
+ *     orm_map Textures/raufaser_orm.png
+ *     normal_map Textures/raufaser_normal.png
+ *     triplanar 1
+ *     triplanar_scale 2
+ *     triplanar_blend 4
+ *
+ * The maps are paths relative to the project's Assets folder, exactly like
+ * every other asset reference in the document - never a handle, so the file
+ * survives a reload, a copy to another machine and a rebuild of the renderer.
  */
 #ifndef DAI_MATFILE_H
 #define DAI_MATFILE_H
@@ -31,6 +49,11 @@
 extern "C" {
 #endif
 
+/* Long enough for "Textures/generated/raufaser_wand_basecolor.png" and then
+ * some. A path that does not fit is a path that is truncated on the way in,
+ * not one that silently loads the wrong file. */
+#define DAI_MATFILE_PATH 160
+
 typedef struct dai_matfile {
     dai_vec3 color;        /* linear 0..1, the base colour                   */
     float    roughness;    /* 0 mirror, 1 matte                              */
@@ -38,6 +61,19 @@ typedef struct dai_matfile {
                               when it grows one; stored so a file written
                               today does not need rewriting then            */
     float    emissive;     /* 0 = not a light source                         */
+
+    /* The maps, relative to the project's Assets folder. Empty = no map in
+     * that slot, which is a complete material, not a broken one. */
+    char     base_color_map[DAI_MATFILE_PATH];   /* sRGB   albedo            */
+    char     orm_map[DAI_MATFILE_PATH];          /* linear AO/rough/metal    */
+    char     normal_map[DAI_MATFILE_PATH];       /* linear tangent space     */
+    float    normal_strength;                    /* multiplies the map, 1    */
+
+    /* World projection. Off by default: it costs three samples per map, and a
+     * material that came out of Blender has a UV set already. */
+    int      triplanar;        /* 0 = sample the UV set, 1 = project in world */
+    float    triplanar_scale;  /* METRES per repeat, not a repeat count       */
+    float    triplanar_blend;  /* 1 wide wash .. 16 hard edge, default 4      */
 } dai_matfile;
 
 DAI_API dai_matfile dai_matfile_default(void);

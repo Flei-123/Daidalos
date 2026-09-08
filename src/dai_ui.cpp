@@ -2901,6 +2901,23 @@ const AcEntry AC_NODE[] = {
     { "text.anchor",          "0 top left .. 8 bottom right" },
     { "image.asset",          "the texture file" },
     { "image.size",           "[x, y, z], world units" },
+    // Blockout: the shapes a room is built out of. Same names the inspector
+    // shows and the same the bridge writes - one table, see
+    // include/dai_blockout_props.inl.
+    { "blockout.kind",        "1 Box 2 Cylinder 3 Stairs 4 Arch 5 Wedge" },
+    { "blockout.size",        "[x, y, z] - FULL size in metres" },
+    { "blockout.segments",    "round shapes: sides around" },
+    { "blockout.steps",       "stairs: how many" },
+    { "blockout.thickness",   "arch: ring thickness in metres" },
+    { "blockout.pivot",       "[x, y, z], -1..1 inside the shape" },
+    { "blockout.enabled",     "is this a blockout node?" },
+    { "csg.op",               "1 union, 2 subtract, 3 intersect" },
+    { "csg.enabled",          "does this node combine its children?" },
+    { "door.offset",          "[x, y, z] - the sill, in node space" },
+    { "door.normal",          "[x, y, z] - which way it faces" },
+    { "door.width",           "metres" },
+    { "door.height",          "metres" },
+    { "door.enabled",         "is there a DoorSocket here?" },
     // The older, flatter spelling. Still valid, still offered.
     { "position",             "short for transform.position" },
     { "velocity",             "[x, y, z] - read and write" },

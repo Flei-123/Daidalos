@@ -57,7 +57,7 @@ struct TextureEntry {
     VkDescriptorSet ui_set = VK_NULL_HANDLE;
 };
 
-// Push constant block, must match the shaders. 80 bytes: still well inside the
+// Push constant block, must match the shaders. 96 bytes: still inside the
 // 128 byte guarantee, so no uniform buffer traffic per material switch.
 struct MaterialPush {
     float base_color[4];   // rgb + alpha cutoff
@@ -65,6 +65,7 @@ struct MaterialPush {
     float scalars[4];      // metallic, roughness, normal strength, unused
     float extra[4];        // occlusion, has_maps, has_normal_map, shadow cascade
     float uv[4];           // tiling x, tiling y, offset x, offset y
+    float tri[4];          // triplanar: on, 1/metres per repeat, blend, unused
 };
 
 struct MaterialEntry {

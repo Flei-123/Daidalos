@@ -117,6 +117,116 @@ int main(int argc, char **argv) {
     CHECK(dai_script_call(s, "nope", err, sizeof(err)) == DAI_ERR_NOT_FOUND,
           "calling a missing function did not report NOT_FOUND");
 
+    // ---- 6. the `editor` binding: what a TOOL may do and a behaviour may not
+    //
+    // The Jarvis bridge drives modelling through this and nothing else (see
+    // include/dai_bridge_host.inl), so the surface is checked here rather than
+    // only through the socket: a fake host records what the script asked for,
+    // and the checks are that the right call arrived with the right arguments.
+    // Every value below is one a script wrote - none of them is set by the
+    // fixture, or the test would be agreeing with itself.
+    {
+        static struct FakeEditor {
+            int added = 0, removed = 0, begun = 0, committed = 0, undone = 0, redone = 0;
+            int saved = 0, selected = 0, shot = 0, material_set = 0;
+            std::string last_name, last_label, last_path, last_material;
+            double last_parent = -1, last_removed = -1, last_selected = -1;
+            double eye[3] = { 0, 0, 0 }, target[3] = { 0, 0, 0 }, fov = 0;
+            double next_id = 100;
+        } fake;
+
+        dai_script_editor_host eh{};
+        eh.add = [](const char *name, double parent, void *) -> double {
+            ++fake.added; fake.last_name = name ? name : ""; fake.last_parent = parent;
+            return fake.next_id++;
+        };
+        eh.remove = [](double id, void *) -> int { ++fake.removed; fake.last_removed = id; return 1; };
+        eh.begin = [](const char *label, void *) { ++fake.begun; fake.last_label = label ? label : ""; };
+        eh.commit = [](void *) { ++fake.committed; };
+        eh.undo = [](void *) -> int { ++fake.undone; return 1; };
+        eh.redo = [](void *) -> int { ++fake.redone; return 0; };
+        eh.count = [](void *) -> double { return 7.0; };
+        eh.at = [](double index, void *) -> double { return 200.0 + index; };
+        eh.save = [](const char *path, void *) -> int {
+            ++fake.saved; fake.last_path = path ? path : ""; return 1;
+        };
+        eh.select = [](double id, void *) { ++fake.selected; fake.last_selected = id; };
+        eh.camera = [](const double *eye, const double *target, double fov, void *) {
+            for (int i = 0; i < 3; ++i) { fake.eye[i] = eye[i]; fake.target[i] = target[i]; }
+            fake.fov = fov;
+        };
+        eh.shot = [](const char *path, void *) -> int { ++fake.shot; return 1; };
+        eh.set_material = [](double, const char *path, void *) -> int {
+            ++fake.material_set; fake.last_material = path ? path : ""; return 1;
+        };
+        eh.get_material = [](double, void *) -> const char * { return "materials/rost.daimat"; };
+
+        // Before the binding exists, `editor` must not: a game that never
+        // called bind must not be able to delete its own scene from a script.
+        CHECK(dai_script_eval(s, "state.hasEditor = (typeof editor === 'undefined') ? 0 : 1;",
+                              "editor", err, sizeof(err)) == DAI_OK, "probing editor failed: %s", err);
+        CHECK(dai_script_get_number(s, "hasEditor", -1.0) == 0.0,
+              "the `editor` global existed before anything bound it");
+
+        dai_script_bind_editor(s, &eh);
+
+        CHECK(dai_script_eval(s,
+              "editor.begin('build a room');"
+              "state.made = editor.add('Wall', 3);"
+              "editor.setMaterial(state.made, 'materials/raufaser.daimat');"
+              "state.mat = editor.getMaterial(state.made);"
+              "editor.select(state.made);"
+              "editor.camera([1,2,3],[4,5,6],52);"
+              "editor.commit();"
+              "state.count = editor.count();"
+              "state.third = editor.at(2);"
+              "state.undone = editor.undo() ? 1 : 0;"
+              "state.redone = editor.redo() ? 1 : 0;"
+              "state.savedOk = editor.save('scenes/room.daiscene') ? 1 : 0;"
+              "state.shotOk = editor.shot('/tmp/x.png') ? 1 : 0;"
+              "editor.remove(state.made);",
+              "editor", err, sizeof(err)) == DAI_OK, "the editor script failed: %s", err);
+
+        CHECK(fake.added == 1, "add was called %d times, not once", fake.added);
+        CHECK(fake.last_name == "Wall", "the node was called '%s'", fake.last_name.c_str());
+        CHECK(fake.last_parent == 3.0, "the parent arrived as %.1f, not 3", fake.last_parent);
+        CHECK(dai_script_get_number(s, "made", -1.0) == 100.0,
+              "add did not answer the host's id");
+        CHECK(fake.begun == 1 && fake.committed == 1,
+              "the undo bracket was begun %d and committed %d times", fake.begun, fake.committed);
+        CHECK(fake.last_label == "build a room", "the undo step is called '%s'", fake.last_label.c_str());
+        CHECK(fake.material_set == 1 && fake.last_material == "materials/raufaser.daimat",
+              "setMaterial got '%s'", fake.last_material.c_str());
+        char mat[64] = { 0 };
+        dai_script_get_string(s, "mat", mat, sizeof(mat));
+        CHECK(std::strcmp(mat, "materials/rost.daimat") == 0,
+              "getMaterial answered '%s'", mat);
+        CHECK(fake.selected == 1 && fake.last_selected == 100.0,
+              "select got node %.0f", fake.last_selected);
+        CHECK(fake.eye[0] == 1.0 && fake.eye[1] == 2.0 && fake.eye[2] == 3.0,
+              "the camera's eye arrived as %.1f %.1f %.1f", fake.eye[0], fake.eye[1], fake.eye[2]);
+        CHECK(fake.target[0] == 4.0 && fake.target[1] == 5.0 && fake.target[2] == 6.0,
+              "the camera's target arrived as %.1f %.1f %.1f",
+              fake.target[0], fake.target[1], fake.target[2]);
+        CHECK(fake.fov == 52.0, "the fov arrived as %.1f", fake.fov);
+        CHECK(dai_script_get_number(s, "count", -1.0) == 7.0, "count did not come through");
+        CHECK(dai_script_get_number(s, "third", -1.0) == 202.0, "at(2) did not come through");
+        CHECK(dai_script_get_number(s, "undone", -1.0) == 1.0, "undo answered false");
+        CHECK(dai_script_get_number(s, "redone", -1.0) == 0.0,
+              "redo answered true although the host said there was nothing to redo");
+        CHECK(fake.undone == 1 && fake.redone == 1, "undo/redo were not called once each");
+        CHECK(fake.saved == 1 && fake.last_path == "scenes/room.daiscene",
+              "save got '%s'", fake.last_path.c_str());
+        CHECK(fake.shot == 1, "shot was not taken");
+        CHECK(fake.removed == 1 && fake.last_removed == 100.0,
+              "remove got node %.0f", fake.last_removed);
+
+        // A tool script that throws must not take the editor down either.
+        CHECK(dai_script_eval(s, "editor.add()", "editor", err, sizeof(err)) == DAI_OK,
+              "editor.add() with no name threw: %s", err);
+        CHECK(fake.added == 1, "add ran with no name at all");
+    }
+
     dai_script_destroy(s);
     dai_ui_destroy(ui);
     dai_font_free(font);

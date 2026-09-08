@@ -5464,6 +5464,7 @@ static void run_context_menus(dai_editor_ui *p) {
                 for (const CompEntry &e : entries)
                     if (e.label == flat[i]) {
                         if (e.cat == "Physics") ic = DAI_ICON_SETTINGS;
+                        else if (e.cat == "Blockout") ic = DAI_ICON_CUBE;
                         else if (e.cat == "Audio") ic = DAI_ICON_AUDIO;
                         else if (e.cat == "Rendering")
                             ic = e.kind == 2 ? DAI_ICON_CAMERA
@@ -5514,6 +5515,11 @@ static void run_context_menus(dai_editor_ui *p) {
                     script_join(ar2.script, sizeof(ar2.script), list);
                     break;
                 }
+                default:
+                    // Seam: the Blockout components take kind 20 and up, so a
+                    // shape added tomorrow cannot renumber a Light.
+                    #include "dai_editor_ui_blockout_addcomp_apply.inl"
+                    break;
                 }   /* nothing removes from here any more - see above */
                 dai_doc_set(d, p->addcomp_node, &ar2);
                 dai_doc_commit(d);

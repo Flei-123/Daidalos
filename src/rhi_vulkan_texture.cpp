@@ -278,6 +278,22 @@ dai_texture dai_render_texture_load(dai_renderer *r, const char *path, int srgb)
 uint32_t dai_render_texture_count(dai_renderer *r) { return r ? (uint32_t)r->textures.size() : 0; }
 uint32_t dai_render_material_count(dai_renderer *r) { return r ? (uint32_t)r->materials.size() : 0; }
 
+// The world projection, as the shader wants it. Metres go in, the RECIPROCAL
+// comes out: the fragment stage multiplies, and a division per pixel per map
+// for a number that changes once per material is a division too many. A scale
+// of 0 means "not set" rather than "collapse the world onto one texel", which
+// is the same rule uv_scale follows two lines up.
+static void fill_triplanar(MaterialPush &p, const dai_material_desc *desc) {
+    float metres = desc->triplanar_scale > 0.0f ? desc->triplanar_scale : 1.0f;
+    float blend  = desc->triplanar_blend > 0.0f ? desc->triplanar_blend : 4.0f;
+    if (blend < 1.0f) blend = 1.0f;
+    if (blend > 16.0f) blend = 16.0f;
+    p.tri[0] = (desc->flags & DAI_MAT_TRIPLANAR) ? 1.0f : 0.0f;
+    p.tri[1] = 1.0f / metres;
+    p.tri[2] = blend;
+    p.tri[3] = 0.0f;
+}
+
 dai_material_desc dai_material_desc_default(void) {
     dai_material_desc d{};
     d.base_color = { 1, 1, 1 };
@@ -287,6 +303,8 @@ dai_material_desc dai_material_desc_default(void) {
     d.occlusion = 1.0f;
     d.uv_scale = { 1.0f, 1.0f };
     d.uv_offset = { 0.0f, 0.0f };
+    d.triplanar_scale = 1.0f;      /* one repeat per metre                     */
+    d.triplanar_blend = 4.0f;      /* hides the corner without smearing        */
     return d;
 }
 
@@ -311,6 +329,7 @@ dai_material dai_render_material_create(dai_renderer *r, const dai_material_desc
     m.p.extra[1] = (desc->base_color_tex || desc->orm_tex || desc->normal_tex || desc->emissive_tex) ? 1.0f : 0.0f;
     m.p.extra[2] = desc->normal_tex ? 1.0f : 0.0f;
     m.p.extra[3] = 0.0f;
+    fill_triplanar(m.p, desc);
     m.base_tex = desc->base_color_tex;
     m.orm_tex = desc->orm_tex;
     m.normal_tex = desc->normal_tex;
@@ -365,6 +384,7 @@ dai_result dai_render_material_update(dai_renderer *r, dai_material mat,
     m.p.extra[1] = (desc->base_color_tex || desc->orm_tex || desc->normal_tex || desc->emissive_tex) ? 1.0f : 0.0f;
     m.p.extra[2] = desc->normal_tex ? 1.0f : 0.0f;
     m.p.extra[3] = 0.0f;
+    fill_triplanar(m.p, desc);
     if (desc->name) std::snprintf(m.name, sizeof(m.name), "%s", desc->name);
 
     if (tex_changed) {

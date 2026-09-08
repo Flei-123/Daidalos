@@ -275,6 +275,22 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
         if (!feq(r.audio_volume, def.audio_volume)) put(s, "  avol %s\n", fstr(r.audio_volume).c_str());
         if (r.audio_loop != def.audio_loop)         put(s, "  aloop %d\n", r.audio_loop);
         if (r.audio_autoplay != def.audio_autoplay) put(s, "  aplay %d\n", r.audio_autoplay);
+        // Blockout. The recipe, never the mesh: the triangles are derived from
+        // these lines every time the scene is opened, so a wall that was 30 cm
+        // thick is still a wall that is 30 cm thick and not a frozen lump.
+        if (r.blockout != def.blockout)   put(s, "  blockout %d\n", r.blockout);
+        if (!v3eq(r.blockout_size, def.blockout_size))  write_v3(s, "bosize", r.blockout_size);
+        if (r.blockout_segments != def.blockout_segments) put(s, "  boseg %d\n", r.blockout_segments);
+        if (r.blockout_steps != def.blockout_steps)       put(s, "  bosteps %d\n", r.blockout_steps);
+        if (!feq(r.blockout_thickness, def.blockout_thickness))
+            put(s, "  bothick %s\n", fstr(r.blockout_thickness).c_str());
+        if (!v3eq(r.blockout_pivot, def.blockout_pivot)) write_v3(s, "bopivot", r.blockout_pivot);
+        if (r.csg != def.csg)             put(s, "  csg %d\n", r.csg);
+        if (r.door_socket != def.door_socket) put(s, "  door %d\n", r.door_socket);
+        if (!v3eq(r.door_offset, def.door_offset)) write_v3(s, "dooroff", r.door_offset);
+        if (!v3eq(r.door_normal, def.door_normal)) write_v3(s, "doornrm", r.door_normal);
+        if (!feq(r.door_width, def.door_width) || !feq(r.door_height, def.door_height))
+            put(s, "  doorsize %s %s\n", fstr(r.door_width).c_str(), fstr(r.door_height).c_str());
         if (r.render_flags != def.render_flags) put(s, "  rflags %u\n", (unsigned)r.render_flags);
         if (r.hidden != def.hidden)             put(s, "  hidden %d\n", r.hidden);
         if (r.disabled != def.disabled)         put(s, "  disabled %d\n", r.disabled);
@@ -473,6 +489,23 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "avol")    { ok = parse_floats(after, &rec.audio_volume, 1); }
         else if (key == "aloop")   { ok = parse_i32(after, &rec.audio_loop); }
         else if (key == "aplay")   { ok = parse_i32(after, &rec.audio_autoplay); }
+        // Blockout. `blockout` and `csg` are range checked for the same reason
+        // `shape` is: a number this build has no shape for would otherwise
+        // fall through to a box, look wrong and say nothing.
+        else if (key == "blockout") { ok = parse_i32(after, &rec.blockout) &&
+                                           rec.blockout >= DAI_BLOCKOUT_NONE &&
+                                           rec.blockout <  DAI_BLOCKOUT_KIND_COUNT; }
+        else if (key == "bosize")   { ok = parse_floats(after, &rec.blockout_size.x, 3); }
+        else if (key == "boseg")    { ok = parse_i32(after, &rec.blockout_segments); }
+        else if (key == "bosteps")  { ok = parse_i32(after, &rec.blockout_steps); }
+        else if (key == "bothick")  { ok = parse_floats(after, &rec.blockout_thickness, 1); }
+        else if (key == "bopivot")  { ok = parse_floats(after, &rec.blockout_pivot.x, 3); }
+        else if (key == "csg")      { ok = parse_i32(after, &rec.csg) &&
+                                           rec.csg >= DAI_CSG_NONE && rec.csg < DAI_CSG_OP_COUNT; }
+        else if (key == "door")     { ok = parse_i32(after, &rec.door_socket); }
+        else if (key == "dooroff")  { ok = parse_floats(after, &rec.door_offset.x, 3); }
+        else if (key == "doornrm")  { ok = parse_floats(after, &rec.door_normal.x, 3); }
+        else if (key == "doorsize") { ok = parse_floats(after, &rec.door_width, 2); }
         else if (key == "rflags") { ok = parse_u32(after, &rec.render_flags); }
         else if (key == "hidden") { ok = parse_i32(after, &rec.hidden); }
         else if (key == "disabled") { ok = parse_i32(after, &rec.disabled); }

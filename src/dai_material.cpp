@@ -45,6 +45,21 @@ std::string fstr(float v) {
     return buf;
 }
 
+// The rest of the line, trimmed. A path is not a token: "Textures/old wall.png"
+// is one file, and splitting it on the space would load neither half.
+std::string rest_of_line(const char *p) {
+    p = skip_ws(p);
+    std::string out = p;
+    while (!out.empty() && (out.back() == '\r' || out.back() == '\n' ||
+                            out.back() == ' '  || out.back() == '\t'))
+        out.pop_back();
+    return out;
+}
+
+void set_path(char *dst, const std::string &src) {
+    std::snprintf(dst, DAI_MATFILE_PATH, "%s", src.c_str());
+}
+
 } // namespace
 
 dai_matfile dai_matfile_default(void) {
@@ -53,6 +68,10 @@ dai_matfile dai_matfile_default(void) {
     m.roughness = 0.5f;
     m.metallic = 0.0f;
     m.emissive = 0.0f;
+    m.normal_strength = 1.0f;
+    m.triplanar = 0;
+    m.triplanar_scale = 1.0f;   /* one repeat per metre */
+    m.triplanar_blend = 4.0f;
     return m;
 }
 
@@ -85,6 +104,17 @@ dai_result dai_matfile_from_text(dai_matfile *out, const char *text, size_t len)
         else if (key == "roughness") parse_floats(after, &out->roughness, 1);
         else if (key == "metallic")  parse_floats(after, &out->metallic, 1);
         else if (key == "emissive")  parse_floats(after, &out->emissive, 1);
+        else if (key == "base_color_map") set_path(out->base_color_map, rest_of_line(after));
+        else if (key == "orm_map")        set_path(out->orm_map, rest_of_line(after));
+        else if (key == "normal_map")     set_path(out->normal_map, rest_of_line(after));
+        else if (key == "normal_strength") parse_floats(after, &out->normal_strength, 1);
+        else if (key == "triplanar") {
+            float v = 1.0f;                    // "triplanar" alone means on
+            parse_floats(after, &v, 1);
+            out->triplanar = v != 0.0f;
+        }
+        else if (key == "triplanar_scale") parse_floats(after, &out->triplanar_scale, 1);
+        else if (key == "triplanar_blend") parse_floats(after, &out->triplanar_blend, 1);
         // Anything else is from a newer editor. Skipped, not refused: a file
         // that will not open is worse than a field that is not understood.
     }
@@ -97,6 +127,13 @@ dai_result dai_matfile_from_text(dai_matfile *out, const char *text, size_t len)
     if (out->metallic < 0.0f)   out->metallic = 0.0f;
     if (out->metallic > 1.0f)   out->metallic = 1.0f;
     if (out->emissive < 0.0f)   out->emissive = 0.0f;
+    if (out->normal_strength < 0.0f) out->normal_strength = 0.0f;
+    if (out->normal_strength > 4.0f) out->normal_strength = 4.0f;
+    // A tiling of zero metres is not a wish, it is a division by zero three
+    // functions later; a blend below 1 washes the three projections into mud.
+    if (out->triplanar_scale <= 0.0f) out->triplanar_scale = 1.0f;
+    if (out->triplanar_blend < 1.0f)  out->triplanar_blend = 1.0f;
+    if (out->triplanar_blend > 16.0f) out->triplanar_blend = 16.0f;
     for (float *v : { &out->color.x, &out->color.y, &out->color.z })
         *v = *v < 0.0f ? 0.0f : (*v > 1.0f ? 1.0f : *v);
     return DAI_OK;
@@ -125,6 +162,28 @@ size_t dai_matfile_to_text(const dai_matfile *m, char *buf, size_t buf_size) {
     }
     if (m->emissive != d.emissive) {
         std::snprintf(line, sizeof(line), "emissive %s\n", fstr(m->emissive).c_str());
+        t += line;
+    }
+    // The maps and the projection, and only when they say something. A
+    // material that has none of them writes exactly the file it wrote before
+    // this round, which is what keeps an existing project's diff empty.
+    if (m->base_color_map[0]) { t += "base_color_map "; t += m->base_color_map; t += "\n"; }
+    if (m->orm_map[0])        { t += "orm_map ";        t += m->orm_map;        t += "\n"; }
+    if (m->normal_map[0])     { t += "normal_map ";     t += m->normal_map;     t += "\n"; }
+    if (m->normal_strength != d.normal_strength) {
+        std::snprintf(line, sizeof(line), "normal_strength %s\n", fstr(m->normal_strength).c_str());
+        t += line;
+    }
+    if (m->triplanar != d.triplanar) {
+        std::snprintf(line, sizeof(line), "triplanar %d\n", m->triplanar ? 1 : 0);
+        t += line;
+    }
+    if (m->triplanar_scale != d.triplanar_scale) {
+        std::snprintf(line, sizeof(line), "triplanar_scale %s\n", fstr(m->triplanar_scale).c_str());
+        t += line;
+    }
+    if (m->triplanar_blend != d.triplanar_blend) {
+        std::snprintf(line, sizeof(line), "triplanar_blend %s\n", fstr(m->triplanar_blend).c_str());
         t += line;
     }
     if (buf && buf_size) {
@@ -174,6 +233,20 @@ size_t dai_matfile_to_text_full(const dai_matfile *m, char *buf, size_t buf_size
     t += line;
     std::snprintf(line, sizeof(line), "emissive %s\n", fstr(m->emissive).c_str());
     t += line;
+    // The map slots are written EMPTY rather than left out: a new material is
+    // opened to be filled in, and a key that is not in the file is a key the
+    // author has to know the name of.
+    t += "base_color_map "; t += m->base_color_map; t += "\n";
+    t += "orm_map ";        t += m->orm_map;        t += "\n";
+    t += "normal_map ";     t += m->normal_map;     t += "\n";
+    std::snprintf(line, sizeof(line), "normal_strength %s\n", fstr(m->normal_strength).c_str());
+    t += line;
+    std::snprintf(line, sizeof(line), "triplanar %d\n", m->triplanar ? 1 : 0);
+    t += line;
+    std::snprintf(line, sizeof(line), "triplanar_scale %s\n", fstr(m->triplanar_scale).c_str());
+    t += line;
+    std::snprintf(line, sizeof(line), "triplanar_blend %s\n", fstr(m->triplanar_blend).c_str());
+    t += line;
     if (buf && buf_size) {
         size_t n = t.size() < buf_size - 1 ? t.size() : buf_size - 1;
         std::memcpy(buf, t.data(), n);
@@ -184,7 +257,7 @@ size_t dai_matfile_to_text_full(const dai_matfile *m, char *buf, size_t buf_size
 
 dai_result dai_matfile_save(const dai_matfile *m, const char *path) {
     if (!m || !path || !*path) return DAI_ERR_INVALID_ARG;
-    char buf[1024];
+    char buf[2048];      // three paths of DAI_MATFILE_PATH and the numbers
     size_t need = dai_matfile_to_text(m, buf, sizeof(buf));
     if (need >= sizeof(buf)) return DAI_ERR_FILE;      // cannot happen; not assumed
     FILE *f = std::fopen(path, "wb");

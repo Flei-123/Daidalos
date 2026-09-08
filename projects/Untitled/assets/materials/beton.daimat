@@ -1,0 +1,13 @@
+daidalos-material 1
+# The ceiling and anything poured. Three metres per repeat: concrete has no
+# small pattern, and a repeat you can count is a repeat you can see.
+color 0.7 0.7 0.69
+roughness 0.92
+metallic 0
+emissive 0
+base_color_map textures/beton_basecolor.png
+orm_map textures/beton_orm.png
+normal_map textures/beton_normal.png
+triplanar 1
+triplanar_scale 3
+triplanar_blend 4

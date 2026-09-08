@@ -1,0 +1,55 @@
+{
+  "daitex": 1,
+  "name": "Rusted sheet metal",
+  "resolution": 256,
+  "seed": 4242,
+  "tiling_m": 1.0,
+
+  "nodes": [
+    { "id": "patch", "type": "noise", "kind": "perlin",
+      "params": { "cells": 5, "octaves": 4, "gain": 0.55, "lacunarity": 2 } },
+
+    { "id": "grain", "type": "noise", "kind": "value",
+      "params": { "cells": 40, "octaves": 3, "gain": 0.5, "lacunarity": 2, "seed": 17 } },
+
+    { "id": "rust", "type": "mix", "kind": "mix", "in": "patch", "in_b": "grain",
+      "params": { "factor": 0.40 } },
+
+    { "id": "mask", "type": "levels", "in": "rust",
+      "params": { "in_min": 0.36, "in_max": 0.62, "out_min": 0.0, "out_max": 1.0, "gamma": 1.0 } },
+
+    { "id": "pits", "type": "noise", "kind": "worley",
+      "params": { "cells": 18, "octaves": 2, "gain": 0.5, "lacunarity": 2, "seed": 29 } },
+
+    { "id": "height", "type": "mix", "kind": "mul", "in": "rust", "in_b": "pits",
+      "params": { "factor": 0.75 } },
+
+    { "id": "iron", "type": "colorramp", "in": "mask",
+      "stops": [
+        { "t": 0.0, "rgb": [ 0.300, 0.312, 0.325 ] },
+        { "t": 0.30, "rgb": [ 0.372, 0.268, 0.180 ] },
+        { "t": 0.65, "rgb": [ 0.545, 0.286, 0.128 ] },
+        { "t": 1.0, "rgb": [ 0.690, 0.418, 0.198 ] }
+      ] },
+
+    { "id": "nrm", "type": "normal", "in": "height",
+      "params": { "strength": 2.5 } },
+
+    { "id": "ao", "type": "ao", "in": "height",
+      "params": { "radius": 6, "strength": 1.0 } },
+
+    { "id": "rough", "type": "levels", "in": "mask",
+      "params": { "in_min": 0.0, "in_max": 1.0, "out_min": 0.34, "out_max": 0.95, "gamma": 1.0 } },
+
+    { "id": "metal", "type": "levels", "in": "mask",
+      "params": { "in_min": 0.0, "in_max": 1.0, "out_min": 1.0, "out_max": 0.0, "gamma": 1.0 } }
+  ],
+
+  "out": {
+    "base_color": "iron",
+    "occlusion": "ao",
+    "roughness": "rough",
+    "metallic": "metal",
+    "normal": "nrm"
+  }
+}

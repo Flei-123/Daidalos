@@ -67,6 +67,64 @@ typedef struct dai_script_node_host {
 } dai_script_node_host;
 DAI_API void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host);
 
+/* What a TOOL needs and a behaviour must not have, as the global `editor`.
+ *
+ * A behaviour changes the world it was born into; a tool MAKES the world - it
+ * adds nodes, deletes them, saves the scene and points the camera. That is a
+ * different privilege, so it is a different binding: a game that runs scripts
+ * for its menus never fills this struct in, and `editor` then does not exist
+ * in its context at all.
+ *
+ * This is the surface the Jarvis bridge drives (see include/dai_bridge_host.inl):
+ * everything an outside tool asks for goes through the same JS API a person
+ * types into the script editor, rather than through a second private path that
+ * would have its own undo behaviour and its own bugs.
+ *
+ *   var wall = editor.add("Wall");        -> node id, -1 when refused
+ *   node.setVec(wall, "transform.scale", 1, 1.5, 0.5);
+ *   editor.remove(wall);
+ *   editor.begin("build a room"); ... editor.commit();   one undo step
+ *   editor.undo() / editor.redo()         -> the new undo depth
+ *   editor.count() / editor.at(i)         walk the document
+ *   editor.select(wall)
+ *   editor.setMaterial(wall, "materials/raufaser.daimat")
+ *   editor.getMaterial(wall)              -> the path, "" when none
+ *
+ * The material is here rather than in the component table above because it is
+ * a STACK on the node (dai_node_desc::materials, ';' separated) and because
+ * pointing an object at a material is an editing action with an undo step,
+ * not a property a behaviour tweaks per frame. Slot 0 is the object's own
+ * surface, which is the one an outside tool means when it says "make this
+ * wall the plaster material".
+ *   editor.camera([4,2,6], [0,1,0], 55)   eye, target, vertical fov
+ *   editor.save("scenes/room.daiscene")   -> true / false
+ *   editor.shot("/tmp/room.png")          -> true / false
+ *
+ * Ids travel as doubles, exactly like the node binding above, so a Node from
+ * scene.find() and one from editor.add() are the same kind of value.
+ *
+ * `add` and `remove` are one undo step each on their own; between begin and
+ * commit they join the step that is open, which is what a script that builds a
+ * whole room wants - one Ctrl-Z, not two hundred. */
+typedef struct dai_script_editor_host {
+    double (*add)(const char *name, double parent, void *user);
+    int    (*remove)(double id, void *user);
+    void   (*begin)(const char *label, void *user);
+    void   (*commit)(void *user);
+    int    (*undo)(void *user);
+    int    (*redo)(void *user);
+    double (*count)(void *user);
+    double (*at)(double index, void *user);
+    int    (*save)(const char *path, void *user);
+    void   (*select)(double id, void *user);
+    void   (*camera)(const double *eye, const double *target, double fov, void *user);
+    int    (*shot)(const char *path, void *user);
+    int    (*set_material)(double id, const char *path, void *user);
+    const char *(*get_material)(double id, void *user);
+    void  *user;
+} dai_script_editor_host;
+DAI_API void dai_script_bind_editor(dai_script *s, const dai_script_editor_host *host);
+
 /* The animation player, as the global `anim` object. Same shape as the node
  * binding above: a struct of function pointers the host fills in, so this file
  * stays free of dai_anim.h and a game that has no animation simply does not

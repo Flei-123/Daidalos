@@ -1,0 +1,49 @@
+{
+  "daitex": 1,
+  "name": "PVC floor",
+  "resolution": 256,
+  "seed": 8821,
+  "tiling_m": 2.0,
+
+  "nodes": [
+    { "id": "speck", "type": "noise", "kind": "value",
+      "params": { "cells": 64, "octaves": 2, "gain": 0.6, "lacunarity": 2 } },
+
+    { "id": "smear", "type": "noise", "kind": "perlin",
+      "params": { "cells": 6, "octaves": 3, "gain": 0.55, "lacunarity": 2, "seed": 3 } },
+
+    { "id": "flecks", "type": "mix", "kind": "mix", "in": "smear", "in_b": "speck",
+      "params": { "factor": 0.38 } },
+
+    { "id": "sheet", "type": "brick", "kind": "tiles",
+      "params": { "rows": 4, "cols": 4, "gap": 0.018, "shift": 0.0, "bevel": 0.02, "variation": 0.0 } },
+
+    { "id": "height", "type": "mix", "kind": "mul", "in": "flecks", "in_b": "sheet",
+      "params": { "factor": 1.0 } },
+
+    { "id": "vinyl", "type": "colorramp", "in": "height",
+      "stops": [
+        { "t": 0.0, "rgb": [ 0.130, 0.148, 0.140 ] },
+        { "t": 0.35, "rgb": [ 0.290, 0.320, 0.296 ] },
+        { "t": 0.75, "rgb": [ 0.430, 0.462, 0.428 ] },
+        { "t": 1.0, "rgb": [ 0.560, 0.585, 0.545 ] }
+      ] },
+
+    { "id": "nrm", "type": "normal", "in": "height",
+      "params": { "strength": 1.5 } },
+
+    { "id": "ao", "type": "ao", "in": "height",
+      "params": { "radius": 4, "strength": 0.8 } },
+
+    { "id": "rough", "type": "levels", "in": "flecks",
+      "params": { "in_min": 0.0, "in_max": 1.0, "out_min": 0.24, "out_max": 0.44, "gamma": 1.0 } }
+  ],
+
+  "out": {
+    "base_color": "vinyl",
+    "occlusion": "ao",
+    "roughness": "rough",
+    "metallic": 0.0,
+    "normal": "nrm"
+  }
+}

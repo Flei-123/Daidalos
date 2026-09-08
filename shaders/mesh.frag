@@ -48,6 +48,7 @@ layout(push_constant) uniform Mat {
     vec4 scalars;      // metallic, roughness, normal strength, unused
     vec4 extra;        // occlusion strength, has_maps, has_normal_map, unused
     vec4 uv;           // tiling xy, offset zw - applied in the vertex stage
+    vec4 tri;          // triplanar: on, 1/metres per repeat, blend sharpness
 } M;
 
 layout(location = 0) out vec4 outColor;
@@ -155,6 +156,55 @@ vec3 apply_normal_map(vec3 N, vec3 world, vec2 uv, float strength) {
     return normalize(mat3(T * inv, B * inv, N) * n);
 }
 
+// ---- world projection (triplanar) ---------------------------------------
+//
+// A wall built out of boxes and CSG cuts has no UV set worth sampling: the
+// hole a door leaves behind is new geometry with no unwrap, and a box scaled
+// to 4 m does not stretch its texture the way a 1 m box does. So the maps are
+// projected along the three world axes instead and blended by the surface
+// normal. Three samples per map, which is why the material has to ask for it.
+//
+// The projection is in METRES: M.tri.y is 1/(metres per repeat), so a 2 m
+// tiling is 2 m on every wall in the scene regardless of how the wall was
+// built, and two walls meeting in a corner continue each other's pattern.
+//
+// The per axis UVs are flipped by the sign of the normal so that the texture
+// is not mirrored on the back side of an object, and the same sign is applied
+// to the tangent normal's x below - the two have to agree or the normal map
+// points the wrong way on exactly half of the geometry.
+vec3 tri_weights(vec3 n) {
+    vec3 w = pow(abs(n), vec3(M.tri.z));
+    return w / max(w.x + w.y + w.z, 1e-6);
+}
+vec2 tri_uv_x(vec3 p, vec3 sg) { return (vec2(p.z * -sg.x, p.y)) * M.tri.y + M.uv.zw; }
+vec2 tri_uv_y(vec3 p, vec3 sg) { return (vec2(p.x * sg.y, p.z * -sg.y)) * M.tri.y + M.uv.zw; }
+vec2 tri_uv_z(vec3 p, vec3 sg) { return (vec2(p.x * sg.z, p.y)) * M.tri.y + M.uv.zw; }
+
+vec4 tri_sample(sampler2D t, vec3 p, vec3 sg, vec3 w) {
+    return texture(t, tri_uv_x(p, sg)) * w.x
+         + texture(t, tri_uv_y(p, sg)) * w.y
+         + texture(t, tri_uv_z(p, sg)) * w.z;
+}
+
+// Normal maps cannot be blended like colours: each of the three samples is a
+// tangent space normal in a DIFFERENT frame, and averaging them straightens
+// out every detail. Reoriented per axis first (the whiteout blend), then
+// blended - which is the one part of triplanar that is not simply "sample
+// three times".
+vec3 tri_normal(vec3 N, vec3 p, vec3 sg, vec3 w, float strength) {
+    vec3 nx = texture(uNormal, tri_uv_x(p, sg)).xyz * 2.0 - 1.0;
+    vec3 ny = texture(uNormal, tri_uv_y(p, sg)).xyz * 2.0 - 1.0;
+    vec3 nz = texture(uNormal, tri_uv_z(p, sg)).xyz * 2.0 - 1.0;
+    nx.xy *= strength; ny.xy *= strength; nz.xy *= strength;
+    // undo the uv flip, so the detail leans the same way on both sides
+    nx.x *= -sg.x; ny.x *= sg.y; ny.y *= -sg.y; nz.x *= sg.z;
+    // whiteout blend: keep the surface normal's own tilt, add the map's
+    nx = vec3(nx.xy + N.zy, abs(nx.z) * N.x);
+    ny = vec3(ny.xy + N.xz, abs(ny.z) * N.y);
+    nz = vec3(nz.xy + N.xy, abs(nz.z) * N.z);
+    return normalize(nx.zyx * w.x + ny.xzy * w.y + nz.xyz * w.z);
+}
+
 float D_GGX(float ndh, float a) {
     float a2 = a * a;
     float d = ndh * ndh * (a2 - 1.0) + 1.0;
@@ -168,10 +218,19 @@ vec3 F_Schlick(vec3 f0, float u) { return f0 + (1.0 - f0) * pow(1.0 - u, 5.0); }
 
 void main() {
     vec2 uv = vUV;
+    // The geometric normal decides the blend, so it is needed before the
+    // normal map is applied - the map must not steer its own projection.
+    vec3 gN = normalize(vNormal);
+    bool tri = M.tri.x > 0.5;
+    vec3 tri_sign = vec3(gN.x < 0.0 ? -1.0 : 1.0, gN.y < 0.0 ? -1.0 : 1.0,
+                         gN.z < 0.0 ? -1.0 : 1.0);
+    vec3 tri_w = tri ? tri_weights(gN) : vec3(0.0);
 
     vec4 base = M.base_color;
     base.rgb *= vColor;
-    if (M.extra.y > 0.5) base *= texture(uBaseColor, uv);
+    if (M.extra.y > 0.5)
+        base *= tri ? tri_sample(uBaseColor, vWorld, tri_sign, tri_w)
+                    : texture(uBaseColor, uv);
     if (M.base_color.w > 0.0 && base.a < M.base_color.w) discard;
 
     if ((vFlags & FLAG_CHECKER) != 0u) {
@@ -185,7 +244,8 @@ void main() {
     float roughness = M.scalars.y * clamp(vMat.x, 0.02, 4.0);
     float occlusion = 1.0;
     if (M.extra.y > 0.5) {
-        vec3 orm = texture(uORM, uv).rgb;
+        vec3 orm = tri ? tri_sample(uORM, vWorld, tri_sign, tri_w).rgb
+                       : texture(uORM, uv).rgb;
         occlusion = mix(1.0, orm.r, M.extra.x);
         roughness *= orm.g;
         metallic  *= orm.b;
@@ -193,8 +253,10 @@ void main() {
     roughness = clamp(roughness, 0.045, 1.0);
     metallic  = clamp(metallic, 0.0, 1.0);
 
-    vec3 N = normalize(vNormal);
-    if (M.extra.z > 0.5) N = apply_normal_map(N, vWorld, uv, M.scalars.z);
+    vec3 N = gN;
+    if (M.extra.z > 0.5)
+        N = tri ? tri_normal(gN, vWorld, tri_sign, tri_w, M.scalars.z)
+                : apply_normal_map(N, vWorld, uv, M.scalars.z);
     vec3 V = normalize(F.cam_pos.xyz - vWorld);
     vec3 L = normalize(F.sun_dir.xyz);
     vec3 H = normalize(L + V);
@@ -257,7 +319,9 @@ void main() {
     color += amb_spec * F.sky_color.w * F_Schlick(f0, ndv) * (1.0 - roughness) * occlusion;
 
     vec3 emissive = M.emissive.rgb;
-    if (M.extra.y > 0.5) emissive *= texture(uEmissive, uv).rgb;
+    if (M.extra.y > 0.5)
+        emissive *= tri ? tri_sample(uEmissive, vWorld, tri_sign, tri_w).rgb
+                        : texture(uEmissive, uv).rgb;
     color += emissive;
     color = mix(color, albedo, clamp(vMat.y, 0.0, 1.0));      // per instance emissive tint
 

@@ -1,0 +1,15 @@
+daidalos-material 1
+# The floor of INNEN. The maps come out of textures/pvc_boden.daitex, which
+# bakes at 2 m per repeat - the same 2 m this material projects with, so the
+# pattern is the size the graph was authored at.
+color 0.78 0.8 0.76
+roughness 0.42
+metallic 0
+emissive 0
+base_color_map textures/pvc_boden_basecolor.png
+orm_map textures/pvc_boden_orm.png
+normal_map textures/pvc_boden_normal.png
+normal_strength 0.8
+triplanar 1
+triplanar_scale 2
+triplanar_blend 6

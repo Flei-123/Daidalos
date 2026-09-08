@@ -1,0 +1,15 @@
+daidalos-material 1
+# Trim, doors and everything that is sheet metal. Metallic comes out of the
+# ORM map's blue channel, so the scalar stays at 1 and lets the map decide
+# which parts are still metal and which have rusted through.
+color 0.72 0.68 0.64
+roughness 1
+metallic 1
+emissive 0
+base_color_map textures/rostblech_basecolor.png
+orm_map textures/rostblech_orm.png
+normal_map textures/rostblech_normal.png
+normal_strength 1.2
+triplanar 1
+triplanar_scale 1
+triplanar_blend 8

@@ -16,7 +16,23 @@
 // in docs/BLOCKOUT.md the day they exist, and keep them in the completion
 // table in src/dai_ui.cpp (AC_NODE) so the script editor offers them.
 
-/* module 1 fills this in, e.g.:
- *   if (!std::strcmp(name, "blockout.kind"))  return ival(&r.blockout);
- *   if (!std::strcmp(name, "blockout.size"))  return vec(&r.blockout_size);
- */
+// The shape a node is, the boolean a CSG node runs, and the socket the next
+// room docks against. `blockout.kind` is dai_blockout_kind (1 Box, 2 Cylinder,
+// 3 Stairs, 4 Arch, 5 Wedge), `csg.op` is dai_csg_op (1 union, 2 subtract,
+// 3 intersect). Sizes are FULL sizes in metres, pivot runs -1..1 per axis.
+if (!std::strcmp(name, "blockout.kind"))      return ival(&r.blockout);
+if (!std::strcmp(name, "blockout.enabled"))   return flag(&r.blockout, 0);
+if (!std::strcmp(name, "blockout.size"))      return vec(&r.blockout_size);
+if (!std::strcmp(name, "blockout.segments"))  return ival(&r.blockout_segments);
+if (!std::strcmp(name, "blockout.steps"))     return ival(&r.blockout_steps);
+if (!std::strcmp(name, "blockout.thickness")) return num(&r.blockout_thickness);
+if (!std::strcmp(name, "blockout.pivot"))     return vec(&r.blockout_pivot);
+
+if (!std::strcmp(name, "csg.op"))             return ival(&r.csg);
+if (!std::strcmp(name, "csg.enabled"))        return flag(&r.csg, 0);
+
+if (!std::strcmp(name, "door.enabled"))       return flag(&r.door_socket, 0);
+if (!std::strcmp(name, "door.offset"))        return vec(&r.door_offset);
+if (!std::strcmp(name, "door.normal"))        return vec(&r.door_normal);
+if (!std::strcmp(name, "door.width"))         return num(&r.door_width);
+if (!std::strcmp(name, "door.height"))        return num(&r.door_height);

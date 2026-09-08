@@ -1,0 +1,54 @@
+{
+  "daitex": 1,
+  "name": "Concrete",
+  "resolution": 256,
+  "seed": 1907,
+  "tiling_m": 3.0,
+
+  "nodes": [
+    { "id": "body", "type": "noise", "kind": "perlin",
+      "params": { "cells": 4, "octaves": 5, "gain": 0.5, "lacunarity": 2 } },
+
+    { "id": "cells", "type": "noise", "kind": "worley",
+      "params": { "cells": 30, "octaves": 1, "gain": 0.5, "lacunarity": 2, "seed": 41 } },
+
+    { "id": "pores", "type": "levels", "in": "cells",
+      "params": { "in_min": 0.0, "in_max": 0.30, "out_min": 0.0, "out_max": 1.0, "gamma": 1.6 } },
+
+    { "id": "mottle", "type": "mix", "kind": "mul", "in": "body", "in_b": "pores",
+      "params": { "factor": 0.55 } },
+
+    { "id": "sand", "type": "noise", "kind": "value",
+      "params": { "cells": 64, "octaves": 3, "gain": 0.55, "lacunarity": 2, "seed": 77 } },
+
+    { "id": "surface", "type": "mix", "kind": "mix", "in": "mottle", "in_b": "sand",
+      "params": { "factor": 0.30 } },
+
+    { "id": "height", "type": "blur", "in": "surface",
+      "params": { "radius": 1, "passes": 1 } },
+
+    { "id": "grey", "type": "colorramp", "in": "height",
+      "stops": [
+        { "t": 0.0, "rgb": [ 0.318, 0.316, 0.308 ] },
+        { "t": 0.5, "rgb": [ 0.482, 0.478, 0.468 ] },
+        { "t": 1.0, "rgb": [ 0.612, 0.608, 0.596 ] }
+      ] },
+
+    { "id": "nrm", "type": "normal", "in": "height",
+      "params": { "strength": 2.0 } },
+
+    { "id": "ao", "type": "ao", "in": "height",
+      "params": { "radius": 8, "strength": 1.4 } },
+
+    { "id": "rough", "type": "levels", "in": "height",
+      "params": { "in_min": 0.0, "in_max": 1.0, "out_min": 0.92, "out_max": 0.70, "gamma": 1.0 } }
+  ],
+
+  "out": {
+    "base_color": "grey",
+    "occlusion": "ao",
+    "roughness": "rough",
+    "metallic": 0.0,
+    "normal": "nrm"
+  }
+}

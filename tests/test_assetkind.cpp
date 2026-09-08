@@ -12,7 +12,9 @@
 // test of that one answer.
 
 #include "dai_editor_ui.h"
+#include "dai_material.h"
 #include <cstdio>
+#include <cstring>
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { \
@@ -68,6 +70,121 @@ int main() {
     for (const Case &c : PLACE)
         CHECK(!(dai_editor_ui_is_placeable(c.path) && dai_editor_ui_is_texture(c.path)),
               "\"%s\" is both placeable and a texture - the drop cannot choose", c.path);
+
+    // ---- and what a .daimat CARRIES --------------------------------------
+    //
+    // The same question one layer down: the browser knows a material file when
+    // it sees one, and this is what it finds inside. Two properties, and the
+    // first one is the one that breaks projects: a file written before the
+    // maps and the world projection existed still opens, unchanged, and saving
+    // it again does not sprinkle the new keys through it.
+    std::printf("\nwhat a .daimat carries\n");
+    {
+        dai_matfile d = dai_matfile_default();
+        CHECK(d.triplanar == 0, "a material projects in world space by default - it must not");
+        CHECK(d.triplanar_scale == 1.0f && d.triplanar_blend == 4.0f,
+              "the projection defaults moved: %g m, blend %g",
+              (double)d.triplanar_scale, (double)d.triplanar_blend);
+        CHECK(d.normal_strength == 1.0f && d.base_color_map[0] == 0 && d.orm_map[0] == 0 &&
+              d.normal_map[0] == 0, "a fresh material is not empty in the new fields");
+
+        const char *old_text = "daidalos-material 1\ncolor 0.82 0.24 0.2\nroughness 0.35\n";
+        dai_matfile old_m{};
+        CHECK(dai_matfile_from_text(&old_m, old_text, std::strlen(old_text)) == DAI_OK,
+              "a material file written before this round no longer loads");
+        CHECK(old_m.color.x > 0.81f && old_m.color.x < 0.83f && old_m.roughness == 0.35f,
+              "the old fields changed meaning: color.x %g roughness %g",
+              (double)old_m.color.x, (double)old_m.roughness);
+        CHECK(old_m.triplanar == 0 && old_m.triplanar_scale == 1.0f && old_m.base_color_map[0] == 0,
+              "a file with no projection line did not come back as an unprojected material");
+        char short_buf[2048];
+        dai_matfile_to_text(&old_m, short_buf, sizeof(short_buf));
+        CHECK(std::strstr(short_buf, "triplanar") == nullptr &&
+              std::strstr(short_buf, "_map") == nullptr,
+              "saving an untouched old material wrote the new keys into it:\n%s", short_buf);
+
+        // A new one, with everything the world projection needs.
+        dai_matfile m = dai_matfile_default();
+        m.color = dai_vec3{ 0.7f, 0.68f, 0.66f };
+        std::snprintf(m.base_color_map, sizeof(m.base_color_map), "textures/raufaser_wand_basecolor.png");
+        std::snprintf(m.orm_map, sizeof(m.orm_map), "textures/raufaser_wand_orm.png");
+        std::snprintf(m.normal_map, sizeof(m.normal_map), "textures/raufaser_wand_normal.png");
+        m.normal_strength = 0.75f;
+        m.triplanar = 1;
+        m.triplanar_scale = 2.0f;
+        m.triplanar_blend = 6.0f;
+        char buf[2048];
+        size_t n = dai_matfile_to_text(&m, buf, sizeof(buf));
+        CHECK(n > 0 && n < sizeof(buf), "the material text did not fit (%u bytes)", (unsigned)n);
+        dai_matfile back{};
+        CHECK(dai_matfile_from_text(&back, buf, std::strlen(buf)) == DAI_OK,
+              "the material this round writes does not load again:\n%s", buf);
+        CHECK(std::strcmp(back.base_color_map, m.base_color_map) == 0 &&
+              std::strcmp(back.orm_map, m.orm_map) == 0 &&
+              std::strcmp(back.normal_map, m.normal_map) == 0,
+              "a map path did not survive the round trip: '%s' '%s' '%s'",
+              back.base_color_map, back.orm_map, back.normal_map);
+        CHECK(back.triplanar == 1 && back.triplanar_scale == 2.0f && back.triplanar_blend == 6.0f,
+              "the projection did not survive the round trip: %d, %g m, blend %g",
+              back.triplanar, (double)back.triplanar_scale, (double)back.triplanar_blend);
+        CHECK(back.normal_strength == 0.75f, "normal_strength came back as %g",
+              (double)back.normal_strength);
+
+        // A path with a space in it is one path, not two tokens.
+        const char *spaced = "daidalos-material 1\nbase_color_map textures/old wall.png\n";
+        dai_matfile sp{};
+        dai_matfile_from_text(&sp, spaced, std::strlen(spaced));
+        CHECK(std::strcmp(sp.base_color_map, "textures/old wall.png") == 0,
+              "a map path with a space came back as '%s'", sp.base_color_map);
+
+        // Nonsense is clamped on the way in, not three functions later.
+        const char *bad = "daidalos-material 1\ntriplanar_scale 0\ntriplanar_blend 900\n";
+        dai_matfile cl{};
+        dai_matfile_from_text(&cl, bad, std::strlen(bad));
+        CHECK(cl.triplanar_scale == 1.0f, "a tiling of 0 m was let through as %g",
+              (double)cl.triplanar_scale);
+        CHECK(cl.triplanar_blend == 16.0f, "a blend of 900 was let through as %g",
+              (double)cl.triplanar_blend);
+
+        // "triplanar" with no number means ON: the shortest thing an author
+        // can type has to mean the obvious thing.
+        const char *bare = "daidalos-material 1\ntriplanar\n";
+        dai_matfile br{};
+        dai_matfile_from_text(&br, bare, std::strlen(bare));
+        CHECK(br.triplanar == 1, "a bare `triplanar` line did not switch it on");
+
+        // A new material file offers every field, including the ones this
+        // round added - a key an author cannot see is a key nobody uses.
+        char full[2048];
+        dai_matfile_to_text_full(&d, full, sizeof(full));
+        CHECK(std::strstr(full, "triplanar_scale") && std::strstr(full, "base_color_map") &&
+              std::strstr(full, "normal_strength"),
+              "a freshly created material does not offer the map and projection keys:\n%s", full);
+
+        // And the four materials this project ships are readable, projected,
+        // and point at maps the baker writes.
+        static const char *SHIPPED[] = {
+            "projects/Untitled/assets/materials/pvc.daimat",
+            "projects/Untitled/assets/materials/raufaser.daimat",
+            "projects/Untitled/assets/materials/rost.daimat",
+            "projects/Untitled/assets/materials/beton.daimat",
+        };
+        for (const char *path : SHIPPED) {
+            dai_matfile sm{};
+            char merr[256] = { 0 };
+            if (dai_matfile_load(&sm, path, merr, sizeof(merr)) != DAI_OK) {
+                // Run from another directory: not a failure of the format.
+                std::printf("  (skipped %s: %s)\n", path, merr);
+                continue;
+            }
+            CHECK(sm.triplanar == 1, "%s is not projected - a blockout wall has no UV set", path);
+            CHECK(sm.triplanar_scale >= 0.5f && sm.triplanar_scale <= 8.0f,
+                  "%s tiles every %g m, which is not a room-sized number",
+                  path, (double)sm.triplanar_scale);
+            CHECK(sm.base_color_map[0] && sm.orm_map[0] && sm.normal_map[0],
+                  "%s leaves a map slot empty", path);
+        }
+    }
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

@@ -27,6 +27,8 @@ struct dai_script {
     int has_gui = 0;
     dai_script_anim_host anim{};
     int has_anim = 0;
+    dai_script_editor_host editor{};
+    int has_editor = 0;
     std::string last_path;
     uint32_t errors = 0;
 };
@@ -586,6 +588,146 @@ void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host) {
     JS_SetPropertyStr(s->ctx, node, "getStr", JS_NewCFunction(s->ctx, js_node_get_str, "getStr", 2));
     JS_SetPropertyStr(s->ctx, node, "setStr", JS_NewCFunction(s->ctx, js_node_set_str, "setStr", 3));
     JS_SetPropertyStr(s->ctx, global, "node", node);
+    JS_FreeValue(s->ctx, global);
+}
+
+
+// ------------------------------------------------------------------- editor
+// The `editor` global, bound by the host through dai_script_bind_editor. Same
+// shape as the node block above - nothing here reaches past the host's own
+// callbacks - and bound separately for a reason that is not tidiness: a
+// behaviour that could delete nodes and overwrite the scene file is a save
+// game corrupter waiting for a typo. A tool may; a game may not.
+namespace {
+
+JSValue js_editor_add(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_editor || !s->editor.add || argc < 1) return JS_NewFloat64(ctx, -1.0);
+    double parent = argc > 1 ? arg_num(ctx, argv[1]) : 0.0;
+    return JS_NewFloat64(ctx, s->editor.add(str(ctx, argv[0]).c_str(), parent, s->editor.user));
+}
+
+JSValue js_editor_remove(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_editor || !s->editor.remove || argc < 1) return JS_FALSE;
+    return s->editor.remove(arg_num(ctx, argv[0]), s->editor.user) ? JS_TRUE : JS_FALSE;
+}
+
+JSValue js_editor_begin(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_editor && s->editor.begin)
+        s->editor.begin(argc >= 1 ? str(ctx, argv[0]).c_str() : "script", s->editor.user);
+    return JS_UNDEFINED;
+}
+
+JSValue js_editor_commit(JSContext *ctx, JSValueConst, int, JSValueConst *) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_editor && s->editor.commit) s->editor.commit(s->editor.user);
+    return JS_UNDEFINED;
+}
+
+JSValue js_editor_undo(JSContext *ctx, JSValueConst, int, JSValueConst *) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_editor || !s->editor.undo) return JS_FALSE;
+    return s->editor.undo(s->editor.user) ? JS_TRUE : JS_FALSE;
+}
+
+JSValue js_editor_redo(JSContext *ctx, JSValueConst, int, JSValueConst *) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_editor || !s->editor.redo) return JS_FALSE;
+    return s->editor.redo(s->editor.user) ? JS_TRUE : JS_FALSE;
+}
+
+JSValue js_editor_count(JSContext *ctx, JSValueConst, int, JSValueConst *) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_editor || !s->editor.count) return JS_NewFloat64(ctx, 0.0);
+    return JS_NewFloat64(ctx, s->editor.count(s->editor.user));
+}
+
+JSValue js_editor_at(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_editor || !s->editor.at || argc < 1) return JS_NewFloat64(ctx, -1.0);
+    return JS_NewFloat64(ctx, s->editor.at(arg_num(ctx, argv[0]), s->editor.user));
+}
+
+JSValue js_editor_save(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_editor || !s->editor.save) return JS_FALSE;
+    return s->editor.save(argc >= 1 ? str(ctx, argv[0]).c_str() : "", s->editor.user) ? JS_TRUE : JS_FALSE;
+}
+
+JSValue js_editor_select(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_editor && s->editor.select && argc >= 1)
+        s->editor.select(arg_num(ctx, argv[0]), s->editor.user);
+    return JS_UNDEFINED;
+}
+
+// editor.camera([ex,ey,ez], [tx,ty,tz], fov). Arrays rather than nine
+// arguments, because a camera call with the target and the eye swapped is a
+// bug you find by looking at a black picture.
+JSValue js_editor_camera(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_editor || !s->editor.camera || argc < 2) return JS_UNDEFINED;
+    double eye[3] = { 0, 0, 0 }, target[3] = { 0, 0, 0 };
+    for (int i = 0; i < 3; ++i) {
+        JSValue e = JS_GetPropertyUint32(ctx, argv[0], (uint32_t)i);
+        JSValue t = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+        eye[i] = arg_num(ctx, e);
+        target[i] = arg_num(ctx, t);
+        JS_FreeValue(ctx, e);
+        JS_FreeValue(ctx, t);
+    }
+    s->editor.camera(eye, target, argc > 2 ? arg_num(ctx, argv[2]) : 0.0, s->editor.user);
+    return JS_UNDEFINED;
+}
+
+JSValue js_editor_shot(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_editor || !s->editor.shot || argc < 1) return JS_FALSE;
+    return s->editor.shot(str(ctx, argv[0]).c_str(), s->editor.user) ? JS_TRUE : JS_FALSE;
+}
+
+JSValue js_editor_set_material(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_editor || !s->editor.set_material || argc < 2) return JS_FALSE;
+    return s->editor.set_material(arg_num(ctx, argv[0]), str(ctx, argv[1]).c_str(),
+                                  s->editor.user) ? JS_TRUE : JS_FALSE;
+}
+
+JSValue js_editor_get_material(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    const char *p = nullptr;
+    if (s->has_editor && s->editor.get_material && argc >= 1)
+        p = s->editor.get_material(arg_num(ctx, argv[0]), s->editor.user);
+    return JS_NewString(ctx, p ? p : "");
+}
+
+} // namespace
+
+void dai_script_bind_editor(dai_script *s, const dai_script_editor_host *host) {
+    if (!s || !host) return;
+    s->editor = *host;
+    s->has_editor = 1;
+    JSValue global = JS_GetGlobalObject(s->ctx);
+    JSValue ed = JS_NewObject(s->ctx);
+    JS_SetPropertyStr(s->ctx, ed, "add", JS_NewCFunction(s->ctx, js_editor_add, "add", 2));
+    JS_SetPropertyStr(s->ctx, ed, "remove", JS_NewCFunction(s->ctx, js_editor_remove, "remove", 1));
+    JS_SetPropertyStr(s->ctx, ed, "begin", JS_NewCFunction(s->ctx, js_editor_begin, "begin", 1));
+    JS_SetPropertyStr(s->ctx, ed, "commit", JS_NewCFunction(s->ctx, js_editor_commit, "commit", 0));
+    JS_SetPropertyStr(s->ctx, ed, "undo", JS_NewCFunction(s->ctx, js_editor_undo, "undo", 0));
+    JS_SetPropertyStr(s->ctx, ed, "redo", JS_NewCFunction(s->ctx, js_editor_redo, "redo", 0));
+    JS_SetPropertyStr(s->ctx, ed, "count", JS_NewCFunction(s->ctx, js_editor_count, "count", 0));
+    JS_SetPropertyStr(s->ctx, ed, "at", JS_NewCFunction(s->ctx, js_editor_at, "at", 1));
+    JS_SetPropertyStr(s->ctx, ed, "save", JS_NewCFunction(s->ctx, js_editor_save, "save", 1));
+    JS_SetPropertyStr(s->ctx, ed, "select", JS_NewCFunction(s->ctx, js_editor_select, "select", 1));
+    JS_SetPropertyStr(s->ctx, ed, "camera", JS_NewCFunction(s->ctx, js_editor_camera, "camera", 3));
+    JS_SetPropertyStr(s->ctx, ed, "shot", JS_NewCFunction(s->ctx, js_editor_shot, "shot", 1));
+    JS_SetPropertyStr(s->ctx, ed, "setMaterial",
+                      JS_NewCFunction(s->ctx, js_editor_set_material, "setMaterial", 2));
+    JS_SetPropertyStr(s->ctx, ed, "getMaterial",
+                      JS_NewCFunction(s->ctx, js_editor_get_material, "getMaterial", 1));
+    JS_SetPropertyStr(s->ctx, global, "editor", ed);
     JS_FreeValue(s->ctx, global);
 }
 

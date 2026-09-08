@@ -70,7 +70,14 @@ test_thumb
 test_assetkind
 test_editor_ui
 test_window_two
+test_daitex
 "
+# ...and the ones build.sh cannot build. That script is frozen and names every
+# translation unit it compiles one by one, so a feature whose implementation is
+# a HEADER (include/dai_daitex.h - see the comment at the top of it) has
+# nowhere to be compiled except next to where it is run. One g++ line each, and
+# a compile error turns the run red exactly like a failing check would.
+HEADER_ONLY="test_daitex"
 # Deliberately NOT here (each needs a GPU or a display). The list is a VARIABLE
 # rather than a comment because the run prints it: a suite that is quietly
 # absent looks exactly like a suite that passed, and "all green" over an
@@ -128,6 +135,20 @@ TOTAL_FAIL=0
 MISSING=""
 FAILED=""
 NOCOUNT=""
+
+for h in $HEADER_ONLY; do
+    [ -f "tests/$h.cpp" ] || continue
+    if g++ -std=c++17 -O2 -Wall -Wno-unused-parameter -Iinclude -Isrc \
+           "tests/$h.cpp" src/dai_json.cpp src/dai_image.cpp -o "build/$h" \
+           >"build/$h.build.log" 2>&1; then
+        echo "-- $h compiled (header-only feature, not in build.sh)"
+    else
+        echo "-- $h did NOT compile:"
+        head -12 "build/$h.build.log" | sed 's/^/    /'
+        FAILED="$FAILED $h"
+        rm -f "build/$h"
+    fi
+done
 
 for s in $SUITES; do
     BIN="build/$s"
@@ -225,6 +246,55 @@ if [ -x build/editor_shot ]; then
     fi
 else
     MISSING="$MISSING editor_shot"
+fi
+
+# The Jarvis bridge, end to end against the editor that build.sh just made.
+# A suite like any other - it prints "ok: N checks, 0 failures" and its checks
+# are counted in the total - except that it is written in Python, because what
+# it is testing is a SOCKET, and a test that links the thing it talks to can
+# only prove the function call. It starts build/editor_demo twice (once
+# without DAI_BRIDGE_PORT, to prove the socket stays shut) so it needs the
+# virtual screen the two-window test already brought up.
+if [ -x build/editor_demo ] && command -v python3 >/dev/null 2>&1; then
+    OUT=$(DAI_SHADER_DIR=shaders DISPLAY="$DAI_TEST_DISPLAY" timeout 300 \
+          python3 tools/bridge_check.py 2>&1)
+    RC=$?
+    P=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ checks' | tail -1 | grep -oE '[0-9]+')
+    F=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ failures' | tail -1 | grep -oE '[0-9]+')
+    [ -z "${P:-}" ] && P=0
+    [ -z "${F:-}" ] && F=0
+    TOTAL_PASS=$((TOTAL_PASS + P - F))
+    TOTAL_FAIL=$((TOTAL_FAIL + F))
+    if [ "$RC" = "0" ] && [ "$F" = "0" ] && [ "$P" != "0" ]; then
+        printf '%-20s %3s/%-3s  ok\n' "bridge_check" "$P" "$F"
+        [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+    else
+        FAILED="$FAILED bridge_check"
+        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "bridge_check" "$P" "$F" "$RC"
+        printf '%s\n' "$OUT" | tail -12 | sed 's/^/    /'
+    fi
+else
+    MISSING="$MISSING bridge_check"
+fi
+
+# The modelling round's pictures: a room built through the bridge, in the real
+# editor, with the blockout, the materials and the door socket in it.
+# tools/build_modeling_shot.sh compiles the tool as well as running it - see
+# the note at the top of that file for why a compile happens here at all.
+if [ -f tools/modeling_shot.cpp ]; then
+    OUT=$(DISPLAY="$DAI_TEST_DISPLAY" timeout 600 \
+          ./tools/build_modeling_shot.sh "$SHOTS" 1600 900 2>&1)
+    RC=$?
+    if [ "$RC" = "0" ]; then
+        printf '%-20s %3s/%-3s  ok  (%s/10..13-modeling-*.png)\n' "modeling_shot" "-" "-" "$SHOTS"
+        [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+    else
+        FAILED="$FAILED modeling_shot"
+        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "modeling_shot" "-" "-" "$RC"
+        printf '%s\n' "$OUT" | tail -10 | sed 's/^/    /'
+    fi
+else
+    MISSING="$MISSING modeling_shot"
 fi
 
 echo "-------------------------------------------"

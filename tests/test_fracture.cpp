@@ -32,6 +32,11 @@ static int g_fail = 0, g_pass = 0;
     else { ++g_fail; std::printf("  FAIL "); std::printf(__VA_ARGS__); std::printf("\n"); } \
 } while (0)
 
+// A blockout wall with a doorway cut into it, out through the same writer and
+// back in through the same reader. Here because this is the headless binary
+// that already links both - see tests/blockout_gltf_cases.hpp.
+#include "blockout_gltf_cases.hpp"
+
 // Signed volume by the divergence theorem: for a closed surface it is exactly
 // the enclosed volume, and for an open one it is wrong - which is the point.
 static double mesh_volume(const dai_mesh_data &m) {
@@ -233,6 +238,7 @@ int main() {
     }
 
     dai_gltf_free_geometry(&box, 1);
+    test_blockout_gltf();
     std::printf("%s: %d checks, %d failures\n", g_fail ? "FAILED" : "ok", g_pass + g_fail, g_fail);
     return g_fail ? 1 : 0;
 }

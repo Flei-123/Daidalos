@@ -50,6 +50,7 @@ layout(push_constant) uniform Mat {
     vec4 scalars;      // metallic, roughness, normal strength, unused
     vec4 extra;
     vec4 uv;           // tiling xy, offset zw
+    vec4 tri;          // triplanar on, 1/metres, blend sharpness, unused
 } M;
 
 layout(set = 0, binding = 2) readonly buffer Joints { mat4 joint[]; } J;

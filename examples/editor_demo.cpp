@@ -1989,6 +1989,14 @@ static std::map<std::string, dai_texture> g_thumbs;
 static dai_renderer *g_thumb_r = nullptr;
 static int g_thumb_budget = 0;
 
+// Seam: a .daitex is a picture of itself - module 3 bakes the graph and hands
+// its base colour back. Declared here rather than called through
+// dai_daitex_host_thumb, because the seam files are included further down with
+// the other three (see include/dai_ext.h) and a thumbnail is not worth moving
+// a host's includes around for. The baker keeps its own cache, keyed on the
+// file's mtime, so this stays a lookup after the first bake.
+static dai_texture dai_daitex_host_preview(dai_renderer *r, const char *full_path);
+
 static bool thumb_ext_is(const std::string &p2, const char *ext) {
     size_t n = std::strlen(ext);
     if (p2.size() <= n) return false;
@@ -2089,6 +2097,12 @@ static dai_texture thumb_for(const char *rel, void *) {
     std::string key = rel;
     auto it = g_thumbs.find(key);
     if (it != g_thumbs.end()) return it->second;
+
+    if (thumb_ext_is(key, ".daitex")) {
+        char graph[700];
+        std::snprintf(graph, sizeof(graph), "%s/%s", g_assets_dir, rel);
+        return dai_daitex_host_preview(g_thumb_r, graph);
+    }
 
     bool model  = thumb_ext_is(key, ".glb") || thumb_ext_is(key, ".gltf");
     bool prefab = thumb_ext_is(key, ".daidalos");

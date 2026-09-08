@@ -14,6 +14,7 @@
 
 #include "daidalos.h"
 #include "dai_render.h"
+#include "dai_material.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -885,6 +886,425 @@ int main(int argc, char **argv) {
               "the surface is shadowing itself", worst_line);
         CHECK(total <= 12, "%d dark bands over the face - shadow acne", total);
         dai_render_ambient(r, dai_vec3{ 0.2f, 0.3f, 0.5f }, dai_vec3{ 0.2f, 0.2f, 0.2f }, 0.35f);
+    }
+
+    // ---------------------------------------------------------------- 20
+    // Triplanar: the maps projected in WORLD space instead of sampled from a
+    // UV set. This is what lets a wall that was built out of boxes and cut by
+    // CSG wear a texture at all - the hole a door leaves behind is new
+    // geometry with no unwrap, and there is nothing to sample.
+    //
+    // Every claim below is measured against the UV path rather than against a
+    // reference image, because the interesting properties are relative ones:
+    // the pattern must follow the WORLD and not the object, it must not care
+    // how the geometry was split, and the three projections must add up to
+    // exactly one.
+    {
+        std::printf("[20] triplanar: world projection, tiling in metres, no seam\n");
+        dai_render_sky(r, 0);
+        dai_render_clear_color(r, 0, 0, 0);
+        dai_render_light(r, dai_vec3{ 0.30f, 0.45f, 0.84f });
+        // Low ambient on purpose: what is measured below is the difference one
+        // channel of a map makes, and a bright wash flattens every one of them.
+        dai_render_ambient(r, dai_vec3{ 0.24f, 0.26f, 0.30f }, dai_vec3{ 0.10f, 0.10f, 0.10f }, 0.25f);
+        dai_render_exposure(r, 1.0f);
+        dai_render_camera(r, dai_vec3{ 0, 0, 7 }, dai_vec3{ 0,0,0 }, dai_vec3{ 0,1,0 },
+                          45.0f, 0.1f, 100.0f);
+
+        const uint8_t px4[16] = {
+            255,0,0,255,     0,255,0,255,
+            0,0,255,255,     255,255,0,255
+        };
+        dai_texture tex = dai_render_texture_create(r, px4, 2, 2, 0);
+        const uint8_t white[4] = { 255, 255, 255, 255 };
+        dai_texture tex_white = dai_render_texture_create(r, white, 1, 1, 1);
+        // ORM: R occlusion 1, G roughness 0.2, B metallic 0. Constant, so the
+        // comparison below is about the VALUE arriving, not about phase.
+        const uint8_t orm_px[4] = { 255, 51, 0, 255 };
+        dai_texture tex_orm = dai_render_texture_create(r, orm_px, 1, 1, 0);
+        // The same map with the occlusion channel closed: what proves the map
+        // is really being sampled through the projection rather than the
+        // default white texture standing in for it.
+        const uint8_t orm_dark_px[4] = { 0, 51, 0, 255 };
+        dai_texture tex_orm_dark = dai_render_texture_create(r, orm_dark_px, 1, 1, 0);
+        // Normal maps, constant: flat (0,0,1) and tilted (0.6, 0, 0.8).
+        const uint8_t nrm_flat_px[4] = { 128, 128, 255, 255 };
+        const uint8_t nrm_tilt_px[4] = { 204, 128, 229, 255 };
+        const uint8_t nrm_tilt_neg_px[4] = { 51, 128, 229, 255 };   // (-0.6, 0, 0.8)
+        dai_texture tex_nrm_flat = dai_render_texture_create(r, nrm_flat_px, 1, 1, 0);
+        dai_texture tex_nrm_tilt = dai_render_texture_create(r, nrm_tilt_px, 1, 1, 0);
+        dai_texture tex_nrm_tilt_neg = dai_render_texture_create(r, nrm_tilt_neg_px, 1, 1, 0);
+        CHECK(tex && tex_white && tex_orm && tex_nrm_flat && tex_nrm_tilt,
+              "a test texture failed to upload: %s", dai_render_last_error(r));
+
+        // How often the pattern repeats along the middle scanline. Test 18
+        // counts hue changes; here the wall is lit and the texture is filtered
+        // across a metre, so the colours arrive as gradients rather than as
+        // steps and a step counter sees nothing. What is counted instead is
+        // how often GREEN takes over from BLUE and back - one alternation per
+        // texel column of the 2x2 test texture, with a dead band so that a
+        // shading gradient across a flat wall cannot register.
+        auto stripes = [](const Frame &f) {
+            uint32_t y = f.h / 2, n = 0;
+            int sign = 0;
+            for (uint32_t x = f.w / 8; x < f.w * 7 / 8; ++x) {
+                const uint8_t *p = f.at(x, y);
+                if (p[0] + p[1] + p[2] < 30) continue;              // background
+                int d = (int)p[1] - (int)p[2];
+                if (d > 30) { if (sign < 0) ++n; sign = 1; }
+                else if (d < -30) { if (sign > 0) ++n; sign = -1; }
+            }
+            return n;
+        };
+        // How many pixels of two frames disagree by more than `tol` levels,
+        // counted over the middle of the image so no silhouette edge - which
+        // is one pixel of coverage either way - is mistaken for a difference.
+        auto disagree = [](const Frame &a, const Frame &b, int tol) {
+            uint32_t n = 0;
+            for (uint32_t y = a.h / 4; y < a.h * 3 / 4; ++y)
+                for (uint32_t x = a.w / 4; x < a.w * 3 / 4; ++x) {
+                    const uint8_t *pa = a.at(x, y), *pb = b.at(x, y);
+                    for (int c = 0; c < 3; ++c)
+                        if (std::abs((int)pa[c] - (int)pb[c]) > tol) { ++n; c = 3; }
+                }
+            return n;
+        };
+        const uint32_t area = (dai_render_width(r) / 2) * (dai_render_height(r) / 2);
+
+        dai_material_desc uvm = dai_material_desc_default();
+        uvm.base_color_tex = tex;
+        uvm.name = "uv_wall";
+        dai_material mat_uv = dai_render_material_create(r, &uvm);
+
+        dai_material_desc trim = dai_material_desc_default();
+        trim.base_color_tex = tex;
+        trim.flags = DAI_MAT_TRIPLANAR;
+        trim.triplanar_scale = 1.0f;      // one repeat per metre
+        trim.triplanar_blend = 4.0f;
+        trim.name = "tri_wall";
+        dai_material mat_tri = dai_render_material_create(r, &trim);
+        CHECK(mat_uv != 0 && mat_tri != 0, "material creation failed: %s", dai_render_last_error(r));
+
+        // ---- the pattern follows the world, not the object ----------------
+        // Two walls of the same height, one twice as wide as the other. On the
+        // UV path both wear the same number of repeats and the wide one is
+        // simply stretched; projected in world space the wide one gets twice
+        // as many, because a metre is a metre.
+        dai_render_instance wall = box_inst(dai_vec3{ 0,0,0 }, dai_vec3{ 2.0f, 1.2f, 0.25f },
+                                            dai_vec3{ 1,1,1 });
+        dai_render_instance half = wall;
+        half.scale = { 1.0f, 1.2f, 0.25f };
+
+        wall.material = mat_uv;  half.material = mat_uv;
+        dai_render_frame(r, &wall, 1);  uint32_t uv_wide = stripes(grab(r));
+        dai_render_frame(r, &half, 1);  uint32_t uv_narrow = stripes(grab(r));
+
+        wall.material = mat_tri; half.material = mat_tri;
+        dai_render_frame(r, &wall, 1);
+        Frame tri_wide_f = grab(r); save(r, "vis_20_tri_wide.ppm");
+        uint32_t tri_wide = stripes(tri_wide_f);
+        dai_render_frame(r, &half, 1);  uint32_t tri_narrow = stripes(grab(r));
+
+        CHECK(uv_wide == uv_narrow,
+              "the UV path gave %u stripes on a 4 m wall and %u on a 2 m one - "
+              "the reference for this test is not the reference", uv_wide, uv_narrow);
+        CHECK(tri_wide >= 6, "a 4 m wall at 1 m tiling produced only %u colour changes - "
+              "the world projection is not tiling", tri_wide);
+        // Twice the wall, twice the pattern. One change of tolerance either
+        // way, because the last repeat can fall on the silhouette.
+        CHECK(tri_wide >= tri_narrow * 2 - 2 && tri_wide <= tri_narrow * 2 + 2,
+              "4 m wall: %u colour changes, 2 m wall: %u - a projected metre is not a metre",
+              tri_wide, tri_narrow);
+
+        // ---- the tiling is in METRES ---------------------------------------
+        trim.triplanar_scale = 2.0f;
+        CHECK(dai_render_material_update(r, mat_tri, &trim) == DAI_OK, "material_update failed");
+        dai_render_frame(r, &wall, 1);
+        uint32_t tri_2m = stripes(grab(r));
+        CHECK(tri_2m >= tri_wide / 2 - 2 && tri_2m <= tri_wide / 2 + 2,
+              "2 m tiling gave %u colour changes where 1 m gave %u - the number is not metres",
+              tri_2m, tri_wide);
+        trim.triplanar_scale = 1.0f;
+        dai_render_material_update(r, mat_tri, &trim);
+
+        // ---- how the geometry was split does not show ----------------------
+        // The whole point of a world projection on a blockout: one 4 m wall and
+        // two 2 m walls that add up to it are the same picture. A UV set cannot
+        // do this - each box would restart the pattern at its own edge, which
+        // is the seam this feature exists to remove.
+        dai_render_instance pair[2];
+        pair[0] = wall; pair[0].position = { -1.0f, 0, 0 }; pair[0].scale = { 1.0f, 1.2f, 0.25f };
+        pair[1] = wall; pair[1].position = {  1.0f, 0, 0 }; pair[1].scale = { 1.0f, 1.2f, 0.25f };
+        dai_render_frame(r, pair, 2);
+        Frame split = grab(r); save(r, "vis_20_tri_split.ppm");
+        uint32_t split_diff = disagree(tri_wide_f, split, 8);
+        CHECK(split_diff * 100 < area * 2,
+              "splitting the wall into two boxes changed %u of %u sampled pixels - "
+              "the projection is not world space", split_diff, area);
+
+        pair[0].material = mat_uv; pair[1].material = mat_uv;
+        dai_render_frame(r, pair, 2);
+        Frame split_uv = grab(r);
+        dai_render_frame(r, &wall, 1);      // wall still carries mat_tri
+        CHECK(disagree(split_uv, split, 8) > area / 20,
+              "the UV path survived the same split unchanged - the measurement cannot "
+              "tell the two apart and proves nothing");
+
+        // ---- the three projections add up to exactly one -------------------
+        // A white map, a box turned 45 degrees so the corner faces the camera,
+        // and the widest possible blend: if the weights did not normalise, the
+        // corner would darken or blow out. Compared against the same box with
+        // no map at all, which is the brightness the material asks for.
+        dai_material_desc plain = dai_material_desc_default();
+        plain.name = "tri_plain";
+        dai_material mat_plain = dai_render_material_create(r, &plain);
+        dai_material_desc whitem = plain;
+        whitem.base_color_tex = tex_white;
+        whitem.flags = DAI_MAT_TRIPLANAR;
+        whitem.triplanar_scale = 1.0f;
+        whitem.triplanar_blend = 1.0f;      // the widest wash there is
+        whitem.name = "tri_white";
+        dai_material mat_white = dai_render_material_create(r, &whitem);
+
+        dai_render_instance corner = box_inst(dai_vec3{ 0,0,0 }, dai_vec3{ 1.4f, 1.4f, 1.4f },
+                                              dai_vec3{ 0.8f, 0.8f, 0.8f });
+        corner.rotation = { 0.0f, 0.3826834f, 0.0f, 0.9238795f };   // 45 deg about Y
+        corner.material = mat_plain;
+        dai_render_frame(r, &corner, 1);
+        Frame corner_plain = grab(r); save(r, "vis_20_tri_corner_plain.ppm");
+        corner.material = mat_white;
+        dai_render_frame(r, &corner, 1);
+        Frame corner_tri = grab(r); save(r, "vis_20_tri_corner.ppm");
+        uint32_t corner_diff = disagree(corner_plain, corner_tri, 3);
+        CHECK(corner_diff * 200 < area,
+              "%u of %u pixels across a 45 degree corner differ from the unprojected "
+              "material by more than 3 levels - the blend weights do not sum to 1",
+              corner_diff, area);
+
+        // ---- ORM travels the same path -------------------------------------
+        // A constant ORM map at roughness 0.2 must land where the scalar 0.2
+        // lands. Same picture, or the G channel is not reaching the shading.
+        dai_material_desc rough_scalar = dai_material_desc_default();
+        rough_scalar.roughness = 0.2f;
+        rough_scalar.name = "tri_rough_scalar";
+        dai_material mat_rough = dai_render_material_create(r, &rough_scalar);
+        dai_material_desc orm_tri = dai_material_desc_default();
+        orm_tri.base_color_tex = tex_white;
+        orm_tri.orm_tex = tex_orm;
+        orm_tri.flags = DAI_MAT_TRIPLANAR;
+        orm_tri.triplanar_scale = 1.0f;
+        orm_tri.name = "tri_orm";
+        dai_material mat_orm = dai_render_material_create(r, &orm_tri);
+
+        corner.rotation = { 0,0,0,1 };
+        corner.material = mat_rough;
+        dai_render_frame(r, &corner, 1);
+        Frame orm_ref = grab(r);
+        corner.material = mat_orm;
+        dai_render_frame(r, &corner, 1);
+        Frame orm_got = grab(r); save(r, "vis_20_tri_orm.ppm");
+        uint32_t orm_diff = disagree(orm_ref, orm_got, 4);
+        CHECK(orm_diff * 100 < area * 2,
+              "a projected ORM map at roughness 0.2 differs from the scalar 0.2 on %u of "
+              "%u pixels - the G channel does not survive the projection", orm_diff, area);
+        orm_tri.orm_tex = tex_orm_dark;     // occlusion 0 instead of 1
+        dai_render_material_update(r, mat_orm, &orm_tri);
+        // Occlusion acts on the ambient term, so it is measured against an
+        // ambient that is actually there - the dim one this section renders
+        // with would put the whole difference inside a few levels.
+        dai_render_ambient(r, dai_vec3{ 0.55f, 0.58f, 0.62f }, dai_vec3{ 0.35f, 0.35f, 0.35f }, 0.6f);
+        dai_render_frame(r, &corner, 1);
+        Frame orm_dark = grab(r);
+        orm_tri.orm_tex = tex_orm;
+        dai_render_material_update(r, mat_orm, &orm_tri);
+        dai_render_frame(r, &corner, 1);
+        Frame orm_open = grab(r);
+        dai_render_ambient(r, dai_vec3{ 0.24f, 0.26f, 0.30f }, dai_vec3{ 0.10f, 0.10f, 0.10f }, 0.25f);
+        CHECK(disagree(orm_open, orm_dark, 4) > area / 20,
+              "a projected ORM map with the occlusion channel closed renders exactly like "
+              "an open one - the map is not being sampled, the default white texture is");
+
+        // ---- the normal map, reoriented per axis ----------------------------
+        // Three faces of one box, three different projections. Two things have
+        // to hold, and neither of them depends on which way round this
+        // module's tangent frames happen to be:
+        //
+        //   * a FLAT map changes nothing at all. That is the identity case,
+        //     and it is what a garbled per axis frame breaks first.
+        //   * a map tilted +X and the same map tilted -X move every one of the
+        //     three faces, and move it in OPPOSITE directions. A projection
+        //     that ignores the map does not move at all; one that folds the
+        //     sign away (an abs(), a swizzle that drops it) moves both the
+        //     same way. Both are the classic triplanar normal bug.
+        dai_render_camera(r, dai_vec3{ 4.5f, 3.6f, 5.5f }, dai_vec3{ 0,0,0 }, dai_vec3{ 0,1,0 },
+                          45.0f, 0.1f, 100.0f);
+        dai_material_desc nrm = dai_material_desc_default();
+        nrm.base_color_tex = tex_white;
+        nrm.flags = DAI_MAT_TRIPLANAR;
+        nrm.triplanar_scale = 1.0f;
+        nrm.roughness = 0.6f;
+        nrm.name = "tri_normal";
+        dai_material mat_nrm = dai_render_material_create(r, &nrm);
+        corner.material = mat_nrm;
+        corner.scale = { 1.4f, 1.4f, 1.4f };
+        // Mid grey, so that no face is sitting against the top of the range
+        // where a change of shading has nowhere to go.
+        corner.color = { 0.45f, 0.45f, 0.45f };
+        dai_render_frame(r, &corner, 1);
+        Frame no_map = grab(r);
+        nrm.normal_tex = tex_nrm_flat;
+        dai_render_material_update(r, mat_nrm, &nrm);
+        dai_render_frame(r, &corner, 1);
+        Frame flat_map = grab(r); save(r, "vis_20_tri_normal_flat.ppm");
+        CHECK(disagree(no_map, flat_map, 3) * 200 < area,
+              "a FLAT normal map changed the shading - the per axis reorientation is not "
+              "the identity where it has to be");
+
+        nrm.normal_tex = tex_nrm_tilt;
+        dai_render_material_update(r, mat_nrm, &nrm);
+        dai_render_frame(r, &corner, 1);
+        Frame tilt_pos = grab(r); save(r, "vis_20_tri_normal_tilt.ppm");
+        nrm.normal_tex = tex_nrm_tilt_neg;
+        dai_render_material_update(r, mat_nrm, &nrm);
+        dai_render_frame(r, &corner, 1);
+        Frame tilt_neg = grab(r);
+
+        // One window per visible face. The window is only used once it has
+        // proved it sits on ONE face: a flat shaded face is constant, so a
+        // window with any spread in it is a window over an edge and the
+        // measurement below would be meaningless.
+        struct Win { const char *name; float fx, fy; };
+        static const Win WINS[] = {
+            { "top",   0.50f, 0.30f },
+            { "left",  0.38f, 0.62f },
+            { "right", 0.62f, 0.62f },
+        };
+        for (const Win &w : WINS) {
+            uint32_t cx = (uint32_t)(flat_map.w * w.fx), cy = (uint32_t)(flat_map.h * w.fy);
+            float lo = 2.0f, hi = -1.0f, sf = 0.0f, sp = 0.0f, sn = 0.0f;
+            int cnt = 0;
+            for (uint32_t y = cy - 6; y <= cy + 6; ++y)
+                for (uint32_t x = cx - 6; x <= cx + 6; ++x) {
+                    float lf = flat_map.lum(x, y);
+                    lo = lf < lo ? lf : lo; hi = lf > hi ? lf : hi;
+                    sf += lf; sp += tilt_pos.lum(x, y); sn += tilt_neg.lum(x, y); ++cnt;
+                }
+            float mf = sf / (float)cnt, mp = sp / (float)cnt, mn = sn / (float)cnt;
+            CHECK(hi - lo < 0.05f && mf > 0.05f && mf < 0.95f,
+                  "the %s sample window is not on one usable face (%.3f..%.3f) - "
+                  "nothing was measured there", w.name, lo, hi);
+            CHECK(std::fabs(mp - mf) > 0.004f && std::fabs(mn - mf) > 0.004f,
+                  "the %s face renders identically with a tilted normal map "
+                  "(flat %.4f, +x %.4f, -x %.4f) - the map is not reaching that projection",
+                  w.name, mf, mp, mn);
+            CHECK((mp - mf) * (mn - mf) < 0.0f,
+                  "the %s face moved the SAME way for a +x and a -x tilt "
+                  "(flat %.4f, +x %.4f, -x %.4f) - the sign of the map is being folded "
+                  "away by the reorientation", w.name, mf, mp, mn);
+        }
+        std::printf("     stripes 4 m wall: %u (uv %u) | 2 m wall: %u | 2 m tiling: %u | "
+                    "split %u px | corner %u px\n",
+                    tri_wide, uv_wide, tri_narrow, tri_2m, split_diff, corner_diff);
+
+    }
+
+    // ---------------------------------------------------------------- 21
+    // The material FILE that carries all of the above. A .daimat is text, and
+    // the two things that have to be true of it are that a file written before
+    // this round still loads (no maps, no projection, four numbers) and that a
+    // file written after it comes back exactly as it went in.
+    {
+        std::printf("[21] the .daimat: maps, projection, round trip\n");
+        dai_matfile d = dai_matfile_default();
+        CHECK(d.triplanar == 0, "a material projects in world space by default - it must not");
+        CHECK(d.triplanar_scale == 1.0f && d.triplanar_blend == 4.0f,
+              "the projection defaults moved: %g m, blend %g",
+              (double)d.triplanar_scale, (double)d.triplanar_blend);
+        CHECK(d.normal_strength == 1.0f && d.base_color_map[0] == 0 && d.orm_map[0] == 0 &&
+              d.normal_map[0] == 0, "a fresh material is not empty in the new fields");
+
+        // An old file: exactly what the editor wrote before this round.
+        const char *old_text = "daidalos-material 1\ncolor 0.82 0.24 0.2\nroughness 0.35\n";
+        dai_matfile old_m{};
+        CHECK(dai_matfile_from_text(&old_m, old_text, std::strlen(old_text)) == DAI_OK,
+              "a material file written before this round no longer loads");
+        CHECK(old_m.color.x > 0.81f && old_m.color.x < 0.83f && old_m.roughness == 0.35f,
+              "the old fields changed meaning: color.x %g roughness %g",
+              (double)old_m.color.x, (double)old_m.roughness);
+        CHECK(old_m.triplanar == 0 && old_m.triplanar_scale == 1.0f &&
+              old_m.base_color_map[0] == 0,
+              "a file with no projection line did not come back as an unprojected material");
+        char short_buf[2048];
+        dai_matfile_to_text(&old_m, short_buf, sizeof(short_buf));
+        CHECK(std::strstr(short_buf, "triplanar") == nullptr &&
+              std::strstr(short_buf, "_map") == nullptr,
+              "saving an untouched old material wrote the new keys into it:\n%s", short_buf);
+
+        // A new one, with everything this module added.
+        dai_matfile m = dai_matfile_default();
+        m.color = dai_vec3{ 0.7f, 0.68f, 0.66f };
+        std::snprintf(m.base_color_map, sizeof(m.base_color_map), "Textures/raufaser_basecolor.png");
+        std::snprintf(m.orm_map, sizeof(m.orm_map), "Textures/raufaser_orm.png");
+        std::snprintf(m.normal_map, sizeof(m.normal_map), "Textures/raufaser_normal.png");
+        m.normal_strength = 0.75f;
+        m.triplanar = 1;
+        m.triplanar_scale = 2.0f;
+        m.triplanar_blend = 6.0f;
+        char buf[2048];
+        size_t n = dai_matfile_to_text(&m, buf, sizeof(buf));
+        CHECK(n > 0 && n < sizeof(buf), "the material text did not fit (%u bytes)", (unsigned)n);
+        dai_matfile back{};
+        CHECK(dai_matfile_from_text(&back, buf, std::strlen(buf)) == DAI_OK,
+              "the material this module writes does not load again:\n%s", buf);
+        CHECK(std::strcmp(back.base_color_map, m.base_color_map) == 0 &&
+              std::strcmp(back.orm_map, m.orm_map) == 0 &&
+              std::strcmp(back.normal_map, m.normal_map) == 0,
+              "a map path did not survive the round trip: '%s' '%s' '%s'",
+              back.base_color_map, back.orm_map, back.normal_map);
+        CHECK(back.triplanar == 1 && back.triplanar_scale == 2.0f && back.triplanar_blend == 6.0f,
+              "the projection did not survive the round trip: %d, %g m, blend %g",
+              back.triplanar, (double)back.triplanar_scale, (double)back.triplanar_blend);
+        CHECK(back.normal_strength == 0.75f, "normal_strength came back as %g",
+              (double)back.normal_strength);
+
+        // A path with a space in it is one path, not two tokens.
+        const char *spaced = "daidalos-material 1\nbase_color_map Textures/old wall.png\n";
+        dai_matfile sp{};
+        dai_matfile_from_text(&sp, spaced, std::strlen(spaced));
+        CHECK(std::strcmp(sp.base_color_map, "Textures/old wall.png") == 0,
+              "a map path with a space came back as '%s'", sp.base_color_map);
+
+        // Nonsense is clamped on the way in, not three functions later.
+        const char *bad = "daidalos-material 1\ntriplanar_scale 0\ntriplanar_blend 900\n";
+        dai_matfile cl{};
+        dai_matfile_from_text(&cl, bad, std::strlen(bad));
+        CHECK(cl.triplanar_scale == 1.0f, "a tiling of 0 m was let through as %g",
+              (double)cl.triplanar_scale);
+        CHECK(cl.triplanar_blend == 16.0f, "a blend of 900 was let through as %g",
+              (double)cl.triplanar_blend);
+
+        // "triplanar" with no number means ON: the shortest thing an author
+        // can type has to mean the obvious thing.
+        const char *bare = "daidalos-material 1\ntriplanar\n";
+        dai_matfile br{};
+        dai_matfile_from_text(&br, bare, std::strlen(bare));
+        CHECK(br.triplanar == 1, "a bare `triplanar` line did not switch it on");
+
+        // And the descriptor the renderer is handed: the flag, the metres and
+        // the blend, exactly as the file says them.
+        dai_material_desc md = dai_material_desc_default();
+        CHECK((md.flags & DAI_MAT_TRIPLANAR) == 0 && md.triplanar_scale == 1.0f &&
+              md.triplanar_blend == 4.0f,
+              "dai_material_desc_default() does not agree with the file default");
+        md.flags = DAI_MAT_TRIPLANAR;
+        md.triplanar_scale = m.triplanar_scale;
+        md.triplanar_blend = m.triplanar_blend;
+        md.name = "daimat_desc";
+        dai_material mm = dai_render_material_create(r, &md);
+        CHECK(mm != 0, "a projected material was refused by the renderer: %s",
+              dai_render_last_error(r));
+        std::printf("     %u bytes of material text, %u materials in the renderer\n",
+                    (unsigned)n, dai_render_material_count(r));
     }
 
     dai_render_destroy(r);

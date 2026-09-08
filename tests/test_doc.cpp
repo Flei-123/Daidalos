@@ -18,6 +18,12 @@ static int g_fail = 0, g_pass = 0;
     else { ++g_fail; std::printf("  FAIL "); std::printf(__VA_ARGS__); std::printf("\n"); } \
 } while (0)
 
+// Blockout, CSG and the DoorSocket - the shapes a room is made of. Their
+// checks live in their own file (they are geometry, not document plumbing)
+// but run in this binary, because half of what they prove is that the fields
+// survive this file's format, its undo stack and its round trip.
+#include "blockout_cases.hpp"
+
 static bool near3(dai_vec3 a, dai_vec3 b, float eps = 1e-4f) {
     return std::fabs(a.x - b.x) < eps && std::fabs(a.y - b.y) < eps && std::fabs(a.z - b.z) < eps;
 }
@@ -826,6 +832,7 @@ int main() {
 
     test_text_component();
     test_unique_names();
+    test_blockout();
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

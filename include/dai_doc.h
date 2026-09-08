@@ -244,8 +244,72 @@ typedef struct dai_node_desc {
                                    what made "activate the camera" switch the
                                    mesh renderer on.                          */
 
+    /* ---- Blockout: the shapes a room is built out of ----------------------
+     * A blockout node is not a mesh in the project folder - it is the RECIPE
+     * for one. The fields below are what a wall, a stair or a doorway is made
+     * of; the mesh is derived from them, rebuilt whenever one of them moves,
+     * and never written back into the scene file. That is the whole point:
+     * "this wall is 30 cm thick" survives in a form somebody can still edit
+     * six months later, and a mesh baked into the scene does not.
+     *
+     * Sizes are FULL sizes in metres, not half extents - a door is 0.9 m wide,
+     * and an artist made to type 0.45 will type 0.9 anyway. Zero means "the
+     * default", the same rule every other optional component here follows, so
+     * a scene written before these fields existed loads unchanged.
+     *
+     * What the numbers mean is in include/dai_blockout.h and docs/BLOCKOUT.md;
+     * the property names a behaviour or the Jarvis bridge uses are in
+     * include/dai_blockout_props.inl. */
+    int      blockout;          /* dai_blockout_kind, 0 = not a blockout node */
+    dai_vec3 blockout_size;     /* full size in metres, 0,0,0 -> 1,1,1        */
+    int      blockout_segments; /* round shapes: sides around, 0 -> 16        */
+    int      blockout_steps;    /* stairs: how many, 0 -> 8                   */
+    float    blockout_thickness;/* arch: ring thickness in metres, 0 -> a
+                                   fifth of the smaller of rise and span      */
+    dai_vec3 blockout_pivot;    /* -1..1 per axis: where the node origin sits
+                                   inside the shape's own box. 0 = the centre,
+                                   -1 = the min face. A wall is built from the
+                                   floor up, so its pivot Y is -1.            */
+    /* The CSG node. Its blockout CHILDREN are combined in hierarchy order,
+     * first child first, and the result is drawn on THIS node - which is why
+     * the children stop drawing themselves the moment the parent has an
+     * operation. A door hole is a Box child under a subtract node, and moving
+     * that child with the ordinary gizmo moves the hole. */
+    int      csg;               /* dai_csg_op, 0 = not a CSG node             */
+    /* ---- DoorSocket: where the next room may be joined on -----------------
+     * A marked opening: where it is, which way it faces, and how big it is.
+     * The room generator that comes later docks against these, and until then
+     * it is the thing that makes a doorway visible in the viewport as more
+     * than a hole - see dai_blockout_draw_sockets in the editor UI. */
+    int      door_socket;       /* 1 = this node carries one                  */
+    dai_vec3 door_offset;       /* where it sits, in the node's own space     */
+    dai_vec3 door_normal;       /* which way the door faces, 0,0,0 -> +Z      */
+    float    door_width;        /* metres, 0 -> 0.9                           */
+    float    door_height;       /* metres, 0 -> 2.0                           */
+
     uint32_t user_data;
 } dai_node_desc;
+
+/* What `blockout` holds. The numbers are the file format, so they never move -
+ * a scene written today opens in a build that has learned a sixth shape. */
+typedef enum dai_blockout_kind {
+    DAI_BLOCKOUT_NONE = 0,
+    DAI_BLOCKOUT_BOX,
+    DAI_BLOCKOUT_CYLINDER,
+    DAI_BLOCKOUT_STAIRS,
+    DAI_BLOCKOUT_ARCH,
+    DAI_BLOCKOUT_WEDGE,
+    DAI_BLOCKOUT_KIND_COUNT
+} dai_blockout_kind;
+
+/* What `csg` holds. */
+typedef enum dai_csg_op {
+    DAI_CSG_NONE = 0,
+    DAI_CSG_UNION,
+    DAI_CSG_SUBTRACT,
+    DAI_CSG_INTERSECT,
+    DAI_CSG_OP_COUNT
+} dai_csg_op;
 
 DAI_API dai_node_desc dai_node_desc_default(void);
 

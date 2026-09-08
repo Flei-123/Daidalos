@@ -139,10 +139,24 @@ typedef struct dai_material_desc {
     dai_texture emissive_tex;
     uint32_t    flags;           /* dai_material_flags                          */
     const char *name;
+    /* World projection (DAI_MAT_TRIPLANAR). The maps are projected along the
+     * three world axes and blended by the surface normal, so a mesh needs no
+     * UV set at all - which is what a wall built out of boxes and CSG has.
+     * `triplanar_scale` is the edge length of one repeat IN METRES, not a
+     * repeat count: a number that stays true when the wall gets longer.
+     * `triplanar_blend` is the sharpness of the blend between the three
+     * projections; 1 is a wide wash, 8 is a hard edge, 4 is the default and
+     * hides the corner without smearing the faces. Both are ignored unless
+     * the flag is set, and uv_scale/uv_offset keep their meaning for every
+     * material that is not projected. */
+    float       triplanar_scale; /* metres per repeat, 0 -> 1                   */
+    float       triplanar_blend; /* blend sharpness, 0 -> 4, clamped to 1..16   */
 } dai_material_desc;
 
 typedef enum dai_material_flags {
-    DAI_MAT_TRIPLANAR = 1 << 0,  /* reserved */
+    /* Project the maps in WORLD space instead of sampling a UV set. Costs
+     * three samples per map instead of one - see docs/MATERIALS.md. */
+    DAI_MAT_TRIPLANAR = 1 << 0,
     DAI_MAT_CHECKER   = 1 << 1   /* procedural checker, needs no texture at all */
 } dai_material_flags;
 

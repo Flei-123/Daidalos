@@ -1,0 +1,48 @@
+{
+  "daitex": 1,
+  "name": "Raufaser wall",
+  "resolution": 256,
+  "seed": 5137,
+  "tiling_m": 1.5,
+
+  "nodes": [
+    { "id": "fibre", "type": "noise", "kind": "value",
+      "params": { "cells": 48, "octaves": 3, "gain": 0.5, "lacunarity": 2 } },
+
+    { "id": "chips", "type": "noise", "kind": "worley",
+      "params": { "cells": 26, "octaves": 1, "gain": 0.5, "lacunarity": 2, "seed": 11 } },
+
+    { "id": "chipmask", "type": "levels", "in": "chips",
+      "params": { "in_min": 0.0, "in_max": 0.42, "out_min": 1.0, "out_max": 0.0, "gamma": 0.8 } },
+
+    { "id": "relief", "type": "mix", "kind": "mix", "in": "chipmask", "in_b": "fibre",
+      "params": { "factor": 0.28 } },
+
+    { "id": "height", "type": "blur", "in": "relief",
+      "params": { "radius": 1, "passes": 1 } },
+
+    { "id": "paint", "type": "colorramp", "in": "height",
+      "stops": [
+        { "t": 0.0, "rgb": [ 0.760, 0.744, 0.712 ] },
+        { "t": 0.55, "rgb": [ 0.868, 0.852, 0.818 ] },
+        { "t": 1.0, "rgb": [ 0.935, 0.925, 0.900 ] }
+      ] },
+
+    { "id": "nrm", "type": "normal", "in": "height",
+      "params": { "strength": 3.0 } },
+
+    { "id": "ao", "type": "ao", "in": "height",
+      "params": { "radius": 6, "strength": 1.2 } },
+
+    { "id": "rough", "type": "levels", "in": "height",
+      "params": { "in_min": 0.0, "in_max": 1.0, "out_min": 0.94, "out_max": 0.80, "gamma": 1.0 } }
+  ],
+
+  "out": {
+    "base_color": "paint",
+    "occlusion": "ao",
+    "roughness": "rough",
+    "metallic": 0.0,
+    "normal": "nrm"
+  }
+}
