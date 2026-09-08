@@ -1,7 +1,8 @@
 // MODULE 1 (blockout) OWNS THIS FILE. Statement seam, see include/dai_ext.h.
 //
-// Included INSIDE inspector_body() in src/dai_editor_ui.cpp, immediately
-// before the clamp block that ends it. In scope here:
+// Included INSIDE inspector_body() in src/dai_editor_ui.cpp, after the Audio
+// section and before Remove/Add Component - among the other components, not
+// below the Add Component button, where a section is never seen. In scope here:
 //
 //   dai_editor_ui *p        the panel
 //   dai_doc       *d        the document

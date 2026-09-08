@@ -297,6 +297,33 @@ else
     MISSING="$MISSING modeling_shot"
 fi
 
+# The blockout round's pictures: the room built through dai_doc in C++, drawn
+# by the real editor with the blockout host attached - the CSG wall with its
+# door hole, the stairs, the arch, the socket gizmo. Two sizes, same as the
+# drone show sets: `wide-` at 1920x1080 and `narrow-` at 1100x700, where a
+# panel that guesses its layout collides with itself. Compiled by the same
+# script that runs it, for the reason build_modeling_shot.sh gives.
+if [ -f tools/blockout_shot.cpp ]; then
+    for SET in 1920x1080:wide- 1100x700:narrow-; do
+        DIM=${SET%%:*}; TAG=${SET#*:}
+        SW=${DIM%%x*}; SH=${DIM##*x}
+        OUT=$(DISPLAY="$DAI_TEST_DISPLAY" timeout 600 \
+              ./tools/build_blockout_shot.sh "$SHOTS" "$SW" "$SH" "$TAG" 2>&1)
+        RC=$?
+        NAME="blockout_shot ${TAG}"
+        if [ "$RC" = "0" ]; then
+            printf '%-20s %3s/%-3s  ok  (%s/%s14..15-blockout-*.png %sx%s)\n' "$NAME" "-" "-" "$SHOTS" "$TAG" "$SW" "$SH"
+            [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+        else
+            FAILED="$FAILED blockout_shot(${SW}x${SH})"
+            printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "$NAME" "-" "-" "$RC"
+            printf '%s\n' "$OUT" | tail -10 | sed 's/^/    /'
+        fi
+    done
+else
+    MISSING="$MISSING blockout_shot"
+fi
+
 echo "-------------------------------------------"
 printf 'TOTAL %d passed, %d failed\n' "$TOTAL_PASS" "$TOTAL_FAIL"
 echo "not run (needs GPU): $GPU_ONLY"

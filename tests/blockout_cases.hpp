@@ -525,10 +525,270 @@ static void test_blockout_document() {
     dai_doc_destroy(d);
 }
 
+// The raw generator, before build() has had a chance to flip it: what the
+// five functions in daiblock::detail return, moved by the pivot and snapped
+// exactly as build() does, and nothing else. The suite asks the winding of
+// THIS, so that "outwards" is a property of each generator and the flip in
+// build() is measured to be idle.
+static daiblock::Solid blockout_raw_of(const daiblock::Shape &s) {
+    double sx = s.size[0], sy = s.size[1], sz = s.size[2];
+    daiblock::Solid raw;
+    switch (s.kind) {
+    case DAI_BLOCKOUT_CYLINDER: raw = daiblock::detail::cylinder_solid(sx, sy, sz, s.segments); break;
+    case DAI_BLOCKOUT_STAIRS:   raw = daiblock::detail::stairs_solid(sx, sy, sz, s.steps); break;
+    case DAI_BLOCKOUT_ARCH:     raw = daiblock::detail::arch_solid(sx, sy, sz, s.segments, s.thickness); break;
+    case DAI_BLOCKOUT_WEDGE:    raw = daiblock::detail::wedge_solid(sx, sy, sz); break;
+    default:                    raw = daiblock::detail::box_solid(sx, sy, sz); break;
+    }
+    daiblock::detail::offset_solid(raw, daiblock::detail::pivot_offset(s));
+    for (daiblock::Poly &p : raw.polys)
+        for (daiblock::V3 &v : p.pts) v = daiblock::snap(v);
+    for (daiblock::Poly &p : raw.polys) p.normal = daiblock::poly_normal(p);
+    return raw;
+}
+
+static bool blockout_same_bits(const daiblock::Mesh &a, const daiblock::Mesh &b) {
+    if (a.verts.size() != b.verts.size() || a.idx.size() != b.idx.size()) return false;
+    if (a.verts.empty() || a.idx.empty()) return false;
+    return std::memcmp(a.verts.data(), b.verts.data(), a.verts.size() * sizeof(dai_vertex)) == 0 &&
+           std::memcmp(a.idx.data(), b.idx.data(), a.idx.size() * sizeof(uint32_t)) == 0;
+}
+
+static const char *blockout_kind_name(int kind) {
+    switch (kind) {
+    case DAI_BLOCKOUT_BOX:      return "box";
+    case DAI_BLOCKOUT_CYLINDER: return "cylinder";
+    case DAI_BLOCKOUT_STAIRS:   return "stairs";
+    case DAI_BLOCKOUT_ARCH:     return "arch";
+    case DAI_BLOCKOUT_WEDGE:    return "wedge";
+    default:                    return "?";
+    }
+}
+
+static void test_blockout_generators() {
+    std::printf("blockout: every generator outwards on its own, no sliver, every field live\n");
+
+    const int kinds[5] = { DAI_BLOCKOUT_BOX, DAI_BLOCKOUT_CYLINDER, DAI_BLOCKOUT_STAIRS,
+                           DAI_BLOCKOUT_ARCH, DAI_BLOCKOUT_WEDGE };
+    const int segments[4] = { 3, 5, 7, 64 };       /* odd ones on purpose: no mirror symmetry to hide behind */
+    const float pivots[3] = { -1.0f, 0.0f, 1.0f };
+
+    // --- the stairs the diagnosis was measured on: 2x3x1.5, five steps ----
+    // The fan from vertex 0 gave eight zero area triangles here, and those
+    // were what kept the edge count at "exactly two". Now: none, and still
+    // closed - the two claims together are the point.
+    {
+        daiblock::Mesh m = blockout_mesh_of(DAI_BLOCKOUT_STAIRS, 2.0f, 3.0f, 1.5f, 16, 5);
+        check_solid("stairs 2x3x1.5, 5 steps", m);
+        CHECK(daiblock::degenerate_triangles(m) == 0,
+              "stairs 2x3x1.5/5: %d degenerate triangle(s)", daiblock::degenerate_triangles(m));
+        CHECK(daiblock::normal_mismatches(m) == 0,
+              "stairs 2x3x1.5/5: %d triangle(s) lit against their winding", daiblock::normal_mismatches(m));
+        CHECK(std::fabs(daiblock::volume(m) - 2.0 * 3.0 * 1.5 * 6.0 / 10.0) < 1e-6,
+              "stairs 2x3x1.5/5 hold %.6f m3, the maths says %.6f", daiblock::volume(m), 5.4);
+    }
+
+    // --- a T junction by hand: finalise() on a loop with collinear points --
+    // A 2 m cube whose top is three strips and whose front is two halves.
+    // The strip seams put vertices on the edges of the four neighbouring
+    // faces; the repair inserts them, and the front face then carries three
+    // collinear points along its top - the case a fan from vertex 0 gets
+    // wrong. Every edge must still be on exactly two faces, nothing may have
+    // zero area, and the cube is still 8 m3 with 24 m2 of skin.
+    {
+        daiblock::Solid s;
+        const double h = 1.0;
+        const double xs[4] = { -1.0, -1.0 / 3.0, 1.0 / 3.0, 1.0 };
+        for (int i = 0; i < 3; ++i)                                 /* +Y in three strips */
+            daiblock::push_quad(s, daiblock::v3(xs[i], h, -h), daiblock::v3(xs[i], h, +h),
+                                   daiblock::v3(xs[i + 1], h, +h), daiblock::v3(xs[i + 1], h, -h));
+        daiblock::push_quad(s, daiblock::v3(-h, -h, +h), daiblock::v3(-h, -h, -h),
+                               daiblock::v3(+h, -h, -h), daiblock::v3(+h, -h, +h));   /* -Y */
+        daiblock::push_quad(s, daiblock::v3(-h, -h, +h), daiblock::v3(0, -h, +h),
+                               daiblock::v3(0, +h, +h), daiblock::v3(-h, +h, +h));    /* +Z, left half */
+        daiblock::push_quad(s, daiblock::v3(0, -h, +h), daiblock::v3(+h, -h, +h),
+                               daiblock::v3(+h, +h, +h), daiblock::v3(0, +h, +h));    /* +Z, right half */
+        daiblock::push_quad(s, daiblock::v3(+h, -h, -h), daiblock::v3(-h, -h, -h),
+                               daiblock::v3(-h, +h, -h), daiblock::v3(+h, +h, -h));   /* -Z */
+        daiblock::push_quad(s, daiblock::v3(+h, -h, -h), daiblock::v3(+h, +h, -h),
+                               daiblock::v3(+h, +h, +h), daiblock::v3(+h, -h, +h));   /* +X */
+        daiblock::push_quad(s, daiblock::v3(-h, -h, +h), daiblock::v3(-h, +h, +h),
+                               daiblock::v3(-h, +h, -h), daiblock::v3(-h, -h, -h));   /* -X */
+        daiblock::Mesh m = daiblock::finalise(s);
+        check_solid("cube with T junctions", m);
+        CHECK(daiblock::degenerate_triangles(m) == 0,
+              "cube with T junctions: %d degenerate triangle(s)", daiblock::degenerate_triangles(m));
+        CHECK(daiblock::normal_mismatches(m) == 0,
+              "cube with T junctions: %d triangle(s) lit against their winding", daiblock::normal_mismatches(m));
+        CHECK(daiblock::inward_faces(m) == 0,
+              "cube with T junctions: %d face(s) look inwards", daiblock::inward_faces(m));
+        CHECK(std::fabs(daiblock::volume(m) - 8.0) < 1e-6,
+              "cube with T junctions holds %.6f m3, not 8", daiblock::volume(m));
+        CHECK(std::fabs(daiblock::area(m) - 24.0) < 1e-6,
+              "cube with T junctions has %.6f m2 of skin, not 24", daiblock::area(m));
+        // Every vertex the repair inserted is used: a point on the loop that
+        // no triangle touches would be an edge no triangle owns.
+        std::vector<int> used(m.verts.size(), 0);
+        for (uint32_t i : m.idx) used[i] = 1;
+        int unused = 0;
+        for (int u : used) if (!u) ++unused;
+        CHECK(unused == 0, "cube with T junctions: %d vertex/vertices no triangle uses", unused);
+    }
+
+    // --- every shape, every pivot corner, odd segment counts, 1..12 steps -
+    // Raw generator: positive volume (outwards on its own, the flip in
+    // build() idle). Convex three: no face looks at the centroid. All five:
+    // closed, no sliver, every normal agrees with its winding.
+    {
+        int raw_inside = 0, inward = 0, slivers = 0, mismatched = 0, open = 0, nonman = 0, backwards = 0;
+        int cases = 0;
+        for (int k = 0; k < 5; ++k) {
+            const bool convex = kinds[k] == DAI_BLOCKOUT_BOX || kinds[k] == DAI_BLOCKOUT_CYLINDER ||
+                                kinds[k] == DAI_BLOCKOUT_WEDGE;
+            const bool round = kinds[k] == DAI_BLOCKOUT_CYLINDER || kinds[k] == DAI_BLOCKOUT_ARCH;
+            const int nseg = round ? 4 : 1;
+            const int nsteps = kinds[k] == DAI_BLOCKOUT_STAIRS ? 12 : 1;
+            for (int sg = 0; sg < nseg; ++sg)
+            for (int st = 1; st <= nsteps; ++st)
+            for (int px = 0; px < 3; ++px)
+            for (int py = 0; py < 3; ++py)
+            for (int pz = 0; pz < 3; ++pz) {
+                daiblock::Shape s;
+                s.kind = kinds[k];
+                s.size[0] = 2.0f; s.size[1] = 3.0f; s.size[2] = 1.5f;
+                s.segments = segments[sg];
+                s.steps = st;
+                s.pivot[0] = pivots[px]; s.pivot[1] = pivots[py]; s.pivot[2] = pivots[pz];
+                ++cases;
+                if (daiblock::volume(daiblock::finalise(blockout_raw_of(s))) <= 0) ++raw_inside;
+                daiblock::Mesh m = daiblock::finalise(daiblock::build(s));
+                int o = 0, b = 0;
+                daiblock::edge_report(m, &o, &b);
+                open += o;
+                nonman += b;
+                backwards += daiblock::inconsistent_edges(m);
+                slivers += daiblock::degenerate_triangles(m);
+                mismatched += daiblock::normal_mismatches(m);
+                if (convex) inward += daiblock::inward_faces(m);
+                // Every corner of the shape's box lands where the pivot says.
+                // Two shapes are INSCRIBED: a cylinder across X and Z (a
+                // three sided one reaches nowhere near -X) and an arch in Y
+                // (with an odd segment count the crown falls between two
+                // vertices). Those axes must stay inside the box and touch
+                // it where the ring starts - +X for the cylinder, the floor
+                // for the arch; every other axis of every shape fills its box
+                // exactly.
+                float lo[3], hi[3];
+                daiblock::bounds(m, lo, hi);
+                for (int ax = 0; ax < 3; ++ax) {
+                    float want_lo = -s.size[ax] * 0.5f * (1.0f + s.pivot[ax]);
+                    float want_hi = want_lo + s.size[ax];
+                    bool inscribed = (kinds[k] == DAI_BLOCKOUT_CYLINDER && ax != 1) ||
+                                     (kinds[k] == DAI_BLOCKOUT_ARCH && ax == 1);
+                    float touch = kinds[k] == DAI_BLOCKOUT_ARCH ? lo[ax] - want_lo : hi[ax] - want_hi;
+                    bool ok = inscribed
+                        ? (lo[ax] >= want_lo - 1e-5f && hi[ax] <= want_hi + 1e-5f &&
+                           (ax == 2 || std::fabs(touch) < 1e-5f))
+                        : (std::fabs(lo[ax] - want_lo) < 1e-5f && std::fabs(hi[ax] - want_hi) < 1e-5f);
+                    if (!ok) {
+                        CHECK(false, "%s pivot (%g %g %g) axis %d reaches %.6f..%.6f, the pivot says %.6f..%.6f",
+                              blockout_kind_name(kinds[k]), s.pivot[0], s.pivot[1], s.pivot[2], ax,
+                              lo[ax], hi[ax], want_lo, want_hi);
+                    }
+                }
+            }
+        }
+        CHECK(cases == 27 * (1 + 4 + 12 + 4 + 1), "the sweep ran %d cases", cases);
+        CHECK(raw_inside == 0, "%d raw generator(s) wind inwards - the flip in build() is doing their job", raw_inside);
+        CHECK(inward == 0, "%d face(s) of a convex shape look inwards", inward);
+        CHECK(slivers == 0, "%d degenerate triangle(s) across the sweep", slivers);
+        CHECK(mismatched == 0, "%d triangle(s) lit against their winding across the sweep", mismatched);
+        CHECK(open == 0 && nonman == 0, "%d open and %d nonmanifold edge(s) across the sweep", open, nonman);
+        CHECK(backwards == 0, "%d edge(s) walked twice the same way across the sweep", backwards);
+    }
+
+    // --- every field is live: change one, the digest moves -----------------
+    // size x/y/z and the pivot on every shape; segments on the round ones,
+    // steps on the stairs, thickness on the arch. A field the mesh ignores
+    // is a field the inspector lies about.
+    {
+        for (int k = 0; k < 5; ++k) {
+            daiblock::Shape base;
+            base.kind = kinds[k];
+            base.size[0] = 1.5f; base.size[1] = 2.5f; base.size[2] = 0.75f;
+            base.segments = 12; base.steps = 5; base.thickness = 0.3f;
+            base.pivot[0] = -1.0f; base.pivot[1] = 1.0f; base.pivot[2] = 0.0f;
+            uint64_t d0 = daiblock::digest(daiblock::finalise(daiblock::build(base)));
+            const char *name = blockout_kind_name(kinds[k]);
+            for (int ax = 0; ax < 3; ++ax) {
+                daiblock::Shape s = base;
+                s.size[ax] += 0.25f;
+                CHECK(daiblock::digest(daiblock::finalise(daiblock::build(s))) != d0,
+                      "%s: size[%d] changed and the mesh did not", name, ax);
+                daiblock::Shape p = base;
+                p.pivot[ax] += 0.5f;
+                CHECK(daiblock::digest(daiblock::finalise(daiblock::build(p))) != d0,
+                      "%s: pivot[%d] changed and the mesh did not", name, ax);
+            }
+            if (kinds[k] == DAI_BLOCKOUT_CYLINDER || kinds[k] == DAI_BLOCKOUT_ARCH) {
+                daiblock::Shape s = base;
+                s.segments = 13;
+                CHECK(daiblock::digest(daiblock::finalise(daiblock::build(s))) != d0,
+                      "%s: segments changed and the mesh did not", name);
+            }
+            if (kinds[k] == DAI_BLOCKOUT_STAIRS) {
+                daiblock::Shape s = base;
+                s.steps = 6;
+                CHECK(daiblock::digest(daiblock::finalise(daiblock::build(s))) != d0,
+                      "stairs: steps changed and the mesh did not");
+            }
+            if (kinds[k] == DAI_BLOCKOUT_ARCH) {
+                daiblock::Shape s = base;
+                s.thickness = 0.2f;
+                CHECK(daiblock::digest(daiblock::finalise(daiblock::build(s))) != d0,
+                      "arch: thickness changed and the mesh did not");
+            }
+        }
+    }
+
+    // --- bit identical: two builds, with a pivot, for all five ------------
+    // and through transform() with a real rotation - the quaternion product
+    // and the snap must land on the same bits twice, not merely nearby.
+    {
+        const float turned[4] = { 0.0f, 0.38268343f, 0.0f, 0.92387953f };   /* 45 degrees about Y */
+        const float at[3] = { 0.7f, -0.3f, 2.1f };
+        const float scaled[3] = { 1.0f, 1.25f, 0.8f };
+        for (int k = 0; k < 5; ++k) {
+            daiblock::Shape s;
+            s.kind = kinds[k];
+            s.size[0] = 1.5f; s.size[1] = 2.5f; s.size[2] = 0.75f;
+            s.segments = 7; s.steps = 5; s.thickness = 0.3f;
+            s.pivot[0] = 1.0f; s.pivot[1] = -1.0f; s.pivot[2] = -1.0f;
+            const char *name = blockout_kind_name(kinds[k]);
+            daiblock::Mesh x = daiblock::finalise(daiblock::build(s));
+            daiblock::Mesh y = daiblock::finalise(daiblock::build(s));
+            CHECK(blockout_same_bits(x, y), "%s with a pivot: two builds are not bit identical", name);
+            daiblock::Mesh tx = daiblock::finalise(daiblock::transform(daiblock::build(s), at, turned, scaled));
+            daiblock::Mesh ty = daiblock::finalise(daiblock::transform(daiblock::build(s), at, turned, scaled));
+            CHECK(blockout_same_bits(tx, ty), "%s turned 45 degrees: two transforms are not bit identical", name);
+            CHECK(daiblock::digest(tx) != daiblock::digest(x), "%s: the transform did nothing", name);
+            check_solid(name, tx);
+            CHECK(daiblock::degenerate_triangles(tx) == 0 && daiblock::normal_mismatches(tx) == 0,
+                  "%s turned 45 degrees: %d sliver(s), %d normal(s) against the winding", name,
+                  daiblock::degenerate_triangles(tx), daiblock::normal_mismatches(tx));
+            // A rotation keeps the volume; the scale multiplies it.
+            CHECK(std::fabs(daiblock::volume(tx) - daiblock::volume(x) * 1.25 * 0.8) < 1e-4,
+                  "%s turned and scaled holds %.6f m3, should be %.6f", name,
+                  daiblock::volume(tx), daiblock::volume(x) * 1.25 * 0.8);
+        }
+    }
+}
+
 static void test_blockout() {
     test_blockout_shapes();
     test_blockout_csg();
     test_blockout_determinism();
+    test_blockout_generators();
     test_blockout_document();
 }
 

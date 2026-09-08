@@ -6,6 +6,11 @@
 
 #include "dai_editor_ui.h"
 #include "dai_show_ui.h"
+#include "dai_render.h"
+#include "dai_ext.h"
+// The blockout host, included the way a real host includes it: section 12
+// builds the mesh a box's fields stand for and checks undo on its digest.
+#include "dai_blockout_host.inl"
 #include <cstdio>
 #include <cmath>
 #include <cstring>
@@ -703,6 +708,330 @@ int main() {
         dai_editor_camera(ed, dai_vec3{ 0, 3, 10 }, dai_vec3{ 0, 0, 0 }, dai_vec3{ 0, 1, 0 },
                           55.0f, 0.1f, 200.0f, 1280.0f, 720.0f);
         dai_editor_camera_viewport_rect(ed, 0.0f, 0.0f, 1280.0f, 720.0f);
+    }
+
+    // ---- 12. blockout: the recipe the inspector edits IS the mesh -----------
+    // A blockout node carries five numbers, not a mesh; the host builds the
+    // triangles from them. So "undo" is proved on the mesh, not on the field:
+    // the digest of daiblock::finalise(build(shape_of(desc))) before the drag,
+    // after it, after undo and after redo. The Size row is FOUND by probing
+    // rows the way the Position row is above, not computed from a pixel.
+    std::printf("blockout\n");
+    {
+        // Without a renderer the host has nothing to build into, and its
+        // contract is to do nothing rather than crash - checked once here so
+        // the include is not decoration.
+        {
+            dai_ext_host ext{};
+            ext.doc = doc; ext.sync = sync; ext.scene = sc; ext.renderer = nullptr;
+            dai_blockout_host_sync(&ext);
+        }
+        auto box_desc = [](const char *name, float x) {
+            dai_node_desc b = dai_node_desc_default();
+            std::snprintf(b.name, sizeof(b.name), "%s", name);
+            b.no_body = b.no_collider = b.no_rigidbody = 1;
+            b.position = { x, 0, 0 };
+            b.blockout = DAI_BLOCKOUT_BOX;
+            b.blockout_size = { 2, 1, 1 };
+            b.render_extent = { 1, 1, 1 };
+            return b;
+        };
+        auto mesh_digest = [&](dai_node n) -> uint64_t {
+            dai_node_desc q{};
+            if (dai_doc_get(doc, n, &q) != DAI_OK) return 0;
+            return daiblock::digest(daiblock::finalise(daiblock::build(daiblockhost::shape_of(q))));
+        };
+        // A frame with the button up first: a field transaction an earlier
+        // section left open would swallow the add below into its undo step,
+        // and the first undo would then take the box away instead of the drag.
+        frame(-100.0f, -100.0f, 0);
+        dai_node_desc bd = box_desc("BlockBox", 0.0f);
+        dai_node box = dai_doc_add(doc, &bd);
+        dai_doc_sync_apply(sync);
+        const uint64_t d_old = mesh_digest(box);
+        CHECK(d_old != 0, "the box built no mesh");
+        CHECK(d_old == mesh_digest(box), "two builds of the same box give different digests");
+        {
+            dai_node_desc other = bd;
+            other.blockout_size = { 2, 1, 1.5f };
+            CHECK(daiblock::digest(daiblock::finalise(daiblock::build(daiblockhost::shape_of(other))))
+                  != d_old, "a different size gives the same digest - the digest is blind");
+        }
+
+        // A frame with the whole input record: Escape is what closes a
+        // dropdown a probe happened to open.
+        auto frame_in = [&](dai_ui_input in) {
+            dai_ui_begin(ui, 1280, 720, &in);
+            dai_editor_ui_expand_all(panels);
+            dai_editor_ui_toolbar(panels, 0.0f, 0.0f, 1280.0f);
+            dai_editor_ui_hierarchy(panels, PANEL_X, PANEL_Y, PANEL_W, 360.0f);
+            dai_editor_ui_inspector(panels, INSPECTOR_X, PANEL_Y, PANEL_W, 592.0f);
+            dai_editor_ui_gizmo(panels);
+            dai_ui_end(ui);
+        };
+        // A press on a component header folds it, and the blockout sections
+        // keep their own fold state - so a probe that folded something puts
+        // it back with a second click, and one that opened a dropdown closes
+        // it. Judged by the vertex count of a hover-only frame at the same
+        // spot: a folded section is fewer triangles, an open dropdown more.
+        auto probe_row = [&](float x, float y) {
+            frame(x, y, 0);
+            uint32_t v0 = total_verts(ui);
+            frame(x, y, 1);
+            for (int i = 1; i <= 10; ++i) frame(x + (float)i * 3.0f, y, 1);
+            frame(x + 30.0f, y, 0);
+            return v0;
+        };
+        auto restore_panel = [&](float x, float y, uint32_t v0) {
+            if (dai_ui_popup_active(ui)) {
+                dai_ui_input in{};
+                in.mouse_x = x; in.mouse_y = y; in.key_escape = 1;
+                frame_in(in);
+            }
+            frame(x, y, 0);
+            if (total_verts(ui) != v0) { frame(x, y, 1); frame(x, y, 0); }
+            frame(x, y, 0);
+        };
+
+        // Where the Size row is for the CURRENT selection - found again for
+        // the multi-select below, whose inspector may lay itself out
+        // differently.
+        auto find_size_row = [&](int *rows_out) {
+            float found = -1.0f;
+            int rows = 0;
+            for (float y = 90.0f; y < 650.0f; y += 4.0f) {
+                dai_node_desc a{}, b2{};
+                dai_doc_get(doc, box, &a);
+                uint32_t depth_before = dai_editor_undo_depth(ed);
+                uint32_t v0 = probe_row(FIELD_X, y);
+                dai_doc_get(doc, box, &b2);
+                if (std::fabs(b2.blockout_size.x - a.blockout_size.x) > 1e-6f) {
+                    if (found < 0.0f) found = y;
+                    ++rows;
+                }
+                while (dai_editor_undo_depth(ed) > depth_before) dai_editor_undo(ed);
+                restore_panel(FIELD_X, y, v0);
+            }
+            if (rows_out) *rows_out = rows;
+            return found;
+        };
+        dai_editor_select(ed, box, 0);
+        int size_rows = 0;
+        float size_y = find_size_row(&size_rows);
+        CHECK(size_y > 0.0f, "no row in the inspector edits the blockout size X");
+        CHECK(size_rows <= 8, "%d different rows changed blockout_size.x - fields overlap", size_rows);
+        CHECK(mesh_digest(box) == d_old, "the probing left the box changed");
+
+        if (size_y > 0.0f) {
+            uint32_t undo_before = dai_editor_undo_depth(ed);
+            probe_row(FIELD_X, size_y);
+            dai_node_desc after{};
+            dai_doc_get(doc, box, &after);
+            const uint64_t d_new = mesh_digest(box);
+            CHECK(after.blockout_size.x > 2.0f,
+                  "dragging Size X right did not grow it (2.000 -> %.3f)", after.blockout_size.x);
+            CHECK(std::fabs(after.blockout_size.y - 1.0f) < 1e-6f, "dragging Size X also moved Y");
+            CHECK(d_new != d_old, "a changed size built the same mesh");
+            CHECK(dai_editor_undo_depth(ed) == undo_before + 1,
+                  "a size drag over 11 frames made %u undo steps, expected 1",
+                  dai_editor_undo_depth(ed) - undo_before);
+            CHECK(dai_editor_undo(ed) == 1, "undo after the size drag failed");
+            CHECK(mesh_digest(box) == d_old, "undo did not give the old mesh back");
+            CHECK(dai_editor_redo(ed) == 1, "redo after the undo failed");
+            CHECK(mesh_digest(box) == d_new, "redo did not give the new mesh back");
+            dai_editor_undo(ed);
+            CHECK(mesh_digest(box) == d_old, "the second undo did not give the old mesh back");
+        }
+
+        // Multi-select: the same drag on two selected boxes lands on both,
+        // as ONE undo step - the diff mechanism above the seam, not a copy.
+        {
+            dai_node_desc bd2 = box_desc("BlockBox2", 3.0f);
+            dai_node box2 = dai_doc_add(doc, &bd2);
+            dai_doc_sync_apply(sync);
+            dai_editor_select(ed, box, 0);
+            dai_editor_select(ed, box2, 1);
+            CHECK(dai_editor_selection_count(ed) == 2, "two boxes were not both selected");
+            float size_y2 = find_size_row(nullptr);
+            CHECK(size_y2 > 0.0f, "with two boxes selected no row edits the size");
+            CHECK(mesh_digest(box) == d_old && mesh_digest(box2) == d_old,
+                  "the multi-select probing left a box changed");
+            uint32_t undo_before = dai_editor_undo_depth(ed);
+            if (size_y2 > 0.0f) probe_row(FIELD_X, size_y2);
+            dai_node_desc a1{}, a2{};
+            dai_doc_get(doc, box, &a1);
+            dai_doc_get(doc, box2, &a2);
+            CHECK(a1.blockout_size.x > 2.0f, "multi-select drag did not change the first box");
+            CHECK(a2.blockout_size.x > 2.0f, "multi-select drag did not reach the second box");
+            CHECK(std::fabs(a1.blockout_size.x - a2.blockout_size.x) < 1e-6f,
+                  "the two boxes got different sizes (%.3f vs %.3f)",
+                  a1.blockout_size.x, a2.blockout_size.x);
+            CHECK(std::fabs(a2.position.x - 3.0f) < 1e-6f, "multi-select copied the position too");
+            CHECK(dai_editor_undo_depth(ed) == undo_before + 1,
+                  "a multi-select drag made %u undo steps, expected 1",
+                  dai_editor_undo_depth(ed) - undo_before);
+            CHECK(dai_editor_undo(ed) == 1, "undo of the multi-select drag failed");
+            CHECK(mesh_digest(box) == d_old && mesh_digest(box2) == d_old,
+                  "undo did not restore both boxes");
+            dai_editor_deselect_all(ed);
+            dai_doc_remove(doc, box2);
+        }
+
+        // CSG: a wall with a doorway under it. The Operation dropdown is
+        // switched through the panel and undone; the op and the child count
+        // come back. The row is found like the others: the press that opens
+        // a dropdown, then the item below it that changes the field.
+        {
+            dai_node_desc wd = box_desc("BlockWall", 0.0f);
+            wd.blockout_size = { 4, 3, 0.2f };
+            wd.blockout_pivot = { 0, -1, 0 };
+            wd.csg = DAI_CSG_SUBTRACT;
+            dai_node wall = dai_doc_add(doc, &wd);
+            dai_node_desc dd = box_desc("Doorway", 0.0f);
+            dd.parent = wall;
+            dd.blockout_size = { 1, 2, 0.5f };
+            dd.blockout_pivot = { 0, -1, 0 };
+            dai_node door = dai_doc_add(doc, &dd);
+            dai_doc_sync_apply(sync);
+            CHECK(dai_doc_children(doc, wall, nullptr, 0) == 1, "the doorway is not the wall's child");
+            const uint64_t d_wall = mesh_digest(wall);
+            dai_editor_select(ed, wall, 0);
+            // One frame before the count starts: the Mesh Renderer section
+            // gives a node it sees for the first time its materials slot, and
+            // that is its own step - not the operation switch under test.
+            frame(-100.0f, -100.0f, 0);
+
+            int switched = 0;
+            uint32_t undo_before = dai_editor_undo_depth(ed);
+            // The depth right before the click that opened the dropdown: the
+            // switch is measured against THAT, so a probe row above it that
+            // edited and was undone cannot be counted twice.
+            uint32_t undo_at_open = undo_before;
+            for (float y = 90.0f; y < 650.0f && !switched; y += 4.0f) {
+                frame(FIELD_X, y, 0);
+                uint32_t v0 = total_verts(ui);
+                undo_at_open = dai_editor_undo_depth(ed);
+                frame(FIELD_X, y, 1);
+                frame(FIELD_X, y, 0);
+                if (!dai_ui_popup_active(ui)) {
+                    // A click that edited something is undone like every
+                    // other probe; a header it may have folded is put back.
+                    while (dai_editor_undo_depth(ed) > undo_before) dai_editor_undo(ed);
+                    frame(FIELD_X, y, 0);
+                    if (total_verts(ui) != v0) { frame(FIELD_X, y, 1); frame(FIELD_X, y, 0); }
+                    continue;
+                }
+                for (float y2 = y + 4.0f; y2 < y + 140.0f && !switched; y2 += 4.0f) {
+                    frame(FIELD_X, y2, 0);
+                    frame(FIELD_X, y2, 1);
+                    frame(FIELD_X, y2, 0);
+                    dai_node_desc q{};
+                    dai_doc_get(doc, wall, &q);
+                    if (q.csg != DAI_CSG_SUBTRACT) { switched = q.csg; break; }
+                    if (!dai_ui_popup_active(ui)) break;
+                }
+                if (!switched) {
+                    while (dai_editor_undo_depth(ed) > undo_before) dai_editor_undo(ed);
+                    dai_ui_input in{};
+                    in.mouse_x = FIELD_X; in.mouse_y = y; in.key_escape = 1;
+                    frame_in(in);
+                    frame(FIELD_X, y, 0);
+                    if (total_verts(ui) != v0) { frame(FIELD_X, y, 1); frame(FIELD_X, y, 0); }
+                }
+            }
+            CHECK(switched != 0, "no dropdown in the inspector switches the CSG operation");
+            CHECK(switched == DAI_CSG_UNION || switched == DAI_CSG_INTERSECT,
+                  "the operation switched to %d, which is no dai_csg_op", switched);
+            CHECK(dai_editor_undo_depth(ed) == undo_at_open + 1,
+                  "switching the operation made %u undo steps, expected 1",
+                  dai_editor_undo_depth(ed) - undo_at_open);
+            CHECK(dai_doc_children(doc, wall, nullptr, 0) == 1,
+                  "switching the operation changed the child count");
+            CHECK(dai_editor_undo(ed) == 1, "undo of the operation switch failed");
+            dai_node_desc back{};
+            dai_doc_get(doc, wall, &back);
+            CHECK(back.csg == DAI_CSG_SUBTRACT, "undo did not restore the operation (%d)", back.csg);
+            CHECK(dai_doc_children(doc, wall, nullptr, 0) == 1, "undo changed the child count");
+            CHECK(mesh_digest(wall) == d_wall, "undo did not give the wall's own shape back");
+            dai_editor_deselect_all(ed);
+            dai_doc_remove(doc, door);
+            dai_doc_remove(doc, wall);
+        }
+
+        // The socket gizmo: a scene with a door socket draws more in the
+        // Scene view than the same scene without one - and nothing extra in
+        // the Game view, where editor lines do not belong.
+        {
+            dai_editor_ui_view_set(panels, DAI_VIEW_SCENE);
+            dai_editor_camera(ed, dai_vec3{ 0, 3, 10 }, dai_vec3{ 0, 0, 0 }, dai_vec3{ 0, 1, 0 },
+                              55.0f, 0.1f, 200.0f, 1280.0f, 720.0f);
+            dai_ui_input gin{};
+            gin.mouse_x = -100; gin.mouse_y = -100;
+            auto scene_verts = [&]() {
+                // Two passes, as every host does: the dock lays itself out
+                // first, then the frame is drawn into the rect it found.
+                for (int pass = 0; pass < 2; ++pass) {
+                    dai_ui_begin(ui, 1280, 720, &gin);
+                    dai_editor_ui_frame(panels, 1280, 720);
+                    dai_ui_end(ui);
+                    float lx = 0, ly = 0, lw = 1280, lh = 720;
+                    dai_editor_ui_viewport_rect(panels, &lx, &ly, &lw, &lh);
+                    dai_editor_camera_viewport_rect(ed, lx, ly, lw, lh);
+                }
+                return total_verts(ui);
+            };
+            // Nothing selected: the inspector would otherwise grow a Door
+            // Socket section along with the gizmo, and the count would be
+            // measuring the panel, not the viewport.
+            dai_editor_deselect_all(ed);
+            uint32_t without = scene_verts();
+            dai_node_desc sd{};
+            dai_doc_get(doc, box, &sd);
+            sd.door_socket = 1;
+            sd.door_offset = { 0, -0.5f, 0.5f };
+            sd.door_normal = { 0, 0, 1 };
+            sd.door_width = 0.9f;
+            sd.door_height = 2.05f;
+            dai_doc_set(doc, box, &sd);
+            uint32_t with = scene_verts();
+            CHECK(with > without, "a door socket drew nothing in the Scene view (%u vs %u verts)",
+                  with, without);
+            // The frame comes from the WORLD transform: a yawed node still
+            // draws its socket, and draws it somewhere else.
+            float sx0, sy0, sx1, sy1;
+            vert_bounds(ui, &sx0, &sy0, &sx1, &sy1);
+            dai_node_desc yd = sd;
+            yd.rotation = { 0, 0.7071068f, 0, 0.7071068f };   // 90 degrees about Y
+            dai_doc_set(doc, box, &yd);
+            uint32_t yawed = scene_verts();
+            CHECK(yawed > without, "a yawed node lost its socket gizmo");
+            // The Game view is compared with ITSELF, socket on against socket
+            // off - the two views differ by their own chrome, not only by
+            // the lines under test.
+            // Inside dai_editor_ui_frame the view is whichever tab the dock
+            // shows, so the Game view is reached the way a user reaches it -
+            // through the panel - and lands a frame later.
+            dai_doc_set(doc, box, &sd);
+            dai_editor_ui_panel_open(panels, "Game");
+            scene_verts();
+            CHECK(dai_editor_ui_view(panels) == DAI_VIEW_GAME, "opening the Game panel did not switch the view");
+            uint32_t game_with = scene_verts();
+            dai_node_desc nd = sd;
+            nd.door_socket = 0; nd.door_width = 0; nd.door_height = 0;
+            dai_doc_set(doc, box, &nd);
+            uint32_t game_without = scene_verts();
+            CHECK(game_with == game_without,
+                  "the Game view drew the socket gizmo (%u vs %u verts)", game_with, game_without);
+            dai_editor_ui_panel_open(panels, "Scene");
+            scene_verts();
+            CHECK(dai_editor_ui_view(panels) == DAI_VIEW_SCENE, "opening the Scene panel did not switch back");
+            dai_doc_set(doc, box, &sd);
+            dai_editor_camera_viewport_rect(ed, 0.0f, 0.0f, 1280.0f, 720.0f);
+        }
+
+        dai_editor_deselect_all(ed);
+        dai_doc_remove(doc, box);
+        dai_doc_sync_apply(sync);
     }
 
     // ---- the sentence the show status line ends in --------------------------

@@ -332,6 +332,31 @@ actually draws against the object's centre, computed the way
   gizmo anchor 0.0 px, drawn centre 2.3 px from the object centre
 ```
 
+### The blockout room
+
+`14-blockout-room.png` and `15-blockout-doorsocket.png`, as `wide-` (1920x1080)
+and `narrow-` (1100x700), come from `tools/blockout_shot.cpp`: a 6 x 5 m room
+built through `dai_doc` in C++ - floor and four walls as box blockouts,
+`Wall.Front` a CSG node with the child `Doorway` subtracted and a door socket
+on its sill, six stairs and an arch inside - drawn by the real editor with
+`include/dai_blockout_host.inl` attached. `build.sh` is frozen, so the tool is
+compiled by the script that runs it, with build.sh's own flags:
+
+```bash
+tools/build_blockout_shot.sh .gauntlet-shots 1920 1080 wide-
+tools/build_blockout_shot.sh .gauntlet-shots 1100 700  narrow-
+```
+
+`./tools/run_tests.sh` runs both, right after the modelling shots; a non-zero
+exit is a red line. What the pictures are worth looking at for: the door hole
+in the front wall, the stairs and the arch over it, the socket's frame and
+arrow on the door, `Doorway` under `Wall.Front` in the hierarchy with the
+boolean's own icon, and the inspector showing Transform, Mesh Renderer,
+Blockout, CSG and Door Socket down to the Add Component button - at 700 px
+too, which is why the tool loads a layout with the inspector as a full height
+column (the default layout left 450 px for five components, and the Door
+Socket section fell off the bottom in the first narrow picture).
+
 ## What the drone show suite does NOT yet prove
 
 Everything above is a measurement. This section is the other half of an honest

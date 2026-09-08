@@ -1075,6 +1075,13 @@ const char *node_icon(const dai_node_desc &r) {
     if (r.audio_event[0]) return DAI_ICON_VOLUME;
     if (r.sprite)         return DAI_ICON_SPRITE;
     if (r.asset[0])       return DAI_ICON_MODEL;
+    // A blockout node is a room part, not an empty: the hierarchy says what
+    // it is. The boolean outranks the shape (a CSG wall IS a wall with a hole),
+    // and a bare socket - a node whose whole job is the docking point - gets
+    // the prefab glyph, since docking a room is what a prefab does.
+    if (r.csg)            return DAI_ICON_C_COLLIDER;
+    if (r.blockout)       return DAI_ICON_CUBE;
+    if (r.door_socket)    return DAI_ICON_C_PREFAB;
     if (r.no_body && r.no_collider && r.no_rigidbody && !r.asset[0])
         return r.script[0] ? DAI_ICON_SCRIPT : DAI_ICON_EMPTY;
     switch (r.shape) {
@@ -3671,6 +3678,11 @@ static void inspector_body(dai_editor_ui *p) {
         }
     }
 
+    // Module 1's sections - Blockout, CSG, Door Socket - among the other
+    // components, ABOVE the Add Component button: a section drawn below that
+    // button and its 220 px of scroll room is a section nobody sees.
+    #include "dai_editor_ui_blockout_inspector.inl"
+
     // ---- Remove Component ---------------------------------------------------
     // Add and Remove are siblings, not the same toggle in two coats: a right
     // click on the component title removes it, like Unity's gear menu.
@@ -3745,10 +3757,10 @@ static void inspector_body(dai_editor_ui *p) {
         }
     }
 
-    // Seam: the blockout components - Box, Cylinder, Stairs, Arch, Wedge, the
-    // CSG node and the DoorSocket. It edits `r` and nothing else; the diff
-    // below turns that into one undo step and into the multi-edit.
-    #include "dai_editor_ui_blockout_inspector.inl"
+    // The blockout seam (Box, Cylinder, Stairs, Arch, Wedge, CSG, DoorSocket)
+    // is included above, with the other component sections. It edits `r` and
+    // nothing else; the diff below turns that into one undo step and into the
+    // multi-edit.
 
     // Clamp here rather than in the widgets: these are physical quantities and
     // a negative roughness or a zero scale would reach the renderer as garbage.
@@ -3806,6 +3818,13 @@ static void inspector_body(dai_editor_ui *p) {
                 DAI_MF(render_extent); DAI_MF(color); DAI_MF(roughness);
                 DAI_MF(emissive); DAI_MF(render_flags);
                 DAI_MF(hidden); DAI_MF(disabled);
+                // The blockout round's fields ride the same diff: a size
+                // dragged on one selected wall lands on every selected wall.
+                DAI_MF(blockout); DAI_MF(blockout_size); DAI_MF(blockout_segments);
+                DAI_MF(blockout_steps); DAI_MF(blockout_thickness); DAI_MF(blockout_pivot);
+                DAI_MF(csg);
+                DAI_MF(door_socket); DAI_MF(door_offset); DAI_MF(door_normal);
+                DAI_MF(door_width); DAI_MF(door_height);
 #undef DAI_MF
                 if (std::memcmp(&t0, &t, sizeof(t)) != 0) dai_doc_set(d, other, &t);
             }

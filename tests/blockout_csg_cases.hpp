@@ -17,7 +17,11 @@
 //   * a cutter turned 45 degrees and a wedge, so the boolean is proved on
 //     planes that are not axis aligned;
 //   * two builds of the same boolean are bit identical, and the result
-//     survives a second boolean.
+//     survives a second boolean;
+//   * the same door hole computed from a DOCUMENT - a wall node with csg 2
+//     and a Box child with a transform - by the host's own recipe, and a
+//     cut wall joined to a second wall, so the boolean's output is proved as
+//     the boolean's input.
 //
 // A generator's own checks (volume, closedness, outward normals) are in
 // blockout_cases.hpp; this file takes the generators as given and measures
@@ -63,6 +67,55 @@ static daiblock::Solid csg_box(float sx, float sy, float sz, float pivot_y,
     s.pivot[1] = pivot_y;
     const float one[3] = { 1, 1, 1 };
     return daiblock::transform(daiblock::build(s), pos, rot, one);
+}
+
+// The document's fields as a shape - the same rules as shape_of() in
+// include/dai_blockout_host.inl: zero is "the default", never a zero sized
+// wall. Restated here rather than included, because the host file is the
+// editor's and pulls the whole ext host in with it.
+static daiblock::Shape csg_doc_shape_of(const dai_node_desc &r) {
+    daiblock::Shape s;
+    s.kind = r.blockout;
+    s.size[0] = r.blockout_size.x > 0 ? r.blockout_size.x : 1.0f;
+    s.size[1] = r.blockout_size.y > 0 ? r.blockout_size.y : 1.0f;
+    s.size[2] = r.blockout_size.z > 0 ? r.blockout_size.z : 1.0f;
+    s.segments = r.blockout_segments > 0 ? r.blockout_segments : 16;
+    s.steps = r.blockout_steps > 0 ? r.blockout_steps : 8;
+    s.thickness = r.blockout_thickness;
+    s.pivot[0] = r.blockout_pivot.x;
+    s.pivot[1] = r.blockout_pivot.y;
+    s.pivot[2] = r.blockout_pivot.z;
+    return s;
+}
+
+// The solid a node stands for, in its own space: its shape, then its
+// blockout children folded in by its operation, first child first, each
+// child moved by its own transform. Step for step what solid_of() in
+// include/dai_blockout_host.inl does - so what this file proves about a
+// document is what the viewport shows of it.
+static daiblock::Solid csg_doc_solid_of(dai_doc *d, dai_node n, int depth) {
+    daiblock::Solid out;
+    dai_node_desc r{};
+    if (dai_doc_get(d, n, &r) != DAI_OK || depth > 8) return out;
+    if (r.blockout) out = daiblock::build(csg_doc_shape_of(r));
+    if (!r.csg) return out;
+    std::vector<dai_node> kids((size_t)dai_doc_children(d, n, nullptr, 0));
+    if (kids.empty()) return out;
+    dai_doc_children(d, n, kids.data(), (uint32_t)kids.size());
+    for (dai_node k : kids) {
+        dai_node_desc c{};
+        if (dai_doc_get(d, k, &c) != DAI_OK) continue;
+        if (!c.blockout && !c.csg) continue;
+        daiblock::Solid cs = csg_doc_solid_of(d, k, depth + 1);
+        if (cs.polys.empty()) continue;
+        const float pos[3] = { c.position.x, c.position.y, c.position.z };
+        const float rot[4] = { c.rotation.x, c.rotation.y, c.rotation.z, c.rotation.w };
+        const float scl[3] = { c.scale.x, c.scale.y, c.scale.z };
+        cs = daiblock::transform(cs, pos, rot, scl);
+        if (out.polys.empty()) out = cs;
+        else                   out = daiblock::csg(out, cs, r.csg);
+    }
+    return out;
 }
 
 static void test_blockout_csg_measured() {
@@ -240,6 +293,120 @@ static void test_blockout_csg_measured() {
         CHECK(std::fabs(daiblock::volume(twice) - (2.0 - 0.6 * 0.6 * 0.2)) < 1e-4,
               "the twice cut wall holds %.6f m3, the maths says %.6f",
               daiblock::volume(twice), 2.0 - 0.6 * 0.6 * 0.2);
+    }
+
+    // --- the door hole as a document: wall node, csg 2, Box child moved -----
+    // The wall is a node with csg = subtract; the door is its child, a
+    // 1 x 2 x 0.5 box scaled 2 in its own X (so 2 x 2 x 0.5), turned 90
+    // degrees about Y and moved 0.5 m along X. Turned, its 0.5 m side spans
+    // the wall and its 2 m side goes through it: the hole is 0.5 wide, 2
+    // high and the wall's 0.2 thick, so 2.4 - 0.5 * 2 * 0.2 = 2.2 m3. The
+    // transform is the proof: an untransformed child would take out 0.4.
+    {
+        dai_doc *d = dai_doc_create();
+        dai_node_desc r = dai_node_desc_default();
+        std::snprintf(r.name, sizeof(r.name), "%s", "Wall");
+        r.blockout = DAI_BLOCKOUT_BOX;
+        r.blockout_size = { 4.0f, 3.0f, 0.2f };
+        r.blockout_pivot = { 0.0f, -1.0f, 0.0f };
+        r.csg = DAI_CSG_SUBTRACT;
+        dai_node wall_node = dai_doc_add(d, &r);
+
+        dai_node_desc c = dai_node_desc_default();
+        std::snprintf(c.name, sizeof(c.name), "%s", "Doorway");
+        c.parent = wall_node;
+        c.blockout = DAI_BLOCKOUT_BOX;
+        c.blockout_size = { 1.0f, 2.0f, 0.5f };
+        c.blockout_pivot = { 0.0f, -1.0f, 0.0f };
+        c.position = { 0.5f, 0.0f, 0.0f };
+        c.rotation = { 0.0f, 0.70710678f, 0.0f, 0.70710678f };
+        c.scale = { 2.0f, 1.0f, 1.0f };
+        dai_node door_node = dai_doc_add(d, &c);
+        CHECK(dai_doc_children(d, wall_node, nullptr, 0) == 1, "the doorway is not the wall's child");
+
+        daiblock::Solid from_doc = csg_doc_solid_of(d, wall_node, 0);
+        daiblock::Mesh m = daiblock::finalise(from_doc);
+        check_csg_solid("wall minus door, from the document", m);
+        CHECK(std::fabs(daiblock::volume(m) - 2.2) < 1e-4,
+              "the document's wall holds %.6f m3, the maths says 2.4 - 0.5 * 2 * 0.2 = 2.2",
+              daiblock::volume(m));
+        // The hole is where the child's transform put it: x = 0.5 +- 0.25,
+        // not the untransformed 0 +- 0.5. Front faces spanning the moved
+        // doorway would mean the transform was ignored; and (0, 1), the
+        // middle of where the UNMOVED door would be, must still be wall -
+        // some triangle of the wall plane has that point in its box.
+        int covering = 0, at_origin = 0;
+        for (size_t i = 0; i + 2 < m.idx.size(); i += 3) {
+            const dai_vec3 &a = m.verts[m.idx[i]].position;
+            const dai_vec3 &b = m.verts[m.idx[i + 1]].position;
+            const dai_vec3 &cc = m.verts[m.idx[i + 2]].position;
+            if (std::fabs(std::fabs(a.z) - 0.1f) > 1e-4f) continue;
+            float minx = std::min(a.x, std::min(b.x, cc.x)), maxx = std::max(a.x, std::max(b.x, cc.x));
+            float miny = std::min(a.y, std::min(b.y, cc.y)), maxy = std::max(a.y, std::max(b.y, cc.y));
+            if (minx < 0.26f && maxx > 0.74f && miny < 0.01f && maxy > 1.99f) ++covering;
+            if (minx < 0.0f && maxx > 0.0f && miny < 1.0f && maxy > 1.0f) ++at_origin;
+        }
+        CHECK(covering == 0, "%d wall face(s) span the moved doorway - the child's transform was ignored", covering);
+        CHECK(at_origin > 0, "no wall face covers (0, 1) - the hole is where the child is NOT");
+
+        // Same recipe, same answer: the document route and the direct call
+        // are one computation, bit for bit.
+        const float pos[3] = { 0.5f, 0.0f, 0.0f };
+        const float yaw90[4] = { 0.0f, 0.70710678f, 0.0f, 0.70710678f };
+        const float deep[3] = { 2.0f, 1.0f, 1.0f };
+        daiblock::Shape ds = csg_doc_shape_of(c);
+        daiblock::Mesh direct = daiblock::finalise(daiblock::csg(
+            wall, daiblock::transform(daiblock::build(ds), pos, yaw90, deep), DAI_CSG_SUBTRACT));
+        CHECK(daiblock::digest(direct) == daiblock::digest(m),
+              "the document's wall and the direct boolean differ: %llx vs %llx",
+              (unsigned long long)daiblock::digest(direct), (unsigned long long)daiblock::digest(m));
+
+        // Moving the door in the document moves the hole: the same wall with
+        // the child 1 m further along still loses 0.2 m3, and a different set
+        // of triangles.
+        dai_node_desc moved = c;
+        moved.position = { 1.5f, 0.0f, 0.0f };
+        dai_doc_begin(d, "Move the doorway");
+        dai_doc_set(d, door_node, &moved);
+        dai_doc_commit(d);
+        daiblock::Mesh m2 = daiblock::finalise(csg_doc_solid_of(d, wall_node, 0));
+        check_csg_solid("wall minus the moved door, from the document", m2);
+        CHECK(std::fabs(daiblock::volume(m2) - 2.2) < 1e-4,
+              "the wall with the moved door holds %.6f m3, not 2.2", daiblock::volume(m2));
+        CHECK(daiblock::digest(m2) != daiblock::digest(m),
+              "the door moved in the document but the wall did not change");
+        dai_doc_destroy(d);
+    }
+
+    // --- the boolean's output as the boolean's input: cut wall + second wall
+    // The cut wall (2.0 m3) joined to a 0.2 x 3 x 4 wall standing across its
+    // end at x = 2: the side wall covers x = 1.9..2.1 and the cut wall ends
+    // at 2, so the two share a 0.1 x 3 x 0.2 post and the union is
+    // 2.0 + 2.4 - 0.06 = 4.34 m3, the door hole still in it.
+    {
+        daiblock::Solid cut = daiblock::csg(wall, door, DAI_CSG_SUBTRACT);
+        const float at[3] = { 2.0f, 0.0f, 0.0f };
+        daiblock::Solid side = csg_box(0.2f, 3.0f, 4.0f, -1.0f, at, id_rot);
+        daiblock::Mesh m = daiblock::finalise(daiblock::csg(cut, side, DAI_CSG_UNION));
+        check_csg_solid("cut wall joined to a second wall", m);
+        CHECK(std::fabs(daiblock::volume(m) - 4.34) < 1e-4,
+              "the corner holds %.6f m3, the maths says 2.0 + 2.4 - 0.06 = 4.34", daiblock::volume(m));
+        // ... and the other way round, since union is commutative and the
+        // BSP is not: same volume, same surface area, whichever is the base.
+        daiblock::Mesh n = daiblock::finalise(daiblock::csg(side, cut, DAI_CSG_UNION));
+        check_csg_solid("second wall joined to the cut wall", n);
+        CHECK(std::fabs(daiblock::volume(n) - daiblock::volume(m)) < 1e-4,
+              "A | B holds %.6f m3 but B | A %.6f", daiblock::volume(m), daiblock::volume(n));
+        CHECK(std::fabs(daiblock::area(n) - daiblock::area(m)) < 1e-3,
+              "A | B has %.6f m2 of surface but B | A %.6f", daiblock::area(m), daiblock::area(n));
+        // Two walls that only touch: the sum of both, and the seam between
+        // them is not a face any more (the 4 x 0.2 slab is 2.4 + 0.8 = 3.2).
+        const float next[3] = { 0.0f, 0.0f, 0.2f };
+        daiblock::Solid behind = csg_box(4.0f, 1.0f, 0.2f, -1.0f, next, id_rot);
+        daiblock::Mesh t = daiblock::finalise(daiblock::csg(wall, behind, DAI_CSG_UNION));
+        check_csg_solid("two walls back to back", t);
+        CHECK(std::fabs(daiblock::volume(t) - 3.2) < 1e-4,
+              "the doubled wall holds %.6f m3, the maths says 2.4 + 0.8 = 3.2", daiblock::volume(t));
     }
 }
 

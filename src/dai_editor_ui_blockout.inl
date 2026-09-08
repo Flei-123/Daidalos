@@ -34,11 +34,19 @@ static void blockout_socket_frame(const dai_node_desc &r, dai_vec3 wp, dai_quat 
     float fl = std::sqrt(f.x * f.x + f.y * f.y + f.z * f.z);
     f = fl > 1e-6f ? v_mul(f, 1.0f / fl) : dai_vec3{ 0, 0, 1 };
 
-    // World up, unless the socket looks straight up or down - a hatch in a
-    // ceiling is still a socket, and a zero length cross product would draw it
-    // as a dot.
-    dai_vec3 u{ 0, 1, 0 };
-    if (std::fabs(f.y) > 0.99f) u = dai_vec3{ 0, 0, 1 };
+    // The NODE's up, taken from its world rotation - a yawed wall keeps its
+    // frame square to itself, and a socket on a tilted node tilts with it.
+    // Falls back to the node's forward when the normal is (nearly) parallel
+    // to it: a hatch in a ceiling is still a socket, and a zero length cross
+    // product would draw it as a dot.
+    dai_vec3 u = qrot_v(wr, dai_vec3{ 0, 1, 0 });
+    float ul = std::sqrt(u.x * u.x + u.y * u.y + u.z * u.z);
+    u = ul > 1e-6f ? v_mul(u, 1.0f / ul) : dai_vec3{ 0, 1, 0 };
+    if (std::fabs(u.x * f.x + u.y * f.y + u.z * f.z) > 0.99f) {
+        u = qrot_v(wr, dai_vec3{ 0, 0, 1 });
+        ul = std::sqrt(u.x * u.x + u.y * u.y + u.z * u.z);
+        u = ul > 1e-6f ? v_mul(u, 1.0f / ul) : dai_vec3{ 0, 0, 1 };
+    }
     dai_vec3 rt{ u.y * f.z - u.z * f.y, u.z * f.x - u.x * f.z, u.x * f.y - u.y * f.x };
     float rl = std::sqrt(rt.x * rt.x + rt.y * rt.y + rt.z * rt.z);
     rt = rl > 1e-6f ? v_mul(rt, 1.0f / rl) : dai_vec3{ 1, 0, 0 };

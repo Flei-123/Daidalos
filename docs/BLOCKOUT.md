@@ -161,3 +161,45 @@ anything that does not, so a wall on a node with a half metre collider is still
 | `tests/blockout_cases.hpp` | shapes, booleans, determinism, the document round trip (runs in `build/test_doc`) |
 | `tests/blockout_csg_cases.hpp` | the boolean against the bar: volumes with a closed form, no degenerate triangle, sloped cutters (runs in `build/test_doc`) |
 | `tests/blockout_gltf_cases.hpp` | the .glb round trip (runs in `build/test_fracture`) |
+| `tests/test_editor_ui.cpp`, section 12 "blockout" | the panel against the mesh: the Size row found by probing, one undo step per drag, the mesh digest back after undo and forward after redo, the same drag on two selected boxes, the CSG operation switched through its dropdown and undone, the socket gizmo drawn in the Scene view and not in the Game view (runs in `build/test_editor_ui`) |
+| `tools/blockout_shot.cpp` | the room built through `dai_doc` in C++ and photographed by the real editor with the host attached - the two pictures below |
+| `tools/build_blockout_shot.sh` | compiles and runs it with build.sh's own flags: `tools/build_blockout_shot.sh OUTDIR W H [PREFIX]` |
+
+## In the editor
+
+The hierarchy says what a node is: a CSG node carries the collider glyph (a
+boolean is a shape made of shapes), a blockout node the cube, a node whose
+whole job is the docking point the package glyph. `node_icon()` in
+`src/dai_editor_ui.cpp` answers in that order - before the "empty" a node
+without physics used to get.
+
+The three inspector sections sit among the other components, above the Add
+Component button: Blockout (Shape, Size, Segments / Steps / Thickness where
+the shape has them, Pivot), CSG (Operation, and what the children do), Door
+Socket (Position, Normal, Width, Height). They edit the record and nothing
+else; the diff below the seam turns a drag into ONE undo step and pushes the
+same change into every selected node - the blockout, CSG and socket fields
+are in that diff's list like position and colour are.
+
+The socket gizmo takes its frame from the node's WORLD transform: the normal
+and the up vector are rotated by the node, so a yawed wall draws its opening
+square to itself and the arrow still points the way the door faces.
+
+## The pictures
+
+`tools/run_tests.sh` runs `tools/build_blockout_shot.sh` twice, right after
+the modelling shots, at 1920x1080 (`wide-`) and 1100x700 (`narrow-`), into
+`.gauntlet-shots/`:
+
+* `14-blockout-room.png` - a 6 x 5 m room: floor and four walls as box
+  blockouts standing on the floor, `Wall.Front` a CSG node (subtract) with the
+  child `Doorway` cut out of it and a door socket on its sill facing out, a
+  flight of six stairs and an arch inside. The CSG wall is selected: translate
+  gizmo on it, the socket frame and arrow bright on the door, the hierarchy
+  open with `Doorway` under `Wall.Front`, the inspector on Transform, Mesh
+  Renderer, Blockout, CSG and Door Socket.
+* `15-blockout-doorsocket.png` - the same scene from close to the door, the
+  socket's node selected.
+
+A non-zero exit of the tool is a red line in the run; a missing `.cpp` is
+listed under "not built".

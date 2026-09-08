@@ -216,13 +216,15 @@ inline void offset_solid(Solid &sol, V3 off) {
 inline Solid box_solid(double sx, double sy, double sz) {
     double hx = sx * 0.5, hy = sy * 0.5, hz = sz * 0.5;
     Solid s;
-    /* Counter clockwise seen from outside, the same winding daimesh uses. */
-    push_quad(s, v3(+hx, -hy, -hz), v3(+hx, -hy, +hz), v3(+hx, +hy, +hz), v3(+hx, +hy, -hz));
-    push_quad(s, v3(-hx, -hy, +hz), v3(-hx, -hy, -hz), v3(-hx, +hy, -hz), v3(-hx, +hy, +hz));
-    push_quad(s, v3(-hx, +hy, -hz), v3(+hx, +hy, -hz), v3(+hx, +hy, +hz), v3(-hx, +hy, +hz));
-    push_quad(s, v3(-hx, -hy, +hz), v3(+hx, -hy, +hz), v3(+hx, -hy, -hz), v3(-hx, -hy, -hz));
-    push_quad(s, v3(-hx, -hy, +hz), v3(-hx, +hy, +hz), v3(+hx, +hy, +hz), v3(+hx, -hy, +hz));
-    push_quad(s, v3(+hx, -hy, -hz), v3(+hx, +hy, -hz), v3(-hx, +hy, -hz), v3(-hx, -hy, -hz));
+    /* Counter clockwise seen from outside, the same winding daimesh uses:
+     * +X, -X, +Y, -Y, +Z, -Z. Checked, not believed - the suite asks
+     * inward_faces() of the raw generator in every pivot position. */
+    push_quad(s, v3(+hx, -hy, -hz), v3(+hx, +hy, -hz), v3(+hx, +hy, +hz), v3(+hx, -hy, +hz));
+    push_quad(s, v3(-hx, -hy, +hz), v3(-hx, +hy, +hz), v3(-hx, +hy, -hz), v3(-hx, -hy, -hz));
+    push_quad(s, v3(-hx, +hy, -hz), v3(-hx, +hy, +hz), v3(+hx, +hy, +hz), v3(+hx, +hy, -hz));
+    push_quad(s, v3(-hx, -hy, +hz), v3(-hx, -hy, -hz), v3(+hx, -hy, -hz), v3(+hx, -hy, +hz));
+    push_quad(s, v3(-hx, -hy, +hz), v3(+hx, -hy, +hz), v3(+hx, +hy, +hz), v3(-hx, +hy, +hz));
+    push_quad(s, v3(+hx, -hy, -hz), v3(-hx, -hy, -hz), v3(-hx, +hy, -hz), v3(+hx, +hy, -hz));
     return s;
 }
 
@@ -329,16 +331,17 @@ inline Solid arch_solid(double sx, double sy, double sz, int segments, double th
 
 inline Solid wedge_solid(double sx, double sy, double sz) {
     double hx = sx * 0.5, hy = sy * 0.5, hz = sz * 0.5;
-    /* A ramp: full height at -Z, nothing at +Z. Five faces, all convex. */
+    /* A ramp: full height at -Z, nothing at +Z. Five faces, all convex, all
+     * counter clockwise seen from outside. */
     V3 a = v3(-hx, -hy, -hz), b = v3(+hx, -hy, -hz);
     V3 c = v3(+hx, -hy, +hz), d = v3(-hx, -hy, +hz);
     V3 e = v3(-hx, +hy, -hz), f = v3(+hx, +hy, -hz);
     Solid s;
-    push_quad(s, a, d, c, b);        /* floor            */
-    push_quad(s, a, b, f, e);        /* the back wall    */
-    push_quad(s, d, e, f, c);        /* the slope        */
-    push_tri(s, a, e, d);            /* -X side          */
-    push_tri(s, b, c, f);            /* +X side          */
+    push_quad(s, a, b, c, d);        /* floor, seen from -Y      */
+    push_quad(s, a, e, f, b);        /* the back wall, from -Z   */
+    push_quad(s, d, c, f, e);        /* the slope, from +Y+Z     */
+    push_tri(s, a, d, e);            /* -X side                  */
+    push_tri(s, b, f, c);            /* +X side                  */
     return s;
 }
 
@@ -363,11 +366,13 @@ inline Solid build(const Shape &shape) {
     for (Poly &p : s.polys)
         for (V3 &v : p.pts) v = snap(v);
     for (Poly &p : s.polys) p.normal = poly_normal(p);
-    /* Every generator above winds its faces the same way round as its
-     * neighbours - which the suite checks with inconsistent_edges() - but
-     * "the same way round" is not yet "outwards". One signed volume settles
-     * that for the whole solid at once, so no generator has to get the
-     * handedness of five separate faces right by eye. */
+    /* Every generator above winds its faces counter clockwise seen from
+     * OUTSIDE, on its own - the suite proves it on the raw solids, before this
+     * line: a positive signed volume for all five, inward_faces() == 0 for the
+     * convex three, in every pivot position. The flip below therefore never
+     * runs; it stays as a safety net so that a generator typed in backwards
+     * one day would come out lit and exported right while the suite goes red
+     * on it, rather than inside out in the viewport. */
     if (volume(finalise(s)) < 0) flip(s);
     return s;
 }
@@ -457,6 +462,17 @@ inline bool clean_poly(Poly &p) {
     return true;
 }
 
+/* How far off an edge a snapped vertex may sit and still be ON it. Not SNAP
+ * itself: the edge's two ends and the vertex were each moved up to half a
+ * grid diagonal (0.87 SNAP) by snapping, in directions that need not agree,
+ * so a point that was exactly on the edge before a rotation can be 1.7 SNAP
+ * off it afterwards - and a stair turned 45 degrees came out with three open
+ * edges for exactly that reason. Two grid cells covers it; anything that
+ * close to an edge and not on it is below what an artist typed anyway. The
+ * triangulation below judges "collinear" by the same number, so a point the
+ * repair inserted is never mistaken for a corner. */
+const double WELD = SNAP * 2.0;
+
 /* T junction repair. A vertex that sits in the middle of a neighbour's edge
  * leaves that edge with one face on one side and two on the other - the seam
  * you can see daylight through, and the reason a "closed" mesh fails an edge
@@ -485,7 +501,7 @@ inline void repair_t_junctions(std::vector<Poly> &polys) {
                 double t = dot(sub(v, a), ab) / len2;
                 if (t <= 1e-9 || t >= 1.0 - 1e-9) continue;
                 V3 on = add(a, mul(ab, t));
-                if (length(sub(on, v)) > SNAP * 0.5) continue;
+                if (length(sub(on, v)) > WELD) continue;
                 hits.push_back(std::make_pair(t, v));
             }
             if (hits.empty()) continue;
@@ -497,6 +513,80 @@ inline void repair_t_junctions(std::vector<Poly> &polys) {
         }
         p.pts = out;
     }
+}
+
+/* Triangulates one convex polygon whose loop may carry collinear points - the
+ * T junction repair above puts them there. A fan from vertex 0 is wrong on
+ * such a loop: whenever vertex 0 and two inserted points share a line the fan
+ * emits a triangle with no area, and that triangle is the only thing keeping
+ * the position based edge count at "exactly two". So: ear clipping, in a fixed
+ * order, that never clips a collinear ear.
+ *
+ * The rules, in the order they are asked:
+ *   - an ear is the corner (prev, i, next) with i strictly convex, i.e. a
+ *     positive turn about the face normal and more than WELD off the chord;
+ *     a T point sits within WELD of its edge and is therefore never one;
+ *   - the chord prev->next must carry no OTHER vertex of the loop. On a convex
+ *     loop that only happens when the loop IS a triangle with T points along
+ *     one side, and clipping across them would leave a zero area remainder
+ *     and a boundary edge that no triangle owns;
+ *   - the first ear in loop order is taken, starting at vertex 1 - so a loop
+ *     without collinear points comes out as exactly the fan it did before,
+ *     and the index order the digest sees is unchanged there;
+ *   - if no vertex passes (a loop thinner than the snap grid - clean_poly
+ *     keeps those when their area is still above 1e-12) the corner with the
+ *     largest area is taken, first one on a tie, so the loop always closes.
+ * Every boundary edge lands in exactly one triangle; no chord is a boundary
+ * edge; nothing here looks at a pointer or a hash. `ring` holds indices into
+ * `pts`, and `out` receives triples of them. */
+inline void clip_convex(const std::vector<V3> &pts, V3 normal, std::vector<uint32_t> &out) {
+    size_t n = pts.size();
+    if (n < 3) return;
+    std::vector<uint32_t> ring;
+    ring.reserve(n);
+    for (size_t i = 0; i < n; ++i) ring.push_back((uint32_t)i);
+
+    while (ring.size() > 3) {
+        size_t r = ring.size();
+        size_t pick = r;             /* r = nothing yet */
+        size_t best = r;
+        double best_area = -1.0;
+        for (size_t k = 0; k < r; ++k) {
+            size_t i = (k + 1) % r;  /* start at vertex 1: the fan's first ear */
+            size_t ip = (i + r - 1) % r, in = (i + 1) % r;
+            const V3 &a = pts[ring[ip]], &b = pts[ring[i]], &c = pts[ring[in]];
+            V3 chord = sub(c, a);
+            double clen = length(chord);
+            if (clen <= 0) continue;
+            V3 g = cross(sub(b, a), sub(c, a));
+            double area2 = length(g);
+            double turn = dot(g, normal);
+            if (area2 * 0.5 > best_area && turn > 0) { best_area = area2 * 0.5; best = k; }
+            if (turn <= 0) continue;                    /* reflex, or backwards */
+            if (area2 / clen <= WELD) continue;         /* height off the chord: a T point */
+            bool on_chord = false;
+            for (size_t j = 0; j < r && !on_chord; ++j) {
+                if (j == ip || j == i || j == in) continue;
+                const V3 &v = pts[ring[j]];
+                double t = dot(sub(v, a), chord) / (clen * clen);
+                if (t <= 0 || t >= 1) continue;
+                if (length(sub(v, add(a, mul(chord, t)))) <= WELD) on_chord = true;
+            }
+            if (on_chord) continue;
+            pick = k;
+            break;
+        }
+        if (pick == r) pick = best;
+        if (pick == r) pick = 0;     /* every corner is flat: the loop has no area left */
+        size_t i = (pick + 1) % r, ip = (i + r - 1) % r, in = (i + 1) % r;
+        out.push_back(ring[ip]);
+        out.push_back(ring[i]);
+        out.push_back(ring[in]);
+        ring.erase(ring.begin() + (long)i);
+    }
+    out.push_back(ring[0]);
+    out.push_back(ring[1]);
+    out.push_back(ring[2]);
 }
 
 inline void axis_uv(V3 n, V3 p, float *u, float *v) {
@@ -534,11 +624,12 @@ inline Mesh finalise(const Solid &sol) {
             detail::axis_uv(p.normal, v, &x.u, &x.v);
             m.verts.push_back(x);
         }
-        for (size_t i = 1; i + 1 < p.pts.size(); ++i) {
-            m.idx.push_back(base);
-            m.idx.push_back(base + (uint32_t)i);
-            m.idx.push_back(base + (uint32_t)i + 1);
-        }
+        /* Ear clipped, not fanned: see clip_convex for why the fan was wrong
+         * once the T junction repair had put collinear points into the loop.
+         * A loop without them still comes out as the same fan. */
+        std::vector<uint32_t> tris;
+        detail::clip_convex(p.pts, p.normal, tris);
+        for (uint32_t t : tris) m.idx.push_back(base + t);
     }
     return m;
 }
