@@ -745,6 +745,11 @@ PropRef prop_ref(dai_node_desc &r, const char *name) {
     if (!std::strcmp(name, "text.anchor"))          return ival(&r.text_anchor);
     if (!std::strcmp(name, "text.color"))           return vec(&r.text_color);
 
+    // Seam: the blockout components' properties, under the same names the
+    // bridge and the behaviours use. One table, so a getter and a setter
+    // cannot disagree - the reason this function is shaped this way.
+    #include "dai_blockout_props.inl"
+
     if (!std::strcmp(name, "image.enabled"))        return flag(&r.sprite, 0);
     if (!std::strcmp(name, "image.size"))           return vec(&r.sprite_size);
     if (!std::strcmp(name, "image.asset"))          return text(r.asset, sizeof(r.asset));
@@ -2351,6 +2356,20 @@ static void apply_materials(dai_doc *doc) {
         dai_editor_ui_log(g_panels_for_log, 0, msg);
     }
 }
+
+// ---- the extension seams ------------------------------------------------
+//
+// Four features this round adds are things the HOST has to drive - build a
+// mesh, create a material, bake a texture, answer a socket - and all four of
+// them would otherwise be edits to the middle of this file by four people at
+// once. They are includes instead; see include/dai_ext.h for why, and for
+// which module owns which file. Everything below the include is the module's,
+// everything around it is not.
+#include "dai_ext.h"
+#include "dai_blockout_host.inl"    // module 1: blockout + CSG meshes
+#include "dai_material_host.inl"    // module 2: .daimat -> dai_material, maps
+#include "dai_daitex_host.inl"      // module 3: .daitex -> baked PNGs
+#include "dai_bridge_host.inl"      // module 4: the local JSON socket
 
 static int script_create(const char *name, void *) {
     if (!name || !*name || !g_assets_dir[0]) return 0;
@@ -4876,6 +4895,26 @@ int main(int argc, char **argv) {
                     dai_show_ui_mesh(g_show_ui, &d, g_show_mesh_src.c_str());
                 }
             }
+        }
+
+        // The four seams of this round, in the order their results depend on
+        // each other: a graph bakes a texture, a material picks that texture
+        // up, a blockout node builds the mesh the material is drawn on, and
+        // the bridge is what may have changed any of the three this frame.
+        // Once per frame, after the document has been reconciled - see
+        // include/dai_ext.h.
+        {
+            dai_ext_host ext{};
+            ext.doc = doc;
+            ext.sync = sync;
+            ext.scene = sc;
+            ext.renderer = r;
+            ext.assets_dir = g_assets_dir;
+            ext.asset_revision = assets ? dai_assets_revision(assets) : 0;
+            dai_daitex_host_poll(&ext);
+            dai_material_host_apply(&ext);
+            dai_blockout_host_sync(&ext);
+            dai_bridge_host_poll(&ext);
         }
 
         float alpha = 1.0f;

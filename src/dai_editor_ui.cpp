@@ -2630,9 +2630,18 @@ static void asset_inspector_body(dai_editor_ui *p) {
             }
             p->inspect_mat = v;
             p->inspect_mat_ok = 1;
+            // Seam: the material fields this panel does not know about yet -
+            // the maps and the triplanar switch. Reads the same
+            // p->inspect_text that was just parsed above.
+            #include "dai_editor_ui_material_parse.inl"
         }
     }
     size_t bytes = std::strlen(p->inspect_text.data());
+
+    // Seam: assets whose contents the editor can show as FIELDS rather than as
+    // a byte count - today the .daitex node graph. It runs before the branches
+    // below and takes the ones it recognises off their hands.
+    #include "dai_editor_ui_daitex.inl"
 
     // ---- what each kind can say for itself --------------------------------
     if (p->inspect_mat_ok) {
@@ -2642,6 +2651,10 @@ static void asset_inspector_body(dai_editor_ui *p) {
         changed |= dai_ui_num_field(p->ui, "Roughness", &p->inspect_mat.roughness, 0.01f, 0.02f, 1.0f, "matrough");
         changed |= dai_ui_num_field(p->ui, "Metallic", &p->inspect_mat.metallic, 0.01f, 0.0f, 1.0f, "matmetal");
         changed |= dai_ui_num_field(p->ui, "Emissive", &p->inspect_mat.emissive, 0.05f, 0.0f, 40.0f, "matemis");
+        // Seam: the rest of the material - its maps, and whether it projects
+        // them from the world instead of from a UV set. Sets `changed` like
+        // the rows above it, so the Save button lights up the same way.
+        #include "dai_editor_ui_material.inl"
         if (changed) p->inspect_dirty = 1;
         // The swatch: a number is not a colour.
         {
@@ -2656,14 +2669,19 @@ static void asset_inspector_body(dai_editor_ui *p) {
             dai_ui_rect_outline(p->ui, sx, sy, sw, 22.0f, 1.0f, st->panel_border);
         }
         if (dai_ui_button_fit(p->ui, p->inspect_dirty ? "Save material *" : "Save material")) {
-            char text[512];
-            std::snprintf(text, sizeof(text),
+            char head[512];
+            std::snprintf(head, sizeof(head),
                           "daidalos-material 1\ncolor %g %g %g\nroughness %g\n"
                           "metallic %g\nemissive %g\n",
                           (double)p->inspect_mat.color[0], (double)p->inspect_mat.color[1],
                           (double)p->inspect_mat.color[2], (double)p->inspect_mat.roughness,
                           (double)p->inspect_mat.metallic, (double)p->inspect_mat.emissive);
-            if (p->file_write && p->file_write(path.c_str(), text, p->file_user)) {
+            // A std::string rather than the fixed buffer it was, because the
+            // seam below appends to it: a Save that writes six lines back over
+            // a file that had ten is not a save, it is a deletion.
+            std::string text = head;
+            #include "dai_editor_ui_material_save.inl"
+            if (p->file_write && p->file_write(path.c_str(), text.c_str(), p->file_user)) {
                 p->inspect_dirty = 0;
                 p->inspect_loaded.clear();          // re-read it next frame
                 p->want_material_apply = 1;         // every object wearing it
@@ -3727,6 +3745,11 @@ static void inspector_body(dai_editor_ui *p) {
         }
     }
 
+    // Seam: the blockout components - Box, Cylinder, Stairs, Arch, Wedge, the
+    // CSG node and the DoorSocket. It edits `r` and nothing else; the diff
+    // below turns that into one undo step and into the multi-edit.
+    #include "dai_editor_ui_blockout_inspector.inl"
+
     // Clamp here rather than in the widgets: these are physical quantities and
     // a negative roughness or a zero scale would reach the renderer as garbage.
     if (r.roughness < 0.02f) r.roughness = 0.02f;
@@ -4237,6 +4260,12 @@ void dai_editor_ui_colliders(dai_editor_ui *p) {
         }
     }
 }
+
+// Seam: what module 1 draws in the viewport - the DoorSocket gizmo. Placed
+// here so the wire_* helpers and dai_editor_project* above it are in scope; it
+// is called from the overlay block that already draws the colliders and the
+// gizmo, so no host has to learn a new function.
+#include "dai_editor_ui_blockout.inl"
 
 // Dragging a face handle: the FACE moves, so half extent and centre both move
 // by half the distance - that is what "the box grew on one side" means, and
@@ -5379,6 +5408,8 @@ static void run_context_menus(dai_editor_ui *p) {
             if (!ar2.image_on)    entries.push_back({ "Image (UI)", "Rendering", 8, "" });
             if (!ar2.button_on)   entries.push_back({ "Button (UI)", "Rendering", 9, "" });
             if (!ar2.audio_event[0]) entries.push_back({ "Audio Source", "Audio", 5, "" });
+            // Seam: the Blockout category - the shapes a room is built out of.
+            #include "dai_editor_ui_blockout_addcomp.inl"
             // NO "Remove X" entries. A menu called Add Component that offers
             // to remove things is a menu you have to read twice, and the
             // component is already removable where it lives: the header's
@@ -8088,6 +8119,7 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
         // grid: world lines via dai_editor_ui_grid_lines, drawn by the host
         (void)0;
         if (p->gizmo_colliders) dai_editor_ui_colliders(p);
+        dai_blockout_draw_sockets(p);
         if (p->gizmo_cameras) draw_cameras(p);
         dai_editor_ui_gizmo(p);
         dai_ui_clip_end(ui);
