@@ -260,3 +260,150 @@ already green.
    only at keyframes - proven in `tests/droneshow_cases_io.cpp`.
 7. `.gauntlet-shots/` shows a usable panel set and a show with one conflict.
 8. `RUN.md` matches this checkout, number for number.
+
+---
+
+# Round 5 - Blockout / CSG / DoorSocket, finished
+
+One module of the modelling round, brought from "wip" to measured. Nothing is
+rebuilt beside what is there: the seams of `include/dai_ext.h` stay, the file
+list in docs/BLOCKOUT.md stays, `build.sh` / `build_win.sh` are not touched.
+Three builders, no two on one file.
+
+## Where the checkout really stands (measured 2026-09-08, commit e6902bf + this skeleton)
+
+* `./build.sh` green, `./tools/run_tests.sh`: **TOTAL 3000 passed, 0 failed,
+  all green** (build/last_run.log).
+* All seams are wired: host (`include/dai_blockout_host.inl`), props table,
+  inspector, Add Component, socket gizmo, `test_doc` runs `test_blockout()`,
+  `test_fracture` runs `test_blockout_gltf()`. The five generators pass
+  volume, edge and winding checks. The document round trip, undo/redo of the
+  fields and the old-scene compatibility are proved.
+* A probe against the bar (`tests/blockout_csg_cases.hpp`, written now and
+  wired into `tests/test_doc.cpp`) finds the real gaps - these are facts, not
+  guesses:
+
+```
+stairs 2x3x1.5, 5 steps      degenerate triangles = 8
+wall 4x3x0.2 - door 1x2x0.5  vol 2.000000 open 0 nonmanifold 0  degenerate = 4
+union of two boxes           vol 4.050000 open 0 nonmanifold 0  degenerate = 2
+wall - arch ring             SEGFAULT: Bsp::build recurses ~21000 deep (stack overflow)
+```
+
+  Diagnosed, with the stack trace in hand:
+
+  1. **degenerate triangles** come from `finalise()`: `repair_t_junctions`
+     inserts a vertex into an edge, and the fan triangulation from vertex 0
+     then emits a zero area triangle whenever vertex 0 and two inserted
+     points lie on one line. Today those zero area triangles are also what
+     keeps the position based edge count at "exactly two" - so dropping them
+     is not enough, the polygon has to be triangulated so that every boundary
+     edge lands in exactly one real triangle (an ear clip that never clips a
+     collinear ear, deterministic order, is the smallest correct answer).
+  2. **the recursion** is `EPS = 1e-9` against `SNAP = 1e-6`: `split_poly`
+     gives a split piece its parent's normal but SNAPPED points, so the piece
+     sits up to ~5e-7 off its own plane, is classified FRONT of it, and the
+     child node picks the same plane again, for ever. The tolerance of the
+     plane test must be coarser than the snap grid (and the polygon a node's
+     plane was taken from must land in that node), or every rotated or
+     sloped cutter is a crash.
+
+* The screenshots: `.gauntlet-shots/10..13-modeling-*.png` come out of
+  `tools/modeling_shot.cpp` over the BRIDGE and show the fallback room (a
+  scaled cube called Wall.Front with Mesh Renderer / Box Collider / Rigidbody
+  in the inspector - no Blockout section, no CSG node). 12 and 13 are byte
+  identical. The bridge is not part of this round; the blockout pictures
+  therefore come from a tool of their own that builds the room through
+  `dai_doc` in C++, exactly as `tools/editor_shot.cpp` does.
+* `node_icon()` in src/dai_editor_ui.cpp shows a blockout node that has no
+  physics as the "empty" icon: the hierarchy does not yet say what it is.
+
+## What the skeleton did (this commit)
+
+| change | why |
+|---|---|
+| `include/dai_blockout_csg.h` - the boolean, cut out of `dai_blockout.h` verbatim and included at ITS end | so the shapes/welding and the boolean have one owner each. Every caller still writes `#include "dai_blockout.h"`. |
+| `daiblock::degenerate_triangles()`, `normal_mismatches()`, `inward_faces()` in `dai_blockout.h` | the three measurements the bar names, in the API so both test files use one definition |
+| `tests/blockout_csg_cases.hpp`, wired into `tests/test_doc.cpp` after `test_blockout()` | the bar as code: 2.4 - 0.4 = 2.0, union 3.5, intersect 0.5, arch / cylinder / 45-degree / wedge cutters, no degenerate triangle, determinism. RED today (see above): that is the work order, not a failure of the tests. |
+
+## Ownership - no two modules touch the same file
+
+| module | files it owns, and only these |
+|---|---|
+| **geometry** (Builder 1) | `include/dai_blockout.h`, `tests/blockout_cases.hpp` |
+| **csg** (Builder 2) | `include/dai_blockout_csg.h`, `tests/blockout_csg_cases.hpp`, `tests/blockout_gltf_cases.hpp` |
+| **editor** (Builder 3) | `src/dai_editor_ui_blockout.inl`, `src/dai_editor_ui_blockout_addcomp.inl`, `src/dai_editor_ui_blockout_addcomp_apply.inl`, `src/dai_editor_ui_blockout_inspector.inl`, `src/dai_editor_ui.cpp` (only `node_icon()`), `include/dai_blockout_host.inl`, `include/dai_blockout_props.inl`, `tests/test_editor_ui.cpp`, `tools/blockout_shot.cpp` (new), `tools/build_blockout_shot.sh` (new), `tools/run_tests.sh`, `docs/BLOCKOUT.md`, `RUN.md`, `.gauntlet-shots/` |
+
+Read-only for everyone: `build.sh`, `build_win.sh`, `tests/test_doc.cpp`,
+`tests/test_fracture.cpp`, `include/dai_doc.h`, `src/dai_doc*.cpp`,
+`tools/modeling_shot.cpp`, `tools/build_modeling_shot.sh`, everything
+`dai_daitex*` / `dai_bridge*` / `dai_material*`.
+
+## The interfaces, exactly
+
+**geometry -> csg, editor.** `include/dai_blockout.h` keeps every existing
+name and signature: `Shape`, `Solid`, `Poly`, `Mesh`, `build()`,
+`transform()`, `finalise()`, `volume()`, `area()`, `edge_report()`,
+`open_edges()`, `nonmanifold_edges()`, `inconsistent_edges()`, `bounds()`,
+`digest()`, plus the three new measurements. `EPS`, `SNAP`, `snap()`,
+`make_poly()`, `flip()`, `detail::Key`, `detail::key_of()`, `detail::clean_poly()`
+are what the boolean uses and keep their meaning. Nothing is renamed; a new
+helper is added below the existing ones. The contract `finalise()` must
+newly keep: **zero degenerate triangles on every closed input, edge count
+unchanged** - the boolean's own tests (`csg`) depend on exactly this, and it
+is the one cross dependency of the round: `[wall minus door] ... degenerate`
+in `tests/blockout_csg_cases.hpp` turns green only when geometry's
+triangulation lands.
+
+**csg -> editor.** `daiblock::csg(const Solid&, const Solid&, int op)` keeps
+its signature and its semantics (op = `daiblock::Op` = `dai_csg_op`, first
+argument the base, empty inputs as today). If `csg` needs a coarser plane
+tolerance it defines it IN `dai_blockout_csg.h` (e.g. `PLANE_EPS`, derived
+from `SNAP`, documented as the reason `EPS` alone was not enough) and does
+not move `EPS` or `SNAP` in geometry's file.
+
+**editor -> the user.** Property names of `include/dai_blockout_props.inl`
+do not change; `dai_node_desc` does not change (`dai_doc.h` is read only, and
+the file format is the file format). The inspector seam keeps its rule: it
+edits `r` and never calls `dai_doc_set`. The shot tool is
+`tools/blockout_shot.cpp`, built by `tools/build_blockout_shot.sh` (same
+flags as `tools/build_modeling_shot.sh`, copied not guessed), called as
+
+```
+tools/build_blockout_shot.sh OUTDIR W H [PREFIX]
+```
+
+and writes `PREFIX14-blockout-room.png` (the judged picture: four box
+walls, one of them a CSG node with a door hole, stairs, arch, DoorSocket
+gizmo on the door, hierarchy open, inspector on the CSG node) and
+`PREFIX15-blockout-doorsocket.png` (the socket node selected, gizmo bright).
+`tools/run_tests.sh` runs it twice, `1920 1080 wide-` and `1100 700 narrow-`,
+right after the `modeling_shot` block and in the same shape (non-zero exit =
+RED, MISSING when the .cpp is absent).
+
+## Sequencing
+
+All three start at once. `csg`'s degenerate checks go green when `geometry`
+lands - `csg` does not work around that in its own file. `editor` writes
+RUN.md and docs/BLOCKOUT.md LAST, from a `./build.sh && ./tools/run_tests.sh`
+run on the merged tree; a number typed before that run exists is fiction.
+
+## The bar for this round
+
+1. `./build.sh` and `./build_win.sh` green.
+2. `./tools/run_tests.sh` ends on `all green` with more than 3000 passed.
+3. Determinism: two builds of the same fields bit identical (memcmp), for
+   every generator and for the boolean.
+4. `tests/blockout_csg_cases.hpp` green as written: 2.0 m3 to 1e-4, every
+   edge on exactly two faces, zero degenerate triangles, zero normal
+   mismatches, union 3.5, intersect 0.5, arch / cylinder / 45-degree / wedge
+   cutters; `inward_faces() == 0` on every convex body in blockout_cases.hpp.
+5. `.gauntlet-shots/wide-14-*` and `narrow-14-*` show room, hole, stairs,
+   arch, socket gizmo, hierarchy with the nodes, inspector with the CSG
+   node's fields - nothing clipped, no half drawn panel, at both sizes.
+6. A field change on a box undone through the editor gives back a mesh with
+   the old digest (`tests/test_editor_ui.cpp`).
+7. A CSG result exported with `dai_gltf_write` reads back with the same
+   triangle count (`tests/blockout_gltf_cases.hpp`, union as well as subtract).
+8. No test weakened, no assertion removed, no fixture thinned.
+9. Every number in RUN.md is a line from `build/last_run.log`.

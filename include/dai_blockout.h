@@ -22,8 +22,13 @@
  *                   each edge is shared by exactly two triangles. That is not
  *                   decoration: an open edge is a hole light leaks through,
  *                   and a glTF exported from it is a solid nothing can print.
- *   MEASURABLE      volume(), open_edges() and nonmanifold_edges() are part of
- *                   the API, so the claim above is a check and not a comment.
+ *   MEASURABLE      volume(), open_edges(), nonmanifold_edges(),
+ *                   degenerate_triangles() and normal_mismatches() are part
+ *                   of the API, so the claim above is a check and not a
+ *                   comment.
+ *
+ * The boolean itself is in include/dai_blockout_csg.h, included at the end of
+ * this file - one `#include "dai_blockout.h"` still gets everything.
  *
  * Units are metres and sizes are FULL sizes, not half extents: a door is 0.9 m
  * wide, and an artist who has to type 0.45 will type 0.9 anyway.
@@ -394,205 +399,10 @@ inline Solid transform(const Solid &in, const float pos[3], const float rot[4],
 
 /* ---- the boolean ------------------------------------------------------ */
 
-namespace detail {
-
-struct Plane {
-    V3     n;
-    double w = 0;
-    bool   ok = false;
-};
-
-inline Plane plane_of(const Poly &p) {
-    Plane pl;
-    pl.n = p.normal;
-    if (p.pts.empty()) return pl;
-    pl.w = dot(pl.n, p.pts[0]);
-    pl.ok = length(pl.n) > 0.5;
-    return pl;
-}
-
-/* Splits `poly` by `pl` into the four buckets the BSP needs. Straight out of
- * the standard constructive-solid-geometry recipe, kept in one place so the
- * classification rule exists exactly once. */
-inline void split_poly(const Plane &pl, const Poly &poly,
-                       std::vector<Poly> &co_front, std::vector<Poly> &co_back,
-                       std::vector<Poly> &front, std::vector<Poly> &back) {
-    enum { COPLANAR = 0, FRONT = 1, BACK = 2, SPANNING = 3 };
-    int poly_type = 0;
-    std::vector<int> types;
-    types.reserve(poly.pts.size());
-    for (const V3 &v : poly.pts) {
-        double t = dot(pl.n, v) - pl.w;
-        int type = (t < -EPS) ? BACK : (t > EPS) ? FRONT : COPLANAR;
-        poly_type |= type;
-        types.push_back(type);
-    }
-    switch (poly_type) {
-    case COPLANAR:
-        (dot(pl.n, poly.normal) > 0 ? co_front : co_back).push_back(poly);
-        break;
-    case FRONT: front.push_back(poly); break;
-    case BACK:  back.push_back(poly); break;
-    default: {
-        std::vector<V3> f, b;
-        size_t c = poly.pts.size();
-        for (size_t i = 0; i < c; ++i) {
-            size_t j = (i + 1) % c;
-            int ti = types[i], tj = types[j];
-            const V3 &vi = poly.pts[i], &vj = poly.pts[j];
-            if (ti != BACK)  f.push_back(vi);
-            if (ti != FRONT) b.push_back(vi);
-            if ((ti | tj) == SPANNING) {
-                double t = (pl.w - dot(pl.n, vi)) / dot(pl.n, sub(vj, vi));
-                V3 v = snap(lerp(vi, vj, t));
-                f.push_back(v);
-                b.push_back(v);
-            }
-        }
-        if (f.size() >= 3) { Poly p = make_poly(f); p.normal = poly.normal; front.push_back(p); }
-        if (b.size() >= 3) { Poly p = make_poly(b); p.normal = poly.normal; back.push_back(p); }
-        break;
-    }
-    }
-}
-
-/* A BSP node. Built from a polygon list, then used to clip another list. */
-struct BspNode {
-    Plane             pl;
-    std::vector<Poly> polys;
-    int               front = -1;   /* indices into the arena, not pointers:
-                                       a vector of nodes moves, and a pointer
-                                       into it is a crash waiting for a resize */
-    int               back = -1;
-};
-
-struct Bsp {
-    std::vector<BspNode> nodes;
-
-    int make() { nodes.push_back(BspNode()); return (int)nodes.size() - 1; }
-
-    void build(int at, const std::vector<Poly> &in) {
-        if (in.empty()) return;
-        BspNode &n = nodes[(size_t)at];
-        if (!n.pl.ok) n.pl = plane_of(in[0]);
-        Plane pl = n.pl;
-        std::vector<Poly> f, b;
-        for (const Poly &p : in) {
-            std::vector<Poly> cf, cb;
-            split_poly(pl, p, cf, cb, f, b);
-            BspNode &me = nodes[(size_t)at];
-            for (const Poly &q : cf) me.polys.push_back(q);
-            for (const Poly &q : cb) me.polys.push_back(q);
-        }
-        if (!f.empty()) {
-            if (nodes[(size_t)at].front < 0) nodes[(size_t)at].front = make();
-            build(nodes[(size_t)at].front, f);
-        }
-        if (!b.empty()) {
-            if (nodes[(size_t)at].back < 0) nodes[(size_t)at].back = make();
-            build(nodes[(size_t)at].back, b);
-        }
-    }
-
-    std::vector<Poly> clip(int at, const std::vector<Poly> &in) const {
-        const BspNode &n = nodes[(size_t)at];
-        if (!n.pl.ok) return in;
-        std::vector<Poly> f, b;
-        for (const Poly &p : in) split_poly(n.pl, p, f, b, f, b);
-        if (n.front >= 0) f = clip(n.front, f);
-        if (n.back >= 0)  b = clip(n.back, b);
-        else              b.clear();          /* inside the other solid */
-        f.insert(f.end(), b.begin(), b.end());
-        return f;
-    }
-
-    void clip_to(int at, const Bsp &other, int other_root) {
-        BspNode &n = nodes[(size_t)at];
-        n.polys = other.clip(other_root, n.polys);
-        int f = n.front, b = n.back;
-        if (f >= 0) clip_to(f, other, other_root);
-        if (b >= 0) clip_to(b, other, other_root);
-    }
-
-    void invert(int at) {
-        BspNode &n = nodes[(size_t)at];
-        for (Poly &p : n.polys) {
-            std::vector<V3> r(p.pts.rbegin(), p.pts.rend());
-            p.pts = r;
-            p.normal = mul(p.normal, -1.0);
-        }
-        n.pl.n = mul(n.pl.n, -1.0);
-        n.pl.w = -n.pl.w;
-        int f = n.front, b = n.back;
-        n.front = b;
-        n.back = f;
-        if (n.front >= 0) invert(n.front);
-        if (n.back >= 0)  invert(n.back);
-    }
-
-    void all(int at, std::vector<Poly> &out) const {
-        const BspNode &n = nodes[(size_t)at];
-        out.insert(out.end(), n.polys.begin(), n.polys.end());
-        if (n.front >= 0) all(n.front, out);
-        if (n.back >= 0)  all(n.back, out);
-    }
-};
-
-} /* namespace detail */
-
-/* union / subtract / intersect, in the node's own space. Both inputs must be
- * closed solids; the result is one too. */
-inline Solid csg(const Solid &a_in, const Solid &b_in, int op) {
-    if (op == OP_NONE || b_in.polys.empty()) return a_in;
-    if (a_in.polys.empty()) return (op == OP_UNION) ? b_in : Solid();
-
-    detail::Bsp a, b;
-    int ar = a.make(), br = b.make();
-    a.build(ar, a_in.polys);
-    b.build(br, b_in.polys);
-
-    switch (op) {
-    case OP_UNION:
-        a.clip_to(ar, b, br);
-        b.clip_to(br, a, ar);
-        b.invert(br);
-        b.clip_to(br, a, ar);
-        b.invert(br);
-        break;
-    case OP_SUBTRACT:
-        a.invert(ar);
-        a.clip_to(ar, b, br);
-        b.clip_to(br, a, ar);
-        b.invert(br);
-        b.clip_to(br, a, ar);
-        b.invert(br);
-        break;
-    case OP_INTERSECT:
-        a.invert(ar);
-        b.clip_to(br, a, ar);
-        b.invert(br);
-        a.clip_to(ar, b, br);
-        b.clip_to(br, a, ar);
-        break;
-    default:
-        return a_in;
-    }
-
-    /* What is left of A plus what is left of B is the surface of the result.
-     * The recipe's last step builds B's polygons into A's tree, which splits
-     * them again; splitting changes no geometry, so the two lists are simply
-     * concatenated here - fewer polygons, fewer T junctions to repair, and
-     * the same surface. */
-    Solid s;
-    a.all(ar, s.polys);
-    b.all(br, s.polys);
-
-    /* Subtract and intersect leave A inverted: turn the whole thing back the
-     * right way out, or every normal points into the wall and the room
-     * renders as a black box lit from inside. */
-    if (op == OP_SUBTRACT || op == OP_INTERSECT) flip(s);
-    return s;
-}
+/* csg(a, b, op) lives in include/dai_blockout_csg.h, included at the END of
+ * this file: it needs everything above and nothing below, and keeping the
+ * boolean in its own file lets the shapes and the boolean be worked on side
+ * by side. Callers keep including this header and get both. */
 
 /* ---- from polygons to triangles --------------------------------------- */
 
@@ -827,6 +637,74 @@ inline int nonmanifold_edges(const Mesh &m) {
     return b;
 }
 
+/* How many triangles have no area: two corners on the same snapped position,
+ * or three corners on one line. A degenerate triangle is a rendering artefact
+ * at best and a glTF validator error at worst - and on a mesh that is welded
+ * by position it is also how an edge count can come out "right" while the
+ * surface is really open. Zero on every generator and every boolean. */
+inline int degenerate_triangles(const Mesh &m) {
+    int bad = 0;
+    for (size_t i = 0; i + 2 < m.idx.size(); i += 3) {
+        const dai_vec3 &a = m.verts[m.idx[i]].position;
+        const dai_vec3 &b = m.verts[m.idx[i + 1]].position;
+        const dai_vec3 &c = m.verts[m.idx[i + 2]].position;
+        V3 p0 = v3(a.x, a.y, a.z), p1 = v3(b.x, b.y, b.z), p2 = v3(c.x, c.y, c.z);
+        detail::Key k0 = detail::key_of(p0), k1 = detail::key_of(p1), k2 = detail::key_of(p2);
+        bool same = (!(k0 < k1) && !(k1 < k0)) || (!(k1 < k2) && !(k2 < k1)) ||
+                    (!(k0 < k2) && !(k2 < k0));
+        double area = length(cross(sub(p1, p0), sub(p2, p0))) * 0.5;
+        if (same || area < 1e-12) ++bad;
+    }
+    return bad;
+}
+
+/* How many triangles carry a normal that disagrees with their own winding.
+ * The stored normal is what the renderer lights with, the winding is what the
+ * volume and the edge counts are computed from; the two must agree on every
+ * face or the surface is closed on paper and lit inside out on screen. Valid
+ * for ANY solid, convex or not. */
+inline int normal_mismatches(const Mesh &m) {
+    int bad = 0;
+    for (size_t i = 0; i + 2 < m.idx.size(); i += 3) {
+        const dai_vertex &a = m.verts[m.idx[i]];
+        const dai_vertex &b = m.verts[m.idx[i + 1]];
+        const dai_vertex &c = m.verts[m.idx[i + 2]];
+        V3 p0 = v3(a.position.x, a.position.y, a.position.z);
+        V3 p1 = v3(b.position.x, b.position.y, b.position.z);
+        V3 p2 = v3(c.position.x, c.position.y, c.position.z);
+        V3 g = cross(sub(p1, p0), sub(p2, p0));
+        if (length(g) < 1e-12) continue;             /* degenerate: counted above */
+        g = normalise(g);
+        V3 n = v3(a.normal.x, a.normal.y, a.normal.z);
+        if (dot(g, n) < 0.999) ++bad;
+    }
+    return bad;
+}
+
+/* How many faces point INTO the solid, judged from its centroid: for a CONVEX
+ * body every outward normal makes a positive dot with the vector from the
+ * centroid to the face's middle. Meaningless on a stair or an arch - the
+ * soffit of an arch looks at the centroid on purpose - so the suite asks it
+ * of the box, the cylinder, the wedge and the convex booleans only. */
+inline int inward_faces(const Mesh &m) {
+    if (m.verts.empty()) return 0;
+    V3 c = v3(0, 0, 0);
+    for (const dai_vertex &v : m.verts) c = add(c, v3(v.position.x, v.position.y, v.position.z));
+    c = mul(c, 1.0 / (double)m.verts.size());
+    int bad = 0;
+    for (size_t i = 0; i + 2 < m.idx.size(); i += 3) {
+        const dai_vertex &a = m.verts[m.idx[i]];
+        const dai_vertex &b = m.verts[m.idx[i + 1]];
+        const dai_vertex &d = m.verts[m.idx[i + 2]];
+        V3 mid = v3((a.position.x + b.position.x + d.position.x) / 3.0,
+                    (a.position.y + b.position.y + d.position.y) / 3.0,
+                    (a.position.z + b.position.z + d.position.z) / 3.0);
+        V3 n = v3(a.normal.x, a.normal.y, a.normal.z);
+        if (dot(n, sub(mid, c)) <= 0) ++bad;
+    }
+    return bad;
+}
+
 /* The axis aligned box the mesh fills - what the inspector shows and what the
  * host uses to keep the collider the size of the thing you can see. */
 inline void bounds(const Mesh &m, float *min3, float *max3) {
@@ -863,5 +741,7 @@ inline uint64_t digest(const Mesh &m) {
 }
 
 } /* namespace daiblock */
+
+#include "dai_blockout_csg.h"
 
 #endif /* DAI_BLOCKOUT_H */

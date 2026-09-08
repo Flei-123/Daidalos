@@ -150,7 +150,8 @@ anything that does not, so a wall on a node with a half metre collider is still
 
 | file | what it holds |
 |---|---|
-| `include/dai_blockout.h` | the generators, the boolean, and the measurements the tests are written against. Header only: `build.sh` is frozen, so a new `src/*.cpp` would never reach an archive |
+| `include/dai_blockout.h` | the generators, the welding and the measurements the tests are written against. Header only: `build.sh` is frozen, so a new `src/*.cpp` would never reach an archive |
+| `include/dai_blockout_csg.h` | the BSP boolean, `csg(a, b, op)`. Included at the end of `dai_blockout.h`, so one include gets both |
 | `include/dai_blockout_host.inl` | the editor host: document -> solid -> mesh -> renderer, cached |
 | `include/dai_blockout_props.inl` | one property table for JS, C++ components and the bridge |
 | `src/dai_editor_ui_blockout_inspector.inl` | the three inspector sections |
@@ -158,4 +159,5 @@ anything that does not, so a wall on a node with a half metre collider is still
 | `src/dai_editor_ui_blockout_addcomp_apply.inl` | what a freshly added component arrives with |
 | `src/dai_editor_ui_blockout.inl` | the DoorSocket gizmo |
 | `tests/blockout_cases.hpp` | shapes, booleans, determinism, the document round trip (runs in `build/test_doc`) |
+| `tests/blockout_csg_cases.hpp` | the boolean against the bar: volumes with a closed form, no degenerate triangle, sloped cutters (runs in `build/test_doc`) |
 | `tests/blockout_gltf_cases.hpp` | the .glb round trip (runs in `build/test_fracture`) |

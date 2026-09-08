@@ -23,6 +23,9 @@ static int g_fail = 0, g_pass = 0;
 // but run in this binary, because half of what they prove is that the fields
 // survive this file's format, its undo stack and its round trip.
 #include "blockout_cases.hpp"
+// ... and the boolean measured against the bar - closed, no slivers, and
+// volumes with a closed form - in its own file next to it.
+#include "blockout_csg_cases.hpp"
 
 static bool near3(dai_vec3 a, dai_vec3 b, float eps = 1e-4f) {
     return std::fabs(a.x - b.x) < eps && std::fabs(a.y - b.y) < eps && std::fabs(a.z - b.z) < eps;
@@ -833,6 +836,7 @@ int main() {
     test_text_component();
     test_unique_names();
     test_blockout();
+    test_blockout_csg_measured();
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
