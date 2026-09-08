@@ -26,6 +26,11 @@ static int g_fail = 0, g_pass = 0;
 // ... and the boolean measured against the bar - closed, no slivers, and
 // volumes with a closed form - in its own file next to it.
 #include "blockout_csg_cases.hpp"
+// ... and the path the editor actually takes: dai_blockout_host_sync against a
+// renderer that counts. One field change, one upload - and undo brings the old
+// key AND the old triangles back. The two renderer entry points are defined in
+// that file, so it has to come after everything that only reads the document.
+#include "blockout_host_cases.hpp"
 
 static bool near3(dai_vec3 a, dai_vec3 b, float eps = 1e-4f) {
     return std::fabs(a.x - b.x) < eps && std::fabs(a.y - b.y) < eps && std::fabs(a.z - b.z) < eps;
@@ -837,6 +842,7 @@ int main() {
     test_unique_names();
     test_blockout();
     test_blockout_csg_measured();
+    test_blockout_host();
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

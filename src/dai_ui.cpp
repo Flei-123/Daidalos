@@ -1708,7 +1708,19 @@ void dai_ui_label(dai_ui *ui, const char *utf8) {
     dai::ui_detail_row_clear();
     if (!ui) return;
     float x, y;
-    next_rect(ui, 0, dai_font_line_height(ui->font), &x, &y);
+    float lh = dai_font_line_height(ui->font);
+    next_rect(ui, 0, lh, &x, &y);
+    // Inside a panel a label stops at the panel's inner edge. It used to run
+    // on: a status line wider than a 200 px inspector column drew its tail
+    // over the panel border and into whatever was docked next to it.
+    if (ui->in_panel && ui->panel_w > 0.0f) {
+        float w = ui->panel_x + ui->panel_w - ui->style.padding - x;
+        if (w < 1.0f) w = 1.0f;
+        dai_ui_clip_begin(ui, x, y, w, lh);
+        dai_ui_text(ui, x, y, utf8, ui->style.text);
+        dai_ui_clip_end(ui);
+        return;
+    }
     dai_ui_text(ui, x, y, utf8, ui->style.text);
 }
 
@@ -2312,7 +2324,29 @@ void field_rect(dai_ui *ui, const char *label, float *x, float *y, float *w, flo
     g_row_x = rx; g_row_y = ry; g_row_w = full; g_row_h = h;
     if (label && *label) {
         float lw = ui->style.label_w > 0 ? ui->style.label_w : 62.0f;
-        dai_ui_text(ui, rx, ry + 2.0f, label, ui->style.text_dim);
+        // The label column is a FRACTION of the panel (fit_label_column in
+        // dai_editor_ui.cpp: 32%, floor 52 px), so at a 200 px inspector it is
+        // 64 px and a name like "Height (m)" is wider than that. It used to be
+        // drawn at full length and the value box was then painted over its
+        // tail: the narrow blockout screenshot read "Height (m" with the
+        // bracket buried under the field. A name that does not fit is ended in
+        // an ellipsis at the last WHOLE character instead, which is a word the
+        // reader can finish; the full text stays on the row's tooltip, whose
+        // rectangle g_row_* above already reports.
+        const char *shown = label;
+        char cut[64];
+        if (dai_ui_text_width(ui, label) > lw - 2.0f) {
+            size_t n = std::strlen(label);
+            if (n > sizeof(cut) - 4) n = sizeof(cut) - 4;
+            for (; n > 0; --n) {
+                std::memcpy(cut, label, n);
+                std::strcpy(cut + n, "...");
+                if (dai_ui_text_width(ui, cut) <= lw - 2.0f) break;
+            }
+            if (n == 0) std::strcpy(cut, "...");
+            shown = cut;
+        }
+        dai_ui_text(ui, rx, ry + 2.0f, shown, ui->style.text_dim);
         *x = rx + lw;
         *w = full - lw;
         g_label_w = lw - 2.0f;
@@ -4741,11 +4775,25 @@ int dai_ui_array_object_row(dai_ui *ui, int index, const char *value,
     char lbl[32];
     std::snprintf(lbl, sizeof(lbl), "Element %d", index);
     float lh = dai_font_line_height(ui->font);
-    dai_ui_text(ui, x + 28.0f, y + (h - lh) * 0.5f, lbl, ui->style.text_dim);
+    const float label_x = x + 28.0f;
 
+    // The field starts where the label ENDS, never at a fixed column: at
+    // 18 px "Element 0" is 80 px wide and the old 90 px column put the value
+    // box over its last letter in a 220 px inspector. Measured, plus a gap.
+    float label_end = label_x + dai_ui_text_width(ui, lbl) + 6.0f;
     float fx = x + (ui->style.label_w > 90.0f ? ui->style.label_w : 90.0f);
+    if (fx < label_end) fx = label_end;
     float fw = x + w - fx;
-    if (fw < 60.0f) { fx = x + w * 0.45f; fw = w * 0.55f; }
+    if (fw < 60.0f) {
+        // No room for both: the value box keeps its 60 px at the right edge
+        // and the label is clipped to what is left, rather than overwritten.
+        fx = x + w - 60.0f;
+        if (fx < label_x) fx = label_x;
+        fw = x + w - fx;
+    }
+    dai_ui_clip_begin(ui, label_x, y, fx - 4.0f - label_x, h);
+    dai_ui_text(ui, label_x, y + (h - lh) * 0.5f, lbl, ui->style.text_dim);
+    dai_ui_clip_end(ui);
     float bw = h;
     float vw = fw - bw - 2.0f;
     if (vw < 20.0f) { vw = fw; bw = 0.0f; }

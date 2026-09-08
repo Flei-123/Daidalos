@@ -255,21 +255,11 @@ int main(int argc, char **argv) {
 
     ::mkdir(outdir.c_str(), 0777);
     int ok = 1;
-    // The inspector as a full height column, the Project panel under the
-    // scene only: the default layout puts Project under the inspector too, and
-    // at 700 px that leaves 450 px for five components - the Door Socket
-    // section fell off the bottom (measured in the first narrow picture). The
-    // same layout at both sizes, so the two pictures differ by size only.
-    static const char LAYOUT[] =
-        "dock 1\n"
-        "{ h 0.7800 { v 0.7600 { h 0.1800 { leaf 0 \"Hierarchy\" } "
-        "{ leaf 0 \"Scene\" \"Game\" \"Script\" } } "
-        "{ leaf 0 \"Project\" \"Console\" \"Localisation\" \"Audio\" } } "
-        "{ leaf 0 \"Inspector\" } }\n";
-    if (dai_editor_ui_layout_load(panels, LAYOUT) != DAI_OK) {
-        std::printf("blockout_shot: the layout text was refused\n");
-        return 1;
-    }
+    // No layout of its own: the pictures come out of the editor's DEFAULT
+    // layout (dai_editor_ui_layout_reset), the one a user opens - a picture
+    // taken through a layout the tool brought along would prove the tool's
+    // layout, not the editor's. The default keeps the inspector a full height
+    // column, which is what lets five components fit at 700 px.
 
     // 14. the room from in front of the door wall, a little above it: the hole
     //     in the middle, the stairs and the arch over the wall, the CSG wall

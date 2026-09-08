@@ -19,7 +19,9 @@
 //   * two builds of the same boolean are bit identical, and the result
 //     survives a second boolean;
 //   * the same door hole computed from a DOCUMENT - a wall node with csg 2
-//     and a Box child with a transform - by the host's own recipe, and a
+//     and a Box child with a transform - through daiblockhost::shape_of and
+//     daiblockhost::solid_of THEMSELVES, included from
+//     include/dai_blockout_host.inl rather than copied into this file, and a
 //     cut wall joined to a second wall, so the boolean's output is proved as
 //     the boolean's input.
 //
@@ -31,6 +33,16 @@
 
 #include "dai_blockout.h"
 #include "dai_doc.h"
+#include "dai_render.h"
+#include "dai_ext.h"
+// The EDITOR'S OWN recipe, not a copy of it: shape_of() and solid_of() come
+// out of the file the viewport includes, so what is measured below is what is
+// drawn. The file was restated here once, and a restatement is a second
+// source of truth that goes stale in silence. It is includable in a binary
+// without a renderer because everything it needs from one it reaches through
+// dai_ext_host, and dai_blockout_host_sync answers a null renderer by doing
+// nothing - the same seam tests/test_editor_ui.cpp uses in its section 12.
+#include "dai_blockout_host.inl"
 
 #include <cmath>
 #include <cstdio>
@@ -69,54 +81,12 @@ static daiblock::Solid csg_box(float sx, float sy, float sz, float pivot_y,
     return daiblock::transform(daiblock::build(s), pos, rot, one);
 }
 
-// The document's fields as a shape - the same rules as shape_of() in
-// include/dai_blockout_host.inl: zero is "the default", never a zero sized
-// wall. Restated here rather than included, because the host file is the
-// editor's and pulls the whole ext host in with it.
-static daiblock::Shape csg_doc_shape_of(const dai_node_desc &r) {
-    daiblock::Shape s;
-    s.kind = r.blockout;
-    s.size[0] = r.blockout_size.x > 0 ? r.blockout_size.x : 1.0f;
-    s.size[1] = r.blockout_size.y > 0 ? r.blockout_size.y : 1.0f;
-    s.size[2] = r.blockout_size.z > 0 ? r.blockout_size.z : 1.0f;
-    s.segments = r.blockout_segments > 0 ? r.blockout_segments : 16;
-    s.steps = r.blockout_steps > 0 ? r.blockout_steps : 8;
-    s.thickness = r.blockout_thickness;
-    s.pivot[0] = r.blockout_pivot.x;
-    s.pivot[1] = r.blockout_pivot.y;
-    s.pivot[2] = r.blockout_pivot.z;
-    return s;
-}
-
-// The solid a node stands for, in its own space: its shape, then its
-// blockout children folded in by its operation, first child first, each
-// child moved by its own transform. Step for step what solid_of() in
-// include/dai_blockout_host.inl does - so what this file proves about a
-// document is what the viewport shows of it.
-static daiblock::Solid csg_doc_solid_of(dai_doc *d, dai_node n, int depth) {
-    daiblock::Solid out;
-    dai_node_desc r{};
-    if (dai_doc_get(d, n, &r) != DAI_OK || depth > 8) return out;
-    if (r.blockout) out = daiblock::build(csg_doc_shape_of(r));
-    if (!r.csg) return out;
-    std::vector<dai_node> kids((size_t)dai_doc_children(d, n, nullptr, 0));
-    if (kids.empty()) return out;
-    dai_doc_children(d, n, kids.data(), (uint32_t)kids.size());
-    for (dai_node k : kids) {
-        dai_node_desc c{};
-        if (dai_doc_get(d, k, &c) != DAI_OK) continue;
-        if (!c.blockout && !c.csg) continue;
-        daiblock::Solid cs = csg_doc_solid_of(d, k, depth + 1);
-        if (cs.polys.empty()) continue;
-        const float pos[3] = { c.position.x, c.position.y, c.position.z };
-        const float rot[4] = { c.rotation.x, c.rotation.y, c.rotation.z, c.rotation.w };
-        const float scl[3] = { c.scale.x, c.scale.y, c.scale.z };
-        cs = daiblock::transform(cs, pos, rot, scl);
-        if (out.polys.empty()) out = cs;
-        else                   out = daiblock::csg(out, cs, r.csg);
-    }
-    return out;
-}
+// What used to stand here: two file-local functions that were a hand copy of
+// shape_of() and solid_of() from include/dai_blockout_host.inl. The
+// copy is gone. The cases below call daiblockhost's own two functions, so a
+// change to the host's rules - a new default, a new child kind, a different
+// order of children in the boolean - shows up as a failure HERE instead of
+// quietly making the test and the viewport disagree about the same document.
 
 static void test_blockout_csg_measured() {
     std::printf("blockout: the boolean against the bar - 2.4 - 0.4 = 2.0, closed, no slivers\n");
@@ -324,7 +294,7 @@ static void test_blockout_csg_measured() {
         dai_node door_node = dai_doc_add(d, &c);
         CHECK(dai_doc_children(d, wall_node, nullptr, 0) == 1, "the doorway is not the wall's child");
 
-        daiblock::Solid from_doc = csg_doc_solid_of(d, wall_node, 0);
+        daiblock::Solid from_doc = daiblockhost::solid_of(d, wall_node, 0);
         daiblock::Mesh m = daiblock::finalise(from_doc);
         check_csg_solid("wall minus door, from the document", m);
         CHECK(std::fabs(daiblock::volume(m) - 2.2) < 1e-4,
@@ -354,7 +324,7 @@ static void test_blockout_csg_measured() {
         const float pos[3] = { 0.5f, 0.0f, 0.0f };
         const float yaw90[4] = { 0.0f, 0.70710678f, 0.0f, 0.70710678f };
         const float deep[3] = { 2.0f, 1.0f, 1.0f };
-        daiblock::Shape ds = csg_doc_shape_of(c);
+        daiblock::Shape ds = daiblockhost::shape_of(c);
         daiblock::Mesh direct = daiblock::finalise(daiblock::csg(
             wall, daiblock::transform(daiblock::build(ds), pos, yaw90, deep), DAI_CSG_SUBTRACT));
         CHECK(daiblock::digest(direct) == daiblock::digest(m),
@@ -369,7 +339,7 @@ static void test_blockout_csg_measured() {
         dai_doc_begin(d, "Move the doorway");
         dai_doc_set(d, door_node, &moved);
         dai_doc_commit(d);
-        daiblock::Mesh m2 = daiblock::finalise(csg_doc_solid_of(d, wall_node, 0));
+        daiblock::Mesh m2 = daiblock::finalise(daiblockhost::solid_of(d, wall_node, 0));
         check_csg_solid("wall minus the moved door, from the document", m2);
         CHECK(std::fabs(daiblock::volume(m2) - 2.2) < 1e-4,
               "the wall with the moved door holds %.6f m3, not 2.2", daiblock::volume(m2));

@@ -474,6 +474,90 @@ int main() {
               (double)NW, (double)narrow_max, (double)narrow_limit);
     }
 
+    // ---- "Element 0" in a narrow inspector column --------------------------
+    //
+    // The array row used to start its value box at a fixed 90 px column. At
+    // 18 px "Element 0" is wider than that, so in the 200 px inspector of a
+    // 1100x700 window the box was drawn over the last letters of the label -
+    // the row read "Element" next to a material name. The field now begins
+    // behind the MEASURED label, and where even that does not fit the label is
+    // clipped rather than overdrawn. Both are geometry, so both are measured.
+    {
+        std::printf("array row: the element label and its field do not overlap\n");
+        const dai_ui_style *ss = dai_ui_style_of(ui);
+        const float PX = 40.0f, PY = 10.0f;
+
+        // Every vertex of the label (the only text_dim pixels right of the
+        // grip) and of the field fill (the only track coloured ones), plus the
+        // clip the label was drawn under.
+        struct RowGeom { float lbl_x0, lbl_x1, field_x0, clip_x1; int glyphs, fills; };
+        auto row_at = [&](float pw) {
+            in.mouse_x = -100.0f; in.mouse_y = -100.0f; in.mouse_down = 0;
+            dai_ui_begin(ui, 800, 600, &in);
+            dai_ui_panel_begin(ui, PX, PY, pw, 200.0f, nullptr);
+            dai_ui_array_object_row(ui, 0, "Bricks", nullptr);
+            dai_ui_panel_end(ui);
+            dai_ui_end(ui);
+
+            const float label_x = PX + ss->padding + 28.0f;
+            RowGeom g{ 1e9f, -1e9f, 1e9f, -1e9f, 0, 0 };
+            const dai_ui_draw *draws = nullptr;
+            uint32_t nb = dai_ui_draws(ui, &draws);
+            for (uint32_t b = 0; b < nb; ++b)
+                for (uint32_t v = 0; v < draws[b].count; ++v) {
+                    const dai_ui_vertex &vx = draws[b].vertices[v];
+                    if (vx.color == ss->text_dim && vx.x >= label_x - 1.0f) {
+                        if (vx.x < g.lbl_x0) g.lbl_x0 = vx.x;
+                        if (vx.x > g.lbl_x1) g.lbl_x1 = vx.x;
+                        if (draws[b].clip[2] > g.clip_x1) g.clip_x1 = draws[b].clip[2];
+                        ++g.glyphs;
+                    } else if (vx.color == ss->track) {
+                        if (vx.x < g.field_x0) g.field_x0 = vx.x;
+                        ++g.fills;
+                    }
+                }
+            return g;
+        };
+
+        const float TW = dai_ui_text_width(ui, "Element 0");
+        CHECK(TW > 40.0f, "the label measures %.1f px - the font did not load", (double)TW);
+
+        // The inspector at 1100x700: 200 px of column, which is the width the
+        // narrow screenshots are taken at.
+        RowGeom g = row_at(200.0f);
+        CHECK(g.glyphs > 0 && g.fills > 0,
+              "the row drew no label (%d) or no field (%d)", g.glyphs, g.fills);
+        CHECK(g.lbl_x1 <= g.field_x0 + 0.5f,
+              "in a 200 px column the label runs to x=%.1f and the field starts at "
+              "x=%.1f - the value box is drawn over 'Element 0'",
+              (double)g.lbl_x1, (double)g.field_x0);
+        CHECK(g.clip_x1 >= PX + ss->padding + 28.0f + TW - 0.5f,
+              "the label is clipped at x=%.1f, 'Element 0' needs %.1f px and ends at "
+              "x=%.1f", (double)g.clip_x1, (double)TW,
+              (double)(PX + ss->padding + 28.0f + TW));
+
+        // Wider than the label needs: the field must not creep left of the old
+        // 90 px column just because the label is short.
+        RowGeom wide = row_at(320.0f);
+        CHECK(wide.field_x0 >= PX + ss->padding + 90.0f - 0.5f,
+              "in a 320 px column the field starts at x=%.1f, before the %.1f px "
+              "label column", (double)wide.field_x0,
+              (double)(PX + ss->padding + 90.0f));
+        CHECK(wide.lbl_x1 <= wide.field_x0 + 0.5f,
+              "the label overlaps the field in a wide column too (%.1f > %.1f)",
+              (double)wide.lbl_x1, (double)wide.field_x0);
+
+        // Narrower than label plus field: the label gives way. What may NOT
+        // happen is the two drawing on top of each other.
+        RowGeom tight = row_at(130.0f);
+        CHECK(tight.glyphs > 0 && tight.fills > 0,
+              "the squeezed row drew no label (%d) or no field (%d)",
+              tight.glyphs, tight.fills);
+        CHECK(tight.lbl_x1 <= tight.field_x0 + 0.5f,
+              "squeezed to 130 px the label reaches x=%.1f and the field starts at "
+              "x=%.1f", (double)tight.lbl_x1, (double)tight.field_x0);
+    }
+
     dai_ui_destroy(ui);
     dai_font_free(font);
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);

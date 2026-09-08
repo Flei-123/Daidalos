@@ -4,7 +4,7 @@
  *
  * Why this exists at all, and why it is a header of INCLUDES rather than a
  * plugin system: `build.sh` and `build_win.sh` are frozen. They name every
- * translation unit they compile, one by one, so a new `src/*.cpp` is a file
+ * translation unit they compile, one by one, so a new .cpp under src/ is a file
  * that never reaches an archive and never reaches the editor. The way in is
  * therefore the way the codebase already uses for `dai_gltf_common.hpp` and
  * `dai_doc_internal.hpp`: a header, included by the one translation unit that

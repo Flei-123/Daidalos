@@ -158,10 +158,24 @@ for s in $SUITES; do
     fi
     ARGS=""
     [ "$s" = "test_image" ] && ARGS="$PNGFIX"
+    # 120 s is the cap for a suite that is arithmetic on a document. One suite
+    # is not: test_droneshow's last plan case flies 10000 drones through the
+    # separation solver, which is the O(n^2) pass the whole show mode rests on,
+    # and it needs 181 s of -O3 on this machine (measured; the 10000 row of its
+    # own scaling table reports 20.9 s of that for one layer alone). It was
+    # being killed at 120 s and reported "0/0 rc=124 FAIL", which cost the run
+    # its 491 green checks and painted it RED over a suite that passes.
+    #
+    # The cap is raised for that ONE suite, by name, and not for the rest: a
+    # blanket 600 s would turn a real hang anywhere else into a ten minute
+    # wait. build.sh runs the same binary to completion at its line 363, so the
+    # number below is the runtime that script already pays.
+    TMO=120
+    [ "$s" = "test_droneshow" ] && TMO=600
     if [ "$s" = "test_window_two" ]; then
-        OUT=$(DAI_SHADER_DIR=shaders DISPLAY="$DAI_TEST_DISPLAY" timeout 120 "$BIN" 2>&1)
+        OUT=$(DAI_SHADER_DIR=shaders DISPLAY="$DAI_TEST_DISPLAY" timeout "$TMO" "$BIN" 2>&1)
     else
-        OUT=$(DAI_SHADER_DIR=shaders timeout 120 "$BIN" $ARGS 2>&1)
+        OUT=$(DAI_SHADER_DIR=shaders timeout "$TMO" "$BIN" $ARGS 2>&1)
     fi
     RC=$?
     # The suites do NOT all print the same summary. Four shapes exist:

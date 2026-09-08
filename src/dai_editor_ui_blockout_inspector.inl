@@ -46,7 +46,46 @@
         return q.door_socket || q.door_width > 0.0f || q.door_height > 0.0f;
     };
 
+    // A status line in this section is written short, and then MEASURED: the
+    // inspector is a 200 px column in the 1100x700 layout, dai_ui_label clips
+    // at the panel's inner edge, and a hard clip ends a sentence in the middle
+    // of a glyph. This ends it in an ellipsis instead, at the last whole
+    // character that still fits into panel_w - 2 * padding. Nothing else in
+    // the seam prints text a field does not carry.
+    auto fit_label = [&](const char *text) {
+        const dai_ui_style *st = dai_ui_style_of(p->ui);
+        float room = dai_ui_panel_width(p->ui) - (st ? st->padding : 8.0f) * 2.0f;
+        if (room <= 0.0f || dai_ui_text_width(p->ui, text) <= room) { dai_ui_label(p->ui, text); return; }
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "%s", text);
+        size_t n = std::strlen(buf);
+        while (n > 0) {
+            --n;
+            char keep[164];
+            size_t k = n < sizeof(keep) - 4 ? n : sizeof(keep) - 4;
+            std::memcpy(keep, buf, k);
+            std::strcpy(keep + k, "...");
+            if (dai_ui_text_width(p->ui, keep) <= room) { dai_ui_label(p->ui, keep); return; }
+        }
+        dai_ui_label(p->ui, "...");
+    };
+    auto fit_label_fmt = [&](const char *fmt, auto... args) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), fmt, args...);
+        fit_label(buf);
+    };
+
     if (r.blockout) {
+        // The mesh is built in metres and the host divides it by the entity's
+        // render scale (entity_render_scale in include/dai_blockout_host.inl),
+        // so a blockout node's render_extent is 1,1,1 - "the model is already
+        // the size it says it is" - and nothing else. Add Component sets it;
+        // a node that arrived another way (a script, an older file) is pinned
+        // here, once, as part of the same edit that inspects it. The Mesh
+        // Renderer's own Size row is not drawn for these nodes for the same
+        // reason.
+        if (r.render_extent.x != 1.0f || r.render_extent.y != 1.0f || r.render_extent.z != 1.0f)
+            r.render_extent = dai_vec3{ 1.0f, 1.0f, 1.0f };
         int on = 1;
         if (dai_ui_header_icon_col(p->ui, DAI_ICON_C_MESH, rgba(0x9C, 0xD6, 0x7A, 255),
                                    "Blockout", &fold_blockout, &on) == 2 && !on)
@@ -78,9 +117,9 @@
                     r.blockout_steps = (int)(st + 0.5f);
                 float rise = (r.blockout_size.y > 0 ? r.blockout_size.y : 1.0f) /
                              (float)(r.blockout_steps > 0 ? r.blockout_steps : 8);
-                dai_ui_label_fmt(p->ui, "Rise %.3f m, going %.3f m", rise,
-                                 (r.blockout_size.z > 0 ? r.blockout_size.z : 1.0f) /
-                                 (float)(r.blockout_steps > 0 ? r.blockout_steps : 8));
+                fit_label_fmt("Rise %.3f, run %.3f m", rise,
+                              (r.blockout_size.z > 0 ? r.blockout_size.z : 1.0f) /
+                              (float)(r.blockout_steps > 0 ? r.blockout_steps : 8));
             }
             if (r.blockout == DAI_BLOCKOUT_ARCH)
                 dai_ui_num_field(p->ui, "Thickness (m)", &r.blockout_thickness,
@@ -113,13 +152,15 @@
             if (op < 0) op = 0;
             if (op > 2) op = 2;
             if (dai_ui_option(p->ui, "Operation", &op, OPS, 3)) r.csg = op + 1;
+            // Short on purpose: the inspector is a 200 px column at 1100 px
+            // and a sentence that does not fit is a sentence that is cut.
             uint32_t kids = dai_doc_children(d, n, nullptr, 0);
             if (!kids)
-                dai_ui_label(p->ui, "No children - add a Box under this node");
+                fit_label("No children - add a Box below");
             else if (r.csg == DAI_CSG_SUBTRACT)
-                dai_ui_label_fmt(p->ui, "%u child shape(s) cut out of this one", kids);
+                fit_label_fmt("%u %s cut out", kids, kids == 1 ? "child" : "children");
             else
-                dai_ui_label_fmt(p->ui, "%u child shape(s) combined with this one", kids);
+                fit_label_fmt("%u %s combined", kids, kids == 1 ? "child" : "children");
         }
     }
 

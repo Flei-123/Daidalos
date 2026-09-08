@@ -3012,13 +3012,21 @@ static void inspector_body(dai_editor_ui *p) {
         // The size of the DRAWN mesh. Zero means "same as the collider", so a
         // fresh box shows the collider's numbers and stops following it the
         // moment either one is typed into.
-        dai_vec3 shown_size = r.render_extent;
-        bool follows = !(shown_size.x || shown_size.y || shown_size.z);
-        if (follows) shown_size = r.half_extent;
-        dai_vec3 full{ shown_size.x * 2.0f, shown_size.y * 2.0f, shown_size.z * 2.0f };
-        if (dai_ui_num_vec3(p->ui, "Size", &full.x, 0.01f)) {
-            r.render_extent = { full.x * 0.5f, full.y * 0.5f, full.z * 0.5f };
-            if (r.mesh == 0xFFFFFFFFu) r.mesh = mesh_of_shape(r.shape);
+        //
+        // Not for a blockout or CSG node: its mesh is built in metres from
+        // the Size (m) row of its own section below, and render_extent is
+        // pinned at 1,1,1 there (see dai_editor_ui_blockout_inspector.inl).
+        // A second "Size" that showed 2,2,2 for a 6.4 m wall was two rows
+        // disagreeing about one fact, and typing into it scaled the wall.
+        if (!r.blockout && !r.csg) {
+            dai_vec3 shown_size = r.render_extent;
+            bool follows = !(shown_size.x || shown_size.y || shown_size.z);
+            if (follows) shown_size = r.half_extent;
+            dai_vec3 full{ shown_size.x * 2.0f, shown_size.y * 2.0f, shown_size.z * 2.0f };
+            if (dai_ui_num_vec3(p->ui, "Size", &full.x, 0.01f)) {
+                r.render_extent = { full.x * 0.5f, full.y * 0.5f, full.z * 0.5f };
+                if (r.mesh == 0xFFFFFFFFu) r.mesh = mesh_of_shape(r.shape);
+            }
         }
         // Colour used to sit here. It belongs to the MATERIAL - a surface
         // property next to the material that owns it is two places the same
@@ -5111,9 +5119,17 @@ void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
     }
     dai_dock_add(p->dock, "Scene", DAI_DOCK_NONE, 0.0f);
     dai_dock_add_tab(p->dock, "Game", "Scene");
+    // Project FIRST, so its bottom strip is cut out of the scene alone, and
+    // the two side columns added after it run the full height of the window.
+    // dai_dock_add splits the whole tree, so the order IS the layout: with
+    // the columns added first, Project ran under all three, and in a 700 px
+    // window the inspector was left 450 px for a node with five components -
+    // the Door Socket section fell off the bottom (measured on the first
+    // narrow blockout screenshot). A tall inspector column is what every 3D
+    // editor opens with anyway.
+    dai_dock_add(p->dock, "Project", DAI_DOCK_BOTTOM, 0.26f);
     dai_dock_add(p->dock, "Hierarchy", DAI_DOCK_LEFT, 0.18f);
     dai_dock_add(p->dock, "Inspector", DAI_DOCK_RIGHT, 0.20f);
-    dai_dock_add(p->dock, "Project", DAI_DOCK_BOTTOM, 0.26f);
     // Registered so the Window menu can list them; they start as tabs of the
     // Project panel rather than stealing space from the scene view.
     // ONLY add_tab: a dai_dock_add() first would carve its own bottom strip
@@ -7596,6 +7612,32 @@ static void project_body(dai_editor_ui *p, float px, float py, float pw, float p
             ry += ROW;
         }
         (void)rows;   // the clamp happened before the draw, where it belongs
+        // The rows the whole-row rule left out, COUNTED where they would have
+        // been. A column 102 px tall lists five of six files and shows a bar
+        // that is 82 px of a 102 px track; that is a hint, not a statement.
+        // "1 more" in the gap under the last row is the statement - at 700 px
+        // the Project panel gets a hundred pixels, and a file that is not on
+        // screen has to say so on the screen.
+        {
+            int hidden_below = 0, hidden_above = 0;
+            float gap_y = list_bot;   // the top of the first row that did not fit
+            float top = cols_y + 2.0f - p->proj_list_scroll;
+            for (int i = 0; i < want_rows; ++i, top += ROW) {
+                if (row_whole(top)) continue;
+                if (top < list_top) { ++hidden_above; continue; }
+                if (hidden_below == 0) gap_y = top;
+                ++hidden_below;
+            }
+            if (hidden_below > 0 && lmax > 0.0f) {
+                char more[48];
+                std::snprintf(more, sizeof(more), "%d more below", hidden_below);
+                float gap_h = list_bot - gap_y;
+                if (gap_h >= 12.0f)
+                    dai_ui_text(ui, list_x + 8.0f, gap_y + (gap_h - 14.0f) * 0.5f, more,
+                                st->text_dim);
+            }
+            (void)hidden_above;   // the wheel already knows; the bar's thumb shows it
+        }
         // The indicator: a track and a thumb on the right edge of the column,
         // drawn whenever there is more listing than column. Without it a list
         // that hides its last entries looks exactly like a list that has none,
