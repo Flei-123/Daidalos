@@ -473,6 +473,119 @@ static void test_modifier_bevel() {
         std::printf("  determinism: %zu vertices and %zu indices, bit identical, twice each\n",
                     f.verts.size(), f.idx.size());
     }
+
+    // --- a bevel that changes nothing SAYS so -------------------------------
+    //
+    // Two ways a bevel legitimately hands its input straight back: nothing is
+    // sharper than the angle it was told to break, and there is no room for
+    // the width it was given at any of the eight halvings it tries. Both are
+    // correct answers and both are invisible - the entry sits in the inspector
+    // with its numbers and the viewport does not move, which is exactly what a
+    // broken modifier looks like. So the reason comes out with the result and
+    // the panel says it (daimod::Inert, the marker in
+    // src/dai_editor_ui_blockout_inspector.inl).
+    {
+        daimod::Bevel none;
+        none.width = 0.05;
+        none.segments = 1;
+        none.angle = 120.0;              // a cube's edges are 90: nothing breaks
+        int why = -1;
+        daiblock::Solid same = daimod::bevel(cube, none, &why);
+        CHECK(why == daimod::INERT_NO_EDGES,
+              "a bevel that broke no edge reported %d, not INERT_NO_EDGES", why);
+        CHECK(same.polys.size() == cube.polys.size(),
+              "a bevel that broke no edge changed the shape: %zu faces, was %zu",
+              same.polys.size(), cube.polys.size());
+
+        // The contract behind the flag, on shapes rather than on one case: the
+        // reason is set EXACTLY when the operator handed the shape back
+        // untouched. A width far larger than the shape is not one of those -
+        // face_width() clamps a chamfer to 45% of the face it sits on, so five
+        // metres of bevel on a one metre cube is a bevel, not a refusal - and
+        // a test that asserted otherwise would be asserting a bug.
+        {
+            daiblock::Solid wall2 = mod_box(4.0f, 3.0f, 0.2f, -1.0f);
+            daiblock::Solid door2 = mod_box(1.0f, 2.0f, 0.5f, -1.0f);
+            daiblock::Solid shapes[3] = { cube, mod_box(2.0f, 0.02f, 2.0f, 0.0f),
+                                          daiblock::csg(wall2, door2, DAI_CSG_SUBTRACT) };
+            const double widths[3] = { 0.01, 0.35, 5.0 };
+            for (int si = 0; si < 3; ++si)
+                for (int wi = 0; wi < 3; ++wi) {
+                    daimod::Bevel b2;
+                    b2.width = widths[wi];
+                    b2.segments = 1;
+                    b2.angle = 30.0;
+                    int w2 = -1;
+                    daiblock::Solid out2 = daimod::bevel(shapes[si], b2, &w2);
+                    int untouched = out2.polys.size() == shapes[si].polys.size();
+                    CHECK(w2 >= 0 && w2 <= daimod::INERT_NO_ROOM,
+                          "shape %d at width %g reported %d, which is not a reason",
+                          si, widths[wi], w2);
+                    CHECK(!(w2 != daimod::INERT_NONE) || untouched,
+                          "shape %d at width %g reported reason %d and STILL changed the "
+                          "shape: %zu faces, was %zu", si, widths[wi], w2,
+                          out2.polys.size(), shapes[si].polys.size());
+                    if (!untouched)
+                        CHECK(w2 == daimod::INERT_NONE,
+                              "shape %d at width %g bevelled and still reported %d",
+                              si, widths[wi], w2);
+                }
+        }
+
+        // ...and one that really runs says nothing at all.
+        daimod::Bevel real;
+        real.width = 0.05;
+        real.segments = 1;
+        real.angle = 30.0;
+        why = -1;
+        daiblock::Solid cut2 = daimod::bevel(cube, real, &why);
+        CHECK(why == daimod::INERT_NONE,
+              "a bevel that ran reported %d, not INERT_NONE", why);
+        CHECK(cut2.polys.size() == 26,
+              "the bevel that ran made %zu faces, not 26", cut2.polys.size());
+
+        // Through the STACK, which is where the inspector reads it: entry by
+        // entry, in stack order, and an entry that is switched off reports
+        // nothing because it was never asked to do anything.
+        daimod::Stack st;
+        daimod::Mod m0;                  // bevel, angle 120 - nothing to break
+        m0.type = daimod::MOD_BEVEL; m0.amount = 0.05; m0.count = 1; m0.angle = 120.0;
+        daimod::Mod m1 = m0;             // the same one, switched off
+        m1.off = 1;
+        daimod::Mod m2;                  // a bevel that does run
+        m2.type = daimod::MOD_BEVEL; m2.amount = 0.05; m2.count = 1; m2.angle = 30.0;
+        st.mods.push_back(m0);
+        st.mods.push_back(m1);
+        st.mods.push_back(m2);
+        daimod::Result res = daimod::apply(st, cube);
+        CHECK(res.inert.size() == 3, "the result reports %zu entries for a stack of 3",
+              res.inert.size());
+        CHECK(res.inert_at(0) == daimod::INERT_NO_EDGES,
+              "entry 1 of the stack reported %d, not INERT_NO_EDGES", res.inert_at(0));
+        CHECK(res.inert_at(1) == daimod::INERT_NONE,
+              "an entry that is switched OFF reported %d - it never ran", res.inert_at(1));
+        CHECK(res.inert_at(2) == daimod::INERT_NONE,
+              "the entry that ran reported %d", res.inert_at(2));
+        CHECK(res.any_inert(), "a stack with a bevel that did nothing says it did");
+        CHECK(res.solid.polys.size() == 26,
+              "the stack made %zu faces, not the 26 of one bevel", res.solid.polys.size());
+
+        // The report the host leaves for the panel: two bits per entry, keyed
+        // by node. Same map the inspector reads, and it only remembers a node
+        // that has something to say.
+        uint32_t mask = 0;
+        for (size_t i = 0; i < res.inert.size(); ++i)
+            mask |= ((uint32_t)(res.inert[i] & 3)) << (i * 2);
+        daimod::report_inert(4242u, mask);
+        CHECK(daimod::inert_of(4242u) == mask,
+              "the inert report for a node came back as %u, not %u",
+              (unsigned)daimod::inert_of(4242u), (unsigned)mask);
+        daimod::report_inert(4242u, 0u);
+        CHECK(daimod::inert_of(4242u) == 0u,
+              "a node whose stack is clean again still carries a report");
+        std::printf("  a bevel that changes nothing reports WHY: no edge over the angle, "
+                    "no room for the width\n");
+    }
 }
 
 #endif // DAI_MODIFIER_BEVEL_CASES_HPP

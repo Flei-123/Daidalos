@@ -269,6 +269,16 @@ static void dai_blockout_host_sync(const dai_ext_host *h) {
              * normals averaged - the positions are the same either way. */
             daimod::Result res = daimod::apply(daiblockhost::stack_of(r), sol);
             daiblock::Mesh m = daimod::finalise(res);
+            /* What came back untouched, so the inspector can say so: a bevel
+             * that finds no edge over its angle, or no room for its width,
+             * hands the shape back and would otherwise look like nothing at
+             * all happened. Two bits per entry, the daimod::Inert value. */
+            {
+                uint32_t inert = 0;
+                for (size_t mi = 0; mi < res.inert.size() && mi < 16; ++mi)
+                    inert |= ((uint32_t)(res.inert[mi] & 3)) << (mi * 2);
+                daimod::report_inert((uint32_t)n, inert);
+            }
             if (!m.idx.empty()) {
                 dai_vec3 es = daiblockhost::entity_render_scale(r, ws);
                 float sx = es.x != 0.0f ? ws.x / es.x : 1.0f;

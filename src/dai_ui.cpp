@@ -102,6 +102,33 @@ struct dai_ui {
         return scroll_max.back().second;
     }
 
+    // ---- the text this frame drew, for a test that reads the screen --------
+    // Off by default and free when it is off. A screenshot review can see that
+    // a label was shortened to "Pos..."; a test cannot, because what leaves
+    // this file is triangles. So every string that reaches dai_ui_text can be
+    // written down with the box it was drawn in and the clip it was drawn
+    // under, and a test can then assert what a reader would - nothing ends in
+    // an ellipsis, nothing is cut off by the box it sits in.
+    int recording = 0;
+    std::vector<dai_ui_text_rec> recorded;
+
+    // ---- the label column, per panel and per row width ---------------------
+    // One number per (panel, row width): the widest label column any row of
+    // that shape wanted last frame, so that this frame's rows all use it and
+    // the value boxes line up. `cur` is filled while drawing, `prev` is what
+    // is read, and dai_ui_begin moves one into the other - the same one frame
+    // handover the scroll limits use.
+    struct LabelCol { float key; float cur; float prev; };
+    std::vector<LabelCol> label_cols;
+    LabelCol &label_col_entry(float panel_x, float full) {
+        const float key = panel_x * 8191.0f + full;
+        for (auto &e : label_cols) if (e.key == key) return e;
+        label_cols.push_back(LabelCol{ key, 0.0f, 0.0f });
+        return label_cols.back();
+    }
+    float &label_col_of(float panel_x, float full) { return label_col_entry(panel_x, full).cur; }
+    float label_col_prev_of(float panel_x, float full) { return label_col_entry(panel_x, full).prev; }
+
     float    drag_accum = 0.0f;     // sub-step remainder of a drag_float
     int      cursor_want = DAI_CURSOR_ARROW;   // what the pointer should look like
 
@@ -443,6 +470,8 @@ void dai_ui_begin(dai_ui *ui, float width, float height, const dai_ui_input *in)
     ui->hot_label = nullptr;
     ui->mouse_over_ui = false;
     ui->clips.clear();
+    if (ui->recording) ui->recorded.clear();
+    for (auto &e : ui->label_cols) { e.prev = e.cur; e.cur = 0.0f; }
     ui->scroll_stack.clear();
     ui->scroll_saved_panel_w.clear();
     ui->cur_layer = 0;
@@ -771,6 +800,26 @@ void dai_ui_text(dai_ui *ui, float x, float y, const char *utf8, uint32_t color)
             else { if (lo < ink_lo) ink_lo = lo; if (hi > ink_hi) ink_hi = hi; }
         }
         if (any && (ink_lo < c.y0 - 0.01f || ink_hi > c.y1 + 0.01f)) return;
+    }
+
+    // Written down AFTER the vertical clip test above, because a line that is
+    // not drawn is not text a reader can complain about - the log is what the
+    // screenshot shows, not what the caller asked for.
+    if (ui->recording && utf8[0]) {
+        dai_ui_text_rec rec{};
+        std::snprintf(rec.text, sizeof(rec.text), "%s", utf8);
+        rec.x = x; rec.y = y;
+        rec.w = dai_ui_text_width(ui, utf8);
+        rec.h = dai_font_line_height(ui->font);
+        if (!ui->clips.empty()) {
+            const dai_ui::Clip &c = ui->clips.back();
+            rec.clip_x = c.x0; rec.clip_y = c.y0;
+            rec.clip_w = c.x1 - c.x0; rec.clip_h = c.y1 - c.y0;
+        } else {
+            rec.clip_x = 0.0f; rec.clip_y = 0.0f;
+            rec.clip_w = ui->width; rec.clip_h = ui->height;
+        }
+        ui->recorded.push_back(rec);
     }
 
     uint32_t off = 0;
@@ -1144,6 +1193,22 @@ float dai_ui_text_height(dai_ui *ui) {
 
 float dai_ui_text_width(dai_ui *ui, const char *utf8) {
     return (ui && ui->font) ? dai_font_measure(ui->font, utf8, nullptr) : 0.0f;
+}
+
+void dai_ui_text_record(dai_ui *ui, int on) {
+    if (!ui) return;
+    ui->recording = on ? 1 : 0;
+    ui->recorded.clear();
+}
+
+uint32_t dai_ui_text_record_count(const dai_ui *ui) {
+    return ui ? (uint32_t)ui->recorded.size() : 0u;
+}
+
+int dai_ui_text_record_at(const dai_ui *ui, uint32_t index, dai_ui_text_rec *out) {
+    if (!ui || !out || index >= ui->recorded.size()) return 0;
+    *out = ui->recorded[index];
+    return 1;
 }
 
 // The one place a name is shortened, so every panel shortens it the same way.
@@ -2385,6 +2450,37 @@ void field_rect_ex(dai_ui *ui, const char *label, float *x, float *y, float *w, 
         float room = full - keep;
         if (want > lw && lw < room) lw = want < room ? want : room;
         if (lw > room) lw = room;
+        // ...and when the value side's COMFORTABLE minimum is the only thing
+        // standing between the reader and the whole word, the value side is
+        // what gives way. "Position" became "Pos..." in the 200 px inspector
+        // of a 1100x700 window because three axis boxes had asked for 149 of
+        // its 184 px - and "Pos..." next to three numbers is a row whose name
+        // has to be guessed, while three boxes 10 px narrower are three boxes
+        // that still hold "-1.025". The comfortable minimum may be squeezed to
+        // 52% of itself for a name that then fits ENTIRELY; below that the
+        // ellipsis is right after all, because a number nobody can read is not
+        // a trade worth making. Half of what three axis boxes ask for is still
+        // an axis letter and four digits each, which is what a 1.1 or a -0.05
+        // needs - the comfortable width is comfortable, not necessary.
+        float hard = min_field > 0.0f ? min_field * 0.52f : full * 0.30f;
+        if (hard < 54.0f) hard = 54.0f;              // one box a number fits in
+        if (hard > full - 8.0f) hard = full - 8.0f;
+        if (want > lw && lw < full - hard) lw = want < full - hard ? want : lw;
+        // ...and then the whole COLUMN, not this one row. Widening each row to
+        // its own name makes a ragged edge of value boxes - "Position" ends
+        // 20 px further right than "Scale" and the numbers no longer line up,
+        // which is both ugly and, for anything that finds a field by scanning
+        // one x, wrong. So the widest name a row of this shape wanted LAST
+        // frame sets the column for all of them, capped per row by what that
+        // row can spare. One frame of catch-up, which is how an immediate mode
+        // panel measures anything it cannot know before it draws it.
+        {
+            float cap = full - hard;
+            float &col = ui->label_col_of(ui->panel_x, full);
+            if (lw > col) col = lw;                      // what THIS frame asks for
+            float prev = ui->label_col_prev_of(ui->panel_x, full);
+            if (prev > lw && prev <= cap) lw = prev;
+        }
         // The floor: 18% of the row, and never more than 34 px of it. Below
         // that a column stops being a column and the row reads as a number
         // with no name at all.

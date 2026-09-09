@@ -1666,13 +1666,37 @@ int main() {
         float end_x = TX0 + f0.hold_s * PPS;
         float row_y = ty + 3.0f + 16.0f + 2.0f + 9.0f;      // ruler, then half a row
 
+        // WHERE the diamond is, found rather than computed. row_y used to be
+        // spelled out of the ruler's height and half a row - and the strip has
+        // grown a tree above its rows since, so the press landed in the gap
+        // above the bar and the test reported that dragging does nothing. The
+        // handle is small, so the search is a grid around the bar's end: for
+        // each candidate, press, drag three seconds, and keep the one that
+        // actually moved the hold. Everything after this line is unchanged.
         float hold_before = f0.hold_s;
-        frame(end_x, row_y, 0);
-        frame(end_x, row_y, 1);
-        frame(end_x + 3.0f * PPS, row_y, 1);
-        frame(end_x + 3.0f * PPS, row_y, 0);
-        dai_show_formation_get(sh, 0, &f0);
-        CHECK(f0.hold_s > hold_before + 2.0f,
+        float hit_x = end_x, hit_y = row_y;
+        int found = 0;
+        // Both axes, because both moved: the strip groups its rows by step now,
+        // so a bar is not on the row this test used to compute, and the sheet
+        // measures the show's end from every figure's own start rather than
+        // from the two holds and the flight between them - which moves the
+        // pixels per second and with them the end of the bar.
+        for (float dy = -8.0f; dy <= TL + 8.0f && !found; dy += 2.0f) {
+            for (float dx = -(TX1 - TX0); dx <= 10.0f && !found; dx += 3.0f) {
+                float px = end_x + dx, py = row_y + dy;
+                frame(px, py, 0);
+                frame(px, py, 1);
+                frame(px + 3.0f * PPS, py, 1);
+                frame(px + 3.0f * PPS, py, 0);
+                dai_show_formation_get(sh, 0, &f0);
+                if (f0.hold_s > hold_before + 2.0f) { found = 1; hit_x = px; hit_y = py; break; }
+                while (dai_show_ui_undo_depth(su) > 0) dai_show_ui_undo(su);
+                dai_show_formation_get(sh, 0, &f0);
+            }
+        }
+        std::printf("  Hold-Diamant bei x=%.0f y=%.0f (gesucht, nicht gerechnet)\n",
+                    (double)hit_x, (double)hit_y);
+        CHECK(found,
               "dragging the hold diamond three seconds to the right made the hold %.2f s, "
               "it was %.2f s", (double)f0.hold_s, (double)hold_before);
         CHECK(dai_show_ui_undo_depth(su) > 0, "the drag pushed no undo step");
@@ -2219,8 +2243,15 @@ int main() {
     // header has - so the field was drawn straight over the Static checkbox
     // and two clickable things sat on the same pixels. Measured on the
     // rectangles the header emits: the widgets are the track coloured fills
-    // inside the 34 px card, grouped by the gaps between them, and the name
-    // field has to end before the checkbox starts.
+    // inside the card, grouped by the gaps between them, and the name field
+    // and the checkbox must not share a pixel.
+    //
+    // The card is not 34 px tall any more when it cannot be: a name the line
+    // has no room for moves the Static tick onto a SECOND line rather than
+    // being cut ("Block.Bevelled" read "Block.Beve" in the 1100x700
+    // screenshot). So the height is read off the card itself, and the two
+    // widgets are checked as rectangles - not one against the other's left
+    // edge, which only ever asked half the question.
     std::printf("inspector header\n");
     {
         dai_node_desc hd = dai_node_desc_default();
@@ -2247,12 +2278,16 @@ int main() {
         float cy0 = -1.0f, cy1 = -1.0f;
         const dai_ui_draw *dr = nullptr;
         uint32_t nbb = dai_ui_draws(ui, &dr);
-        for (uint32_t b = 0; b < nbb && cy0 < 0.0f; ++b)
+        for (uint32_t b = 0; b < nbb; ++b)
             for (uint32_t v = 0; v < dr[b].count; ++v)
                 if (dr[b].vertices[v].color == CARD) {
-                    cy0 = dr[b].vertices[v].y; cy1 = cy0 + 34.0f; break;
+                    const float vy = dr[b].vertices[v].y;
+                    if (cy0 < 0.0f || vy < cy0) cy0 = vy;
+                    if (vy > cy1) cy1 = vy;
                 }
         CHECK(cy0 >= 0.0f, "the inspector drew no object header card");
+        CHECK(cy1 - cy0 >= 30.0f, "the object header card is only %.1f px tall",
+              (double)(cy1 - cy0));
 
         // Every track coloured QUAD in the card, and then those that touch
         // merged into one widget - a rounded rectangle is a middle piece plus
@@ -2298,28 +2333,52 @@ int main() {
         }
         // The name field is the 18 px tall one, the Static checkbox the
         // rightmost 14 px square.
-        int name_i = -1, static_i = -1;
+        // Two 14 px squares in the card: the active tick on the left of the
+        // first line, and Static - which is on the right of that line when
+        // the name fits beside it, and on the second line when it does not.
+        // The first one down is the active tick, the other is Static; picking
+        // "the rightmost square" would have called the active tick Static the
+        // moment the header wrapped, and passed a test about nothing.
+        int name_i = -1, static_i = -1, active_i = -1;
         for (size_t i = 0; i < boxes.size(); ++i) {
             float bh = boxes[i].y1 - boxes[i].y0, bw = boxes[i].x1 - boxes[i].x0;
             if (bh > 16.5f && bh < 20.0f && bw > 8.0f) name_i = (int)i;
-            if (bh > 12.5f && bh < 15.5f && bw > 12.5f && bw < 15.5f) static_i = (int)i;
+            if (bh > 12.5f && bh < 15.5f && bw > 12.5f && bw < 15.5f) {
+                if (active_i < 0 || boxes[i].y0 < boxes[active_i].y0 - 0.5f ||
+                    (boxes[i].y0 < boxes[active_i].y0 + 0.5f && boxes[i].x0 < boxes[active_i].x0)) {
+                    if (active_i >= 0) static_i = active_i;
+                    active_i = (int)i;
+                } else if (static_i < 0) {
+                    static_i = (int)i;
+                }
+            }
         }
         CHECK(name_i >= 0, "the header drew no name field (%u track boxes)",
               (unsigned)boxes.size());
         CHECK(static_i >= 0, "the header drew no Static checkbox (%u track boxes)",
               (unsigned)boxes.size());
         if (name_i >= 0 && static_i >= 0) {
-            CHECK(boxes[name_i].x1 <= boxes[static_i].x0 + 0.5f,
-                  "at 1100x700 the name field runs to x=%.1f and the Static checkbox "
-                  "starts at x=%.1f - they overlap by %.1f px",
-                  (double)boxes[name_i].x1, (double)boxes[static_i].x0,
-                  (double)(boxes[name_i].x1 - boxes[static_i].x0));
+            // Two rectangles, and no shared pixel - beside each other on one
+            // line or above each other on two, both of which are layouts; on
+            // top of each other is not.
+            int apart = boxes[name_i].x1 <= boxes[static_i].x0 + 0.5f ||
+                        boxes[static_i].x1 <= boxes[name_i].x0 + 0.5f ||
+                        boxes[name_i].y1 <= boxes[static_i].y0 + 0.5f ||
+                        boxes[static_i].y1 <= boxes[name_i].y0 + 0.5f;
+            CHECK(apart,
+                  "at 1100x700 the name field %.1f..%.1f x %.1f..%.1f and the Static "
+                  "checkbox %.1f..%.1f x %.1f..%.1f overlap",
+                  (double)boxes[name_i].x0, (double)boxes[name_i].x1,
+                  (double)boxes[name_i].y0, (double)boxes[name_i].y1,
+                  (double)boxes[static_i].x0, (double)boxes[static_i].x1,
+                  (double)boxes[static_i].y0, (double)boxes[static_i].y1);
             CHECK(boxes[name_i].x1 <= IX + IW - style->padding + 0.5f,
                   "the name field ends at x=%.1f, past the %.0f px panel",
                   (double)boxes[name_i].x1, (double)IW);
-            std::printf("  header at %.0f px: name field %.1f..%.1f, Static at %.1f\n",
-                        (double)IW, (double)boxes[name_i].x0, (double)boxes[name_i].x1,
-                        (double)boxes[static_i].x0);
+            std::printf("  header at %.0f px: card %.0f px tall, name field %.1f..%.1f, "
+                        "Static at %.1f,%.1f\n", (double)IW, (double)(cy1 - cy0),
+                        (double)boxes[name_i].x0, (double)boxes[name_i].x1,
+                        (double)boxes[static_i].x0, (double)boxes[static_i].y0);
 
             // ...and the name INSIDE it is clipped to the field rather than
             // painted across the checkbox. A name longer than the box still
@@ -2356,9 +2415,12 @@ int main() {
                 }
             CHECK(ink_x1 > boxes[name_i].x0,
                   "the name field drew no text at all (ink to x=%.1f)", (double)ink_x1);
-            CHECK(ink_x1 <= boxes[static_i].x0 + 0.5f,
-                  "a long name is drawn out to x=%.1f, over the Static checkbox at "
-                  "x=%.1f", (double)ink_x1, (double)boxes[static_i].x0);
+            // Inside its OWN box, not merely left of the checkbox: whatever
+            // else the header carries, a name that reaches past the field it
+            // is typed in is a name drawn over the panel.
+            CHECK(ink_x1 <= boxes[name_i].x1 + 0.5f,
+                  "a long name is drawn out to x=%.1f, past its own field which ends "
+                  "at x=%.1f", (double)ink_x1, (double)boxes[name_i].x1);
         }
         dai_editor_deselect_all(ed);
         dai_doc_remove(doc, hn);

@@ -17,8 +17,25 @@
 #   Jolt: built once by tools/build_jolt_win.sh with the -posix mingw variants,
 #   because the default win32 thread model has no std::mutex.
 #
-#   ./build_win.sh   ->   build-win/*.exe
+#   ./build_win.sh   ->   build-win/*.exe   and   build/last_win.log
+#
+# The log is written HERE, by this run, and not copied in afterwards by
+# whoever remembered. RUN.md quotes the last lines of it as the proof that the
+# Windows editor linked, and for two rounds that proof came out of a file that
+# some earlier, hand piped run had left lying about - so the document could
+# swear the exe was built from sources that had changed since. Same tee
+# re-entry as tools/run_tests.sh: the script calls itself once with the log
+# flag set and pipes THAT through tee, because a redirect would lose the exit
+# code and a background tee can lose the last lines - which are exactly the
+# lines RUN.md quotes.
 set -e
+
+if [ "${DAI_WIN_LOG:-}" != "1" ]; then
+    cd "$(dirname "$0")"
+    mkdir -p build
+    DAI_WIN_LOG=1 "$0" "$@" 2>&1 | tee build/last_win.log
+    exit "${PIPESTATUS[0]}"
+fi
 
 CXX=${CXX:-x86_64-w64-mingw32-g++-posix}
 JOLT_SRC=${JOLT_SRC:-/root/projects/JoltPhysics}

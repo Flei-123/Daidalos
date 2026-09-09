@@ -1647,8 +1647,12 @@ static int open_asset_cb(const char *, const char *rel_path, void *) {
     // the usual install locations are checked too.
     // Code.exe, not code.cmd: a .cmd has to go through cmd.exe, and cmd.exe
     // is a black window that flashes up (and, when the path has a space in it
-    // and the quoting is one level off, prints "C:\\Users\\justi\\AppData\\Local\\
-    // Programs\\Microsoft is not recognised" instead of opening anything).
+    // and the quoting is one level off, prints "C:\\Users\\justi\\AppData
+    // \\Local\\Programs\\Microsoft is not recognised" instead of opening
+    // anything). The line break is BEFORE the separator on purpose: a //
+    // line whose last character is a backslash is a line continuation, the
+    // line after it vanishes into the comment, and gcc says so with
+    // -Wcomment - which it did here, every build, on both toolchains.
     const char *CODE_PATHS[] = {
         "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe",
         "%ProgramFiles%\\Microsoft VS Code\\Code.exe",

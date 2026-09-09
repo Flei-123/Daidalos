@@ -660,6 +660,13 @@ int main(int argc, char **argv) {
             dai_show_ui_viewport(show, ui, px, py, pw, ph);
             dai_dock_panel_end(dock);
         }
+        // Registered by 04 below, and DRAWN here - a panel that is added to a
+        // dock and then not painted is the black rectangle this round was sent
+        // to get rid of.
+        if (dai_dock_panel(dock, "Validation", &px, &py, &pw, &ph)) {
+            dai_show_ui_validation(show, ui, px, py, pw, ph);
+            dai_dock_panel_end(dock);
+        }
         dai_dock_end(dock);
         dai_show_ui_status(show, ui, 0.0f, (float)H - BOT, (float)W, BOT);
         dai_ui_end(ui);
@@ -697,42 +704,34 @@ int main(int argc, char **argv) {
         return true;
     };
 
-    // 04  the storyboard, with a figure taken out of the list: a row is a
-    //     toggle, and the figure it selects opens its own Hold, Transit,
-    //     Profile and Assignment fields under it. That expansion is the panel's
-    //     whole job, and a picture of the list with nothing open is a picture
-    //     of a list. The row is pressed through the pointer, at a fraction of
-    //     the rectangle the DOCK gave the panel, so the same code hits a row at
-    //     1100 px and at 1920.
+    // 04  THE VALIDATION LIST, in a panel of its own.
+    //
+    //     There used to be three pictures here - 04 storyboard, 05 parameters,
+    //     06 validation - and for two rounds all three were the same image as
+    //     07, byte for byte, because the panels they name do not exist any
+    //     more: dai_show_ui_panels gave its work away (the hierarchy lists the
+    //     figures under their steps, the settings hold the show's numbers, the
+    //     console carries the faults) and is a no-op today, so `in_panel` never
+    //     found a rectangle and every shot fell through to the bare preview.
+    //     Four names over one picture is not documentation, it is evidence
+    //     nobody checked - tools/run_tests.sh now turns red on two shots with
+    //     the same md5, which is how this was caught.
+    //
+    //     What is left in this file is what this file can honestly photograph:
+    //     the show's own faults list, which is still exported for exactly this
+    //     reason, drawn into a rectangle beside the preview with a row picked.
+    //     The panels that moved into the editor are photographed by the tool
+    //     that photographs the editor, tools/editor_shot.cpp.
     {
-        float mx = -100.0f, my = -100.0f;
-        if (in_panel("Storyboard", 0.40f, 0.41f, &mx, &my)) {
-            dock_frame(mx, my, 0);         // hover
-            dock_frame(mx, my, 1);         // press
-            dock_frame(mx, my, 0);         // release: the row commits
-            std::printf("storyboard row pressed at %.0f,%.0f - the figure it selects "
-                        "opens Hold, Transit, Profile and Assignment under it\n", mx, my);
-        }
-        panel_shot("04-storyboard", "Storyboard", mx, my, 0);
-    }
-
-    // 05  the parameters, with the pointer resting on Solve show - hovering,
-    //     not pressing: a shot tool that re-solves the show would photograph a
-    //     different plan than the one every other picture is of.
-    {
-        float mx = -100.0f, my = -100.0f;
-        in_panel("Show Parameters", 0.5f, 0.66f, &mx, &my);
-        panel_shot("05-parameters", "Show Parameters", mx, my, 0);
-    }
-
-    // 06  the validation list with a row SELECTED, which is the state a
-    //     director reads it in: the preview behind it is at that conflict's
-    //     second, with the pair drawn red.
-    {
+        dai_dock_add(dock, "Validation", DAI_DOCK_LEFT, 0.30f);
+        dock_frame(-100.0f, -100.0f, 0);
+        dock_frame(-100.0f, -100.0f, 0);
         float px, py, pw, ph;
         float mx = -100.0f, my = -100.0f;
         int picked = -1;
         if (dai_dock_panel_rect(dock, "Validation", 0, &px, &py, &pw, &ph)) {
+            std::printf("%-16s the dock gives it %4.0f x %4.0f px at %4.0f,%4.0f\n",
+                        "Validation", pw, ph, px, py);
             for (float y = py + 30.0f; y < py + ph - 10.0f && picked < 0; y += 5.0f) {
                 dock_frame(px + 120.0f, y, 0);
                 dock_frame(px + 120.0f, y, 1);
@@ -747,8 +746,10 @@ int main(int argc, char **argv) {
             std::printf("validation row at %.0f,%.0f -> conflict %d selected, the "
                         "timeline is at %.2fs\n", mx, my, picked, dai_show_ui_time(show));
         else
-            std::printf("no validation row took the click in the docked panel\n");
-        panel_shot("06-validation", "Validation", mx, my, 0);
+            std::printf("no validation row took the click - the list may be empty\n");
+        dock_frame(mx, my, 0);
+        dock_frame(mx, my, 0);
+        flush(shot_path("04-validation").c_str());
     }
 
     // 07  the preview alone: a dock with nothing else registered in it, which

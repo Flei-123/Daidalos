@@ -403,15 +403,28 @@ fi
 # panel that guesses its layout collides with itself. Compiled by the same
 # script that runs it, for the reason build_modeling_shot.sh gives.
 if [ -f tools/blockout_shot.cpp ]; then
-    for SET in 1920x1080:wide- 1100x700:narrow-; do
+    # Three sizes, and only the first of them compiles the tool - the same
+    # shape the modeling shots use, for the same reason. The plain 1600x900
+    # names are in the set because they are in git: leaving them out meant the
+    # repository kept a `16-modifier-bevel.png` from an older layout next to the
+    # current `wide-` and `narrow-` ones, which is a stale picture that looks
+    # exactly as current as the two beside it.
+    for SET in 1600x900: 1920x1080:wide- 1100x700:narrow-; do
         DIM=${SET%%:*}; TAG=${SET#*:}
         SW=${DIM%%x*}; SH=${DIM##*x}
-        OUT=$(DISPLAY="$DAI_TEST_DISPLAY" timeout 600 \
-              ./tools/build_blockout_shot.sh "$SHOTS" "$SW" "$SH" "$TAG" 2>&1)
+        if [ -z "$TAG" ]; then
+            OUT=$(DISPLAY="$DAI_TEST_DISPLAY" timeout 600 \
+                  ./tools/build_blockout_shot.sh "$SHOTS" "$SW" "$SH" 2>&1)
+        elif [ -x build/blockout_shot ]; then
+            OUT=$(DAI_SHADER_DIR=shaders DISPLAY="$DAI_TEST_DISPLAY" timeout 600 \
+                  ./build/blockout_shot "$SHOTS" "$SW" "$SH" --prefix "$TAG" 2>&1)
+        else
+            OUT="blockout_shot was not compiled"; false
+        fi
         RC=$?
-        NAME="blockout_shot ${TAG}"
+        NAME="blockout_shot ${TAG:-plain}"
         if [ "$RC" = "0" ]; then
-            printf '%-20s %3s/%-3s  ok  (%s/%s14..15-blockout-*, %s16..18-modifier-*.png %sx%s)\n' "$NAME" "-" "-" "$SHOTS" "$TAG" "$TAG" "$SW" "$SH"
+            printf '%-20s %3s/%-3s  ok  (%s/%s14..15-blockout-*, %s16..19-modifier-*.png %sx%s)\n' "$NAME" "-" "-" "$SHOTS" "$TAG" "$TAG" "$SW" "$SH"
             [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
         else
             FAILED="$FAILED blockout_shot(${SW}x${SH})"
@@ -433,13 +446,74 @@ fi
 # out of build/last_win.log, between two markers in the file - and a RUN.md
 # that still has a placeholder in it turns the run red, exactly like a failing
 # check would.
+# Every picture in the shots directory, hashed against every other one.
+#
+# Four of them - 04-storyboard, 05-parameters, 06-validation, 07-preview-full -
+# went out byte identical in all three sizes: the three panels those names
+# promise had moved into the editor's own dock and the shot tool was still
+# calling a function that registers nothing, so it photographed the preview
+# four times. Nothing noticed, because nothing looked. Two files with the same
+# content are one picture with two captions, and a captioned duplicate is worse
+# than a missing file: it reads as evidence. One md5 per file, and any pair
+# that matches turns the run red with both names printed.
+if [ -d "$SHOTS" ]; then
+    DUPES=$(md5sum "$SHOTS"/*.png 2>/dev/null | sort | awk '
+        { if ($1 == last_h) { if (!shown[$1]++) printf "   %s\n", last_f; printf "   %s\n", $2; n++ }
+          last_h = $1; last_f = $2 }
+        END { exit (n > 0 ? 1 : 0) }')
+    if [ -n "$DUPES" ]; then
+        FAILED="$FAILED shots(duplicate-pictures)"
+        echo "-- two shots in $SHOTS are the SAME picture under different names:"
+        printf '%s\n' "$DUPES"
+    else
+        SHOT_N=$(ls "$SHOTS"/*.png 2>/dev/null | wc -l)
+        echo "-- $SHOT_N shots in $SHOTS, no two of them the same picture"
+    fi
+fi
+
 WIN_LOG=build/last_win.log
+WIN_EXE=build-win/editor_demo.exe
+# ...and before any of it is quoted, whether the receipt is still true.
+#
+# A log is a claim about a binary that was built from sources. Two ways that
+# claim goes stale, and both of them happened here: the log was written by
+# hand from a piped run and then the exe was rebuilt without it (log older
+# than the exe), or the exe is genuinely from this log but somebody has edited
+# the engine since (log older than a source file). Either way RUN.md would go
+# out quoting "ok: build-win/editor_demo.exe" about a build that no longer
+# describes the checkout. Both turn the run RED rather than being explained in
+# a paragraph nobody reads. ./build_win.sh writes the log itself now, so the
+# fix for both is the same one command.
+if [ -f "$WIN_EXE" ]; then
+    if [ ! -f "$WIN_LOG" ]; then
+        FAILED="$FAILED win-log(missing)"
+        echo "-- $WIN_EXE exists but $WIN_LOG does not - run ./build_win.sh"
+    elif [ "$WIN_EXE" -nt "$WIN_LOG" ]; then
+        FAILED="$FAILED win-log(older-than-exe)"
+        echo "-- $WIN_LOG is older than $WIN_EXE - the log is not this build's receipt"
+    fi
+fi
+if [ -f "$WIN_LOG" ]; then
+    WIN_NEWER=$(find include src -type f -newer "$WIN_LOG" -print 2>/dev/null | head -3)
+    if [ -n "$WIN_NEWER" ]; then
+        FAILED="$FAILED win-log(stale)"
+        echo "-- $WIN_LOG is older than sources it claims to have built:"
+        echo "$WIN_NEWER" | sed 's/^/     /'
+        echo "   re-run ./build_win.sh"
+    fi
+fi
 if [ -f RUN.md ]; then
     if [ -f "$WIN_LOG" ]; then
         # The tail worth quoting: the section headers and the "ok:" lines the
         # script prints, up to and including the editor. Compiler warnings in
         # between are not what the document is claiming.
-        WIN_TAIL=$(grep -E '^(-- |   ok: )' "$WIN_LOG" | tail -5)
+        # The log's own timestamp goes into the block with the lines: a quoted
+        # "ok:" with no date on it cannot be told from one a year old, and the
+        # staleness check above is a line in a terminal nobody keeps.
+        WIN_STAMP=$(date -u -r "$WIN_LOG" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)
+        WIN_TAIL=$(printf '%s\n%s' \
+                   "$(grep -E '^(-- |   ok: )' "$WIN_LOG" | tail -5)" \
+                   "(build/last_win.log written $WIN_STAMP by ./build_win.sh)")
         case "$WIN_TAIL" in
             *"ok: build-win/editor_demo.exe"*)
                 if grep -q 'BEGIN win tail' RUN.md; then

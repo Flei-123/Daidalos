@@ -8,12 +8,15 @@
 #include "dai_tr.h"
 #include "dai_dock.h"
 #include "dai_show_ui.h"
+#include "dai_modifier.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -150,6 +153,25 @@ struct dai_editor_ui {
     // folds live here.
     int fold_transform = 1, fold_body = 1, fold_collider = 1, fold_render = 1;
     int fold_button = 1;
+    // The modifier list's folds, PER NODE. They used to be one static array
+    // inside src/dai_editor_ui_blockout_inspector.inl, which made them process
+    // global: folding the Bevel of a stair closed also folded the Bevel of the
+    // wall in the other window, and a second editor window inherited whatever
+    // the first one was left in. A fold belongs to the entry of one node, so
+    // it is keyed by node here, in the panel that draws it. A node that is
+    // deleted leaves eight ints behind and nothing else.
+    std::map<dai_node, std::array<int, DAI_MODIFIER_MAX> > fold_mods;
+    // Every entry starts open: a list somebody just added an entry to that
+    // shows nothing but headers is a list that looks empty.
+    int *fold_mods_of(dai_node n) {
+        std::map<dai_node, std::array<int, DAI_MODIFIER_MAX> >::iterator it = fold_mods.find(n);
+        if (it == fold_mods.end()) {
+            std::array<int, DAI_MODIFIER_MAX> a;
+            a.fill(1);
+            it = fold_mods.insert(std::make_pair(n, a)).first;
+        }
+        return it->second.data();
+    }
     std::vector<int> fold_scripts;   // one fold per attached script (Unity: each is its own component)
     char     script_buf[512] = { 0 };   // a full script list fits, not one path
     dai_node script_buf_node = DAI_INVALID_NODE;
@@ -2813,17 +2835,37 @@ static void inspector_body(dai_editor_ui *p) {
         const dai_ui_style *st2 = dai_ui_style_of(ui2);
         float hx, hy;
         dai_ui_cursor_pos(ui2, &hx, &hy);
-        dai_ui_advance(ui2, 0, 34.0f);
         float hw = dai_ui_panel_width(ui2) - st2->padding * 2;
+        // How wide the header's three parts want to be, BEFORE any of them is
+        // drawn - because the answer decides how tall the card is.
+        //
+        // "Static" and its tick sit on the right; the name field has what is
+        // left between the icon plate and them. At the 200 px inspector of a
+        // 1100x700 window that leaves about 80 px, and "Block.Bevelled" is
+        // 88 - so the field showed "Block.Beve" and the screenshot named an
+        // object that does not exist. A name is the one thing in the header
+        // that MUST be complete, so when the line cannot hold it the header
+        // becomes two lines and the tick moves down to the second, instead of
+        // the name being cut to keep a word that has its own tooltip.
+        float sw = dai_ui_text_width(ui2, "Static") + 22.0f;
+        float name_w = dai_ui_text_width(ui2, p->name_buf) + 14.0f;
+        int wrap_static = (name_w > (hx + hw - sw - 12.0f) - (hx + 58.0f)) ? 1 : 0;
+        float card_h = wrap_static ? 54.0f : 34.0f;
+        // On two lines the icon plate goes down with the tick, and the name
+        // gets the whole first line: it is the reason the header grew, so it
+        // is what the room is spent on.
+        float plate_x = wrap_static ? hx + 8.0f : hx + 28.0f;
+        float plate_y = wrap_static ? hy + 27.0f : hy + 5.0f;
+        dai_ui_advance(ui2, 0, card_h);
         float mx2 = 0, my2 = 0;
         int d2 = 0, p2 = 0;
         dai_ui_mouse(ui2, &mx2, &my2, &d2, &p2);
         // A card, not a strip: the object header is the one thing in the
         // inspector that says WHAT you are editing, and it was the same
         // height as a numeric field.
-        dai_ui_rrect(ui2, hx, hy, hw, 34.0f, 5.0f, rgba(0x3A, 0x3A, 0x3A, 255));
-        dai_ui_rect_outline(ui2, hx, hy, hw, 34.0f, 1.0f, st2->panel_border);
-        dai_ui_rect(ui2, hx, hy + 33.0f, hw, 1.0f, st2->accent);
+        dai_ui_rrect(ui2, hx, hy, hw, card_h, 5.0f, rgba(0x3A, 0x3A, 0x3A, 255));
+        dai_ui_rect_outline(ui2, hx, hy, hw, card_h, 1.0f, st2->panel_border);
+        dai_ui_rect(ui2, hx, hy + card_h - 1.0f, hw, 1.0f, st2->accent);
 
         // the active checkbox
         float bx = hx + 8.0f, by = hy + 10.0f, bsz = 14.0f;
@@ -2843,26 +2885,25 @@ static void inspector_body(dai_editor_ui *p) {
         }
         // The kind, in a tile of its own - Unity's inspector puts the icon
         // on a plate so the eye finds it before it reads anything.
-        dai_ui_rrect(ui2, hx + 28.0f, hy + 5.0f, 24.0f, 24.0f, 4.0f, st2->track);
-        dai_ui_icon_at(ui2, node_icon(r), hx + 32.0f, hy + 9.0f, 16.0f, st2->accent);
+        dai_ui_rrect(ui2, plate_x, plate_y, 24.0f, 24.0f, 4.0f, st2->track);
+        dai_ui_icon_at(ui2, node_icon(r), plate_x + 4.0f, plate_y + 4.0f, 16.0f, st2->accent);
 
         // Static, on the right, where Unity has it. It is the motion type
         // here, which is the same promise: this thing does not move.
         //
-        // The WORD next to the tick is what a narrow header gives up first.
-        // Below a 46 px name field the row cannot carry all three of tile,
-        // name and "Static", and of the three the word is the one the tick's
-        // own tooltip already says in full - a name field shrunk to a stump so
-        // that a label can stay is a header that no longer names the object it
-        // is editing. Measured, not guessed: the threshold is the text's own
-        // width, so a bigger font gives the word up sooner.
-        float sw = dai_ui_text_width(ui2, "Static") + 22.0f;
-        float sx = hx + hw - sw - 6.0f;
-        if (sx - (hx + 58.0f) - 8.0f < 46.0f) { sw = 14.0f; sx = hx + hw - sw - 6.0f; }
-        int with_static_word = sw > 20.0f;
+        // Where it goes was decided above, with the card's height: on the line
+        // when the name fits beside it, on a SECOND line when it does not. The
+        // old answer was to drop the word "Static" and leave a bare tick, and
+        // the name was cut anyway - "Block.Bevelled" read "Block.Beve" in the
+        // 1100x700 screenshot, which names an object that is not in the scene.
+        // Two lines cost 20 px of a column that scrolls; a cut name costs the
+        // reader the only thing the header is for.
+        float sx = wrap_static ? hx + 38.0f : hx + hw - sw - 6.0f;
+        float sy = wrap_static ? hy + 27.0f : hy + 4.0f;
+        int with_static_word = 1;
         {
-            float cx = sx, cy = hy + 10.0f;
-            bool over_s = mx2 >= cx && mx2 < cx + sw && my2 >= hy + 4.0f && my2 < hy + 30.0f;
+            float cx = sx, cy = sy + 6.0f;
+            bool over_s = mx2 >= cx && mx2 < cx + sw && my2 >= sy && my2 < sy + 26.0f;
             dai_ui_rect(ui2, cx, cy, 14.0f, 14.0f, over_s ? st2->button_hover : st2->track);
             dai_ui_rect_outline(ui2, cx, cy, 14.0f, 14.0f, 1.0f, st2->panel_border);
             int is_static = r.motion == DAI_STATIC;
@@ -2888,7 +2929,7 @@ static void inspector_body(dai_editor_ui *p) {
                       "a script does to its transform will be simulated."
                     : "Not static: the body is simulated. Tick this for floors, "
                       "walls and anything that should never be pushed.";
-                dai_ui_tooltip_at(ui2, cx, hy + 4.0f, sw, 26.0f, tip);
+                dai_ui_tooltip_at(ui2, cx, sy, sw, 26.0f, tip);
             }
         }
 
@@ -2902,13 +2943,15 @@ static void inspector_body(dai_editor_ui *p) {
         // gap - so the name box was drawn straight over the Static checkbox
         // and two clickable things sat on the same pixels. A field that does
         // not fit gets small; it does not get to borrow its neighbour's room.
-        float nfx = hx + 58.0f;
-        float nfw = (sx - 6.0f) - nfx;
+        // With the tick and the icon plate on the second line the field has the
+        // whole first one to itself, which is the point of moving them down.
+        float nfx = wrap_static ? hx + 28.0f : hx + 58.0f;
+        float nfw = wrap_static ? (hx + hw - 6.0f) - nfx : (sx - 6.0f) - nfx;
         if (nfw < 24.0f) {
             // Narrower than any name: the icon plate gives its column back
             // before the field is allowed to reach the checkbox.
             nfx = hx + 28.0f;
-            nfw = (sx - 6.0f) - nfx;
+            nfw = (wrap_static ? (hx + hw - 8.0f) : (sx - 6.0f)) - nfx;
             if (nfw < 12.0f) nfw = 12.0f;
         }
         // Long names are clipped INSIDE the box for the same reason: the text
@@ -5150,19 +5193,21 @@ void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
     // middle. Registering is idempotent, so this also runs on the first frame.
     dai_dock_reset(p->dock);
     if (p->show) {
-        // The layout a SHOW opens with: the preview in the middle, the
-        // storyboard (WHEN each figure flies) on the left, the parameters of
-        // the selected figure on the right, the validation along the bottom.
-        // The two panels a show inherits - figures where a scene has nodes, a
-        // drone at an instant where a node has components - start as tabs, so
-        // they cost nothing until they are wanted. The game default with
-        // three more panels squeezed into it is not a show layout, it is the
-        // game layout apologising.
+        // The layout a SHOW opens with: the preview in the middle, the running
+        // order on the left, the selected figure's parameters on the right,
+        // what the program has to say along the bottom.
+        //
+        // The left panel used to be called "Storyboard" and was REGISTERED
+        // WITHOUT BEING DRAWN: dai_show_ui_panels gave its work away - the
+        // hierarchy lists the figures under their steps, the settings hold the
+        // show's numbers, the console carries the faults - and the tab it left
+        // behind opened black in every screenshot over a status line that said
+        // "5 figures". A panel nobody draws is not a placeholder, it is a hole
+        // in the window, so the panel that does the job opens in its place.
         dai_dock_add(p->dock, "Scene", DAI_DOCK_NONE, 0.0f);
-        dai_dock_add(p->dock, "Storyboard", DAI_DOCK_LEFT, 0.22f);
+        dai_dock_add(p->dock, "Hierarchy", DAI_DOCK_LEFT, 0.22f);
         dai_dock_add(p->dock, "Inspector", DAI_DOCK_RIGHT, 0.24f);
         dai_dock_add(p->dock, "Console", DAI_DOCK_BOTTOM, 0.26f);
-        dai_dock_add_tab(p->dock, "Hierarchy", "Storyboard");
         // The show's numbers are the project's settings, so they are in the
         // Settings panel - one tab beside the inspector, not a panel of its
         // own called something only this program knows.
@@ -5170,7 +5215,7 @@ void dai_editor_ui_layout_reset(dai_editor_ui *p, float vw, float vh) {
         p->settings_open = 1;
         dai_dock_add_tab(p->dock, "Project", "Console");
         dai_dock_add_tab(p->dock, "Script", "Scene");
-        dai_dock_focus(p->dock, "Storyboard");
+        dai_dock_focus(p->dock, "Hierarchy");
         dai_dock_focus(p->dock, "Inspector");
         dai_dock_focus(p->dock, "Console");
         p->layout_ready = true;

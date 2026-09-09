@@ -207,7 +207,17 @@
     // is a row somebody will eventually type a number into.
     if (r.modifier_count > 0) {
         if (r.modifier_count > DAI_MODIFIER_MAX) r.modifier_count = DAI_MODIFIER_MAX;
-        static int fold_mods[DAI_MODIFIER_MAX] = { 1, 1, 1, 1, 1, 1, 1, 1 };
+        // The folds of THIS node's list, held by the panel (fold_mods_of in
+        // src/dai_editor_ui.cpp). They were a function static, which is one
+        // array for the whole process: folding the Bevel of the stair closed
+        // folded the Bevel of the wall too, and a second editor window opened
+        // with whatever the first one had been left in. A fold is a property
+        // of one entry of one node in one panel, so that is where it lives.
+        int *fold_mods = p->fold_mods_of(n);
+        // What the last rebuild made of this stack: two bits per entry, the
+        // daimod::Inert value. An entry that ran and changed nothing says so
+        // under its own fields instead of looking broken.
+        uint32_t inert_mask = daimod::inert_of((uint32_t)n);
         static const char *const MOD_NAMES[DAI_MOD_TYPE_COUNT] = {
             "Modifier", "Bevel", "Subdivide", "Solidify", "Array", "Mirror"
         };
@@ -315,6 +325,37 @@
             default:
                 fit_label("Empty slot - pick a type");
                 break;
+            }
+
+            // What the last rebuild made of this entry. A bevel hands the
+            // shape back untouched when nothing is sharper than its angle, or
+            // when there is no room for its width (daimod::Inert in
+            // include/dai_modifier.h) - a correct answer that looks exactly
+            // like a broken modifier from the outside. So the entry says it,
+            // in its own colour, under its own numbers, and the host has
+            // already said it once in the Console.
+            uint32_t why = (inert_mask >> (mi * 2)) & 3u;
+            if (why && !m.off) {
+                float wx = 0, wy = 0;
+                dai_ui_cursor_pos(p->ui, &wx, &wy);
+                float ww = dai_ui_panel_width(p->ui) -
+                           (dai_ui_style_of(p->ui) ? dai_ui_style_of(p->ui)->padding : 8.0f) * 2.0f;
+                float wh = dai_ui_text_height(p->ui) + 6.0f;
+                dai_ui_advance(p->ui, 0, wh + 2.0f);
+                dai_ui_rrect(p->ui, wx, wy, ww, wh, 3.0f, rgba(0x4A, 0x3A, 0x1E, 255));
+                dai_ui_rect(p->ui, wx, wy, 3.0f, wh, rgba(0xE0, 0xB8, 0x6A, 255));
+                char wbuf[96];
+                std::snprintf(wbuf, sizeof(wbuf), "no change: %s",
+                              daimod::inert_text((int)why));
+                char cutw[96];
+                const char *shown = dai_ui_fit_text(p->ui, wbuf, ww - 12.0f, cutw, sizeof(cutw));
+                dai_ui_text(p->ui, wx + 7.0f, wy + 3.0f, shown, rgba(0xE0, 0xC8, 0x8A, 255));
+                dai_ui_tooltip_at(p->ui, wx, wy, ww, wh,
+                                  why == (uint32_t)daimod::INERT_NO_EDGES
+                                      ? "This bevel broke no edge: no two faces of the shape "
+                                        "disagree by more than the angle above. Lower it."
+                                      : "This bevel found no room: even an eighth of the width "
+                                        "folds a face. Use a smaller width.");
             }
         }
 

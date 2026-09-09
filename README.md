@@ -608,11 +608,15 @@ paths comes back the build goes red instead of merely printing an ugly number.
 DAI_SHADER_DIR=shaders ./build/droneshow_shot .gauntlet-shots 1600 900
 ```
 
-The panels are ordinary dock panels: **Storyboard** (figures in order, hold and
-transition times, "make a formation from the selected mesh"), **Parameters**
+The panels are the editor's own, not a second set beside them: the running
+order is the **Hierarchy** (every step with its figures under it; clicking a
+row selects the figure and takes the timeline to it), the show's numbers
 (fleet, minimum distance, v_max, a_max, sampling mode, assignment method,
-Solve), **Validation** (the conflict list, and a click jumps the timeline to
-the moment and selects the two drones), and the **preview**, which draws the
+Solve) are in **Settings** where a project's settings live, the faults are
+written to the **Console** as a solve produces them - and `dai_show_ui_validation`
+still draws the conflict list into any rectangle a host gives it, which is what
+`04-validation.png` is a picture of. A click on a row jumps the timeline to the
+moment and selects the two drones. Then there is the **preview**, which draws the
 fleet as coloured points in their real LED colour with the conflicting pairs in
 red and a line between them. The preview goes through `dai_ui`, not through the
 renderer: a show at this stage is points, lines and text, and routing them

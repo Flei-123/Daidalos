@@ -2922,12 +2922,21 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
         const float CAND[7] = { 1.0f, 2.0f, 5.0f, 10.0f, 30.0f, 60.0f, 300.0f };
         float tick = CAND[6];
         for (int k = 0; k < 7; ++k) if (CAND[k] * PPS >= 60.0f) { tick = CAND[k]; break; }
+        // The right edge is a WALL, not a suggestion. A number is drawn only
+        // when the WHOLE of it fits: the last one used to start 2 px from the
+        // edge and go over it, so a 130 second show ended in a "13" - which is
+        // the one number on the ruler a reader actually looks for. The tick
+        // mark under it is kept either way; it costs a pixel and it is where
+        // the second is.
+        const float LABEL_EDGE = x + w - 4.0f;
         for (float t = 0.0f; t <= dur + 0.001f; t += tick) {
             float px2 = TX0 + t * PPS;
+            if (px2 > LABEL_EDGE) break;
             dai_ui_rect(ui, px2, ruler_y + RULER_H - 5.0f, 1.0f, 5.0f, st->panel_border);
             char lab[24];
             std::snprintf(lab, sizeof(lab), "%g", (double)t);
-            dai_ui_text(ui, px2 + 2.0f, ruler_y, lab, st->text_dim);
+            if (px2 + 2.0f + dai_ui_text_width(ui, lab) <= LABEL_EDGE)
+                dai_ui_text(ui, px2 + 2.0f, ruler_y, lab, st->text_dim);
         }
 
         const float rows_y = ruler_y + RULER_H + 2.0f;
@@ -3004,12 +3013,16 @@ void dai_show_ui_viewport(dai_show_ui *u, dai_ui *ui, float x, float y, float w,
             }
         }
 
-        // Conflicts, on the ruler, where they were before.
+        // Conflicts, on the ruler - UNDER the numbers rather than beside them.
+        // A 2x6 px red bar starting level with the digits reads as a comma
+        // somebody typed after "120", which is what a reviewer saw and said
+        // out loud. Kept short and pushed to the bottom edge of the ruler, it
+        // reads as what it is: a mark at a second.
         for (uint32_t i = 0; i < cn; ++i) {
             dai_show_conflict c;
             if (!dai_show_conflict_at(u->sh, i, &c)) continue;
-            dai_ui_rect(ui, TX0 + std::min(c.time_s, dur) * PPS,
-                        ruler_y + RULER_H - 6.0f, 2.0f, 6.0f, COL_CONFLICT);
+            dai_ui_rect(ui, TX0 + std::min(c.time_s, dur) * PPS - 1.0f,
+                        ruler_y + RULER_H - 4.0f, 3.0f, 4.0f, COL_CONFLICT);
         }
 
         // The playhead, over everything.

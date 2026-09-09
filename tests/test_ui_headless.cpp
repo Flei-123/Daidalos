@@ -205,10 +205,19 @@ int main() {
               "the indented row reports a different rectangle than the row above it");
     }
 
-    // ---- two identical frames are identical ---------------------------------
+    // ---- the frame settles in ONE frame and then never drifts ---------------
     // Every picture in .gauntlet-shots/ is taken by drawing the same frame
     // twice - once to lay the dock out, once to photograph it - and a layer
     // that drifts between them is a screenshot nobody can diff.
+    //
+    // "Twice" is not decoration. The label column is a one frame handover on
+    // purpose (see LabelCol in src/dai_ui.cpp): a row cannot know how wide the
+    // widest name in its panel is until every row has been through, so this
+    // frame uses what last frame measured and the value boxes line up. A panel
+    // drawn for the FIRST time therefore lands its fields a few pixels off and
+    // is right from the second frame on. That is the contract, so that is what
+    // is checked: same vertex count immediately, bit identical from the second
+    // frame onwards, and no drift after that however long it runs.
     {
         auto draw = [&]() {
             dai_ui_input in{};
@@ -227,14 +236,37 @@ int main() {
         };
         std::vector<dai_ui_vertex> a = draw();
         std::vector<dai_ui_vertex> b = draw();
+        std::vector<dai_ui_vertex> c = draw();
+        std::vector<dai_ui_vertex> d = draw();
         CHECK(!a.empty(), "the frame drew nothing");
-        CHECK(a.size() == b.size(), "two identical frames made %u and %u vertices",
-              (uint32_t)a.size(), (uint32_t)b.size());
-        int same = a.size() == b.size();
-        if (same)
-            same = std::memcmp(a.data(), b.data(), a.size() * sizeof(dai_ui_vertex)) == 0;
-        CHECK(same, "two identical frames are not bit identical");
-        std::printf("  the same frame twice: %u vertices, identical\n", (uint32_t)a.size());
+        // The count is settled from the very first frame: a column that is
+        // still measuring itself may move a box, it may not make one appear.
+        CHECK(a.size() == b.size() && b.size() == c.size() && c.size() == d.size(),
+              "the frame made %u, %u, %u and %u vertices",
+              (uint32_t)a.size(), (uint32_t)b.size(), (uint32_t)c.size(), (uint32_t)d.size());
+        int bc = b.size() == c.size() &&
+                 std::memcmp(b.data(), c.data(), b.size() * sizeof(dai_ui_vertex)) == 0;
+        int cd = c.size() == d.size() &&
+                 std::memcmp(c.data(), d.data(), c.size() * sizeof(dai_ui_vertex)) == 0;
+        CHECK(bc, "frames two and three are not bit identical - the layout is still drifting");
+        CHECK(cd, "frames three and four are not bit identical - the layout never settles");
+        // And the settling is SMALL and horizontal: the label column decides
+        // where a value box starts, not how tall a row is or what colour it
+        // has. A first frame that moves something vertically or recolours it
+        // is not a column measuring itself, it is a bug.
+        int drift_rows = 0, bad_drift = 0;
+        for (size_t i2 = 0; i2 < a.size() && i2 < b.size(); ++i2) {
+            if (std::memcmp(&a[i2], &b[i2], sizeof(dai_ui_vertex)) == 0) continue;
+            ++drift_rows;
+            if (a[i2].y != b[i2].y || a[i2].color != b[i2].color ||
+                std::fabs(a[i2].x - b[i2].x) > 40.0f)
+                ++bad_drift;
+        }
+        CHECK(bad_drift == 0,
+              "%d of the %d vertices that moved between the first two frames moved "
+              "vertically, changed colour or jumped more than 40 px", bad_drift, drift_rows);
+        std::printf("  the same frame four times: %u vertices, %d moved once and then never again\n",
+                    (uint32_t)a.size(), drift_rows);
     }
 
     dai_ui_destroy(ui);

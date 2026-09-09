@@ -482,7 +482,12 @@ static void modifier_stack_cases(dai_doc *doc, dai_doc_sync *sync, dai_editor *e
             frame_at(40.0f, H - 10.0f, (k % 2) == 0 ? 1 : 0, 0.0f);
         CHECK(!dai_ui_popup_active(ui), "a popup is still open over the inspector");
 
-        dai_node_desc r = cube_desc("Listed");
+        // Named after the block in .gauntlet-shots/16b-mit-bevel.png, and not
+        // by accident: the header of that picture read "Block.Beve" because
+        // the name field was measured against what was left over rather than
+        // against the name. The picture and this check are about the same
+        // fourteen characters.
+        dai_node_desc r = cube_desc("Block.Bevelled");
         r.modifier_count = 3;
         r.modifiers[0] = mod_bevel(0.03f, 2, 30.0f);
         r.modifiers[1] = mod_array(4, dai_vec3{ 1.2f, 0, 0 });
@@ -507,6 +512,60 @@ static void modifier_stack_cases(dai_doc *doc, dai_doc_sync *sync, dai_editor *e
               "the inspector draws the same %u vertices with a three entry stack and "
               "without one", without);
         dai_doc_set(doc, n, &r);
+
+        // ---- and every word in that panel is a WHOLE word --------------------
+        // Vertices prove the list is drawn; they say nothing about whether it
+        // can be read. The 1100x700 screenshot of exactly this node showed
+        // "Pos...", "Siz..." and a name field ending at "Block.Beve" - three
+        // rows whose meaning the reader has to guess - and no check in this
+        // suite could tell, because what leaves the UI layer is triangles.
+        //
+        // dai_ui_text_record writes the strings down as they are drawn, with
+        // the clip each one was drawn under, so this asks what a reader asks:
+        // inside the Inspector, does anything end in an ellipsis, and is
+        // anything wider than the box it sits in. "Add Component..." is the
+        // one honest ellipsis in the panel - Unity's "this opens a dialog" -
+        // and it is named here rather than pattern matched away.
+        {
+            float ix = 0, iy = 0, iw = 0, ih = 0, dfx = 0, dfy = 0, dfw = 0, dfh = 0;
+            dai_editor_ui_inspector_last_field(panels, &dfx, &dfy, &dfw, &dfh,
+                                               &ix, &iy, &iw, &ih);
+            dai_ui_text_record(ui, 1);
+            frame_at(-100.0f, -100.0f, 0, 0.0f);
+            char cut_text[96] = { 0 }, over_text[96] = { 0 };
+            int n_cut = 0, n_over = 0, saw_name = 0;
+            for (uint32_t i = 0; i < dai_ui_text_record_count(ui); ++i) {
+                dai_ui_text_rec t;
+                if (!dai_ui_text_record_at(ui, i, &t)) continue;
+                if (t.x < ix - 0.5f || t.x > ix + iw + 0.5f) continue;
+                if (t.y < iy - 0.5f || t.y > iy + ih + 0.5f) continue;
+                if (!std::strcmp(t.text, "Add Component...")) continue;
+                size_t len = std::strlen(t.text);
+                if (len > 3 && !std::strcmp(t.text + len - 3, "...")) {
+                    if (!n_cut) std::snprintf(cut_text, sizeof(cut_text), "%s", t.text);
+                    ++n_cut;
+                    std::printf("    shortened: \"%s\" at %.0f,%.0f (%.0f px wide, clip %.0f)\n",
+                                t.text, (double)t.x, (double)t.y, (double)t.w, (double)t.clip_w);
+                }
+                if (t.x + t.w > t.clip_x + t.clip_w + 0.5f) {
+                    if (!n_over) std::snprintf(over_text, sizeof(over_text), "%s", t.text);
+                    ++n_over;
+                    std::printf("    cut off:   \"%s\" at %.0f,%.0f runs to %.0f, clip ends %.0f\n",
+                                t.text, (double)t.x, (double)t.y, (double)(t.x + t.w),
+                                (double)(t.clip_x + t.clip_w));
+                }
+                if (!std::strcmp(t.text, "Block.Bevelled")) saw_name = 1;
+            }
+            dai_ui_text_record(ui, 0);
+            CHECK(n_cut == 0,
+                  "at 1100x700 the inspector shortens %d of its own labels to an ellipsis, "
+                  "the first of them \"%s\"", n_cut, cut_text);
+            CHECK(n_over == 0,
+                  "at 1100x700 %d texts in the inspector are wider than the box they are "
+                  "drawn in, the first of them \"%s\"", n_over, over_text);
+            CHECK(saw_name,
+                  "the name field does not show \"Block.Bevelled\" in full at 1100x700");
+        }
 
         // The wheel, one notch at a time and over the panel: the scroll limit
         // is last frame's, so this is a loop and not a single jump.

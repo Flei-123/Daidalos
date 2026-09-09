@@ -54,6 +54,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <utility>
 #include <vector>
@@ -85,6 +86,29 @@ enum Type {
     MOD_ARRAY,
     MOD_MIRROR
 };
+
+/* Why an operator handed its input straight back.
+ *
+ * A modifier that changes nothing is not a broken modifier - a bevel finds no
+ * edge sharp enough, or no room for the chamfer it was asked for, and the
+ * honest answer to both is the shape it was given. Honest, but INVISIBLE: the
+ * entry sits in the list with its numbers and the viewport looks exactly as it
+ * did, which reads as "the stack is broken" to everyone who did not write it.
+ * So the reason travels out with the result and the inspector says it. */
+enum Inert {
+    INERT_NONE     = 0,
+    INERT_NO_EDGES = 1,   /* nothing disagreed by more than the angle threshold */
+    INERT_NO_ROOM  = 2    /* every width down to 1/128th folded a face          */
+};
+
+/* The one sentence each reason is worth, for the inspector and the console. */
+inline const char *inert_text(int why) {
+    switch (why) {
+    case INERT_NO_EDGES: return "no edge over the angle";
+    case INERT_NO_ROOM:  return "no room for this width";
+    default:             return "";
+    }
+}
 
 /* The flag bits a modifier carries. Mirrors DAI_MODF_* in dai_doc.h. */
 enum Flags {
@@ -343,7 +367,10 @@ inline void settle(Solid &s) {
  * Declared here, defined in the two headers included at the bottom. Each takes
  * a solid and returns a new one; none of them touches a document, a renderer
  * or a clock. */
-inline Solid bevel(const Solid &in, const Bevel &p);
+/* `why`, when it is given, comes back as one of the Inert values above: 0 when
+ * the bevel really ran. An old caller that passes nothing is unchanged. */
+inline Solid bevel(const Solid &in, const Bevel &p, int *why);
+inline Solid bevel(const Solid &in, const Bevel &p) { return bevel(in, p, 0); }
 inline Solid subdivide(const Solid &in, const Subdiv &p);
 inline Solid solidify(const Solid &in, const Solidify &p);
 inline Solid array(const Solid &in, const Array &p);
@@ -359,17 +386,34 @@ inline Solid mirror(const Solid &in, const Mirror &p);
 struct Result {
     Solid solid;
     bool  smooth = false;   /* a subdivide asked for averaged normals */
+    /* One entry per entry of the stack, in stack order: INERT_NONE when the
+     * entry ran (or was switched off and never asked to), one of the other
+     * Inert values when it gave the shape back untouched. An empty vector is
+     * "nothing to report", which is what an old caller sees. */
+    std::vector<int> inert;
+
+    int  inert_at(size_t i) const { return i < inert.size() ? inert[i] : (int)INERT_NONE; }
+    bool any_inert() const {
+        for (size_t i = 0; i < inert.size(); ++i) if (inert[i]) return true;
+        return false;
+    }
 };
 
 inline Result apply(const Stack &st, const Solid &base) {
     Result out;
     out.solid = base;
+    out.inert.assign(st.mods.size(), (int)INERT_NONE);
     for (size_t i = 0; i < st.mods.size(); ++i) {
         const Mod &m = st.mods[i];
         if (m.off || m.type == MOD_NONE) continue;
         if (out.solid.polys.empty()) break;
         switch (m.type) {
-        case MOD_BEVEL:     out.solid = bevel(out.solid, bevel_of(m)); break;
+        case MOD_BEVEL: {
+            int why = INERT_NONE;
+            out.solid = bevel(out.solid, bevel_of(m), &why);
+            out.inert[i] = why;
+            break;
+        }
         case MOD_SUBDIVIDE: {
             Subdiv s = subdiv_of(m);
             out.solid = subdivide(out.solid, s);
@@ -432,6 +476,51 @@ inline Mesh finalise(const Result &r) {
 
 /* The whole pipeline in one call, for the host and for the tests. */
 inline Mesh build(const Stack &st, const Solid &base) { return finalise(apply(st, base)); }
+
+/* ---- what the last build made of a node's stack -------------------------
+ *
+ * A modifier that ran and handed its input straight back (Inert above) is a
+ * correct answer that looks exactly like a broken one: the entry sits in the
+ * list with its numbers and the viewport does not move. So the host that
+ * rebuilds the mesh writes what came back here, two bits per entry - the
+ * Inert value of entry i in bits 2*i, 2*i+1 - and the inspector reads it while
+ * it draws the list.
+ *
+ * A map behind an inline function rather than an API on the editor: the host
+ * seam (include/dai_blockout_host.inl) is compiled into programs that do NOT
+ * link the editor UI - tests/test_doc.cpp is one - and a report is not worth a
+ * link error. One inline function is one map per program, which is what both
+ * sides need, and a headless host simply writes into a map nobody reads.
+ *
+ * The reason is also printed ONCE per change, to stdout, which is the editor's
+ * Console panel. Printed every frame it would be the loudest thing in the
+ * program and the first thing anybody turned off. */
+inline std::map<uint32_t, uint32_t> &inert_report() {
+    static std::map<uint32_t, uint32_t> m;
+    return m;
+}
+
+inline uint32_t inert_of(uint32_t node) {
+    std::map<uint32_t, uint32_t>::const_iterator it = inert_report().find(node);
+    return it == inert_report().end() ? 0u : it->second;
+}
+
+inline void report_inert(uint32_t node, uint32_t mask) {
+    if (!node) return;
+    std::map<uint32_t, uint32_t> &m = inert_report();
+    std::map<uint32_t, uint32_t>::iterator it = m.find(node);
+    uint32_t was = it == m.end() ? 0u : it->second;
+    if (was == mask) return;
+    if (!mask) { if (it != m.end()) m.erase(it); return; }
+    m[node] = mask;
+    for (int i = 0; i < 16; ++i) {
+        uint32_t why = (mask >> (i * 2)) & 3u;
+        if (!why || why == ((was >> (i * 2)) & 3u)) continue;
+        std::printf("modifier %d on node %u changed nothing: %s\n", i + 1,
+                    (unsigned)node, inert_text((int)why));
+    }
+    std::fflush(stdout);
+}
 
 /* A fingerprint of the STACK, for the host's rebuild cache: the same number
  * means the same modifiers and therefore the same mesh, so nothing is rebuilt.

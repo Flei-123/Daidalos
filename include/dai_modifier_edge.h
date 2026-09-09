@@ -564,7 +564,8 @@ inline Solid subdivide(const Solid &in, const Subdiv &p) {
  * volume of s^3 - 6*b^2*s + (16/3)*b^3, both checked in
  * tests/modifier_bevel_cases.hpp against the arithmetic rather than against
  * a previous run. */
-inline Solid bevel(const Solid &in, const Bevel &p) {
+inline Solid bevel(const Solid &in, const Bevel &p, int *why) {
+    if (why) *why = INERT_NONE;
     if (in.polys.empty() || !(p.width > 0)) return in;
     int seg = p.segments < 1 ? 1 : (p.segments > 4 ? 4 : p.segments);
 
@@ -580,7 +581,13 @@ inline Solid bevel(const Solid &in, const Bevel &p) {
         if (e.count != 2 || e.face[0] < 0 || e.face[1] < 0 || e.face[0] == e.face[1]) continue;
         if (dihedral(src, e) > p.angle) { brk[i] = 1; ++nbrk; }
     }
-    if (nbrk == 0) return in;
+    if (nbrk == 0) {
+        /* Not a failure and not silence either: the caller says so in the
+         * inspector, so that an entry that changes nothing does not read as
+         * an entry that is broken. */
+        if (why) *why = INERT_NO_EDGES;
+        return in;
+    }
 
     /* --- every loop edge, and where it sits in the topology ----------- */
     std::vector<std::vector<int> > eof(nf);
@@ -673,7 +680,10 @@ inline Solid bevel(const Solid &in, const Bevel &p) {
             if (!edge::inset_ok(src.polys[f], q)) placed = false;
         }
     }
-    if (!placed) return in;
+    if (!placed) {
+        if (why) *why = INERT_NO_ROOM;
+        return in;
+    }
 
     Solid out;
     out.polys.reserve(nf + topo.edges.size() * (size_t)seg + topo.points.size());

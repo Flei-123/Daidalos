@@ -778,6 +778,27 @@ DAI_API float dai_ui_text_width(dai_ui *ui, const char *utf8);
  * this way owes the reader the full text on a tooltip. */
 DAI_API const char *dai_ui_fit_text(dai_ui *ui, const char *utf8, float width,
                                     char *buf, size_t buf_size);
+
+/* ---- what the frame actually WROTE on the screen --------------------------
+ * A reviewer looking at a screenshot can see that the inspector shortened
+ * "Position" to "Pos..." or that the name field ends in the middle of
+ * "Block.Bevelled". A test cannot: what leaves this layer is triangles. So the
+ * strings can be written down as they are drawn, each with the box it went
+ * into and the clip that was in force - and a test asserts what the reviewer
+ * would: no visible text ends in an ellipsis, and no visible text is wider
+ * than the clip it sits under.
+ *
+ * Off by default; switching it on clears the log, and dai_ui_begin clears it
+ * once per frame. Nothing is recorded while it is off, so this costs a branch. */
+typedef struct dai_ui_text_rec {
+    float x, y, w, h;                  /* where the string was drawn        */
+    float clip_x, clip_y, clip_w, clip_h; /* the clip in force, or the frame */
+    char  text[96];
+} dai_ui_text_rec;
+DAI_API void     dai_ui_text_record(dai_ui *ui, int on);
+DAI_API uint32_t dai_ui_text_record_count(const dai_ui *ui);
+DAI_API int      dai_ui_text_record_at(const dai_ui *ui, uint32_t index,
+                                       dai_ui_text_rec *out);
 /* Line height of the current font. Host chrome that lays itself out (the dock
  * tab bar, the console button row) needs it to centre a label - a hardcoded
  * offset is right at one font size and clips descenders at every other. */
