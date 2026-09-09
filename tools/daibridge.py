@@ -99,6 +99,22 @@ class Bridge(object):
             self.sock.close()
 
 
+def read_sources(paths):
+    """Several files as one program.
+
+    A level script is written against examples/scripts/innen_lib.js, and the
+    bridge evaluates ONE string per command - so the library is not "imported",
+    it is simply put in front. Each file gets a comment line with its name, so
+    a syntax error in the answer can be traced back to a file rather than to a
+    line number in something nobody ever wrote out.
+    """
+    out = []
+    for path in paths:
+        with open(path, "r") as f:
+            out.append("// ---- %s ----\n%s" % (path, f.read()))
+    return "\n".join(out)
+
+
 def vec(text):
     parts = [p for p in text.replace(" ", "").split(",") if p]
     if len(parts) != 3:
@@ -118,7 +134,11 @@ def main(argv):
     sub.add_parser("ping")
     p_js = sub.add_parser("js", help="run JavaScript in the editor's script context")
     p_js.add_argument("code", nargs="?", default=None)
-    p_js.add_argument("-f", "--file", default=None, help="read the code from a file")
+    p_js.add_argument("-f", "--file", default=None, action="append",
+                      help="read the code from a file; may be given more than "
+                           "once, and the files are concatenated into ONE eval "
+                           "(that is how a level script gets its library in "
+                           "front of it)")
     p_scene = sub.add_parser("scene", help="the document, as JSON")
     p_scene.add_argument("--name", default=None, help="only the node with this name")
     p_save = sub.add_parser("save")
@@ -153,8 +173,7 @@ def main(argv):
         elif args.cmd == "js":
             code = args.code
             if args.file:
-                with open(args.file, "r") as f:
-                    code = f.read()
+                code = read_sources(args.file)
             if code is None:
                 sys.stderr.write("js needs either CODE or -f FILE\n")
                 return 2

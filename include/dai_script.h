@@ -236,9 +236,20 @@ DAI_API void dai_script_set_number(dai_script *s, const char *name, double value
 DAI_API void dai_script_set_string(dai_script *s, const char *name, const char *value);
 DAI_API double dai_script_get_number(dai_script *s, const char *name, double fallback);
 
-/* state.<name> as text. 1 when it exists and is not null. */
+/* state.<name> as text. 1 when it exists and is not null.
+ *
+ * TRUNCATES silently when the buffer is too small, the way snprintf does - so
+ * ask first if the value can be long. A bridge answer of a few kilobytes of
+ * JSON cut off at a fixed 4096 is not an error anybody sees: it is a parse
+ * failure in the CALLER, several seconds later, about a quote that is missing
+ * at the end of the world. */
 DAI_API int dai_script_get_string(dai_script *s, const char *name,
                                   char *out, size_t out_size);
+
+/* How many bytes state.<name> needs INCLUDING the terminator, or 0 when it
+ * does not exist. The pair of this and the call above is how a host reads a
+ * value whose length it cannot know. */
+DAI_API size_t dai_script_get_string_size(dai_script *s, const char *name);
 
 DAI_API dai_result dai_script_eval(dai_script *s, const char *code, const char *name,
                                    char *err, size_t err_len);

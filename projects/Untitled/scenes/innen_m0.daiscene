@@ -35,7 +35,7 @@ node 106
   shape 2
   motion 2
   friction 0.2
-  script innen_player.js{eye=Spieler.Kamera,torch=Spieler.Lampe,walkSpeed=2.2,eyeOffset=0.62,torchOn=true}
+  script innen_player.js{eye=Spieler.Kamera,torch=Spieler.Lampe,walkSpeed=2.2,eyeOffset=0.62,torchOn=true,startYaw=0}
   freeze 40
   hidden 1
 end

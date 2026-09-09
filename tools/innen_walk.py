@@ -49,7 +49,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from daibridge import Bridge          # noqa: E402
+from daibridge import Bridge, read_sources   # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -192,8 +192,8 @@ def main(argv):
             print("innen_walk: the host never opened the bridge")
             return 2
         b = Bridge(args.port)
-        with open("examples/scripts/innen_m0.js") as f:
-            built = b.js(f.read())
+        built = b.js(read_sources(["examples/scripts/innen_lib.js",
+                                   "examples/scripts/innen_m0.js"]))
         check(built.get("ok") is True, "the level script failed: %r" % built.get("error"))
         if not built.get("ok"):
             return 1

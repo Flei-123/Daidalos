@@ -424,6 +424,52 @@ else
     MISSING="$MISSING innen_check"
 fi
 
+# INNEN - the ROOM GENERATOR. Grows a floor from the phone box over the bridge
+# and then asks the document what stands there: same seed same floor, no room
+# inside another, every door docking with opposite normals, every room
+# reachable from the start, zones rising by one per door, and the whole floor
+# one Ctrl-Z. This is the test that lets the game have more than three rooms.
+if [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then
+    OUT=$(DAI_SHADER_DIR=shaders timeout 500 \
+          python3 tools/innen_gen.py --binary build/modeling_shot --port 8398 2>&1)
+    RC=$?
+    P=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ checks' | tail -1 | grep -oE '[0-9]+')
+    F=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ failures' | tail -1 | grep -oE '[0-9]+')
+    [ -z "${P:-}" ] && P=0
+    [ -z "${F:-}" ] && F=0
+    TOTAL_PASS=$((TOTAL_PASS + P - F))
+    TOTAL_FAIL=$((TOTAL_FAIL + F))
+    if [ "$RC" = "0" ] && [ "$F" = "0" ] && [ "$P" != "0" ]; then
+        printf '%-20s %3s/%-3s  ok\n' "innen_gen" "$P" "$F"
+        [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+    else
+        FAILED="$FAILED innen_gen"
+        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "innen_gen" "$P" "$F" "$RC"
+        printf '%s\n' "$OUT" | tail -12 | sed 's/^/    /'
+    fi
+else
+    MISSING="$MISSING innen_gen"
+fi
+
+# ...and that floor photographed: a plan view framed around whatever the seed
+# built, plus two from eye height inside it.
+if [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then
+    OUT=$(DAI_SHADER_DIR=shaders timeout 400 \
+          python3 tools/innen_gen_shot.py --seed 7 --port 8399 --out "$SHOTS" 2>&1)
+    RC=$?
+    if [ "$RC" = "0" ]; then
+        printf '%-20s %3s/%-3s  ok  (%s/2[7-9]-innen-gen-*.png)\n' \
+               "innen_gen_shot" "-" "-" "$SHOTS"
+        [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+    else
+        FAILED="$FAILED innen_gen_shot"
+        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "innen_gen_shot" "-" "-" "$RC"
+        printf '%s\n' "$OUT" | tail -10 | sed 's/^/    /'
+    fi
+else
+    MISSING="$MISSING innen_gen_shot"
+fi
+
 # ...and the same three rooms photographed from eye height, in two sizes. The
 # pictures come out of the bridge, from examples/scripts/innen_m0.js, so a
 # level that changes changes them - which is the point of having them in git.

@@ -36,7 +36,7 @@ import socket as pysocket
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from daibridge import Bridge          # noqa: E402
+from daibridge import Bridge, read_sources   # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -171,6 +171,7 @@ def main(argv):
     ap.add_argument("--binary", default="build/editor_demo")
     ap.add_argument("--port", type=int, default=8397)
     ap.add_argument("--script", default="examples/scripts/innen_m0.js")
+    ap.add_argument("--lib", default="examples/scripts/innen_lib.js")
     args = ap.parse_args(argv[1:])
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -191,9 +192,9 @@ def main(argv):
         b = Bridge(args.port)
         before = b.ping().get("nodes", 0)
 
-        with open(args.script) as f:
-            src = f.read()
-        answer = b.js(src)
+        # The library first, then the level, as one eval - the same two
+        # files tools/innen_shots.sh sends.
+        answer = b.js(read_sources([args.lib, args.script]))
         check(answer.get("ok") is True,
               "the M0 script failed: %r" % answer.get("error"))
         if not answer.get("ok"):

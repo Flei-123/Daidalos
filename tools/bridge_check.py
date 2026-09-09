@@ -328,6 +328,20 @@ def main(argv):
         check(u.get("moved") is True, "the second undo did nothing")
         check(b.node("BridgeStack") is None, "the modifier check did not clean up after itself")
 
+        # ---- an answer longer than any buffer -------------------------
+        # The result used to be read out of the script context into a fixed
+        # 4096 byte array, so a generated floor plan came back cut off in the
+        # middle of a number - valid looking JSON with no closing brace, and a
+        # parse error in the caller that says nothing about where it came from.
+        big = b.js("var s = ''; for (var i = 0; i < 900; i++)"
+                   " s += ('' + i) + 'abcdefghij'; s")
+        got = big.get("result", "")
+        check(len(got) > 9000,
+              "a long answer came back as %d characters - the bridge is "
+              "truncating it" % len(got))
+        check(got.endswith("899abcdefghij"),
+              "a long answer lost its end: %r" % got[-30:])
+
         b.js("1")     # one last command, so the count below is not a fluke
     finally:
         b.close()

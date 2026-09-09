@@ -692,9 +692,15 @@ static std::string handle(const std::string &line) {
         dai_result rc = dai_script_eval(s, wrapped.c_str(), "bridge", err, sizeof(err));
         dai_doc_commit(d);
         if (rc != DAI_OK) return fail(err[0] ? err : "script error");
-        char result[4096] = { 0 };
-        dai_script_get_string(s, "result", result, sizeof(result));
-        return "{\"ok\":true,\"result\":" + quote(result) +
+        // The answer is as long as it is. It used to be read into a fixed
+        // 4096 byte buffer, which cut a generated floor plan off in the middle
+        // of a number and handed the caller JSON that ends without its closing
+        // brace - an error that looks like a bug in the caller's parser and is
+        // in fact this line.
+        size_t need = dai_script_get_string_size(s, "result");
+        std::vector<char> result(need > 0 ? need : 1, 0);
+        dai_script_get_string(s, "result", result.data(), result.size());
+        return "{\"ok\":true,\"result\":" + quote(result.data()) +
                ",\"undo\":" + number((double)dai_doc_undo_depth(d)) + "}";
 #else
         return fail("this build has no script runtime");

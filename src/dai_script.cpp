@@ -231,6 +231,19 @@ int dai_script_get_string(dai_script *s, const char *name, char *out, size_t out
     return ok;
 }
 
+size_t dai_script_get_string_size(dai_script *s, const char *name) {
+    if (!s || !name) return 0;
+    JSValue g = JS_GetGlobalObject(s->ctx);
+    JSValue st = JS_GetPropertyStr(s->ctx, g, "state");
+    JSValue v = JS_GetPropertyStr(s->ctx, st, name);
+    size_t n = 0;
+    if (!JS_IsUndefined(v) && !JS_IsNull(v)) n = str(s->ctx, v).size() + 1;
+    JS_FreeValue(s->ctx, v);
+    JS_FreeValue(s->ctx, st);
+    JS_FreeValue(s->ctx, g);
+    return n;
+}
+
 double dai_script_get_number(dai_script *s, const char *name, double fallback) {
     if (!s || !name) return fallback;
     JSValue g = JS_GetGlobalObject(s->ctx);

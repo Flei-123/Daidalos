@@ -52,7 +52,7 @@ done
 
 B="tools/daibridge.py --port $PORT"
 
-$B js -f examples/scripts/innen_m0.js > /tmp/innen_build.json || {
+$B js -f examples/scripts/innen_lib.js -f examples/scripts/innen_m0.js > /tmp/innen_build.json || {
     echo "innen_shots: the room script failed"; cat /tmp/innen_serve.log | tail -5; exit 1; }
 cat /tmp/innen_build.json
 

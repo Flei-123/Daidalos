@@ -232,7 +232,12 @@ Zone 3 ist die einzige, die je nach Spieler ganz anders ist → Replay-Grund.
 > `tools/innen_walk.py` beweist, dass die geschlossene Tür den Spieler
 > aufhält, die offene nicht, und dass er 2,3 m Treppe hochkommt.
 > Beschreibung, Zahlen und Prüfungen: [`docs/INNEN_M0.md`](INNEN_M0.md).
-> Es fehlen der Generator und Schlüssel/Items, die eine Tür aufsperren.
+> **Der Generator läuft** (`examples/scripts/innen_gen.js`,
+> [`docs/INNEN_GEN.md`](INNEN_GEN.md)): aus dem Vorraum wächst ein Grundriss
+> über Türsockel, Räume aus einer Zonen-Tabelle, alles aus einem Seed —
+> derselbe Seed ergibt denselben Grundriss, nachweislich (~100 Prüfungen in
+> `tools/innen_gen.py`). Es fehlen Umbau-Regel, warme Räume/Anti-Pingpong
+> (§5.2), Anker, Portale und Schlüssel/Items, die eine Tür aufsperren.
 | M1 Vertical Slice | Zone 1 komplett, Puls, Umbau-Regel, 1 Telefon mit 5 Anrufen, Kopie | Spielbar 30 Min, ein Kernstück |
 | M2 | Zone 2–3, Wärter, Formular-Seed, 5 Angstvarianten | 2 h |
 | M3 | Archiv, Akten (41 Texte), Verbrennen, Twist | 4 h |

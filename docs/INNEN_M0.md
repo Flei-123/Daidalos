@@ -184,6 +184,15 @@ the same half turn, and the document hands back whichever the conversion
 produced. The check therefore turns the staircase's own forward vector and asks
 where it points, instead of comparing three numbers.
 
+## And then a floor of them
+
+`examples/scripts/innen_gen.js` grows a whole floor off these sockets — see
+[`INNEN_GEN.md`](INNEN_GEN.md). The parts both files build rooms out of moved
+into `examples/scripts/innen_lib.js` for that: two copies of `wall()` would be
+two definitions of what a doorway is, and the day they disagreed the
+generator's rooms would stop docking onto the hand built ones, in a way
+neither file's own tests would name.
+
 ## What M0 is not
 
 No room generator, no sound, no keys to pick up (a locked door stays locked).
