@@ -46,6 +46,10 @@ static void vert_bounds(dai_ui *ui, float *x0, float *y0, float *x1, float *y1) 
         }
 }
 
+// The modifier stack on the node: the scene lines, undo, the property names
+// and the list the inspector draws. Called from the end of main().
+#include "modifier_stack_cases.hpp"
+
 int main() {
     char err[256] = { 0 };
     dai_font *font = dai_font_load("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18.0f,
@@ -2361,6 +2365,7 @@ int main() {
         dai_doc_sync_apply(sync);
     }
 
+    modifier_stack_cases(doc, sync, ed, panels, ui);
 
     dai_editor_ui_destroy(panels);
     dai_editor_destroy(ed);

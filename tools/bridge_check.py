@@ -251,6 +251,83 @@ def main(argv):
         check(s.get("ok") is True, "the bridge could not save the scene: %r" % s.get("error"))
         check(os.path.exists(scene_path), "the saved scene is not on disk")
 
+        # ---- 12. a modifier, set through its property names --------------
+        # The point of the stack being DATA on the node is that a script can
+        # set it without a mouse. So: a plain 1 m box, a picture of it, then
+        # four words - modifier.count, .type, .copies, .offset - and a second
+        # picture. The two pictures must not be the same file, because the
+        # mesh the renderer got is not the same mesh. Nothing here reaches
+        # into the process: the names go over the socket like everything else.
+        answer = b.js("var m = editor.add('BridgeStack');"
+                      " node.setNum(m, 'blockout.kind', 1);"
+                      " node.setVec(m, 'blockout.size', 1, 1, 1);"
+                      " node.setVec(m, 'blockout.pivot', 0, -1, 0);"
+                      " node.setPos(m, 0, 0, 3);"
+                      " m")
+        check(answer.get("ok") is True, "the blockout box script failed: %r" % answer.get("error"))
+        plain_png = os.path.abspath("build/bridge_check_mod_plain.png")
+        stack_png = os.path.abspath("build/bridge_check_mod_stack.png")
+        for path in (plain_png, stack_png):
+            if os.path.exists(path):
+                os.remove(path)
+        b.shot(plain_png, eye=[0, 1.4, 6.5], target=[0, 0.5, 3], fov=52)
+
+        answer = b.js("var m = +scene.find('BridgeStack');"
+                      " node.setNum(m, 'modifier.count', 1);"
+                      " node.setNum(m, 'modifier.0.type', 4);"
+                      " node.setNum(m, 'modifier.0.copies', 4);"
+                      " node.setVec(m, 'modifier.0.offset', 1.2, 0, 0);"
+                      " node.getNum(m, 'modifier.0.copies')")
+        check(answer.get("ok") is True, "setting a modifier by name failed: %r" % answer.get("error"))
+        check(str(answer.get("result", "")).startswith("4"),
+              "modifier.0.copies read back as %r" % answer.get("result"))
+        # The aliases are the same storage: .copies was written, .count reads.
+        alias = b.js("var m = +scene.find('BridgeStack');"
+                     " node.getNum(m, 'modifier.0.count')")
+        check(str(alias.get("result", "")).startswith("4"),
+              "modifier.0.count and .copies are not the same field: %r" % alias.get("result"))
+        b.shot(stack_png, eye=[0, 1.4, 6.5], target=[0, 0.5, 3], fov=52)
+
+        check(os.path.exists(plain_png) and os.path.exists(stack_png),
+              "the two modifier pictures were not both written")
+        if os.path.exists(plain_png) and os.path.exists(stack_png):
+            with open(plain_png, "rb") as fh:
+                before_bytes = fh.read()
+            with open(stack_png, "rb") as fh:
+                after_bytes = fh.read()
+            check(before_bytes != after_bytes,
+                  "the array of four changed nothing on the screen - the mesh the "
+                  "renderer got is the same one (%d bytes both times)" % len(before_bytes))
+
+        # The stack is in the scene file, as one `mod` line and its count.
+        mod_scene = os.path.abspath("build/bridge_check_mod.daiscene")
+        if os.path.exists(mod_scene):
+            os.remove(mod_scene)
+        b.save(mod_scene)
+        text = ""
+        if os.path.exists(mod_scene):
+            with open(mod_scene, "r") as fh:
+                text = fh.read()
+        check("  modcount 1\n" in text, "the saved scene has no modifier count")
+        check("  mod 0 4 " in text, "the saved scene has no array entry: %r" %
+              [ln for ln in text.splitlines() if ln.startswith("  mod")])
+
+        # Two bridge commands built this node - the box, then the array - so
+        # it takes two undos to unbuild it, the same arithmetic as section 6.
+        # The first one is the interesting one: it must take back the
+        # parameter change and leave the node standing with an empty stack.
+        u = b.undo()
+        check(u.get("moved") is True, "undo did nothing after the modifier command")
+        check(b.node("BridgeStack") is not None,
+              "undo removed the whole node although the array was the last step")
+        back = b.js("var m = +scene.find('BridgeStack');"
+                    " node.getNum(m, 'modifier.count')")
+        check(str(back.get("result", "")).startswith("0"),
+              "undo did not take the modifier back off the stack: %r" % back.get("result"))
+        u = b.undo()
+        check(u.get("moved") is True, "the second undo did nothing")
+        check(b.node("BridgeStack") is None, "the modifier check did not clean up after itself")
+
         b.js("1")     # one last command, so the count below is not a fluke
     finally:
         b.close()

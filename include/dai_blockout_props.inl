@@ -31,6 +31,45 @@ if (!std::strcmp(name, "blockout.pivot"))     return vec(&r.blockout_pivot);
 if (!std::strcmp(name, "csg.op"))             return ival(&r.csg);
 if (!std::strcmp(name, "csg.enabled"))        return flag(&r.csg, 0);
 
+// The modifier stack, addressed by SLOT: "modifier.0.type" is the first entry
+// in the list, "modifier.7" the last one there can be. The index is a single
+// digit parsed straight out of the name - eight slots is DAI_MODIFIER_MAX and
+// a two digit slot would be a slot that does not exist.
+//
+// Every field has the neutral name dai_modifier uses AND the name the type it
+// belongs to calls it: `.width` and `.amount` are the same four bytes, not a
+// copy, so a script that says `modifier.0.width = 0.05` and one that says
+// `modifier.0.amount = 0.05` do the same thing and read each other back. The
+// full list is in docs/BLOCKOUT.md.
+if (!std::strncmp(name, "modifier.", 9)) {
+    const char *mrest = name + 9;
+    if (!std::strcmp(mrest, "count")) return ival(&r.modifier_count);
+    if (mrest[0] >= '0' && mrest[0] < '0' + DAI_MODIFIER_MAX && mrest[1] == '.') {
+        dai_modifier &m = r.modifiers[mrest[0] - '0'];
+        const char *f = mrest + 2;
+        if (!std::strcmp(f, "type"))      return ival(&m.type);
+        if (!std::strcmp(f, "off"))       return flag(&m.off, 0);
+        // The tick box in the inspector, the way round a reader expects it:
+        // `enabled` is `off` upside down, like rigidbody.enabled and no_body.
+        if (!std::strcmp(f, "enabled"))   return flag(&m.off, 1);
+        if (!std::strcmp(f, "amount") || !std::strcmp(f, "width") ||
+            !std::strcmp(f, "thickness") || !std::strcmp(f, "weld"))
+                                          return num(&m.amount);
+        if (!std::strcmp(f, "count") || !std::strcmp(f, "segments") ||
+            !std::strcmp(f, "level") || !std::strcmp(f, "copies"))
+                                          return ival(&m.count);
+        if (!std::strcmp(f, "angle") || !std::strcmp(f, "rotation"))
+                                          return num(&m.angle);
+        if (!std::strcmp(f, "axis"))      return ival(&m.axis);
+        if (!std::strcmp(f, "offset") || !std::strcmp(f, "step"))
+                                          return vec(&m.offset);
+        if (!std::strcmp(f, "param") || !std::strcmp(f, "shift"))
+                                          return num(&m.param);
+        if (!std::strcmp(f, "smooth"))    return flag(&m.smooth, 0);
+        if (!std::strcmp(f, "relative"))  return flag(&m.relative, 0);
+    }
+}
+
 if (!std::strcmp(name, "door.enabled"))       return flag(&r.door_socket, 0);
 if (!std::strcmp(name, "door.offset"))        return vec(&r.door_offset);
 if (!std::strcmp(name, "door.normal"))        return vec(&r.door_normal);

@@ -286,6 +286,22 @@ size_t dai_doc_to_text(const dai_doc *d, char *buf, size_t buf_size) {
             put(s, "  bothick %s\n", fstr(r.blockout_thickness).c_str());
         if (!v3eq(r.blockout_pivot, def.blockout_pivot)) write_v3(s, "bopivot", r.blockout_pivot);
         if (r.csg != def.csg)             put(s, "  csg %d\n", r.csg);
+        // The modifier stack: how many entries are live, then one line per
+        // slot that is not empty. The slot's INDEX is the first number on the
+        // line, so the order - which is the whole point of a stack - survives
+        // a file where a middle slot happens to be a default, and a reader
+        // does not have to count lines to know which entry it is looking at.
+        // The fields are the ones dai_modifier lists, in that order.
+        if (r.modifier_count != def.modifier_count) put(s, "  modcount %d\n", r.modifier_count);
+        for (int mi = 0; mi < DAI_MODIFIER_MAX; ++mi) {
+            const dai_modifier &m = r.modifiers[mi];
+            if (std::memcmp(&m, &def.modifiers[mi], sizeof(dai_modifier)) == 0) continue;
+            put(s, "  mod %d %d %d %s %d %s %d %d %d %s %s %s %s\n",
+                mi, m.type, m.off, fstr(m.amount).c_str(), m.count, fstr(m.angle).c_str(),
+                m.axis, m.smooth, m.relative,
+                fstr(m.offset.x).c_str(), fstr(m.offset.y).c_str(), fstr(m.offset.z).c_str(),
+                fstr(m.param).c_str());
+        }
         if (r.door_socket != def.door_socket) put(s, "  door %d\n", r.door_socket);
         if (!v3eq(r.door_offset, def.door_offset)) write_v3(s, "dooroff", r.door_offset);
         if (!v3eq(r.door_normal, def.door_normal)) write_v3(s, "doornrm", r.door_normal);
@@ -502,6 +518,59 @@ dai_result dai_doc_from_text(dai_doc *d, const char *text, size_t len,
         else if (key == "bopivot")  { ok = parse_floats(after, &rec.blockout_pivot.x, 3); }
         else if (key == "csg")      { ok = parse_i32(after, &rec.csg) &&
                                            rec.csg >= DAI_CSG_NONE && rec.csg < DAI_CSG_OP_COUNT; }
+        // The modifier stack, range checked like `blockout` and for the same
+        // reason: a type this build has no operator for would fall through to
+        // "do nothing", look wrong and say nothing. The slot index is checked
+        // too - a file that names slot 9 is a file from a build with a longer
+        // stack, and quietly dropping the entry is data loss.
+        else if (key == "modcount") { ok = parse_i32(after, &rec.modifier_count) &&
+                                           rec.modifier_count >= 0 &&
+                                           rec.modifier_count <= DAI_MODIFIER_MAX; }
+        else if (key == "mod") {
+            int idx = 0;
+            const char *p2 = skip_ws(after);
+            char *endp = nullptr;
+            idx = (int)strtol(p2, &endp, 10);
+            ok = endp != p2 && idx >= 0 && idx < DAI_MODIFIER_MAX;
+            if (ok) {
+                dai_modifier m{};
+                float f[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+                int   iv[6] = { 0, 0, 0, 0, 0, 0 };
+                // type off amount count angle axis smooth relative ox oy oz param
+                const char *p3 = endp;
+                ok = parse_i32(p3, &iv[0]);
+                for (int step = 0; ok && step < 12; ++step) {
+                    p3 = skip_ws(p3);
+                    char *e2 = nullptr;
+                    double v = strtod(p3, &e2);
+                    if (e2 == p3 || !std::isfinite(v)) { ok = false; break; }
+                    switch (step) {
+                    case 0:  iv[0] = (int)v; break;   /* type      */
+                    case 1:  iv[1] = (int)v; break;   /* off       */
+                    case 2:  f[0] = (float)v; break;  /* amount    */
+                    case 3:  iv[2] = (int)v; break;   /* count     */
+                    case 4:  f[1] = (float)v; break;  /* angle     */
+                    case 5:  iv[3] = (int)v; break;   /* axis      */
+                    case 6:  iv[4] = (int)v; break;   /* smooth    */
+                    case 7:  iv[5] = (int)v; break;   /* relative  */
+                    case 8:  f[2] = (float)v; break;  /* offset x  */
+                    case 9:  f[3] = (float)v; break;  /* offset y  */
+                    case 10: f[4] = (float)v; break;  /* offset z  */
+                    default: f[5] = (float)v; break;  /* param     */
+                    }
+                    p3 = e2;
+                }
+                if (ok && (iv[0] < DAI_MOD_NONE || iv[0] >= DAI_MOD_TYPE_COUNT)) ok = false;
+                if (ok) {
+                    m.type = iv[0]; m.off = iv[1] ? 1 : 0;
+                    m.amount = f[0]; m.count = iv[2]; m.angle = f[1]; m.axis = iv[3];
+                    m.smooth = iv[4] ? 1 : 0; m.relative = iv[5] ? 1 : 0;
+                    m.offset = dai_vec3{ f[2], f[3], f[4] };
+                    m.param = f[5];
+                    rec.modifiers[idx] = m;
+                }
+            }
+        }
         else if (key == "door")     { ok = parse_i32(after, &rec.door_socket); }
         else if (key == "dooroff")  { ok = parse_floats(after, &rec.door_offset.x, 3); }
         else if (key == "doornrm")  { ok = parse_floats(after, &rec.door_normal.x, 3); }

@@ -3024,6 +3024,24 @@ const AcEntry AC_NODE[] = {
     { "door.width",           "metres" },
     { "door.height",          "metres" },
     { "door.enabled",         "is there a DoorSocket here?" },
+    // The modifier stack, one slot at a time. `N` is 0..7; the neutral field
+    // names and the ones each type calls them by are the same storage - see
+    // include/dai_blockout_props.inl and docs/BLOCKOUT.md.
+    { "modifier.count",       "how many entries the stack runs" },
+    { "modifier.0.type",      "1 bevel 2 subdivide 3 solidify 4 array 5 mirror" },
+    { "modifier.0.enabled",   "the tick box: 0 skips the entry" },
+    { "modifier.0.width",     "bevel: how far back, in metres" },
+    { "modifier.0.segments",  "bevel: 1 chamfer, 2..4 rounded" },
+    { "modifier.0.angle",     "bevel: break edges sharper than this" },
+    { "modifier.0.level",     "subdivide: 1..3" },
+    { "modifier.0.smooth",    "subdivide: average the normals" },
+    { "modifier.0.thickness", "solidify: the wall, in metres" },
+    { "modifier.0.shift",     "solidify: -1 inward, 0 both, +1 outward" },
+    { "modifier.0.copies",    "array: how many in total" },
+    { "modifier.0.offset",    "array: [x, y, z] step between copies" },
+    { "modifier.0.relative",  "array: the step is a multiple of the size" },
+    { "modifier.0.axis",      "mirror plane / array rotation: 0 X 1 Y 2 Z" },
+    { "modifier.0.weld",      "mirror: join points closer than this" },
     // The older, flatter spelling. Still valid, still offered.
     { "position",             "short for transform.position" },
     { "velocity",             "[x, y, z] - read and write" },

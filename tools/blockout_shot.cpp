@@ -325,6 +325,126 @@ int main(int argc, char **argv) {
     ok &= shot("15-blockout-doorsocket.png", dai_vec3{ 2.4f, 2.1f, -5.6f }, dai_vec3{ 0.0f, 1.0f, -2.5f }, 50.0f);
     ok &= assert_inspector_tail("15-blockout-doorsocket.png");
 
+    // ---- 16..18: the modifier stack ---------------------------------------
+    // Added AFTER the two pictures above are taken, so those two are exactly
+    // the room they always were. Every piece here is one blockout shape plus a
+    // short list of rules - no vertex was placed by hand for any of them, and
+    // the inspector in each picture is open on the node whose stack built it.
+    {
+        auto with_stack = [&](dai_node_desc r, int count, const dai_modifier *mods) {
+            r.modifier_count = count;
+            for (int i = 0; i < count && i < DAI_MODIFIER_MAX; ++i) r.modifiers[i] = mods[i];
+            return dai_doc_add(doc, &r);
+        };
+
+        // 16. THE SAME SHAPE, twice, side by side: the left one raw, the right
+        //     one with one Bevel entry on it. 8 cm and three segments, because
+        //     a 2 mm chamfer is honest and invisible, and a picture nobody can
+        //     read proves nothing.
+        const dai_vec3 blk_col{ 0.70f, 0.66f, 0.62f };
+        dai_node_desc plain = part("Block.Plain", dai_vec3{ -1.35f, 0, -1.4f },
+                                   DAI_BLOCKOUT_BOX, dai_vec3{ 1.1f, 1.1f, 1.1f },
+                                   on_floor, blk_col);
+        dai_doc_add(doc, &plain);
+        dai_modifier bev{};
+        // 14 cm and three segments. A chamfer has to be READ off the picture,
+        // not taken on trust: at 8 cm on a 1.1 m block the rounded corner is a
+        // couple of pixels wide once the block is small enough that its
+        // unbevelled twin fits in frame beside it, which proves nothing to
+        // somebody looking at the two side by side.
+        bev.type = DAI_MOD_BEVEL; bev.amount = 0.14f; bev.count = 3; bev.angle = 30.0f;
+        dai_node bevelled = with_stack(part("Block.Bevelled", dai_vec3{ 0.15f, 0, -1.4f },
+                                            DAI_BLOCKOUT_BOX, dai_vec3{ 1.1f, 1.1f, 1.1f },
+                                            on_floor, blk_col), 1, &bev);
+
+        // 17. a STAIR out of one step: a single 1.2 x 0.18 x 0.32 m slab and an
+        //     Array of eight, stepping up and back. Eight nodes' worth of
+        //     staircase from one node and four numbers.
+        dai_modifier arr{};
+        arr.type = DAI_MOD_ARRAY; arr.count = 8;
+        arr.offset = dai_vec3{ 0.0f, 0.18f, 0.32f };
+        arr.axis = 1;
+        dai_node stair = with_stack(part("Stair.Array", dai_vec3{ 2.0f, 0, -2.0f },
+                                         DAI_BLOCKOUT_BOX, dai_vec3{ 1.2f, 0.18f, 0.32f },
+                                         on_floor, dai_vec3{ 0.66f, 0.56f, 0.44f }),
+                                    1, &arr);
+
+        // 18. a MIRRORED part: half an arch - a wedge leaning one way - and a
+        //     Mirror entry on X, which is the other half. The seam down the
+        //     middle is welded, so the two halves are one closed solid.
+        dai_modifier mir{};
+        mir.type = DAI_MOD_MIRROR; mir.axis = 0; mir.amount = 0.002f;
+        // Behind the arch is where this used to stand, and the arch is 2.4 m
+        // wide and exactly in the way: the picture came out as a picture of
+        // the arch. Neither corner is any better: the arch spans x -2.1..0.3
+        // and walls off the left of the room, and the front right bay is where
+        // 17's stair array stands. It goes in the open band between them -
+        // z -0.8..0.6, which the blocks (z <= -0.85) and the arch (z >= 0.7)
+        // both leave clear - and the camera comes at it from the back right,
+        // past the arch's right leg rather than through it.
+        dai_node_desc half = part("Bracket.Half", dai_vec3{ -0.7f, 0, -0.1f },
+                                  DAI_BLOCKOUT_WEDGE, dai_vec3{ 0.9f, 1.6f, 0.7f },
+                                  on_floor, dai_vec3{ 0.52f, 0.58f, 0.68f });
+        dai_node bracket = with_stack(half, 1, &mir);
+        pump();
+
+        // The three cameras stand INSIDE the room. The first cut of these had
+        // the eye at z = -4.3, which is on the far side of the front wall
+        // (z = -2.5): the picture was the outside of that wall, with the
+        // subject somewhere behind it through the door hole. A camera for a
+        // shot of an object is placed by where the object is, not by where the
+        // room's own establishing shot happened to stand.
+
+        // 16: square on to the two blocks from inside the room, close enough
+        //     that the chamfer on the right hand one is a band and not a
+        //     pixel, wide enough that the plain one is fully in frame beside
+        //     it. The pair spans x -1.90..0.70, so the eye sits on their
+        //     midline and backs off 3.1 m.
+        dai_editor_select(ed, bevelled, 0);
+        ok &= reveal_inspector_tail();
+        //     The first cut stood 3.1 m off at 44 degrees and the right hand
+        //     block ran out of the top of the frame: a chamfer that is only
+        //     half in the picture is a chamfer the reader has to take on
+        //     trust. Backed off to 4.5 m on the same midline, which puts the
+        //     pair at a little under half the frame's width with floor under
+        //     both of them.
+        ok &= shot("16-modifier-bevel.png", dai_vec3{ -0.60f, 1.30f, 1.70f },
+                   dai_vec3{ -0.60f, 0.55f, -1.40f }, 58.0f);
+        ok &= assert_inspector_tail("16-modifier-bevel.png");
+
+        // 17: the stair runs from z = -2.0 towards the back and climbs to
+        //     1.44 m. Seen from the left and slightly above, along its run, so
+        //     all eight treads read as steps instead of one silhouette.
+        dai_editor_select(ed, stair, 0);
+        ok &= reveal_inspector_tail();
+        //     Two metres further back than the first cut, which had the top
+        //     treads outside the frame: the whole flight - all eight - has to
+        //     be countable in the picture.
+        ok &= shot("17-modifier-array-stair.png", dai_vec3{ -1.30f, 2.10f, 0.10f },
+                   dai_vec3{ 1.70f, 0.72f, -0.80f }, 70.0f);
+        ok &= assert_inspector_tail("17-modifier-array-stair.png");
+
+        // 18: the mirror plane is the YZ plane, so a camera that looks ALONG X
+        //     sees one half hide the other and the picture argues for nothing.
+        //     Looked at from above instead: the seam runs down the middle of
+        //     the frame with a half on either side of it, and a line dropped
+        //     from 3.5 m clears the arch (2.2 m tall, z 0.7..1.1) that stands
+        //     between this corner and the rest of the room.
+        dai_editor_select(ed, bracket, 0);
+        ok &= reveal_inspector_tail();
+        //     Narrow lens on purpose: seen from overhead the pair covers only
+        //     its 1.8 x 0.7 m footprint, and at 50 degrees that is a detail in
+        //     the middle of three metres of floor.
+        //     Straight down from 3.5 m the pair read as one flat outline with
+        //     the node's own shadow across it. Dropped to eye height and moved
+        //     off the seam instead: from up and to the right the two halves
+        //     stand apart, and the mirrored one still shows the same slope
+        //     going the other way.
+        ok &= shot("18-modifier-mirror.png", dai_vec3{ 1.30f, 1.60f, 1.70f },
+                   dai_vec3{ -0.70f, 0.80f, -0.10f }, 58.0f);
+        ok &= assert_inspector_tail("18-modifier-mirror.png");
+    }
+
     std::printf("blockout_shot: %u nodes in the document, %s\n", dai_doc_count(doc),
                 ok ? "ok" : "FAILED");
 

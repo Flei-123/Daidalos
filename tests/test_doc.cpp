@@ -26,6 +26,11 @@ static int g_fail = 0, g_pass = 0;
 // ... and the boolean measured against the bar - closed, no slivers, and
 // volumes with a closed form - in its own file next to it.
 #include "blockout_csg_cases.hpp"
+// ... and the modifier stack's two edge operators - bevel and subdivide -
+// measured the same way: face counts by the direction they face, volumes
+// against a formula worked out on paper, and the boolean's own result put
+// through the bevel to prove it survives a T junction.
+#include "modifier_bevel_cases.hpp"
 // ... and the path the editor actually takes: dai_blockout_host_sync against a
 // renderer that counts. One field change, one upload - and undo brings the old
 // key AND the old triangles back. The two renderer entry points are defined in
@@ -892,6 +897,7 @@ int main() {
     test_blockout();
     test_blockout_csg_measured();
     test_blockout_csg_matrix();
+    test_modifier_bevel();
     test_blockout_host();
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);

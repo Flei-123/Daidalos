@@ -194,4 +194,142 @@
                 r.door_height = dh;
         }
     }
+
+    // ---- Modifiers -------------------------------------------------------
+    // The list of rules that turns the rough shape into a detailed one, run
+    // top down. The ORDER is what the list is for - an array of a bevelled
+    // step is nine bevelled steps, a bevel of an arrayed step is one long
+    // bevel down the joins - so every entry carries its two arrows, and the
+    // tick box in its header switches it off without losing its numbers.
+    //
+    // Only the fields of THIS entry's type are drawn. A bevel has no copy
+    // count and an array has no angle threshold, and a row that means nothing
+    // is a row somebody will eventually type a number into.
+    if (r.modifier_count > 0) {
+        if (r.modifier_count > DAI_MODIFIER_MAX) r.modifier_count = DAI_MODIFIER_MAX;
+        static int fold_mods[DAI_MODIFIER_MAX] = { 1, 1, 1, 1, 1, 1, 1, 1 };
+        static const char *const MOD_NAMES[DAI_MOD_TYPE_COUNT] = {
+            "Modifier", "Bevel", "Subdivide", "Solidify", "Array", "Mirror"
+        };
+        static const char *const AXES[] = { "X", "Y", "Z" };
+        // What the list is about to do to itself. Applied AFTER the loop:
+        // moving an entry while the loop that draws it is still running would
+        // draw one entry twice and skip its neighbour.
+        int move_from = -1, move_to = -1, remove_at = -1;
+
+        for (int mi = 0; mi < r.modifier_count && mi < DAI_MODIFIER_MAX; ++mi) {
+            dai_modifier &m = r.modifiers[mi];
+            int t = (m.type > 0 && m.type < DAI_MOD_TYPE_COUNT) ? m.type : 0;
+            char title[48];
+            std::snprintf(title, sizeof(title), "%d  %s", mi + 1, MOD_NAMES[t]);
+            // One hue per type, the way every other component header here is
+            // told apart by colour before it is read.
+            uint32_t tint = rgba(0xB0, 0x9C, 0xE0, 255);
+            switch (t) {
+            case DAI_MOD_BEVEL:     tint = rgba(0xE0, 0xB8, 0x6A, 255); break;
+            case DAI_MOD_SUBDIVIDE: tint = rgba(0x8A, 0xC8, 0xD8, 255); break;
+            case DAI_MOD_SOLIDIFY:  tint = rgba(0xC8, 0x9A, 0xD8, 255); break;
+            case DAI_MOD_ARRAY:     tint = rgba(0x9C, 0xD6, 0x7A, 255); break;
+            case DAI_MOD_MIRROR:    tint = rgba(0xE0, 0x8B, 0x5A, 255); break;
+            default: break;
+            }
+            int on = m.off ? 0 : 1;
+            // The tick box does NOT delete the entry - that is what the minus
+            // button is for. An entry that is off keeps every number it had,
+            // which is the only way "switch it off and see" is useful.
+            if (dai_ui_header_icon_col(p->ui, DAI_ICON_C_MATERIAL, tint, title,
+                                       &fold_mods[mi], &on) == 2)
+                m.off = on ? 0 : 1;
+            if (!fold_mods[mi]) continue;
+
+            // Up, down, remove. Icons rather than words: three text buttons
+            // do not fit into a 200 px inspector column at 1100x700, and an
+            // arrow that is 18 px wide is still an arrow.
+            dai_ui_row(p->ui, 20.0f);
+            if (dai_ui_icon_button(p->ui, DAI_ICON_ARROW_UP, "Move up", 0) && mi > 0) {
+                move_from = mi; move_to = mi - 1;
+            }
+            if (dai_ui_icon_button(p->ui, DAI_ICON_ARROW_DOWN, "Move down", 0) &&
+                mi + 1 < r.modifier_count) {
+                move_from = mi; move_to = mi + 1;
+            }
+            if (dai_ui_icon_button(p->ui, DAI_ICON_MINUS, "Remove", 0)) remove_at = mi;
+            dai_ui_row_end(p->ui);
+
+            // A zero is "the default" in the document, and the number the
+            // panel shows is the one the geometry reads - bevel_of() and its
+            // siblings in include/dai_modifier.h, not a second opinion.
+            switch (t) {
+            case DAI_MOD_BEVEL: {
+                float w = m.amount > 0 ? m.amount : 0.02f;
+                if (dai_ui_num_field(p->ui, "Width (m)", &w, 0.005f, 0.0005f, 10.0f, "modw"))
+                    m.amount = w;
+                float seg = (float)(m.count > 0 ? (m.count > 4 ? 4 : m.count) : 1);
+                if (dai_ui_num_field(p->ui, "Segments", &seg, 1.0f, 1.0f, 4.0f, "modseg"))
+                    m.count = (int)(seg + 0.5f);
+                float ang = m.angle > 0 ? m.angle : 30.0f;
+                if (dai_ui_num_field(p->ui, "Angle (deg)", &ang, 1.0f, 1.0f, 180.0f, "modang"))
+                    m.angle = ang;
+                break;
+            }
+            case DAI_MOD_SUBDIVIDE: {
+                float lv = (float)(m.count > 0 ? (m.count > 3 ? 3 : m.count) : 1);
+                if (dai_ui_num_field(p->ui, "Level", &lv, 1.0f, 1.0f, 3.0f, "modlvl"))
+                    m.count = (int)(lv + 0.5f);
+                dai_ui_checkbox(p->ui, "Smooth", &m.smooth);
+                break;
+            }
+            case DAI_MOD_SOLIDIFY: {
+                float th = m.amount > 0 ? m.amount : 0.05f;
+                if (dai_ui_num_field(p->ui, "Thickness (m)", &th, 0.005f, 0.0005f, 10.0f, "modth"))
+                    m.amount = th;
+                float sh = m.param;
+                if (dai_ui_num_field(p->ui, "Shift", &sh, 0.1f, -1.0f, 1.0f, "modsh"))
+                    m.param = sh;
+                break;
+            }
+            case DAI_MOD_ARRAY: {
+                float cp = (float)(m.count > 0 ? m.count : 2);
+                if (dai_ui_num_field(p->ui, "Copies", &cp, 1.0f, 1.0f, 64.0f, "modcp"))
+                    m.count = (int)(cp + 0.5f);
+                float off[3] = { m.offset.x, m.offset.y, m.offset.z };
+                if (off[0] == 0.0f && off[1] == 0.0f && off[2] == 0.0f) off[0] = 1.0f;
+                if (dai_ui_num_vec3(p->ui, "Offset", off, 0.05f))
+                    m.offset = dai_vec3{ off[0], off[1], off[2] };
+                dai_ui_checkbox(p->ui, "Relative", &m.relative);
+                float rot = m.angle;
+                if (dai_ui_num_field(p->ui, "Rotation", &rot, 1.0f, -360.0f, 360.0f, "modrot"))
+                    m.angle = rot;
+                int ax = (m.axis >= 0 && m.axis <= 2) ? m.axis : 1;
+                if (dai_ui_option(p->ui, "Axis", &ax, AXES, 3)) m.axis = ax;
+                break;
+            }
+            case DAI_MOD_MIRROR: {
+                int ax = (m.axis >= 0 && m.axis <= 2) ? m.axis : 0;
+                if (dai_ui_option(p->ui, "Axis", &ax, AXES, 3)) m.axis = ax;
+                float wd = m.amount > 0 ? m.amount : 0.001f;
+                if (dai_ui_num_field(p->ui, "Weld (m)", &wd, 0.0005f, 0.0f, 1.0f, "modweld"))
+                    m.amount = wd;
+                break;
+            }
+            default:
+                fit_label("Empty slot - pick a type");
+                break;
+            }
+        }
+
+        if (move_from >= 0 && move_to >= 0 && move_to < r.modifier_count) {
+            dai_modifier tmp = r.modifiers[move_from];
+            r.modifiers[move_from] = r.modifiers[move_to];
+            r.modifiers[move_to] = tmp;
+            int f = fold_mods[move_from];
+            fold_mods[move_from] = fold_mods[move_to];
+            fold_mods[move_to] = f;
+        } else if (remove_at >= 0) {
+            for (int mi = remove_at; mi + 1 < DAI_MODIFIER_MAX; ++mi)
+                r.modifiers[mi] = r.modifiers[mi + 1];
+            r.modifiers[DAI_MODIFIER_MAX - 1] = dai_modifier{};
+            if (r.modifier_count > 0) --r.modifier_count;
+        }
+    }
 }

@@ -34,3 +34,23 @@ if (sel->kind >= 20 && sel->kind <= 24) {
     if (ar2.door_normal.x == 0.0f && ar2.door_normal.y == 0.0f && ar2.door_normal.z == 0.0f)
         ar2.door_normal = dai_vec3{ 0.0f, 0.0f, 1.0f };
 }
+else if (sel->kind >= 30 && sel->kind <= 34 && ar2.modifier_count < DAI_MODIFIER_MAX) {
+    // A new entry goes on the END of the stack: it runs on what is already
+    // there, which is what "add a modifier" means everywhere else. The arrows
+    // in its header move it, and its numbers arrive at the value the geometry
+    // reads for a zero (include/dai_modifier.h) so the shape visibly changes
+    // the moment it is added - a modifier that does nothing reads as an
+    // editor that did nothing.
+    dai_modifier m{};
+    m.type = sel->kind - 30 + DAI_MOD_BEVEL;
+    switch (m.type) {
+    case DAI_MOD_BEVEL:     m.amount = 0.02f; m.count = 1; m.angle = 30.0f; break;
+    case DAI_MOD_SUBDIVIDE: m.count = 1; break;
+    case DAI_MOD_SOLIDIFY:  m.amount = 0.05f; break;
+    case DAI_MOD_ARRAY:     m.count = 2; m.offset = dai_vec3{ 1.0f, 0.0f, 0.0f }; m.axis = 1; break;
+    case DAI_MOD_MIRROR:    m.amount = 0.001f; m.axis = 0; break;
+    default: break;
+    }
+    ar2.modifiers[ar2.modifier_count] = m;
+    ++ar2.modifier_count;
+}

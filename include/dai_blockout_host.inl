@@ -21,6 +21,7 @@
 // Called once per frame, AFTER dai_doc_sync_apply().
 
 #include "dai_blockout.h"
+#include "dai_modifier.h"
 
 #include <map>
 #include <vector>
@@ -59,6 +60,45 @@ static daiblock::Shape shape_of(const dai_node_desc &r) {
     return s;
 }
 
+/* The document's stack, in the shape the geometry reads it. The ONE
+ * conversion in the tree, next to shape_of() and for the same reason: two
+ * readings of "what does a zero width mean" are two different bevels for one
+ * file. What a zero means itself is not decided here - that is bevel_of() and
+ * its four siblings in include/dai_modifier.h, and this only carries the
+ * numbers across.
+ *
+ * Entries past modifier_count are not in the stack, whatever they hold: the
+ * count is what the inspector's list length is, and a slot below it that was
+ * deleted keeps its old numbers until it is filled again. */
+static daimod::Mod mod_of(const dai_modifier &m) {
+    daimod::Mod o;
+    o.type = m.type;
+    o.off = m.off;
+    o.amount = (double)m.amount;
+    o.count = m.count;
+    o.angle = (double)m.angle;
+    o.axis = m.axis;
+    o.flags = (uint32_t)((m.smooth ? DAI_MODF_SMOOTH : 0u) |
+                         (m.relative ? DAI_MODF_RELATIVE : 0u));
+    o.offset[0] = (double)m.offset.x;
+    o.offset[1] = (double)m.offset.y;
+    o.offset[2] = (double)m.offset.z;
+    o.param = (double)m.param;
+    return o;
+}
+
+static daimod::Stack stack_of(const dai_node_desc &r) {
+    daimod::Stack st;
+    int n = r.modifier_count;
+    if (n < 0) n = 0;
+    if (n > DAI_MODIFIER_MAX) n = DAI_MODIFIER_MAX;
+    for (int i = 0; i < n; ++i) {
+        if (r.modifiers[i].type == DAI_MOD_NONE) continue;
+        st.mods.push_back(mod_of(r.modifiers[i]));
+    }
+    return st;
+}
+
 static void eat(uint64_t &h, const void *p, size_t n) {
     const unsigned char *b = (const unsigned char *)p;
     for (size_t i = 0; i < n; ++i) { h ^= b[i]; h *= 1099511628211ull; }
@@ -77,6 +117,17 @@ static void hash_node(dai_doc *d, dai_node n, uint64_t &h, int depth) {
     eat(h, &r.blockout_thickness, sizeof(r.blockout_thickness));
     eat(h, &r.blockout_pivot, sizeof(r.blockout_pivot));
     eat(h, &r.csg, sizeof(r.csg));
+    /* The stack is part of the mesh, so it is part of the key. Through
+     * daimod::digest() rather than over the raw array: the digest hashes the
+     * entries that actually RUN, in the order they run, so a slot that sits
+     * below modifier_count with old numbers in it does not force a rebuild.
+     * Only at depth 0: the stack runs on the finished shape, and a CUTTER's
+     * own stack is not part of the wall it cuts - a hole is a tool, not a
+     * shape (see the mesh build below). */
+    if (depth == 0) {
+        uint64_t sd = daimod::digest(stack_of(r));
+        eat(h, &sd, sizeof(sd));
+    }
     if (depth > 0) {
         eat(h, &r.position, sizeof(r.position));
         eat(h, &r.rotation, sizeof(r.rotation));
@@ -211,7 +262,13 @@ static void dai_blockout_host_sync(const dai_ext_host *h) {
 
         if (!b.has_mesh || b.key != key) {
             daiblock::Solid sol = daiblockhost::solid_of(d, n, 0);
-            daiblock::Mesh m = daiblock::finalise(sol);
+            /* The stack, on the solid the CSG produced and before anything is
+             * turned into triangles: a bevel has to see the door reveal the
+             * boolean cut, not the triangles it was drawn with. finalise()
+             * through daimod so a subdivide that asked for smooth gets its
+             * normals averaged - the positions are the same either way. */
+            daimod::Result res = daimod::apply(daiblockhost::stack_of(r), sol);
+            daiblock::Mesh m = daimod::finalise(res);
             if (!m.idx.empty()) {
                 dai_vec3 es = daiblockhost::entity_render_scale(r, ws);
                 float sx = es.x != 0.0f ? ws.x / es.x : 1.0f;

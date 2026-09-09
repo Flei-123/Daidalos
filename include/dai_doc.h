@@ -43,6 +43,56 @@ typedef uint32_t dai_node;
 #define DAI_INVALID_NODE ((dai_node)0)
 #define DAI_NODE_NAME_MAX 64
 
+/* ---- one entry of the modifier stack ------------------------------------
+ * The list of rules that turns a rough blockout into something worth looking
+ * at. This is the shape the DOCUMENT holds an entry in - flat, fixed size and
+ * without a pointer in it, because it lives inside dai_node_desc and the undo
+ * stack is a memcpy of that struct.
+ *
+ * Every field is four bytes and there is no padding anywhere in here, which is
+ * what keeps the whole-record memcmp in src/dai_doc.cpp honest: two nodes are
+ * equal when their bytes are, and a hole full of stack rubbish would make two
+ * identical stacks compare different.
+ *
+ * Zero means "the default" for every number, the same rule the rest of this
+ * struct follows - the ONE reading of what a zero means is bevel_of() and its
+ * four siblings in include/dai_modifier.h, and the inspector, the bridge, the
+ * host and the tests all go through them.
+ *
+ * `smooth` and `relative` are the two flags, as their own ints rather than as
+ * bits in a word: every other flag in dai_node_desc (hidden, trigger,
+ * no_body) is an int, and a script says `modifier.0.smooth = 1` through the
+ * same property machinery those use. DAI_MODF_* below are what they become on
+ * the way into daimod::Mod, whose `flags` word is the geometry side's shape.
+ */
+#define DAI_MODIFIER_MAX 8
+#define DAI_MODF_SMOOTH   0x1u
+#define DAI_MODF_RELATIVE 0x2u
+typedef struct dai_modifier {
+    int      type;      /* dai_modifier_type, 0 = the slot is empty          */
+    int      off;       /* 1 = switched off: the stack skips it entirely     */
+    float    amount;    /* bevel width | solidify thickness | mirror weld, m */
+    int      count;     /* bevel segments 1..4 | subdiv level 1..3 | copies  */
+    float    angle;     /* bevel threshold deg | array degrees per copy      */
+    int      axis;      /* mirror axis | array rotation axis, 0 X 1 Y 2 Z    */
+    int      smooth;    /* subdivide: average the normals (DAI_MODF_SMOOTH)  */
+    int      relative;  /* array: offset is a multiple of the bounding size
+                           per axis rather than metres (DAI_MODF_RELATIVE)   */
+    dai_vec3 offset;    /* array step                                        */
+    float    param;     /* solidify shift -1..1                              */
+} dai_modifier;         /* all fields 4 bytes: no padding, memcmp is honest  */
+
+/* What `type` holds. The numbers are the file format, so they never move. */
+typedef enum dai_modifier_type {
+    DAI_MOD_NONE = 0,
+    DAI_MOD_BEVEL,
+    DAI_MOD_SUBDIVIDE,
+    DAI_MOD_SOLIDIFY,
+    DAI_MOD_ARRAY,
+    DAI_MOD_MIRROR,
+    DAI_MOD_TYPE_COUNT
+} dai_modifier_type;
+
 /* One node, entirely by value: a snapshot is a memcpy, which is what makes the
  * undo stack generic instead of one command class per property. */
 typedef struct dai_node_desc {
@@ -276,6 +326,24 @@ typedef struct dai_node_desc {
      * operation. A door hole is a Box child under a subtract node, and moving
      * that child with the ordinary gizmo moves the hole. */
     int      csg;               /* dai_csg_op, 0 = not a CSG node             */
+    /* ---- The modifier stack ----------------------------------------------
+     * Detail on a blockout does not come from placed vertices, it comes from
+     * a short list of RULES that are re-run whenever the rough shape moves:
+     * break the edges, divide the faces, give the plane a thickness, repeat
+     * it, mirror it. That list is DATA on the node - so it is in the scene
+     * file, it rides the same undo step as every other field, and the mesh it
+     * produces stays derived and is never written back.
+     *
+     * `modifier_count` is how many of the eight slots are in use; the entries
+     * are run in order, first entry first, and the ORDER is part of the
+     * result: an array of a bevelled step is nine bevelled steps, a bevel of
+     * an arrayed step is one long bevel down the joins.
+     *
+     * What each field means is include/dai_modifier.h; the names a script or
+     * the bridge uses are include/dai_blockout_props.inl; the scene lines are
+     * `modcount` and `mod` in src/dai_doc_text.cpp. */
+    int          modifier_count;              /* 0..DAI_MODIFIER_MAX          */
+    dai_modifier modifiers[DAI_MODIFIER_MAX];
     /* ---- DoorSocket: where the next room may be joined on -----------------
      * A marked opening: where it is, which way it faces, and how big it is.
      * The room generator that comes later docks against these, and until then

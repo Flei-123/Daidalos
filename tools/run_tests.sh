@@ -396,7 +396,9 @@ fi
 
 # The blockout round's pictures: the room built through dai_doc in C++, drawn
 # by the real editor with the blockout host attached - the CSG wall with its
-# door hole, the stairs, the arch, the socket gizmo. Two sizes, same as the
+# door hole, the stairs, the arch, the socket gizmo, and the modifier stack's
+# three (16..18: the same block without and with a bevel, a stair built by an
+# array of one step, a mirrored bracket - inspector open on the stack). Two sizes, same as the
 # drone show sets: `wide-` at 1920x1080 and `narrow-` at 1100x700, where a
 # panel that guesses its layout collides with itself. Compiled by the same
 # script that runs it, for the reason build_modeling_shot.sh gives.
@@ -409,7 +411,7 @@ if [ -f tools/blockout_shot.cpp ]; then
         RC=$?
         NAME="blockout_shot ${TAG}"
         if [ "$RC" = "0" ]; then
-            printf '%-20s %3s/%-3s  ok  (%s/%s14..15-blockout-*.png %sx%s)\n' "$NAME" "-" "-" "$SHOTS" "$TAG" "$SW" "$SH"
+            printf '%-20s %3s/%-3s  ok  (%s/%s14..15-blockout-*, %s16..18-modifier-*.png %sx%s)\n' "$NAME" "-" "-" "$SHOTS" "$TAG" "$TAG" "$SW" "$SH"
             [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
         else
             FAILED="$FAILED blockout_shot(${SW}x${SH})"

@@ -37,6 +37,11 @@ static int g_fail = 0, g_pass = 0;
 // that already links both - see tests/blockout_gltf_cases.hpp.
 #include "blockout_gltf_cases.hpp"
 
+// Solidify, array and mirror - the modifiers that make more surface than they
+// are given. Here for the same reason as the file above: this is the headless
+// binary, and include/dai_modifier.h is a header that needs nothing linked.
+#include "modifier_dup_cases.hpp"
+
 // Signed volume by the divergence theorem: for a closed surface it is exactly
 // the enclosed volume, and for an open one it is wrong - which is the point.
 static double mesh_volume(const dai_mesh_data &m) {
@@ -240,6 +245,7 @@ int main() {
     dai_gltf_free_geometry(&box, 1);
     test_blockout_gltf();
     test_blockout_gltf_matrix();
+    test_modifier_dup();
     std::printf("%s: %d checks, %d failures\n", g_fail ? "FAILED" : "ok", g_pass + g_fail, g_fail);
     return g_fail ? 1 : 0;
 }

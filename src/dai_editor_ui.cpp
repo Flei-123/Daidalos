@@ -3885,6 +3885,12 @@ static void inspector_body(dai_editor_ui *p) {
                 DAI_MF(blockout); DAI_MF(blockout_size); DAI_MF(blockout_segments);
                 DAI_MF(blockout_steps); DAI_MF(blockout_thickness); DAI_MF(blockout_pivot);
                 DAI_MF(csg);
+                // The stack rides it too, as ONE field: a bevel width dragged
+                // on one selected wall lands on every selected wall, and an
+                // entry inserted into slot 2 is an entry in slot 2 everywhere
+                // - copying the slots one by one would let two selected nodes
+                // end up with the same modifiers in a different order.
+                DAI_MF(modifier_count); DAI_MF(modifiers);
                 DAI_MF(door_socket); DAI_MF(door_offset); DAI_MF(door_normal);
                 DAI_MF(door_width); DAI_MF(door_height);
 #undef DAI_MF

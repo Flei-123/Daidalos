@@ -38,3 +38,19 @@ if (!ar2.blockout) {
 }
 if (!ar2.csg)         entries.push_back({ "CSG (boolean)", "Blockout", 25, "" });
 if (!ar2.door_socket) entries.push_back({ "Door Socket",   "Blockout", 26, "" });
+
+// kind 30..34 are the five modifiers. A node may carry EIGHT of them and the
+// same type more than once - two arrays at right angles is a grid, two bevels
+// is a wide break and a fine one - so unlike the shapes above these entries
+// stay in the menu until the stack is full.
+//
+// A modifier without a shape under it has nothing to modify, so they are
+// offered on a node that is a blockout or a CSG node, which is the same rule
+// the inspector's list draws itself by.
+if ((ar2.blockout || ar2.csg) && ar2.modifier_count < DAI_MODIFIER_MAX) {
+    entries.push_back({ "Modifier > Bevel",     "Blockout", 30, "" });
+    entries.push_back({ "Modifier > Subdivide", "Blockout", 31, "" });
+    entries.push_back({ "Modifier > Solidify",  "Blockout", 32, "" });
+    entries.push_back({ "Modifier > Array",     "Blockout", 33, "" });
+    entries.push_back({ "Modifier > Mirror",    "Blockout", 34, "" });
+}
