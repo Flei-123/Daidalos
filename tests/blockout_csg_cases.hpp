@@ -380,4 +380,126 @@ static void test_blockout_csg_measured() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The same questions, over every shape the blockout can make, every operation
+// and several poses of the cutter.
+//
+// The cases above are hand computed: each one has a closed form somebody can
+// redo on paper, and each one is a shape a room is built out of. What they
+// cannot be is exhaustive - a closed form for "a 45 degree box through a
+// twelve segment arch" is a week of work for one number - and the boolean is
+// exactly the kind of code that is right on the six cases its author tried and
+// wrong on the seventh.
+//
+// So this sweep asks the questions that need NO closed form and are still
+// arithmetic rather than opinion. For any two solids A and B, whatever their
+// shape:
+//
+//     |A| + |B| = |A u B| + |A n B|          (inclusion-exclusion)
+//     |A \ B|   = |A| - |A n B|
+//
+// Both are identities, not tolerances: a boolean that loses a sliver, keeps a
+// face twice or gets a winding backwards breaks them, and it breaks them by
+// the size of what it lost. Each result is also held to check_csg_solid - the
+// same closedness, winding, sliver and normal test the hand computed cases use
+// - and to being bit identical when computed twice.
+//
+// 5 shapes x 6 poses x 3 operations, all of them overlapping the base solid
+// (a cutter that misses would make an empty intersection, which is a different
+// question and is asked in blockout_cases.hpp).
+static void test_blockout_csg_matrix() {
+    std::printf("blockout: |A|+|B| = |AuB|+|AnB| and |A\\B| = |A|-|AnB| over "
+                "5 shapes x 6 cutter poses x 3 operations\n");
+
+    struct KindCase { const char *name; int kind; float size[3]; int segments; int steps; float thickness; };
+    static const KindCase KINDS[] = {
+        { "box",      daiblock::KIND_BOX,      { 2.0f, 1.5f, 1.2f },  16, 8, 0.2f },
+        { "cylinder", daiblock::KIND_CYLINDER, { 1.6f, 1.8f, 1.6f },  12, 8, 0.2f },
+        { "wedge",    daiblock::KIND_WEDGE,    { 1.8f, 1.4f, 1.6f },  16, 8, 0.2f },
+        { "stairs",   daiblock::KIND_STAIRS,   { 1.6f, 1.4f, 2.0f },  16, 5, 0.2f },
+        { "arch",     daiblock::KIND_ARCH,     { 2.0f, 1.6f, 1.0f },   8, 8, 0.3f },
+    };
+    // Poses chosen so the cutter always MEETS the base and never lies in one
+    // of its planes: a coplanar face is its own question (the "two walls back
+    // to back" case above), and mixing it in here would say nothing about the
+    // shape the row is named after. The offsets are odd numbers on purpose -
+    // a cutter at exactly half a step is a case the stairs generator can pass
+    // by accident.
+    struct Pose { const char *name; float pos[3]; float rot[4]; float scale[3]; };
+    static const Pose POSES[] = {
+        { "centred",   { 0.00f,  0.00f, 0.00f }, { 0, 0, 0, 1 },                             { 1.0f, 1.0f, 1.0f } },
+        { "off X",     { 0.37f,  0.11f, 0.00f }, { 0, 0, 0, 1 },                             { 1.0f, 1.0f, 1.0f } },
+        { "corner",    { 0.41f,  0.47f, 0.33f }, { 0, 0, 0, 1 },                             { 1.0f, 1.0f, 1.0f } },
+        { "yaw 45",    { 0.13f,  0.09f, 0.07f }, { 0, 0.38268343f, 0, 0.92387953f },         { 1.0f, 1.0f, 1.0f } },
+        { "pitch 30",  { 0.05f,  0.19f, 0.11f }, { 0.25881905f, 0, 0, 0.96592583f },         { 1.0f, 1.0f, 1.0f } },
+        // Half size and high up: small enough to sit in the middle of a wall,
+        // high enough to still be in the MATERIAL of the arch rather than in
+        // the hole under its ring - an empty intersection is a different
+        // question and would say nothing about the boolean.
+        { "half size", { 0.03f,  0.42f, 0.05f }, { 0, 0, 0, 1 },                             { 0.5f, 0.5f, 0.5f } },
+    };
+    static const int OPS[3] = { DAI_CSG_UNION, DAI_CSG_SUBTRACT, DAI_CSG_INTERSECT };
+    static const char *const OP_NAMES[3] = { "union", "subtract", "intersect" };
+
+    for (size_t ki = 0; ki < sizeof(KINDS) / sizeof(KINDS[0]); ++ki) {
+        const KindCase &kc = KINDS[ki];
+        daiblock::Shape s;
+        s.kind = kc.kind;
+        s.size[0] = kc.size[0]; s.size[1] = kc.size[1]; s.size[2] = kc.size[2];
+        s.segments = kc.segments;
+        s.steps = kc.steps;
+        s.thickness = kc.thickness;
+        daiblock::Solid base = daiblock::build(s);
+        const double vA = daiblock::volume(base);
+        CHECK(vA > 0.0, "%s: the generator's own volume is %.6f m3", kc.name, vA);
+
+        for (size_t pi = 0; pi < sizeof(POSES) / sizeof(POSES[0]); ++pi) {
+            const Pose &po = POSES[pi];
+            daiblock::Shape cs;
+            cs.kind = daiblock::KIND_BOX;
+            cs.size[0] = 0.9f; cs.size[1] = 1.1f; cs.size[2] = 0.9f;
+            daiblock::Solid cutter =
+                daiblock::transform(daiblock::build(cs), po.pos, po.rot, po.scale);
+            const double vB = daiblock::volume(cutter);
+
+            double vol[3] = { 0, 0, 0 };
+            for (int oi = 0; oi < 3; ++oi) {
+                char what[128];
+                std::snprintf(what, sizeof(what), "%s %s a box (%s)",
+                              kc.name, OP_NAMES[oi], po.name);
+                daiblock::Mesh m = daiblock::finalise(daiblock::csg(base, cutter, OPS[oi]));
+                check_csg_solid(what, m);
+                vol[oi] = daiblock::volume(m);
+                // Twice is the same, bit for bit: the boolean reads no clock
+                // and no unseeded random, and a sweep this wide is where a
+                // container iterated in address order would show up.
+                daiblock::Mesh again = daiblock::finalise(daiblock::csg(base, cutter, OPS[oi]));
+                CHECK(m.verts.size() == again.verts.size() && m.idx.size() == again.idx.size() &&
+                      std::memcmp(m.verts.data(), again.verts.data(),
+                                  m.verts.size() * sizeof(dai_vertex)) == 0 &&
+                      std::memcmp(m.idx.data(), again.idx.data(),
+                                  m.idx.size() * sizeof(uint32_t)) == 0,
+                      "%s is not the same twice", what);
+            }
+            // The two identities. The tolerance is absolute and the solids are
+            // a couple of cubic metres, so 1e-4 is four significant figures of
+            // the smallest volume in the row.
+            CHECK(std::fabs((vol[0] + vol[2]) - (vA + vB)) < 1e-4,
+                  "%s (%s): |AuB| + |AnB| = %.6f but |A| + |B| = %.6f - the boolean "
+                  "lost or doubled %.6f m3", kc.name, po.name, vol[0] + vol[2], vA + vB,
+                  std::fabs((vol[0] + vol[2]) - (vA + vB)));
+            CHECK(std::fabs(vol[1] - (vA - vol[2])) < 1e-4,
+                  "%s (%s): |A\\B| = %.6f but |A| - |AnB| = %.6f",
+                  kc.name, po.name, vol[1], vA - vol[2]);
+            // ...and the intersection is inside both, the union around both.
+            CHECK(vol[2] > 1e-6 && vol[2] < vA + 1e-6 && vol[2] < vB + 1e-6,
+                  "%s (%s): the intersection holds %.6f m3, with |A| = %.6f and |B| = %.6f",
+                  kc.name, po.name, vol[2], vA, vB);
+            CHECK(vol[0] > vA - 1e-6 && vol[0] > vB - 1e-6,
+                  "%s (%s): the union holds %.6f m3, less than one of its parts "
+                  "(|A| = %.6f, |B| = %.6f)", kc.name, po.name, vol[0], vA, vB);
+        }
+    }
+}
+
 #endif /* DAI_BLOCKOUT_CSG_CASES_HPP */

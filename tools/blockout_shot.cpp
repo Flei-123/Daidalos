@@ -253,6 +253,55 @@ int main(int argc, char **argv) {
         return 1;
     };
 
+    // The Inspector scrolls, and at 1100x700 the selected wall's last
+    // component - Door Socket, with its Width and Height - starts below the
+    // fold. A picture of a door socket without its two numbers in it is a
+    // picture of a door socket that appears to have none, so the panel is
+    // scrolled the way a reader would scroll it (the wheel, over the panel)
+    // until the last field is inside the panel's rectangle, and then it is
+    // ASSERTED - a shot that still cuts the field turns this tool red rather
+    // than being written out and argued about at review.
+    auto reveal_inspector_tail = [&]() -> int {
+        float px = 0, py = 0, pw = 0, ph = 0;
+        for (int i = 0; i < 60; ++i) {
+            dai_ui_input in{};
+            in.mouse_x = (float)W * 0.5f; in.mouse_y = (float)H * 0.5f;
+            if (i > 0) {
+                // Over the Inspector, one notch at a time: the region only
+                // takes the wheel when the pointer is inside it, and its
+                // scroll limit is last frame's - so this is a loop and not a
+                // single jump.
+                in.mouse_x = px + pw * 0.5f;
+                in.mouse_y = py + ph * 0.5f;
+                in.wheel = -1.0f;
+            }
+            dai_ui_begin(ui, (float)W, (float)H, &in);
+            dai_editor_ui_frame(panels, (float)W, (float)H);
+            dai_ui_end(ui);
+            float fx = 0, fy = 0, fw = 0, fh = 0;
+            int inside = dai_editor_ui_inspector_last_field(panels, &fx, &fy, &fw, &fh,
+                                                            &px, &py, &pw, &ph);
+            if (inside) return 1;
+            if (pw <= 0.0f || ph <= 0.0f) return 0;
+        }
+        return 0;
+    };
+    auto assert_inspector_tail = [&](const char *what) -> int {
+        float fx = 0, fy = 0, fw = 0, fh = 0, px = 0, py = 0, pw = 0, ph = 0;
+        int inside = dai_editor_ui_inspector_last_field(panels, &fx, &fy, &fw, &fh,
+                                                        &px, &py, &pw, &ph);
+        if (inside) {
+            std::printf("   %-40s last inspector field %.0f,%.0f %.0fx%.0f inside panel "
+                        "%.0f,%.0f %.0fx%.0f\n", what, (double)fx, (double)fy, (double)fw,
+                        (double)fh, (double)px, (double)py, (double)pw, (double)ph);
+            return 1;
+        }
+        std::printf("blockout_shot: %s CUTS the last inspector field: field %.0f,%.0f %.0fx%.0f, "
+                    "panel %.0f,%.0f %.0fx%.0f\n", what, (double)fx, (double)fy, (double)fw,
+                    (double)fh, (double)px, (double)py, (double)pw, (double)ph);
+        return 0;
+    };
+
     ::mkdir(outdir.c_str(), 0777);
     int ok = 1;
     // No layout of its own: the pictures come out of the editor's DEFAULT
@@ -272,7 +321,9 @@ int main(int argc, char **argv) {
     //     the frame and the arrow bright.
     dai_node socket_node = find_node("Wall.Front");
     if (socket_node) dai_editor_select(ed, socket_node, 0);
+    ok &= reveal_inspector_tail();
     ok &= shot("15-blockout-doorsocket.png", dai_vec3{ 2.4f, 2.1f, -5.6f }, dai_vec3{ 0.0f, 1.0f, -2.5f }, 50.0f);
+    ok &= assert_inspector_tail("15-blockout-doorsocket.png");
 
     std::printf("blockout_shot: %u nodes in the document, %s\n", dai_doc_count(doc),
                 ok ? "ok" : "FAILED");

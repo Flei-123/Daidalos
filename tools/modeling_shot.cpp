@@ -245,10 +245,16 @@ static dai_script_node_host g_node_host = { sh_find, sh_get_pos, sh_set_pos, sh_
 // ---- what the bridge does when it is asked for a picture --------------------
 // The whole editor, panels and all - which is the difference between "the
 // bridge can render" and "the bridge can show me what I just built".
+// ...from the camera the BRIDGE was given. The seam's own shot_scene() reads
+// daibridge::state().eye/target/fov and this host must mean the same thing by
+// them, or `{"cmd":"shot","eye":[...]}` would answer with a picture taken from
+// wherever the editor happened to be looking - which is how 12 and 13 came out
+// byte identical and the bridge's camera looked like it worked.
 static int modeling_editor_png(const char *path);
+static int modeling_bridge_png(const char *path);
 static void modeling_select(dai_node n);
 
-#define DAI_BRIDGE_SHOT(path)   modeling_editor_png(path)
+#define DAI_BRIDGE_SHOT(path)   modeling_bridge_png(path)
 #define DAI_BRIDGE_SELECT(node) modeling_select((dai_node)(node))
 
 #include "dai_blockout_host.inl"    // module 1: blockout + CSG meshes
@@ -258,6 +264,22 @@ static void modeling_select(dai_node n);
 
 static void modeling_select(dai_node n) {
     if (g_ed) dai_editor_select(g_ed, n, 0);
+}
+
+// The bridge asked for a picture and said where from. Both cameras are moved,
+// not only the renderer's: the editor's camera is what the gizmo, the picking
+// and the viewport rectangle project through, and a frame where the world is
+// drawn from one eye and the gizmo from another is a frame nobody can trust.
+// The editor keeps the moved camera afterwards - the bridge's `camera` command
+// means "look from here", and putting the old one back would undo it.
+static int modeling_bridge_png(const char *path) {
+    daibridge::Bridge &b = daibridge::state();
+    if (g_ed)
+        dai_editor_camera(g_ed, b.eye, b.target, dai_vec3{ 0, 1, 0 }, b.fov, 0.05f, 400.0f,
+                          (float)g_width, (float)g_height);
+    if (g_renderer)
+        dai_render_camera(g_renderer, b.eye, b.target, dai_vec3{ 0, 1, 0 }, b.fov, 0.05f, 400.0f);
+    return modeling_editor_png(path);
 }
 
 // The Project panel's picture for a row. Module 3 answers for a `.daitex`
@@ -519,11 +541,21 @@ int main(int argc, char **argv) {
 
     // Lit like a room and not like a landscape: one sun for shape, a lot of
     // ambient, because the interior of INNEN is a place with no sky in it.
+    //
+    // The sun stood almost straight up (0.35, 0.86, 0.36). A room seen from
+    // outside is then five faces at grazing incidence and one lit roof: the
+    // front wall and the floor slab under it came out the same near black, the
+    // doorway was a dark rectangle in a dark wall, and 10-modeling-room.png
+    // showed a box. The light comes over the camera's shoulder now - from the
+    // -Z side, where the door is - so the wall it lights is the wall the
+    // picture is OF, the floor slab keeps its own (upward) normal and reads as
+    // a different surface, and the opening is a hole into a room that the Lamp
+    // node lights from inside rather than a black patch on a black wall.
     dai_vec3 eye{ 5.2f, 3.4f, -7.6f }, look{ -0.4f, 1.1f, -0.4f }, up{ 0, 1, 0 };
     dai_render_camera(g_renderer, eye, look, up, 60.0f, 0.05f, 300.0f);
-    dai_render_sun(g_renderer, dai_vec3{ 0.35f, 0.86f, 0.36f }, dai_vec3{ 1.0f, 0.96f, 0.90f }, 1.1f);
-    dai_render_ambient(g_renderer, dai_vec3{ 0.30f, 0.34f, 0.40f }, dai_vec3{ 0.24f, 0.22f, 0.20f }, 0.55f);
-    dai_render_exposure(g_renderer, 0.55f);
+    dai_render_sun(g_renderer, dai_vec3{ -0.34f, 0.68f, -0.65f }, dai_vec3{ 1.0f, 0.95f, 0.88f }, 1.45f);
+    dai_render_ambient(g_renderer, dai_vec3{ 0.34f, 0.38f, 0.46f }, dai_vec3{ 0.26f, 0.23f, 0.20f }, 0.62f);
+    dai_render_exposure(g_renderer, 0.62f);
     dai_render_shadow_extent(g_renderer, 16.0f);
     dai_render_sky(g_renderer, 1);
 
@@ -625,11 +657,51 @@ int main(int argc, char **argv) {
 
     // 1. the room, from the doorway, with the CSG wall selected and its
     //    inspector open - the picture the round is judged on.
+    //
+    // "From the doorway" was a caption, not a camera: the old eye stood at
+    // (5.2, 3.4, -7.6) and looked at the room's corner from above, which is a
+    // picture of a closed box - the one thing this round built, the hole the
+    // boolean cut, was on the far side of the wall the camera was reading.
+    // The eye is at door height and off to the +X side now, and its axis goes
+    // THROUGH the opening (x = 0, 1.1 m up, the outer face at z = -2.7) and on
+    // into the room: the wall is seen from the front, the opening is a lit
+    // interior seen through it, and the two are not the same colour.
     dai_node wall = find_node("Wall.Front");
     if (wall) dai_editor_select(g_ed, wall, 0);
     dai_editor_gizmo_mode(g_ed, DAI_GIZMO_TRANSLATE);
-    dai_editor_camera(g_ed, eye, look, up, 60.0f, 0.05f, 300.0f, (float)g_width, (float)g_height);
-    dai_render_camera(g_renderer, eye, look, up, 60.0f, 0.05f, 300.0f);
+    // The green wireframe is the SELECTION's collider, and the wall arrived
+    // from the script with the default 1 m box on it - a metre cube standing
+    // in the middle of a 1.1 x 2.05 m opening, which is exactly the part of
+    // the picture the round is about. The collider is given the wall's own
+    // size here: it stops covering the hole, and it stops claiming the wall
+    // can only be hit in the middle.
+    if (wall) {
+        dai_node_desc wr{};
+        dai_node_desc sl{};
+        dai_node slab = find_node("Wall.Front.Slab");
+        if (dai_doc_get(g_doc, wall, &wr) == DAI_OK && slab &&
+            dai_doc_get(g_doc, slab, &sl) == DAI_OK &&
+            sl.blockout_size.x > 0.0f && sl.blockout_size.y > 0.0f) {
+            wr.half_extent = dai_vec3{ sl.blockout_size.x * 0.5f, sl.blockout_size.y * 0.5f,
+                                       sl.blockout_size.z * 0.5f };
+            dai_doc_set(g_doc, wall, &wr);
+            host_pump(&ext, sync);
+        }
+    }
+    //
+    // And CLOSE, which is the second half of the same problem: the selected
+    // wall carries a gizmo and a green collider wireframe, both drawn at a
+    // fixed size in PIXELS around the node's origin - and that origin sits in
+    // the middle of the opening. From six metres away the hole was the same
+    // size on screen as the arrows standing in it and the picture showed a
+    // gizmo with some dark around it. From two metres the opening is most of
+    // the frame and the gizmo is a small cross inside it: the hole is read as
+    // a hole, and the room behind it as a room.
+    {
+        dai_vec3 e1{ 1.35f, 1.15f, -4.55f }, l1{ -0.30f, 0.95f, -1.20f };
+        dai_editor_camera(g_ed, e1, l1, up, 60.0f, 0.05f, 300.0f, (float)g_width, (float)g_height);
+        dai_render_camera(g_renderer, e1, l1, up, 60.0f, 0.05f, 300.0f);
+    }
     shot("10-modeling-room.png");
 
     // 2. the door socket: selected, so its gizmo and its fields are what the

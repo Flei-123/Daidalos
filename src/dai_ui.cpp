@@ -838,6 +838,10 @@ void ui_detail_row_clear();
 
 // The same, for a widget that was drawn by hand and therefore has no "row"
 // for dai_ui_help to attach to. The caller knows its own rectangle.
+const char *dai_ui_tooltip_text(const dai_ui *ui) {
+    return (ui && ui->tooltip_on) ? ui->tooltip : "";
+}
+
 void dai_ui_tooltip_at(dai_ui *ui, float x, float y, float w, float h, const char *text) {
     if (!ui || !text || !*text) return;
     if (ui->in_popup || ui->blocked) return;
@@ -1140,6 +1144,38 @@ float dai_ui_text_height(dai_ui *ui) {
 
 float dai_ui_text_width(dai_ui *ui, const char *utf8) {
     return (ui && ui->font) ? dai_font_measure(ui->font, utf8, nullptr) : 0.0f;
+}
+
+// The one place a name is shortened, so every panel shortens it the same way.
+//
+// Cutting happens at the END and on a whole character: "DoorSock..." is a name
+// a reader completes, half a UTF-8 sequence is a question mark, and a name the
+// clip rectangle happened to end at ("DoorSocket.Fro") reads like a different
+// object. When not even "..." fits there is nothing left to say and the caller
+// gets the ellipsis alone - it still tells the reader the row has more to it.
+const char *dai_ui_fit_text(dai_ui *ui, const char *utf8, float width,
+                            char *buf, size_t buf_size) {
+    if (!buf || buf_size == 0) return "";
+    buf[0] = 0;
+    if (!ui || !utf8) return buf;
+    std::snprintf(buf, buf_size, "%s", utf8);
+    if (width <= 0.0f) return buf;
+    if (dai_ui_text_width(ui, buf) <= width) return buf;
+    char cut[512];
+    size_t n = std::strlen(buf);
+    if (n > sizeof(cut) - 4) n = sizeof(cut) - 4;
+    while (n > 0) {
+        --n;
+        while (n > 0 && ((unsigned char)utf8[n] & 0xC0) == 0x80) --n;   // whole glyphs only
+        std::memcpy(cut, utf8, n);
+        std::strcpy(cut + n, "...");
+        if (dai_ui_text_width(ui, cut) <= width) {
+            std::snprintf(buf, buf_size, "%s", cut);
+            return buf;
+        }
+    }
+    std::snprintf(buf, buf_size, "%s", "...");
+    return buf;
 }
 
 // ---------------------------------------------------------------- layout
@@ -2307,7 +2343,19 @@ float g_label_x = 0.0f, g_label_y = 0.0f, g_label_w = 0.0f;
 // it is a coefficient and not a percentage.
 float g_row_x = 0.0f, g_row_y = 0.0f, g_row_w = 0.0f, g_row_h = 0.0f;
 
-void field_rect(dai_ui *ui, const char *label, float *x, float *y, float *w, float h) {
+// The label column, and how much of the row the VALUE side insists on.
+//
+// `min_field` is what the widget cannot draw itself in less than: a vector row
+// needs three boxes and two gaps, an ordinary field has no opinion and passes
+// 0. The column used to be a fixed fraction of the panel (fit_label_column in
+// dai_editor_ui.cpp: 32%, floor 52 px) whatever stood in it and whatever stood
+// next to it, so at the 200 px inspector of a 1100x700 window every name
+// longer than "Size" was served as a stump next to a value box that had room
+// to spare. It now MEASURES its name: it grows to it while the row can afford
+// the value side's minimum, and gives way proportionally when it cannot. The
+// ellipsis is what is left when even that is too wide - not the first answer.
+void field_rect_ex(dai_ui *ui, const char *label, float *x, float *y, float *w, float h,
+                   float min_field) {
     float rx, ry;
     next_rect(ui, 0, h, &rx, &ry);
     float full = (ui->in_panel ? ui->panel_w - ui->style.padding * 2 : ui->width);
@@ -2324,29 +2372,37 @@ void field_rect(dai_ui *ui, const char *label, float *x, float *y, float *w, flo
     g_row_x = rx; g_row_y = ry; g_row_w = full; g_row_h = h;
     if (label && *label) {
         float lw = ui->style.label_w > 0 ? ui->style.label_w : 62.0f;
-        // The label column is a FRACTION of the panel (fit_label_column in
-        // dai_editor_ui.cpp: 32%, floor 52 px), so at a 200 px inspector it is
-        // 64 px and a name like "Height (m)" is wider than that. It used to be
-        // drawn at full length and the value box was then painted over its
-        // tail: the narrow blockout screenshot read "Height (m" with the
-        // bracket buried under the field. A name that does not fit is ended in
-        // an ellipsis at the last WHOLE character instead, which is a word the
-        // reader can finish; the full text stays on the row's tooltip, whose
-        // rectangle g_row_* above already reports.
-        const char *shown = label;
-        char cut[64];
-        if (dai_ui_text_width(ui, label) > lw - 2.0f) {
-            size_t n = std::strlen(label);
-            if (n > sizeof(cut) - 4) n = sizeof(cut) - 4;
-            for (; n > 0; --n) {
-                std::memcpy(cut, label, n);
-                std::strcpy(cut + n, "...");
-                if (dai_ui_text_width(ui, cut) <= lw - 2.0f) break;
-            }
-            if (n == 0) std::strcpy(cut, "...");
-            shown = cut;
-        }
+        // Grow to the measured name, but never past what the value side can
+        // spare. A name is worth reading; a value box too small to hold the
+        // number it shows is not worth having.
+        float want = dai_ui_text_width(ui, label) + 6.0f;
+        float keep = min_field > 0.0f ? min_field : full * 0.45f;
+        // A row that asked for a minimum may take up to 78% of it; a row that
+        // did not is held at 45%. The name never loses more than that - a
+        // column of numbers with no names is not an inspector.
+        float ceiling = full * (min_field > 0.0f ? 0.80f : 0.72f);
+        if (keep > ceiling) keep = ceiling;
+        float room = full - keep;
+        if (want > lw && lw < room) lw = want < room ? want : room;
+        if (lw > room) lw = room;
+        // The floor: 18% of the row, and never more than 34 px of it. Below
+        // that a column stops being a column and the row reads as a number
+        // with no name at all.
+        float floor_w = full * 0.18f;
+        if (floor_w > 34.0f) floor_w = 34.0f;
+        if (lw < floor_w) lw = floor_w;
+        if (lw > full - 16.0f) lw = full - 16.0f;
+        if (lw < 8.0f) lw = 8.0f;
+        // Shortened at the last whole character, clipped to the column so a
+        // long name can never reach the value box, and readable in full on
+        // the row's tooltip: the narrow blockout screenshot read "Height (m"
+        // with the bracket buried under the field.
+        char cut[96];
+        const char *shown = dai_ui_fit_text(ui, label, lw - 4.0f, cut, sizeof(cut));
+        dai_ui_clip_begin(ui, rx, ry, lw - 2.0f, h);
         dai_ui_text(ui, rx, ry + 2.0f, shown, ui->style.text_dim);
+        dai_ui_clip_end(ui);
+        if (std::strcmp(shown, label) != 0) dai_ui_tooltip_at(ui, rx, ry, lw, h, label);
         *x = rx + lw;
         *w = full - lw;
         g_label_w = lw - 2.0f;
@@ -2355,6 +2411,10 @@ void field_rect(dai_ui *ui, const char *label, float *x, float *y, float *w, flo
         *w = full;
     }
     *y = ry;
+}
+
+void field_rect(dai_ui *ui, const char *label, float *x, float *y, float *w, float h) {
+    field_rect_ex(ui, label, x, y, w, h, 0.0f);
 }
 
 // Drag the label sideways to change the value. `step` is units per pixel, and
@@ -2439,6 +2499,18 @@ float ui_detail_row_y() { return g_row_y; }
 float ui_detail_row_w() { return g_row_w; }
 float ui_detail_row_h() { return g_row_h; }
 void ui_detail_row_clear() { g_row_w = 0.0f; g_row_h = 0.0f; }
+}
+
+// The same row, for a HOST rather than for this file. A panel that scrolls can
+// draw a field the reader cannot see, and the only thing that knows where the
+// field went is the frame that laid it out - so it says, and the editor's
+// inspector passes the answer on through dai_editor_ui_inspector_last_field.
+void dai_ui_last_field_rect(const dai_ui *ui, float *x, float *y, float *w, float *h) {
+    (void)ui;
+    if (x) *x = g_row_x;
+    if (y) *y = g_row_y;
+    if (w) *w = g_row_w;
+    if (h) *h = g_row_h;
 }
 
 int dai_ui_drag_float(dai_ui *ui, const char *label, float *value, float step) {
@@ -4081,6 +4153,22 @@ int dai_ui_tree_item_ex(dai_ui *ui, const char *label, int depth,
 static uint32_t g_tree_label_col = 0;
 void dai_ui_tree_label_color(dai_ui *ui, uint32_t rgba) { (void)ui; g_tree_label_col = rgba; }
 
+// A hierarchy row is as wide as the panel it lives in; a name is as long as
+// whoever typed it made it. The row drew the name at full length and left the
+// panel's clip rectangle to cut it wherever it happened to land - which is how
+// the 1100x700 screenshot ended up showing "DoorSocket.Fro": a cut through a
+// glyph reads as a DIFFERENT name, and nothing on the row says there was more.
+// Ended at the last WHOLE character with an ellipsis instead - the same rule
+// field_rect() already uses for the label column - and the caller puts the
+// full name on the row's tooltip, so the cut costs one hover and no meaning.
+// The cutting itself is dai_ui_fit_text: one rule for the hierarchy, the label
+// column and the material row, or the three drift apart a character at a time.
+static const char *fit_row_label(dai_ui *ui, const char *label, float room,
+                                 char *buf, size_t buf_size) {
+    if (room <= 0.0f) { if (buf && buf_size) buf[0] = 0; return buf; }
+    return dai_ui_fit_text(ui, label ? label : "", room, buf, buf_size);
+}
+
 int dai_ui_tree_item_icon(dai_ui *ui, const char *icon, const char *label, int depth,
                           int has_children, int *open, int selected) {
     if (!ui || !label) return 0;
@@ -4141,8 +4229,15 @@ int dai_ui_tree_item_icon(dai_ui *ui, const char *icon, const char *label, int d
                        selected ? ui->style.text : ui->style.text_dim);
         tx += isz + 4.0f;
     }
-    dai_ui_text(ui, tx, y + 1.0f, label,
+    // What is LEFT of the row after the fold arrow and the kind icon, minus
+    // the same 4 px of air the panel keeps on its right edge.
+    char fit[192];
+    const char *shown = fit_row_label(ui, label, (x + w) - tx - 4.0f, fit, sizeof(fit));
+    dai_ui_text(ui, tx, y + 1.0f, shown,
                 g_tree_label_col ? g_tree_label_col : ui->style.text);
+    // Shortened rows say so on hover, and only those: a tooltip that repeats a
+    // name you can already read is a tooltip people learn to ignore.
+    if (std::strcmp(shown, label) != 0) dai_ui_tooltip_at(ui, x, y, w, h, label);
     g_tree_label_col = 0;      // one row only: it is set immediately before
     return clicked;
 }
@@ -4568,6 +4663,14 @@ int num_field_at_impl(dai_ui *ui, float x, float y, float w, float h, float *val
     bool axis_over = false;
     if (axis) {
         lw = 13.0f;
+        // In a narrow inspector those 13 px are the difference between "-2.1"
+        // and "-...": the letter itself is 8 px wide, so a squeezed row gets
+        // the column measured instead of the round number. Only a squeezed one -
+        // a wide row keeps the comfortable spacing the gizmo colours read at.
+        if (w < 48.0f) {
+            float aw = dai_ui_text_width(ui, axis) + 3.0f;
+            if (aw > 4.0f && aw < lw) lw = aw;
+        }
         axis_over = !ui->in_popup && !ui->blocked &&
                     mx >= x && mx < x + lw && my >= y && my < y + h;
     }
@@ -4619,10 +4722,25 @@ int num_field_at_impl(dai_ui *ui, float x, float y, float w, float h, float *val
         dai_ui_text(ui, x + 2.0f, y + (h - dai_font_line_height(ui->font)) * 0.5f, axis, col);
     }
     if (!editing) {
+        // The number has to fit the BOX, and an axis box in a 200 px inspector
+        // is 30 px wide. "1.025" was drawn at full length from the left edge,
+        // over the neighbouring field's frame and into its X/Y/Z letter - the
+        // narrow screenshots read "1.02 5" across two fields. Fewer significant
+        // figures first, because a rounded number is still a number; the
+        // ellipsis only when even two digits do not fit; and the clip so a
+        // half glyph can never leave the frame either way.
         char shown[64];
         num_fmt(shown, sizeof(shown), *value);
-        dai_ui_text(ui, bx + 5.0f, y + (h - dai_font_line_height(ui->font)) * 0.5f, shown,
+        float room = bw - 6.0f;
+        if (room < 0.0f) room = 0.0f;
+        for (int digits = 3; digits >= 2 && dai_ui_text_width(ui, shown) > room; --digits)
+            std::snprintf(shown, sizeof(shown), "%.*g", digits, (double)*value);
+        char fit[64];
+        const char *txt = dai_ui_fit_text(ui, shown, room, fit, sizeof(fit));
+        dai_ui_clip_begin(ui, bx + 1.0f, y + 1.0f, bw - 2.0f, h - 2.0f);
+        dai_ui_text(ui, bx + 4.0f, y + (h - dai_font_line_height(ui->font)) * 0.5f, txt,
                     ui->style.text);
+        dai_ui_clip_end(ui);
     }
     (void)with_label;
     return changed;
@@ -4632,14 +4750,32 @@ int dai_ui_num_vec3(dai_ui *ui, const char *label, float *xyz, float step) {
     if (!ui || !xyz) return 0;
     if (step <= 0.0f) step = 0.01f;
     float h = widget_height(ui), x, y, w;
-    field_rect(ui, label, &x, &y, &w, h);
+    // What three axes need before the row is worth drawing at all: the axis
+    // letter, a number like "-1.025", the 5 px the field indents its text by
+    // and the two gaps between the boxes. Asked for HERE and honoured by the
+    // label column, because the alternative is what the narrow inspector did -
+    // a full width name and 27 px boxes whose contents ran into each other.
+    const float axis_w = 13.0f, gap = 4.0f;
+    // The FLOOR, not the comfortable width: the axis letter, a short number
+    // like "0.05" and the 5 px the box indents its text by. A row asking for
+    // its comfortable width would take the whole panel away from the name.
+    // "-0.05" is the widest SHORT number an inspector shows - sign, unit,
+    // point, two decimals - plus the 5 px the box indents its text by at each
+    // end. Anything narrower than that and the row starts rounding what it
+    // displays, which is how "-2.1" became "-..." in the narrow screenshot.
+    float digits_w = dai_ui_text_width(ui, "-0.05") + 8.0f;
+    float min_each = axis_w + digits_w;
+    field_rect_ex(ui, label, &x, &y, &w, h, min_each * 3.0f + gap * 2.0f);
     const char *names[3] = { "X", "Y", "Z" };
     // Axis colours match the gizmo, so a field and an arm are obviously the
     // same thing.
     const uint32_t cols[3] = { rgba(230, 64, 64, 255), rgba(90, 217, 77, 255),
                                rgba(77, 128, 242, 255) };
-    float gap = 4.0f;
+    // Three equal boxes with the gaps taken off FIRST and only the rest
+    // divided, so box i ends a whole gap before box i+1 starts - at every
+    // panel width, which is what the geometry test measures.
     float each = (w - gap * 2.0f) / 3.0f;
+    if (each < 18.0f) each = 18.0f;      // narrower than this is not a field
     int changed = 0;
     for (int i = 0; i < 3; ++i) {
         float fx = x + (each + gap) * (float)i;
@@ -4818,7 +4954,18 @@ int dai_ui_array_object_row(dai_ui *ui, int index, const char *value,
         dai_ui_icon_at(ui, icon, tx, y + (h - isz) * 0.5f, isz, ui->style.accent);
         tx += isz + 4.0f;
     }
-    dai_ui_text(ui, tx, y + (h - lh) * 0.5f, value ? value : "None", ui->style.text);
+    // A material is a PATH ("blockout/wall_magenta.daimat") and the box is as
+    // wide as the inspector left it. Drawn at full length it ran out of its
+    // own frame and under the target button next to it; ended at the last
+    // whole character instead, with the whole path on the row's tooltip -
+    // which is the only place the folder it lives in is still readable.
+    const char *raw = value ? value : "None";
+    char vfit[192];
+    const char *vshown = dai_ui_fit_text(ui, raw, fx + vw - 4.0f - tx, vfit, sizeof(vfit));
+    dai_ui_clip_begin(ui, fx + 1.0f, y + 1.0f, vw - 2.0f, h - 2.0f);
+    dai_ui_text(ui, tx, y + (h - lh) * 0.5f, vshown, ui->style.text);
+    dai_ui_clip_end(ui);
+    if (std::strcmp(vshown, raw) != 0) dai_ui_tooltip_at(ui, fx, y, vw, h, raw);
     if (bw > 0.0f) {
         float bx = fx + vw + 2.0f;
         dai_ui_rrect(ui, bx, y + 1.0f, bw, h - 2.0f, ui->style.rounding,

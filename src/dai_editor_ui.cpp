@@ -527,6 +527,13 @@ struct dai_editor_ui {
     bool  layout_ready = false;
     float layout_w = 0, layout_h = 0;
     float view_x = 0, view_y = 0, view_w = 0, view_h = 0;
+    // The Inspector's own rectangle, and where the last field of the last
+    // component in it landed. Both are recorded while the panel draws, because
+    // "is the bottom row of the Door Socket visible at 1100x700" is a question
+    // only the frame that drew it can answer - and it is a question the
+    // screenshot tools have to be able to ask, or a clipped panel ships.
+    float insp_x = 0, insp_y = 0, insp_w = 0, insp_h = 0;
+    float insp_field_x = 0, insp_field_y = 0, insp_field_w = 0, insp_field_h = 0;
     // The Game panel next to the Scene panel: two independent views, not one
     // viewport with a split personality.
     int   has_game = 0;
@@ -2841,8 +2848,18 @@ static void inspector_body(dai_editor_ui *p) {
 
         // Static, on the right, where Unity has it. It is the motion type
         // here, which is the same promise: this thing does not move.
+        //
+        // The WORD next to the tick is what a narrow header gives up first.
+        // Below a 46 px name field the row cannot carry all three of tile,
+        // name and "Static", and of the three the word is the one the tick's
+        // own tooltip already says in full - a name field shrunk to a stump so
+        // that a label can stay is a header that no longer names the object it
+        // is editing. Measured, not guessed: the threshold is the text's own
+        // width, so a bigger font gives the word up sooner.
         float sw = dai_ui_text_width(ui2, "Static") + 22.0f;
         float sx = hx + hw - sw - 6.0f;
+        if (sx - (hx + 58.0f) - 8.0f < 46.0f) { sw = 14.0f; sx = hx + hw - sw - 6.0f; }
+        int with_static_word = sw > 20.0f;
         {
             float cx = sx, cy = hy + 10.0f;
             bool over_s = mx2 >= cx && mx2 < cx + sw && my2 >= hy + 4.0f && my2 < hy + 30.0f;
@@ -2853,7 +2870,7 @@ static void inspector_body(dai_editor_ui *p) {
                 dai_ui_line(ui2, cx + 3.0f, cy + 7.0f, cx + 6.0f, cy + 10.5f, 2.0f, st2->text);
                 dai_ui_line(ui2, cx + 6.0f, cy + 10.5f, cx + 11.5f, cy + 3.5f, 2.0f, st2->text);
             }
-            dai_ui_text(ui2, cx + 18.0f, cy + 1.0f, "Static", st2->text_dim);
+            if (with_static_word) dai_ui_text(ui2, cx + 18.0f, cy + 1.0f, "Static", st2->text_dim);
             // Unity's Static is a hint for batching and lightmaps. Here it is
             // the MOTION TYPE, which is the same promise made honestly: a
             // static body never moves, so the solver can leave it alone.
@@ -2877,10 +2894,35 @@ static void inspector_body(dai_editor_ui *p) {
 
         // Written back only when it actually changed, or every frame would
         // count as an edit and every rename from elsewhere would be undone.
-        float nfw = sx - (hx + 58.0f) - 8.0f;
-        if (nfw < 60.0f) nfw = 60.0f;
-        if (dai_ui_text_field(ui2, "objname", hx + 58.0f, hy + 8.0f, nfw, 18.0f,
-                              p->name_buf, sizeof(p->name_buf), nullptr))
+        //
+        // The width is what the header HAS: panel width, minus the measured
+        // "Static" block on the right, minus the icon plate on the left, minus
+        // the padding between them. It used to have a 60 px floor, and at the
+        // 200 px inspector of a 1100x700 window that floor was wider than the
+        // gap - so the name box was drawn straight over the Static checkbox
+        // and two clickable things sat on the same pixels. A field that does
+        // not fit gets small; it does not get to borrow its neighbour's room.
+        float nfx = hx + 58.0f;
+        float nfw = (sx - 6.0f) - nfx;
+        if (nfw < 24.0f) {
+            // Narrower than any name: the icon plate gives its column back
+            // before the field is allowed to reach the checkbox.
+            nfx = hx + 28.0f;
+            nfw = (sx - 6.0f) - nfx;
+            if (nfw < 12.0f) nfw = 12.0f;
+        }
+        // Long names are clipped INSIDE the box for the same reason: the text
+        // is drawn from the left edge of the field and does not stop at its
+        // right one. Horizontally to the field, vertically to the whole card:
+        // dai_ui_text drops a LINE whose ink crosses its clip rather than
+        // slicing it lengthwise (see the note in dai_ui.cpp), so a clip as
+        // short as the box would hide a name at a font size where the ink is
+        // taller than 18 px instead of shortening it.
+        dai_ui_clip_begin(ui2, nfx, hy + 1.0f, nfw, 32.0f);
+        int name_changed = dai_ui_text_field(ui2, "objname", nfx, hy + 8.0f, nfw, 18.0f,
+                                             p->name_buf, sizeof(p->name_buf), nullptr);
+        dai_ui_clip_end(ui2);
+        if (name_changed)
             std::snprintf(r.name, sizeof(r.name), "%s", p->name_buf);
     }
     dai_ui_spacing(p->ui, 2.0f);
@@ -3690,6 +3732,18 @@ static void inspector_body(dai_editor_ui *p) {
     // components, ABOVE the Add Component button: a section drawn below that
     // button and its 220 px of scroll room is a section nobody sees.
     #include "dai_editor_ui_blockout_inspector.inl"
+    // Where the LAST of those fields ended up, so a host can ask whether it is
+    // actually on the screen. "Door Socket / Height (m)" is the bottom row of
+    // the bottom component, it is the first thing a 700 px window loses, and a
+    // screenshot in which it is missing looks exactly like a screenshot in
+    // which it does not exist. tools/blockout_shot.cpp asserts on it - see
+    // dai_editor_ui_inspector_last_field.
+    {
+        float fx = 0, fy = 0, fw = 0, fh = 0;
+        dai_ui_last_field_rect(p->ui, &fx, &fy, &fw, &fh);
+        p->insp_field_x = fx; p->insp_field_y = fy;
+        p->insp_field_w = fw; p->insp_field_h = fh;
+    }
 
     // ---- Remove Component ---------------------------------------------------
     // Add and Remove are siblings, not the same toggle in two coats: a right
@@ -5161,6 +5215,39 @@ void dai_editor_ui_viewport_rect(const dai_editor_ui *p, float *x, float *y, flo
     if (y) *y = p->view_y;
     if (w) *w = p->view_w;
     if (h) *h = p->view_h;
+}
+
+// Is the last field of the last component actually ON the screen?
+//
+// The Inspector scrolls, so "the panel drew it" and "the reader can see it"
+// are two different statements: at 1100x700 the Door Socket's Width and Height
+// sit below the fold, the panel is honest about it (there is a scroll bar), and
+// a screenshot taken without touching that bar shows a component whose numbers
+// are simply not in the picture. The screenshot tools scroll the panel and then
+// ASSERT with this - a picture that cuts the field it is a picture of turns the
+// run red instead of being shipped and argued about later.
+//
+// Returns 1 when the field's rectangle lies fully inside the panel's, 0 when it
+// is clipped or when no inspector was drawn this frame. Both rectangles come
+// back either way, so a caller can say by how much.
+int dai_editor_ui_inspector_last_field(const dai_editor_ui *p,
+                                       float *fx, float *fy, float *fw, float *fh,
+                                       float *px, float *py, float *pw, float *ph) {
+    if (!p) return 0;
+    if (fx) *fx = p->insp_field_x;
+    if (fy) *fy = p->insp_field_y;
+    if (fw) *fw = p->insp_field_w;
+    if (fh) *fh = p->insp_field_h;
+    if (px) *px = p->insp_x;
+    if (py) *py = p->insp_y;
+    if (pw) *pw = p->insp_w;
+    if (ph) *ph = p->insp_h;
+    if (p->insp_w <= 0.0f || p->insp_h <= 0.0f) return 0;
+    if (p->insp_field_w <= 0.0f || p->insp_field_h <= 0.0f) return 0;
+    return p->insp_field_x >= p->insp_x - 0.5f &&
+           p->insp_field_y >= p->insp_y - 0.5f &&
+           p->insp_field_x + p->insp_field_w <= p->insp_x + p->insp_w + 0.5f &&
+           p->insp_field_y + p->insp_field_h <= p->insp_y + p->insp_h + 0.5f;
 }
 
 // (the asset-path and script-list helpers live right after the struct now -
@@ -7920,6 +8007,7 @@ void dai_editor_ui_frame(dai_editor_ui *p, float vw, float vh) {
             continue;
         }
         dai_ui_panel_begin(ui, px, py, pw, ph, nullptr);
+        p->insp_x = px; p->insp_y = py; p->insp_w = pw; p->insp_h = ph;
         char sid[24];
         std::snprintf(sid, sizeof(sid), "inspector%d", inst);
         dai_ui_scroll_begin(ui, sid, ph - 6.0f);

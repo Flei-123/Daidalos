@@ -239,6 +239,7 @@ int main() {
 
     dai_gltf_free_geometry(&box, 1);
     test_blockout_gltf();
+    test_blockout_gltf_matrix();
     std::printf("%s: %d checks, %d failures\n", g_fail ? "FAILED" : "ok", g_pass + g_fail, g_fail);
     return g_fail ? 1 : 0;
 }

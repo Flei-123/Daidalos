@@ -108,14 +108,35 @@ static void dai_blockout_draw_sockets(dai_editor_ui *p) {
 
         // The arrow: which way the door faces, read at a glance instead of by
         // reading three numbers in the inspector.
+        //
+        // Unless it points at the camera. An arrow seen end on projects to a
+        // shaft a few pixels long with two barbs on it, which is what the
+        // 1100x700 shot showed: a loose V floating in the opening, drawn as if
+        // the shaft had been forgotten. Head on, a ring says the same thing and
+        // says it honestly - the door faces YOU - so past ~78 degrees off the
+        // view plane the arrow becomes a circle in the opening's own plane,
+        // centred on the point the shaft would have started from. The test in
+        // tests/test_editor_ui.cpp counts the segments of both shapes.
         dai_vec3 mid = v_add(c, v_mul(up, h * 0.5f));
         float len = w * 0.6f;
         dai_vec3 tip = v_add(mid, v_mul(f, len));
-        wire_line(p, mid, tip, col, thick);
-        wire_line(p, tip, v_add(v_add(mid, v_mul(f, len * 0.6f)), v_mul(rt, len * 0.22f)),
-                  col, thick);
-        wire_line(p, tip, v_add(v_add(mid, v_mul(f, len * 0.6f)), v_mul(rt, -len * 0.22f)),
-                  col, thick);
+
+        dai_vec3 cam_eye{}, cam_tgt{};
+        dai_editor_camera_get(p->ed, &cam_eye, &cam_tgt, nullptr);
+        dai_vec3 to_cam{ cam_eye.x - mid.x, cam_eye.y - mid.y, cam_eye.z - mid.z };
+        float cl = std::sqrt(to_cam.x * to_cam.x + to_cam.y * to_cam.y + to_cam.z * to_cam.z);
+        float head_on = cl > 1e-6f
+            ? std::fabs((to_cam.x * f.x + to_cam.y * f.y + to_cam.z * f.z) / cl) : 1.0f;
+        if (head_on > 0.978f) {          // cos(12 deg): the shaft is gone
+            dai_quat idq{ 0, 0, 0, 1 };
+            wire_circle(p, mid, idq, rt, up, len * 0.30f, col, thick);
+        } else {
+            wire_line(p, mid, tip, col, thick);
+            wire_line(p, tip, v_add(v_add(mid, v_mul(f, len * 0.6f)), v_mul(rt, len * 0.22f)),
+                      col, thick);
+            wire_line(p, tip, v_add(v_add(mid, v_mul(f, len * 0.6f)), v_mul(rt, -len * 0.22f)),
+                      col, thick);
+        }
         // A cross on the sill point itself, so "position" is a place you can
         // see and not a value you have to trust.
         wire_line(p, v_add(c, v_mul(rt, -0.08f)), v_add(c, v_mul(rt, 0.08f)), col, thick);

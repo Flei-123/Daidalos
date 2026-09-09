@@ -158,5 +158,84 @@ static void test_blockout_gltf() {
     }
 }
 
+// Every shape, every operation, three poses of the cutter - out through the
+// writer and back through the reader.
+//
+// The three cases above are the ones with a closed form; what they cannot say
+// is that the exporter survives the OTHER thirty results the same editor makes
+// in an afternoon. A boolean on a twelve segment arch produces triangles that
+// no hand written fixture has: long thin ones, ones that share a vertex with
+// four others, ones whose normal is nearly in the plane of the wall. That is
+// what a mesh writer breaks on.
+//
+// The volume each result is held to is NOT the volume it went out with - that
+// would only prove the file remembers what it was told. It is computed from
+// the OTHER two operations through inclusion-exclusion (blockout_csg_cases.hpp
+// explains the identity), so the number on the far side of the round trip is
+// arithmetic done on a different mesh.
+static void test_blockout_gltf_matrix() {
+    std::printf("blockout: 5 shapes x 3 cutter poses x 3 operations make the "
+                "glTF round trip\n");
+
+    struct KindCase { const char *name; int kind; float size[3]; int segments; int steps; float thickness; };
+    static const KindCase KINDS[] = {
+        { "Box",      daiblock::KIND_BOX,      { 2.0f, 1.5f, 1.2f }, 16, 8, 0.2f },
+        { "Cylinder", daiblock::KIND_CYLINDER, { 1.6f, 1.8f, 1.6f }, 12, 8, 0.2f },
+        { "Wedge",    daiblock::KIND_WEDGE,    { 1.8f, 1.4f, 1.6f }, 16, 8, 0.2f },
+        { "Stairs",   daiblock::KIND_STAIRS,   { 1.6f, 1.4f, 2.0f }, 16, 5, 0.2f },
+        { "Arch",     daiblock::KIND_ARCH,     { 2.0f, 1.6f, 1.0f },  8, 8, 0.3f },
+    };
+    struct Pose { const char *name; float pos[3]; float rot[4]; float scale[3]; };
+    static const Pose POSES[] = {
+        { "centred", { 0.00f, 0.00f, 0.00f }, { 0, 0, 0, 1 },                     { 1.0f, 1.0f, 1.0f } },
+        { "corner",  { 0.41f, 0.47f, 0.33f }, { 0, 0, 0, 1 },                     { 1.0f, 1.0f, 1.0f } },
+        { "yaw 45",  { 0.13f, 0.09f, 0.07f }, { 0, 0.38268343f, 0, 0.92387953f }, { 1.0f, 1.0f, 1.0f } },
+    };
+    static const int OPS[3] = { daiblock::OP_UNION, daiblock::OP_SUBTRACT, daiblock::OP_INTERSECT };
+    static const char *const OP_NAMES[3] = { "Union", "Minus", "Shared" };
+
+    for (size_t ki = 0; ki < sizeof(KINDS) / sizeof(KINDS[0]); ++ki) {
+        const KindCase &kc = KINDS[ki];
+        daiblock::Shape s;
+        s.kind = kc.kind;
+        s.size[0] = kc.size[0]; s.size[1] = kc.size[1]; s.size[2] = kc.size[2];
+        s.segments = kc.segments;
+        s.steps = kc.steps;
+        s.thickness = kc.thickness;
+        daiblock::Solid base = daiblock::build(s);
+        const double vA = daiblock::volume(base);
+
+        for (size_t pi = 0; pi < sizeof(POSES) / sizeof(POSES[0]); ++pi) {
+            const Pose &po = POSES[pi];
+            daiblock::Shape cs;
+            cs.kind = daiblock::KIND_BOX;
+            cs.size[0] = 0.9f; cs.size[1] = 1.1f; cs.size[2] = 0.9f;
+            daiblock::Solid cutter =
+                daiblock::transform(daiblock::build(cs), po.pos, po.rot, po.scale);
+            const double vB = daiblock::volume(cutter);
+            const double vI =
+                daiblock::volume(daiblock::finalise(daiblock::csg(base, cutter, daiblock::OP_INTERSECT)));
+
+            for (int oi = 0; oi < 3; ++oi) {
+                // union = |A| + |B| - |AnB|, subtract = |A| - |AnB|,
+                // intersect = |AnB| computed from the union the same way -
+                // never the mesh's own volume.
+                double want = vI;
+                if (OPS[oi] == daiblock::OP_UNION)         want = vA + vB - vI;
+                else if (OPS[oi] == daiblock::OP_SUBTRACT) want = vA - vI;
+                else {
+                    double vU = daiblock::volume(
+                        daiblock::finalise(daiblock::csg(base, cutter, daiblock::OP_UNION)));
+                    want = vA + vB - vU;
+                }
+                char what[128], path[192];
+                std::snprintf(what, sizeof(what), "%s%s%s", kc.name, OP_NAMES[oi], po.name);
+                std::snprintf(path, sizeof(path), "/tmp/dai_blockout_%zu_%zu_%d.glb", ki, pi, oi);
+                daiblock::Mesh m = daiblock::finalise(daiblock::csg(base, cutter, OPS[oi]));
+                blockout_gltf_roundtrip(what, path, m, want);
+            }
+        }
+    }
+}
 
 #endif /* DAI_BLOCKOUT_GLTF_CASES_HPP */

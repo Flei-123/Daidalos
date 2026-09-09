@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -1866,6 +1867,462 @@ int main() {
         dai_show_ui_destroy(su);
         dai_show_destroy(sh);
     }
+
+    // ---- 20. the door socket's gizmo, counted as line runs ------------------
+    //
+    // The socket draws an opening (four segments, one closed loop), a cross on
+    // the sill point (two segments) and an arrow along the normal. Seen from
+    // the side that is a shaft with two barbs; seen END ON the shaft projects
+    // to nothing and the old code drew the two barbs alone - a loose V in the
+    // opening, which is what the 1100x700 screenshot showed. Head on it is a
+    // ring now, and the proof is geometry rather than a look: every segment of
+    // the socket's own colour is recovered from the vertex buffer, the segments
+    // are joined into connected runs, and the runs are counted and measured.
+    std::printf("door socket gizmo\n");
+    {
+        const float FW = 1600.0f, FH = 900.0f;
+        const uint32_t SEL_COL = 0xFF6FD8FFu;      // the selected socket's colour
+
+        dai_node_desc sd = dai_node_desc_default();
+        std::snprintf(sd.name, sizeof(sd.name), "DoorSocket.Front");
+        sd.no_body = sd.no_collider = sd.no_rigidbody = 1;
+        sd.position = { 0.0f, 0.0f, 0.0f };
+        sd.door_socket = 1;
+        sd.door_offset = { 0.0f, 0.0f, 0.0f };
+        sd.door_normal = { 0.0f, 0.0f, 1.0f };
+        sd.door_width = 1.0f;
+        sd.door_height = 2.1f;
+        dai_node socket = dai_doc_add(doc, &sd);
+        dai_doc_sync_apply(sync);
+        dai_editor_deselect_all(ed);
+        dai_editor_select(ed, socket, 0);
+        dai_editor_gizmo_mode(ed, DAI_GIZMO_TRANSLATE);
+
+        struct Seg { float x0, y0, x1, y1; };
+        // One dai_ui_line is one quad: six vertices, all of the same colour,
+        // two triangles over the corners (a,b,c) and (a,c,d). The segment's
+        // ends are the middles of the two short sides - a & d at one end, b & c
+        // at the other - so the thickness averages out and what comes back is
+        // the line that was asked for.
+        auto socket_segments = [&](std::vector<Seg> *out) {
+            out->clear();
+            const dai_ui_draw *d = nullptr;
+            uint32_t nb = dai_ui_draws(ui, &d);
+            for (uint32_t i = 0; i < nb; ++i)
+                for (uint32_t v = 0; v + 6 <= d[i].count; v += 6) {
+                    const dai_ui_vertex *q = d[i].vertices + v;
+                    int same = 1;
+                    for (int k = 0; k < 6; ++k) if (q[k].color != SEL_COL) same = 0;
+                    if (!same) continue;
+                    Seg s;
+                    s.x0 = (q[0].x + q[5].x) * 0.5f; s.y0 = (q[0].y + q[5].y) * 0.5f;
+                    s.x1 = (q[1].x + q[2].x) * 0.5f; s.y1 = (q[1].y + q[2].y) * 0.5f;
+                    out->push_back(s);
+                }
+        };
+        // Connected runs: two segments belong to the same run when they share
+        // an endpoint. Union-find over the endpoints, 0.75 px apart counting as
+        // the same point - the projection is in pixels and the frame's corners
+        // are computed twice, once per side.
+        auto runs_of = [](const std::vector<Seg> &segs, int *closed_max) {
+            std::vector<int> par((int)segs.size());
+            for (size_t i = 0; i < par.size(); ++i) par[i] = (int)i;
+            std::function<int(int)> find = [&](int a) {
+                while (par[a] != a) { par[a] = par[par[a]]; a = par[a]; }
+                return a;
+            };
+            auto near_pt = [](float ax, float ay, float bx, float by) {
+                return std::fabs(ax - bx) < 0.75f && std::fabs(ay - by) < 0.75f;
+            };
+            for (size_t i = 0; i < segs.size(); ++i)
+                for (size_t j = i + 1; j < segs.size(); ++j) {
+                    const Seg &a = segs[i], &b = segs[j];
+                    if (near_pt(a.x0, a.y0, b.x0, b.y0) || near_pt(a.x0, a.y0, b.x1, b.y1) ||
+                        near_pt(a.x1, a.y1, b.x0, b.y0) || near_pt(a.x1, a.y1, b.x1, b.y1))
+                        par[find((int)i)] = find((int)j);
+                }
+            std::vector<int> root, size_of;
+            for (size_t i = 0; i < segs.size(); ++i) {
+                int rt = find((int)i);
+                size_t k = 0;
+                for (; k < root.size(); ++k) if (root[k] == rt) break;
+                if (k == root.size()) { root.push_back(rt); size_of.push_back(0); }
+                size_of[k]++;
+            }
+            if (closed_max) {
+                // A run is CLOSED when no endpoint of it is used only once.
+                *closed_max = 0;
+                for (size_t k = 0; k < root.size(); ++k) {
+                    std::vector<float> px, py; std::vector<int> deg;
+                    for (size_t i = 0; i < segs.size(); ++i) {
+                        if (find((int)i) != root[k]) continue;
+                        const float ex[2] = { segs[i].x0, segs[i].x1 };
+                        const float ey[2] = { segs[i].y0, segs[i].y1 };
+                        for (int e = 0; e < 2; ++e) {
+                            size_t m = 0;
+                            for (; m < px.size(); ++m)
+                                if (std::fabs(px[m] - ex[e]) < 0.75f &&
+                                    std::fabs(py[m] - ey[e]) < 0.75f) break;
+                            if (m == px.size()) { px.push_back(ex[e]); py.push_back(ey[e]); deg.push_back(0); }
+                            deg[m]++;
+                        }
+                    }
+                    int open_end = 0;
+                    for (size_t m = 0; m < deg.size(); ++m) if (deg[m] < 2) open_end = 1;
+                    if (!open_end && size_of[k] > *closed_max) *closed_max = size_of[k];
+                }
+            }
+            return (int)root.size();
+        };
+        auto shoot = [&](dai_vec3 eye, std::vector<Seg> *out) {
+            dai_editor_camera(ed, eye, dai_vec3{ 0.0f, 1.05f, 0.0f }, dai_vec3{ 0, 1, 0 },
+                              55.0f, 0.05f, 200.0f, FW, FH);
+            dai_ui_input in{};
+            in.mouse_x = -100.0f; in.mouse_y = -100.0f;
+            dai_ui_begin(ui, FW, FH, &in);
+            dai_editor_ui_frame(panels, FW, FH);
+            dai_ui_end(ui);
+            float vx = 0, vy = 0, vw = 0, vh = 0;
+            dai_editor_ui_viewport_rect(panels, &vx, &vy, &vw, &vh);
+            dai_editor_camera_viewport_rect(ed, vx, vy, vw, vh);
+            dai_ui_begin(ui, FW, FH, &in);
+            dai_editor_ui_frame(panels, FW, FH);
+            dai_ui_end(ui);
+            socket_segments(out);
+        };
+
+        // From the side: shaft plus two barbs, all three meeting at the tip.
+        std::vector<Seg> side;
+        shoot(dai_vec3{ 5.0f, 1.6f, 5.0f }, &side);
+        int side_closed = 0;
+        int side_runs = runs_of(side, &side_closed);
+        CHECK((int)side.size() == 9,
+              "the socket drew %d segments from the side, expected 9 (frame 4, cross 2, arrow 3)",
+              (int)side.size());
+        CHECK(side_runs == 4,
+              "the socket drew %d connected runs from the side, expected 4 "
+              "(the opening, two cross arms, the arrow)", side_runs);
+        CHECK(side_closed == 4,
+              "the opening is not a closed loop from the side (largest closed run: %d segments)",
+              side_closed);
+
+        // Head on: the arrow would be a dot, so it is a ring - and a ring is a
+        // closed run of its own, longer than the four sided opening.
+        std::vector<Seg> front;
+        shoot(dai_vec3{ 0.0f, 1.05f, 6.0f }, &front);
+        int front_closed = 0;
+        int front_runs = runs_of(front, &front_closed);
+        CHECK((int)front.size() == 30,
+              "the socket drew %d segments head on, expected 30 (frame 4, cross 2, ring 24)",
+              (int)front.size());
+        CHECK(front_runs == 4,
+              "the socket drew %d connected runs head on, expected 4 "
+              "(the opening, two cross arms, the ring)", front_runs);
+        CHECK(front_closed == 24,
+              "head on the arrow is not a closed ring (largest closed run: %d segments)",
+              front_closed);
+        // The symptom the ring replaces: a two segment run with a free end at
+        // each side of it - a barb pair with no shaft between them.
+        int stub_runs = 0;
+        for (size_t i = 0; i < front.size(); ++i) {
+            float len = std::sqrt((front[i].x1 - front[i].x0) * (front[i].x1 - front[i].x0) +
+                                  (front[i].y1 - front[i].y0) * (front[i].y1 - front[i].y0));
+            if (len < 1.0f) ++stub_runs;
+        }
+        CHECK(stub_runs == 0, "%d of the socket's segments are shorter than a pixel head on",
+              stub_runs);
+        std::printf("  socket gizmo: %d segments / %d runs from the side, %d / %d head on\n",
+                    (int)side.size(), side_runs, (int)front.size(), front_runs);
+
+        dai_editor_deselect_all(ed);
+        dai_doc_remove(doc, socket);
+        dai_doc_sync_apply(sync);
+        dai_editor_camera(ed, dai_vec3{ 0, 3, 10 }, dai_vec3{ 0, 0, 0 }, dai_vec3{ 0, 1, 0 },
+                          55.0f, 0.1f, 200.0f, 1280.0f, 720.0f);
+        dai_editor_camera_viewport_rect(ed, 0.0f, 0.0f, 1280.0f, 720.0f);
+    }
+
+    // ---- a hierarchy name too wide for its panel ends in an ellipsis -------
+    //
+    // The row used to draw the full name and leave the panel's clip rectangle
+    // to cut it: the 1100x700 screenshot showed "DoorSocket.Fro", which is not
+    // an abbreviation but a different name, and nothing on the row said there
+    // was more. The proof is in the GLYPHS - the last three quads of the row
+    // carry the atlas rectangle of '.', which is what an ellipsis is made of -
+    // and the whole name comes back on the row's tooltip under the pointer.
+    std::printf("hierarchy ellipsis\n");
+    {
+        const float NARROW_W = 155.0f;                 // the panel that is too small
+        const float HX = 8.0f, HY = 60.0f, HH = 360.0f;
+        dai_node_desc dd = dai_node_desc_default();
+        std::snprintf(dd.name, sizeof(dd.name), "Wall.Front.Doorway");
+        dd.no_body = dd.no_collider = dd.no_rigidbody = 1;
+        dd.position = { 0, 0, -6 };
+        dai_node doorway = dai_doc_add(doc, &dd);
+        dai_doc_sync_apply(sync);
+
+        const dai_glyph *dot = dai_font_glyph(font, '.');
+        CHECK(dot != nullptr && dot->x1 > dot->x0, "the font has no '.' to make an ellipsis of");
+
+        // Every glyph quad whose atlas rectangle is the one '.' sits in, as the
+        // top left corner of the quad: six vertices per glyph, so the corner is
+        // taken once per glyph rather than once per vertex.
+        struct Dot { float x, y; };
+        auto dots_at = [&](float panel_w, float mouse_x, float mouse_y) {
+            dai_ui_input in{};
+            in.mouse_x = mouse_x; in.mouse_y = mouse_y;
+            dai_ui_begin(ui, 1100, 700, &in);
+            dai_editor_ui_hierarchy(panels, HX, HY, panel_w, HH);
+            dai_ui_end(ui);
+            std::vector<Dot> out;
+            const dai_ui_draw *dr = nullptr;
+            uint32_t nbb = dai_ui_draws(ui, &dr);
+            for (uint32_t b = 0; b < nbb; ++b)
+                for (uint32_t v = 0; v + 5 < dr[b].count; v += 6) {
+                    float ux = 1e9f, uy = 1e9f, qx = 1e9f, qy = 1e9f;
+                    for (uint32_t k = 0; k < 6; ++k) {
+                        const dai_ui_vertex &p = dr[b].vertices[v + k];
+                        if (p.u < ux) ux = p.u;
+                        if (p.v < uy) uy = p.v;
+                        if (p.x < qx) qx = p.x;
+                        if (p.y < qy) qy = p.y;
+                    }
+                    if (std::fabs(ux - dot->u0) < 1e-6f && std::fabs(uy - dot->v0) < 1e-6f)
+                        out.push_back(Dot{ qx, qy });
+                }
+            return out;
+        };
+        // Three dots on ONE row, side by side and evenly spaced - an ellipsis,
+        // and not the two dots the name itself is spelled with.
+        auto ellipsis_runs = [&](const std::vector<Dot> &v, float *row_y) {
+            int runs = 0;
+            for (size_t i = 0; i + 2 < v.size(); ++i) {
+                if (std::fabs(v[i + 1].y - v[i].y) > 0.5f) continue;
+                if (std::fabs(v[i + 2].y - v[i].y) > 0.5f) continue;
+                float s1 = v[i + 1].x - v[i].x, s2 = v[i + 2].x - v[i + 1].x;
+                if (s1 <= 0.0f || std::fabs(s2 - s1) > 0.5f) continue;
+                if (s1 > dot->advance + 0.5f) continue;
+                ++runs;
+                if (row_y) *row_y = v[i].y;
+            }
+            return runs;
+        };
+
+        // The sections above left dozens of nodes in this document, and a row
+        // below the fold is not drawn at all - dai_ui_text drops a line whose
+        // ink crosses the clip. The new node is the newest, so it is the LAST
+        // row: the tree is wheeled to its end before anything is measured, the
+        // same way a user would reach it.
+        for (int k = 0; k < 40; ++k) {
+            dai_ui_input in{};
+            in.mouse_x = HX + NARROW_W * 0.5f; in.mouse_y = HY + 120.0f;
+            in.wheel = -8.0f;
+            dai_ui_begin(ui, 1100, 700, &in);
+            dai_editor_ui_hierarchy(panels, HX, HY, NARROW_W, HH);
+            dai_ui_end(ui);
+        }
+        // Two frames per measurement: the first lays the panel out, the second
+        // draws it with that layout - the two-pass shape the shot tools use.
+        dots_at(NARROW_W, -100.0f, -100.0f);
+        std::vector<Dot> narrow = dots_at(NARROW_W, -100.0f, -100.0f);
+        float run_y = -1.0f;
+        int runs = ellipsis_runs(narrow, &run_y);
+        CHECK(runs >= 1,
+              "no row of a %.0f px hierarchy ends in '...' - 'Wall.Front.Doorway' is "
+              "still cut by the clip rectangle (%u dot glyphs on the whole panel)",
+              (double)NARROW_W, (unsigned)narrow.size());
+
+        // ...and it is the WIDTH that shortens it, not the name: given room the
+        // same row draws the name whole and no ellipsis run is left.
+        dots_at(320.0f, -100.0f, -100.0f);
+        std::vector<Dot> wide = dots_at(320.0f, -100.0f, -100.0f);
+        CHECK(ellipsis_runs(wide, nullptr) == 0,
+              "a 320 px hierarchy shortens a name that fits: %d ellipsis runs",
+              ellipsis_runs(wide, nullptr));
+
+        // Nothing is drawn past the panel edge either: an ellipsis that still
+        // overflows has shortened nothing.
+        {
+            dai_ui_input in{};
+            in.mouse_x = -100.0f; in.mouse_y = -100.0f;
+            dai_ui_begin(ui, 1100, 700, &in);
+            dai_editor_ui_hierarchy(panels, HX, HY, NARROW_W, HH);
+            dai_ui_end(ui);
+            float bx0, by0, bx1, by1;
+            vert_bounds(ui, &bx0, &by0, &bx1, &by1);
+            CHECK(bx1 <= HX + NARROW_W + 0.5f,
+                  "the hierarchy drew out to x=%.1f, %.1f px past its own panel",
+                  (double)bx1, (double)(bx1 - (HX + NARROW_W)));
+        }
+
+        // The tooltip: hovering the shortened row spells the whole name out,
+        // which is where the two dots of "Wall.Front.Doorway" come back - so
+        // the hovered frame carries at least two dot glyphs more than the
+        // unhovered one.
+        if (run_y >= 0.0f) {
+            dots_at(NARROW_W, HX + NARROW_W * 0.5f, run_y + 4.0f);
+            std::vector<Dot> hovered = dots_at(NARROW_W, HX + NARROW_W * 0.5f, run_y + 4.0f);
+            CHECK(hovered.size() >= narrow.size() + 2,
+                  "hovering the shortened row added %d dot glyphs - the full name is "
+                  "not on a tooltip", (int)hovered.size() - (int)narrow.size());
+        }
+        dai_doc_remove(doc, doorway);
+        dai_doc_sync_apply(sync);
+    }
+
+    // ---- the inspector header: the name field never reaches "Static" -------
+    //
+    // The name box was laid out from a 60 px floor, and in the 200 px
+    // inspector of a 1100x700 window that floor is wider than the gap the
+    // header has - so the field was drawn straight over the Static checkbox
+    // and two clickable things sat on the same pixels. Measured on the
+    // rectangles the header emits: the widgets are the track coloured fills
+    // inside the 34 px card, grouped by the gaps between them, and the name
+    // field has to end before the checkbox starts.
+    std::printf("inspector header\n");
+    {
+        dai_node_desc hd = dai_node_desc_default();
+        std::snprintf(hd.name, sizeof(hd.name), "Wall.Front.Doorway.Lintel.Left");
+        hd.no_body = hd.no_collider = hd.no_rigidbody = 1;
+        dai_node hn = dai_doc_add(doc, &hd);
+        dai_doc_sync_apply(sync);
+        dai_editor_select(ed, hn, 0);
+
+        const float IW = 200.0f;                     // the inspector at 1100x700
+        const float IX = 1100.0f - IW - 8.0f, IY = 60.0f;
+        auto header_frame = [&]() {
+            dai_ui_input in{};
+            in.mouse_x = -100.0f; in.mouse_y = -100.0f;
+            dai_ui_begin(ui, 1100, 700, &in);
+            dai_editor_ui_expand_all(panels);
+            dai_editor_ui_inspector(panels, IX, IY, IW, 592.0f);
+            dai_ui_end(ui);
+        };
+        header_frame();
+        header_frame();
+
+        const uint32_t CARD = 0xFF3A3A3Au;           // the header plate's own colour
+        float cy0 = -1.0f, cy1 = -1.0f;
+        const dai_ui_draw *dr = nullptr;
+        uint32_t nbb = dai_ui_draws(ui, &dr);
+        for (uint32_t b = 0; b < nbb && cy0 < 0.0f; ++b)
+            for (uint32_t v = 0; v < dr[b].count; ++v)
+                if (dr[b].vertices[v].color == CARD) {
+                    cy0 = dr[b].vertices[v].y; cy1 = cy0 + 34.0f; break;
+                }
+        CHECK(cy0 >= 0.0f, "the inspector drew no object header card");
+
+        // Every track coloured QUAD in the card, and then those that touch
+        // merged into one widget - a rounded rectangle is a middle piece plus
+        // four corner slivers, and a rectangle only has vertices at its
+        // corners, so grouping raw vertices by their gaps would cut a 14 px
+        // checkbox in half down the middle. What comes out is the active box,
+        // the icon plate, the name field and the Static checkbox.
+        struct Box { float x0, x1, y0, y1; };
+        std::vector<Box> boxes;
+        if (cy0 >= 0.0f) {
+            for (uint32_t b = 0; b < nbb; ++b)
+                for (uint32_t v = 0; v + 5 < dr[b].count; v += 6) {
+                    Box q{ 1e9f, -1e9f, 1e9f, -1e9f };
+                    int mine = 1;
+                    for (uint32_t k = 0; k < 6; ++k) {
+                        const dai_ui_vertex &p = dr[b].vertices[v + k];
+                        if (p.color != style->track) { mine = 0; break; }
+                        if (p.x < q.x0) q.x0 = p.x;
+                        if (p.x > q.x1) q.x1 = p.x;
+                        if (p.y < q.y0) q.y0 = p.y;
+                        if (p.y > q.y1) q.y1 = p.y;
+                    }
+                    if (!mine) continue;
+                    if (q.y0 < cy0 - 0.5f || q.y1 > cy1 + 0.5f) continue;
+                    boxes.push_back(q);
+                }
+            for (int again = 1; again;) {
+                again = 0;
+                for (size_t i = 0; i < boxes.size() && !again; ++i)
+                    for (size_t j = i + 1; j < boxes.size() && !again; ++j) {
+                        if (boxes[i].x0 > boxes[j].x1 + 0.5f) continue;
+                        if (boxes[j].x0 > boxes[i].x1 + 0.5f) continue;
+                        if (boxes[i].y0 > boxes[j].y1 + 0.5f) continue;
+                        if (boxes[j].y0 > boxes[i].y1 + 0.5f) continue;
+                        if (boxes[j].x0 < boxes[i].x0) boxes[i].x0 = boxes[j].x0;
+                        if (boxes[j].x1 > boxes[i].x1) boxes[i].x1 = boxes[j].x1;
+                        if (boxes[j].y0 < boxes[i].y0) boxes[i].y0 = boxes[j].y0;
+                        if (boxes[j].y1 > boxes[i].y1) boxes[i].y1 = boxes[j].y1;
+                        boxes.erase(boxes.begin() + (long)j);
+                        again = 1;
+                    }
+            }
+        }
+        // The name field is the 18 px tall one, the Static checkbox the
+        // rightmost 14 px square.
+        int name_i = -1, static_i = -1;
+        for (size_t i = 0; i < boxes.size(); ++i) {
+            float bh = boxes[i].y1 - boxes[i].y0, bw = boxes[i].x1 - boxes[i].x0;
+            if (bh > 16.5f && bh < 20.0f && bw > 8.0f) name_i = (int)i;
+            if (bh > 12.5f && bh < 15.5f && bw > 12.5f && bw < 15.5f) static_i = (int)i;
+        }
+        CHECK(name_i >= 0, "the header drew no name field (%u track boxes)",
+              (unsigned)boxes.size());
+        CHECK(static_i >= 0, "the header drew no Static checkbox (%u track boxes)",
+              (unsigned)boxes.size());
+        if (name_i >= 0 && static_i >= 0) {
+            CHECK(boxes[name_i].x1 <= boxes[static_i].x0 + 0.5f,
+                  "at 1100x700 the name field runs to x=%.1f and the Static checkbox "
+                  "starts at x=%.1f - they overlap by %.1f px",
+                  (double)boxes[name_i].x1, (double)boxes[static_i].x0,
+                  (double)(boxes[name_i].x1 - boxes[static_i].x0));
+            CHECK(boxes[name_i].x1 <= IX + IW - style->padding + 0.5f,
+                  "the name field ends at x=%.1f, past the %.0f px panel",
+                  (double)boxes[name_i].x1, (double)IW);
+            std::printf("  header at %.0f px: name field %.1f..%.1f, Static at %.1f\n",
+                        (double)IW, (double)boxes[name_i].x0, (double)boxes[name_i].x1,
+                        (double)boxes[static_i].x0);
+
+            // ...and the name INSIDE it is clipped to the field rather than
+            // painted across the checkbox. A name longer than the box still
+            // emits its glyphs - the text is laid out from the left edge and
+            // does not stop at the right one - so what is measured is the INK
+            // THAT SURVIVES: a vertex past its batch's clip rectangle is a
+            // vertex the scissor never lets through, which is what the field
+            // now wraps itself in.
+            // A GLYPH, not a fill: every rectangle in this interface is drawn
+            // with a single solid texel of the same atlas, so "has texture
+            // coordinates" is not the question - "do they SPAN anything" is.
+            // The tick inside the Static checkbox is a fill in exactly the
+            // text colour, and counting it as a letter would fail this check
+            // no matter what the name field does.
+            float ink_x1 = -1e9f;
+            for (uint32_t b = 0; b < nbb; ++b)
+                for (uint32_t v = 0; v + 5 < dr[b].count; v += 6) {
+                    float qx1 = -1e9f, qy0 = 1e9f, qy1 = -1e9f, u0 = 1e9f, u1 = -1e9f;
+                    int mine = 1;
+                    for (uint32_t k = 0; k < 6; ++k) {
+                        const dai_ui_vertex &p = dr[b].vertices[v + k];
+                        if (p.color != style->text) { mine = 0; break; }
+                        if (p.x > qx1) qx1 = p.x;
+                        if (p.y < qy0) qy0 = p.y;
+                        if (p.y > qy1) qy1 = p.y;
+                        if (p.u < u0) u0 = p.u;
+                        if (p.u > u1) u1 = p.u;
+                    }
+                    if (!mine || u1 - u0 < 1e-6f) continue;        // a fill, not a letter
+                    if (qy0 < cy0 - 0.5f || qy1 > cy1 + 0.5f) continue;
+                    if (qx1 < boxes[name_i].x0 - 0.5f) continue;   // left of the field
+                    float eff = qx1 < dr[b].clip[2] ? qx1 : dr[b].clip[2];
+                    if (eff > ink_x1) ink_x1 = eff;
+                }
+            CHECK(ink_x1 > boxes[name_i].x0,
+                  "the name field drew no text at all (ink to x=%.1f)", (double)ink_x1);
+            CHECK(ink_x1 <= boxes[static_i].x0 + 0.5f,
+                  "a long name is drawn out to x=%.1f, over the Static checkbox at "
+                  "x=%.1f", (double)ink_x1, (double)boxes[static_i].x0);
+        }
+        dai_editor_deselect_all(ed);
+        dai_doc_remove(doc, hn);
+        dai_doc_sync_apply(sync);
+    }
+
 
     dai_editor_ui_destroy(panels);
     dai_editor_destroy(ed);

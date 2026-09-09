@@ -15,6 +15,7 @@
 
 #include "dai_ui.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -556,6 +557,191 @@ int main() {
         CHECK(tight.lbl_x1 <= tight.field_x0 + 0.5f,
               "squeezed to 130 px the label reaches x=%.1f and the field starts at "
               "x=%.1f", (double)tight.lbl_x1, (double)tight.field_x0);
+    }
+
+    // ---- a vector row in the 200 px inspector of a 1100x700 window ---------
+    //
+    // "Position 1.025 / 0.05 / -12.5" is the row the narrow screenshots show,
+    // and it showed it as one smear: the three boxes were divided out of the
+    // full row width with the gaps taken off afterwards, and each number was
+    // drawn at its full length from the left edge of its box - so "1.025" ran
+    // over the frame of the Y field and into its green "Y". Three things are
+    // measured here, all of them geometry: the boxes are pairwise disjoint,
+    // every digit stays inside the box that owns it, and the name column does
+    // not reach into the first box.
+    {
+        std::printf("vector row: three boxes, pairwise disjoint, digits inside\n");
+        const dai_ui_style *ss = dai_ui_style_of(ui);
+        const float PX = 40.0f, PY = 10.0f;
+
+        struct Box { float x0, x1; int digits; };
+        auto vec_row_at = [&](float pw, std::vector<Box> *boxes, float *label_x1,
+                              float *digits_out, float *digits_in) {
+            float v[3] = { 1.025f, 0.05f, -12.5f };
+            in.mouse_x = -100.0f; in.mouse_y = -100.0f; in.mouse_down = 0;
+            dai_ui_begin(ui, 1100, 700, &in);
+            dai_ui_panel_begin(ui, PX, PY, pw, 300.0f, nullptr);
+            dai_ui_num_vec3(ui, "Position", v, 0.01f);
+            dai_ui_panel_end(ui);
+            dai_ui_end(ui);
+
+            // The boxes: the only track coloured fills in the panel. One fill
+            // is one RUN of vertices in the buffer (two triangles of the same
+            // colour), so a run is a rectangle - grouping by position instead
+            // would happily merge two boxes that overlap, which is the one
+            // thing this test is here to catch.
+            *label_x1 = -1e9f;
+            boxes->clear();
+            const dai_ui_draw *draws = nullptr;
+            uint32_t nb = dai_ui_draws(ui, &draws);
+            bool in_run = false;
+            for (uint32_t b = 0; b < nb; ++b)
+                for (uint32_t vv = 0; vv < draws[b].count; ++vv) {
+                    const dai_ui_vertex &vx = draws[b].vertices[vv];
+                    if (vx.color == ss->track) {
+                        if (!in_run) { boxes->push_back(Box{ vx.x, vx.x, 0 }); in_run = true; }
+                        if (vx.x < boxes->back().x0) boxes->back().x0 = vx.x;
+                        if (vx.x > boxes->back().x1) boxes->back().x1 = vx.x;
+                        continue;
+                    }
+                    in_run = false;
+                    if (vx.color == ss->text_dim && vx.x > *label_x1) *label_x1 = vx.x;
+                }
+            std::sort(boxes->begin(), boxes->end(),
+                      [](const Box &a, const Box &b2) { return a.x0 < b2.x0; });
+            // The digits: every glyph drawn in the text colour. Each one has
+            // to sit in one of the boxes.
+            *digits_out = 0.0f; *digits_in = 0.0f;
+            for (uint32_t b = 0; b < nb; ++b)
+                for (uint32_t vv = 0; vv < draws[b].count; ++vv) {
+                    const dai_ui_vertex &vx = draws[b].vertices[vv];
+                    if (vx.color != ss->text) continue;
+                    int home = -1;
+                    for (size_t k = 0; k < boxes->size(); ++k)
+                        if (vx.x >= (*boxes)[k].x0 - 0.5f && vx.x <= (*boxes)[k].x1 + 0.5f)
+                            home = (int)k;
+                    if (home < 0) *digits_out += 1.0f;
+                    else { *digits_in += 1.0f; (*boxes)[(size_t)home].digits++; }
+                }
+        };
+
+        std::vector<Box> boxes;
+        float label_x1 = 0.0f, out = 0.0f, insid = 0.0f;
+        vec_row_at(200.0f, &boxes, &label_x1, &out, &insid);
+        CHECK(boxes.size() == 3,
+              "a vector row in a 200 px panel drew %d boxes, not 3 - two of them "
+              "touch or overlap", (int)boxes.size());
+        if (boxes.size() == 3) {
+            for (int i = 0; i + 1 < 3; ++i)
+                CHECK(boxes[(size_t)i].x1 + 1.0f <= boxes[(size_t)i + 1].x0,
+                      "field %d ends at x=%.1f and field %d starts at x=%.1f - the "
+                      "two rectangles are not disjoint", i, (double)boxes[(size_t)i].x1,
+                      i + 1, (double)boxes[(size_t)i + 1].x0);
+            for (int i = 0; i < 3; ++i) {
+                CHECK(boxes[(size_t)i].x1 - boxes[(size_t)i].x0 >= 18.0f,
+                      "field %d is %.1f px wide - no number fits in that", i,
+                      (double)(boxes[(size_t)i].x1 - boxes[(size_t)i].x0));
+                CHECK(boxes[(size_t)i].digits > 0,
+                      "field %d drew no digits at all", i);
+            }
+            CHECK(label_x1 <= boxes[0].x0 + 0.5f,
+                  "the name column reaches x=%.1f, the X field starts at x=%.1f - "
+                  "'Position' is drawn into the first value box",
+                  (double)label_x1, (double)boxes[0].x0);
+        }
+        CHECK(insid > 0.0f && out == 0.0f,
+              "%d of %d digit quads are drawn outside every field rectangle - "
+              "1.025 runs into its neighbour", (int)out, (int)(out + insid));
+
+        // The same row with room to spare: the boxes must not stop being
+        // disjoint just because they got bigger, and the name is written out
+        // in full rather than shortened out of habit.
+        vec_row_at(360.0f, &boxes, &label_x1, &out, &insid);
+        CHECK(boxes.size() == 3, "a 360 px panel drew %d boxes, not 3", (int)boxes.size());
+        CHECK(out == 0.0f, "%d digit quads outside their field in a 360 px panel", (int)out);
+        if (boxes.size() == 3)
+            CHECK(label_x1 <= boxes[0].x0 + 0.5f,
+                  "wide panel: the name reaches x=%.1f, the X field starts at x=%.1f",
+                  (double)label_x1, (double)boxes[0].x0);
+    }
+
+    // ---- the label column gives way, and says what it gave up --------------
+    //
+    // The column used to be a fixed fraction of the panel whatever stood in it:
+    // at 200 px that is 64 px, so "Restitution" was a stump next to a value box
+    // with room to spare. It measures its name now - and where the row cannot
+    // afford the whole name the rest is one hover away rather than gone.
+    {
+        std::printf("label column: measured, shrinking, and never silent\n");
+        const dai_ui_style *ss = dai_ui_style_of(ui);
+        const char *LONG = "Restitution";
+        float v = 0.35f;
+        auto label_run = [&](float pw, float mx, float my, float *x0, float *x1,
+                             float *field_x0) {
+            in.mouse_x = mx; in.mouse_y = my; in.mouse_down = 0;
+            dai_ui_begin(ui, 1100, 700, &in);
+            dai_ui_panel_begin(ui, 0.0f, 0.0f, pw, 200.0f, nullptr);
+            dai_ui_num_field(ui, LONG, &v, 0.01f, 0.0f, 0.0f, "rest");
+            dai_ui_panel_end(ui);
+            dai_ui_end(ui);
+            *x0 = 1e9f; *x1 = -1e9f; *field_x0 = 1e9f;
+            const dai_ui_draw *draws = nullptr;
+            uint32_t nb = dai_ui_draws(ui, &draws);
+            for (uint32_t b = 0; b < nb; ++b)
+                for (uint32_t vv = 0; vv < draws[b].count; ++vv) {
+                    const dai_ui_vertex &vx = draws[b].vertices[vv];
+                    if (vx.color == ss->text_dim) {
+                        if (vx.x < *x0) *x0 = vx.x;
+                        if (vx.x > *x1) *x1 = vx.x;
+                    } else if (vx.color == ss->track && vx.x < *field_x0) *field_x0 = vx.x;
+                }
+        };
+
+        float x0 = 0, x1 = 0, fx = 0;
+        label_run(320.0f, -100.0f, -100.0f, &x0, &x1, &fx);
+        CHECK(x1 <= fx + 0.5f, "in a 320 px panel '%s' runs to x=%.1f and the box "
+              "starts at x=%.1f", LONG, (double)x1, (double)fx);
+        CHECK(x1 - x0 >= dai_ui_text_width(ui, LONG) - 4.0f,
+              "'%s' needs %.1f px and got %.1f in a panel with room to spare - the "
+              "column did not measure its name", LONG,
+              (double)dai_ui_text_width(ui, LONG), (double)(x1 - x0));
+
+        // 150 px: the name no longer fits next to a usable box, so it is
+        // shortened - and the row hands the whole of it back on hover.
+        label_run(150.0f, -100.0f, -100.0f, &x0, &x1, &fx);
+        CHECK(x1 <= fx + 0.5f, "in a 150 px panel the name reaches x=%.1f and the box "
+              "starts at x=%.1f", (double)x1, (double)fx);
+        CHECK(fx <= 150.0f - 40.0f,
+              "the value box starts at x=%.1f in a 150 px panel - less than 40 px of "
+              "field is left for the number", (double)fx);
+        label_run(150.0f, 10.0f, 10.0f, &x0, &x1, &fx);
+        CHECK(std::strcmp(dai_ui_tooltip_text(ui), LONG) == 0,
+              "hovering the shortened '%s' says '%s'", LONG, dai_ui_tooltip_text(ui));
+        label_run(320.0f, 10.0f, 10.0f, &x0, &x1, &fx);
+        CHECK(std::strcmp(dai_ui_tooltip_text(ui), LONG) != 0,
+              "a name that fits still raises a tooltip repeating it");
+    }
+
+    // ---- a name too long for its column is ENDED, not chopped --------------
+    // dai_ui_fit_text is the one rule every panel shortens with, so it is
+    // measured once here rather than in each of them.
+    {
+        std::printf("fit_text: whole characters, ellipsis, never wider than asked\n");
+        char buf[64];
+        const char *full = "DoorSocket.Front";
+        const float wide = dai_ui_text_width(ui, full) + 10.0f;
+        CHECK(std::strcmp(dai_ui_fit_text(ui, full, wide, buf, sizeof(buf)), full) == 0,
+              "a name that fits was shortened anyway: '%s'", buf);
+        const float narrow = dai_ui_text_width(ui, "DoorSock") + 2.0f;
+        const char *cut = dai_ui_fit_text(ui, full, narrow, buf, sizeof(buf));
+        size_t cl = std::strlen(cut);
+        CHECK(cl >= 4 && std::strcmp(cut + cl - 3, "...") == 0,
+              "'%s' does not end in an ellipsis", cut);
+        CHECK(dai_ui_text_width(ui, cut) <= narrow + 0.5f,
+              "'%s' is %.1f px wide, %.1f px were free", cut,
+              (double)dai_ui_text_width(ui, cut), (double)narrow);
+        CHECK(std::strncmp(cut, full, cl - 3) == 0,
+              "'%s' is not a prefix of '%s'", cut, full);
     }
 
     dai_ui_destroy(ui);

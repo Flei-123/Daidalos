@@ -71,6 +71,9 @@ test_assetkind
 test_editor_ui
 test_window_two
 test_daitex
+test_gltf_headless
+test_ui_headless
+test_viewport_headless
 "
 # ...and the ones build.sh cannot build. That script is frozen and names every
 # translation unit it compiles one by one, so a feature whose implementation is
@@ -78,6 +81,26 @@ test_daitex
 # nowhere to be compiled except next to where it is run. One g++ line each, and
 # a compile error turns the run red exactly like a failing check would.
 HEADER_ONLY="test_daitex"
+
+# The GPU-less HALVES of three suites that are on the GPU list as wholes.
+#
+# test_gltf, test_ui and test_viewport each open a Vulkan device - test_gltf in
+# its second statement, test_ui in its last section, test_viewport in its first
+# - so all three are excluded here, and with them everything they check that
+# never wanted a device: the glTF container, the accessors, the writer and the
+# round trip; the UI layer's batching, clicks, sliders and layout; the
+# projection and picking arithmetic the whole editor's gizmo work stands on.
+# Excluded tests rot - that sentence is written twice more in this file, and
+# these three are the largest thing it was still true of.
+#
+# So the halves live in tests/test_*_headless.cpp (and tests/ui_cases.hpp, which
+# test_ui itself now runs as well - the cases were MOVED, not copied), and they
+# are compiled here for the same reason the header-only suite above is: build.sh
+# is frozen and names its translation units one by one. Same flags, the archives
+# that script produced, and a compile error turns the run red like a failing
+# check would.
+SPLIT_SUITES="test_gltf_headless test_ui_headless test_viewport_headless"
+
 # Deliberately NOT here (each needs a GPU or a display). The list is a VARIABLE
 # rather than a comment because the run prints it: a suite that is quietly
 # absent looks exactly like a suite that passed, and "all green" over an
@@ -147,6 +170,36 @@ for h in $HEADER_ONLY; do
         head -12 "build/$h.build.log" | sed 's/^/    /'
         FAILED="$FAILED $h"
         rm -f "build/$h"
+    fi
+done
+
+JOLT_LIB=${JOLT_LIB:-/root/projects/jolt-build}
+TALOS=${TALOS:-/root/projects/talos}
+AULOS=${AULOS:-/root/projects/aulos}
+SPLIT_LIBS=""
+[ -f "$AULOS/build/libaulos.a" ] && SPLIT_LIBS="$SPLIT_LIBS $AULOS/build/libaulos.a"
+[ -f "$TALOS/build/libtalos.a" ] && SPLIT_LIBS="$SPLIT_LIBS $TALOS/build/libtalos.a"
+SPLIT_X11=""
+[ -f /usr/include/X11/Xlib.h ] && SPLIT_X11="-lX11"
+for s in $SPLIT_SUITES; do
+    [ -f "tests/$s.cpp" ] || continue
+    if [ ! -f build/libdaidalos.a ] || [ ! -f build/libdaidalos_vk.a ]; then
+        echo "-- $s NOT compiled: build/libdaidalos*.a missing - run ./build.sh first"
+        MISSING="$MISSING $s"
+        continue
+    fi
+    # shellcheck disable=SC2086
+    if g++ -std=c++17 -O2 -fno-rtti -ffp-contract=fast -pthread -Wall -Wno-unused-parameter \
+           -Iinclude -Itests "tests/$s.cpp" \
+           build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $SPLIT_LIBS \
+           -L"$JOLT_LIB" -lJolt -lvulkan $SPLIT_X11 -lpthread -lm -ldl -o "build/$s" \
+           >"build/$s.build.log" 2>&1; then
+        echo "-- $s compiled (the GPU-less half of a suite build.sh does not name)"
+    else
+        echo "-- $s did NOT compile:"
+        head -12 "build/$s.build.log" | sed 's/^/    /'
+        FAILED="$FAILED $s"
+        rm -f "build/$s"
     fi
 done
 
@@ -295,18 +348,48 @@ fi
 # editor, with the blockout, the materials and the door socket in it.
 # tools/build_modeling_shot.sh compiles the tool as well as running it - see
 # the note at the top of that file for why a compile happens here at all.
+#
+# Three sets, like the drone show's: the plain names at 1600x900, `wide-` at
+# 1920x1080 and `narrow-` at 1100x700. Only the first one compiles the tool;
+# the other two run the binary it just made, because compiling the same
+# translation unit three times to take three pictures is two minutes of nothing.
+#
+# And a check that is not a picture: shot 13 is taken by the BRIDGE, from the
+# camera the bridge was handed, while 12 is taken from C++ - so if the two files
+# are byte identical the bridge's camera was ignored and the "photograph from
+# here" command is decoration. md5sum of both, and equal turns the run red.
 if [ -f tools/modeling_shot.cpp ]; then
-    OUT=$(DISPLAY="$DAI_TEST_DISPLAY" timeout 600 \
-          ./tools/build_modeling_shot.sh "$SHOTS" 1600 900 2>&1)
-    RC=$?
-    if [ "$RC" = "0" ]; then
-        printf '%-20s %3s/%-3s  ok  (%s/10..13-modeling-*.png)\n' "modeling_shot" "-" "-" "$SHOTS"
-        [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
-    else
-        FAILED="$FAILED modeling_shot"
-        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "modeling_shot" "-" "-" "$RC"
-        printf '%s\n' "$OUT" | tail -10 | sed 's/^/    /'
-    fi
+    for SET in 1600x900: 1920x1080:wide- 1100x700:narrow-; do
+        DIM=${SET%%:*}; TAG=${SET#*:}
+        SW=${DIM%%x*}; SH=${DIM##*x}
+        if [ -z "$TAG" ]; then
+            OUT=$(DISPLAY="$DAI_TEST_DISPLAY" timeout 600 \
+                  ./tools/build_modeling_shot.sh "$SHOTS" "$SW" "$SH" 2>&1)
+        elif [ -x build/modeling_shot ]; then
+            OUT=$(DAI_SHADER_DIR=shaders DISPLAY="$DAI_TEST_DISPLAY" timeout 600 \
+                  ./build/modeling_shot "$SHOTS" "$SW" "$SH" --prefix "$TAG" 2>&1)
+        else
+            OUT="modeling_shot was not compiled"; false
+        fi
+        RC=$?
+        NAME="modeling_shot ${TAG:-plain}"
+        M12=$(md5sum "$SHOTS/${TAG}12-modeling-materials.png" 2>/dev/null | cut -d' ' -f1)
+        M13=$(md5sum "$SHOTS/${TAG}13-modeling-bridge-shot.png" 2>/dev/null | cut -d' ' -f1)
+        if [ "$RC" = "0" ] && [ -n "$M13" ] && [ "$M12" = "$M13" ]; then
+            RC=90
+            OUT="$OUT
+    ${TAG}12 and ${TAG}13 are the same file ($M12) - the bridge's camera was ignored"
+        fi
+        if [ "$RC" = "0" ]; then
+            printf '%-20s %3s/%-3s  ok  (%s/%s10..13-modeling-*.png %sx%s)\n' \
+                   "$NAME" "-" "-" "$SHOTS" "$TAG" "$SW" "$SH"
+            [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+        else
+            FAILED="$FAILED modeling_shot(${SW}x${SH})"
+            printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "$NAME" "-" "-" "$RC"
+            printf '%s\n' "$OUT" | tail -10 | sed 's/^/    /'
+        fi
+    done
 else
     MISSING="$MISSING modeling_shot"
 fi
@@ -336,6 +419,57 @@ if [ -f tools/blockout_shot.cpp ]; then
     done
 else
     MISSING="$MISSING blockout_shot"
+fi
+
+# The Windows build's own last lines, copied into RUN.md.
+#
+# RUN.md quotes the end of ./build_win.sh - the line that says the editor
+# linked - and it quoted it by hand. A hand copied log line is a log line that
+# is one round out of date by the next review, and this one was worse than
+# that: the document went out with the word WIN_TAIL_PLACEHOLDER where the
+# output belongs, which is a promise nobody kept. So the block is GENERATED,
+# out of build/last_win.log, between two markers in the file - and a RUN.md
+# that still has a placeholder in it turns the run red, exactly like a failing
+# check would.
+WIN_LOG=build/last_win.log
+if [ -f RUN.md ]; then
+    if [ -f "$WIN_LOG" ]; then
+        # The tail worth quoting: the section headers and the "ok:" lines the
+        # script prints, up to and including the editor. Compiler warnings in
+        # between are not what the document is claiming.
+        WIN_TAIL=$(grep -E '^(-- |   ok: )' "$WIN_LOG" | tail -5)
+        case "$WIN_TAIL" in
+            *"ok: build-win/editor_demo.exe"*)
+                if grep -q 'BEGIN win tail' RUN.md; then
+                    awk -v tail="$WIN_TAIL" '
+                        /BEGIN win tail/ { print; print "```"; print tail; print "```"; skip = 1; next }
+                        /END win tail/   { skip = 0 }
+                        !skip            { print }
+                    ' RUN.md > build/RUN.md.win && mv build/RUN.md.win RUN.md
+                    echo "-- RUN.md: the Windows tail block refreshed from $WIN_LOG"
+                else
+                    echo "-- RUN.md has no 'BEGIN win tail' marker - nothing refreshed"
+                fi
+                ;;
+            *)
+                echo "-- $WIN_LOG does not end in 'ok: build-win/editor_demo.exe' - RUN.md left alone"
+                ;;
+        esac
+    else
+        echo "-- no $WIN_LOG (run ./build_win.sh) - RUN.md's Windows tail is whatever it was"
+    fi
+    if grep -q 'WIN_TAIL_PLACEHOLDER' RUN.md; then
+        FAILED="$FAILED RUN.md(win-tail-placeholder)"
+        echo "-- RUN.md still contains WIN_TAIL_PLACEHOLDER"
+    fi
+    # And the number this script just made, next to the one the document
+    # quotes. Said out loud rather than enforced: RUN.md is written after the
+    # run it documents, so a run that is still going cannot be wrong about it -
+    # but a difference nobody prints is a difference nobody notices.
+    RUN_MD_TOTAL=$(grep -oE '^TOTAL [0-9]+ passed' RUN.md | tail -1 | grep -oE '[0-9]+')
+    if [ -n "${RUN_MD_TOTAL:-}" ] && [ "$RUN_MD_TOTAL" != "$TOTAL_PASS" ]; then
+        echo "-- RUN.md quotes TOTAL $RUN_MD_TOTAL passed, this run made $TOTAL_PASS"
+    fi
 fi
 
 echo "-------------------------------------------"

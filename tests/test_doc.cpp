@@ -842,6 +842,7 @@ int main() {
     test_unique_names();
     test_blockout();
     test_blockout_csg_measured();
+    test_blockout_csg_matrix();
     test_blockout_host();
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);

@@ -174,6 +174,18 @@ DAI_API int  dai_editor_ui_game_view_rect(const dai_editor_ui *p, float *x, floa
 DAI_API void dai_editor_ui_viewport_rect(const dai_editor_ui *p, float *x, float *y,
                                          float *w, float *h);
 
+/* The last field of the last component the Inspector drew this frame, and the
+ * Inspector's own rectangle. Returns 1 when the field lies FULLY inside the
+ * panel, 0 when it is clipped away (or when no inspector was drawn).
+ *
+ * It exists for the screenshot tools: the panel scrolls, so a component whose
+ * numbers are below the fold is drawn and invisible at the same time, and a
+ * picture of the Door Socket that cuts off Width and Height reads as a Door
+ * Socket that has none. Any output pointer may be NULL. */
+DAI_API int dai_editor_ui_inspector_last_field(const dai_editor_ui *p,
+                                               float *fx, float *fy, float *fw, float *fh,
+                                               float *px, float *py, float *pw, float *ph);
+
 /* The bar along the bottom: mode, node count, selection, last undo step. */
 DAI_API void dai_editor_ui_status(dai_editor_ui *p, float x, float y, float w, float h);
 

@@ -302,6 +302,11 @@ DAI_API void dai_ui_cursor_pos(const dai_ui *ui, float *x, float *y);
 /* The rectangle the widget that was just drawn occupies. What drag & drop
  * needs to mark a row as the drop target: the caller knows it IS the target,
  * the layout knows where it is. Valid until the next widget. */
+/* The ROW of the last field that was laid out - label column included, which
+ * is what a host has to test a scrolled panel against. dai_ui_last_rect below
+ * answers for tree rows; this one answers for fields. */
+DAI_API void dai_ui_last_field_rect(const dai_ui *ui, float *x, float *y,
+                                    float *w, float *h);
 DAI_API void dai_ui_last_rect(const dai_ui *ui, float *x, float *y,
                               float *w, float *h);
 /* Advances the layout as if a widget of this size had been drawn. */
@@ -765,6 +770,14 @@ DAI_API void dai_ui_text(dai_ui *ui, float x, float y, const char *utf8, uint32_
 DAI_API void dai_ui_text_scaled(dai_ui *ui, float x, float y, const char *utf8,
                                 uint32_t color, float scale);
 DAI_API float dai_ui_text_width(dai_ui *ui, const char *utf8);
+/* `utf8` shortened until it fits `width` pixels, ended in an ellipsis at the
+ * last WHOLE character ("DoorSocket.Front" -> "DoorSock..."), written into
+ * `buf` and returned from there. A name a panel is too narrow for is a name
+ * the reader can still finish; a name cut by the clip rectangle at whatever
+ * pixel the panel ends at ("DoorSocket.Fro") is not. Whoever shortens a label
+ * this way owes the reader the full text on a tooltip. */
+DAI_API const char *dai_ui_fit_text(dai_ui *ui, const char *utf8, float width,
+                                    char *buf, size_t buf_size);
 /* Line height of the current font. Host chrome that lays itself out (the dock
  * tab bar, the console button row) needs it to centre a label - a hardcoded
  * offset is right at one font size and clips descenders at every other. */
@@ -788,6 +801,11 @@ DAI_API void dai_ui_help(dai_ui *ui, const char *text);
 /* A tooltip for a hand drawn widget, which has no row to hang off. */
 DAI_API void dai_ui_tooltip_at(dai_ui *ui, float x, float y, float w, float h,
                                const char *text);
+/* What the tooltip says this frame, "" when there is none. The host never
+ * needs it - the UI draws its own - but "the name was shortened AND the full
+ * one is one hover away" is two facts, and a test that can only see the first
+ * of them is why the second gets forgotten. */
+DAI_API const char *dai_ui_tooltip_text(const dai_ui *ui);
 
 #ifdef __cplusplus
 }
