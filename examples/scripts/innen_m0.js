@@ -394,18 +394,141 @@
 
     // A staircase that goes up into the ceiling. It is not a way out; it is
     // the room being wrong in a way the player can walk on.
+    // A staircase that goes up INTO the ceiling. It is not a way out; it is
+    // the room being wrong in a way the player can walk on - and walking on it
+    // is the point, so it has treads you can climb and not just a picture of
+    // them.
+    //
+    // The generator's own shape rises in +Z from its own corner, so the node
+    // is turned 180 degrees to climb the way the player walks (-Z), and its
+    // pivot is put on the bottom back corner: then "where it stands" is the
+    // foot of the stairs and nothing has to be halved by hand.
+    var STAIR = { w: 1.20, rise: 4.35, run: 6.00, steps: 23, x: -3.2, z: 2.90 };
     var treppe = editor.add("Halle.Treppe", halle);
-    node.setPos(treppe, -3.2, 0, -2.2);
+    node.setPos(treppe, STAIR.x, 0, STAIR.z);
     node.setNum(treppe, "rigidbody.motion", 0);
     if (hasBlockout) {
         node.setNum(treppe, "blockout.kind", STAIRS);
-        node.setVec(treppe, "blockout.size", 1.20, 2.60, 3.20);
-        node.setNum(treppe, "blockout.steps", 13);
+        node.setVec(treppe, "blockout.size", STAIR.w, STAIR.rise, STAIR.run);
+        node.setNum(treppe, "blockout.steps", STAIR.steps);
+        node.setVec(treppe, "blockout.pivot", 0, -1, -1);   // foot, back edge
+        node.setVec(treppe, "transform.rotation", 0, 180, 0);
     } else {
-        node.setVec(treppe, "transform.scale", 1.20, 2.60, 3.20);
+        node.setVec(treppe, "transform.scale", STAIR.w, STAIR.rise, STAIR.run);
     }
     noPhysics(treppe);
     editor.setMaterial(treppe, M.ceiling);
+
+    // What the player actually walks on: ONE ramp under the treads, invisible,
+    // at the pitch of the flight.
+    //
+    // Not one box per step, which is the obvious version and was tried first:
+    // a capsule has no step-up in this engine, so it walks into the 19 cm
+    // riser of step one and stops there with the motor running. Every engine
+    // that ships stairs puts a smooth collider over them for this reason - the
+    // steps are what you see, the ramp is what you climb.
+    var stepH = STAIR.rise / STAIR.steps;      // 0.189 m - a real riser
+    var stepD = STAIR.run / STAIR.steps;       // 0.261 m - a real going
+    var pitch = Math.atan2(STAIR.rise, STAIR.run);          // radians
+    var rampLen = Math.sqrt(STAIR.rise * STAIR.rise + STAIR.run * STAIR.run);
+    var rampT = 0.30;
+    // Surface centre, then half a thickness down along the surface normal,
+    // which after a rotation about X is (0, cos, sin).
+    var ramp = collider("Halle.Treppe.Rampe", halle,
+        [STAIR.x,
+         STAIR.rise * 0.5 - rampT * 0.5 * Math.cos(pitch),
+         STAIR.z - STAIR.run * 0.5 - rampT * 0.5 * Math.sin(pitch)],
+        [STAIR.w, rampT, rampLen]);
+    node.setVec(ramp, "transform.rotation", pitch * 180 / Math.PI, 0, 0);
+
+    // ------------------------------------------------------------- die Tueren
+    // A door is a LEAF: one box the size of the opening, with a collider, in
+    // the doorway, carrying innen_door.js. The behaviour finds its own hinge
+    // from where the leaf stands, swings it, and moves the handle with it.
+    //
+    // The leaves hang off a group at the origin rather than off their rooms,
+    // and that is not tidiness: the runtime moves a node that HAS A BODY by
+    // setting the body's transform, which is world space. A leaf parented into
+    // a room 13 metres down the corridor would be moved to the world position
+    // its script computed and land in the wrong room.
+    var tueren = group("Tueren", 0, [0, 0, 0]);
+    var LEAF_T = 0.045;                       // 45 mm of door
+    var doorCount = 0;
+
+    function door(name, pos, yaw, w, h, material, opts) {
+        var o = opts || {};
+        var leafW = w - 0.02, leafH = h - 0.02;   // a door is not its frame
+        var leaf = editor.add(name, tueren);
+        node.setPos(leaf, pos[0], 0.01 + leafH * 0.5, pos[2]);
+        node.setVec(leaf, "transform.scale", leafW, leafH, LEAF_T);
+        node.setVec(leaf, "transform.rotation", 0, yaw, 0);
+        // KINEMATIC: it is moved by a script and it stops a player. A static
+        // body that teleports is a lie to the solver, a dynamic one falls over.
+        node.setNum(leaf, "rigidbody.motion", 1);
+        editor.setMaterial(leaf, material);
+
+        // The handle, on the side away from the hinge. No physics and no
+        // parenting - the door script carries it, which is the only way it
+        // keeps up with a body that moves.
+        var hinge = (o.hinge === undefined) ? 1 : o.hinge;
+        var handleName = "";
+        if (hasBlockout) {
+            handleName = name + ".Klinke";
+            var kl = editor.add(handleName, tueren);
+            var hxLocal = -hinge * (leafW * 0.5 - 0.07);
+            var c = Math.cos(yaw * Math.PI / 180), sn = Math.sin(yaw * Math.PI / 180);
+            node.setPos(kl, pos[0] + hxLocal * c,
+                            0.01 + leafH * 0.5 - 0.06,
+                            pos[2] - hxLocal * sn);
+            node.setNum(kl, "blockout.kind", CYL);
+            node.setVec(kl, "blockout.size", 0.03, 0.13, 0.03);
+            node.setNum(kl, "blockout.segments", 8);
+            node.setVec(kl, "transform.rotation", 0, yaw, 90);
+            noPhysics(kl);
+            editor.setMaterial(kl, M.metal);
+        }
+
+        if (hasScript) {
+            var f = [];
+            f.push("width=" + leafW);
+            f.push("hinge=" + hinge);
+            f.push("yaw=" + yaw);
+            f.push("openAngle=" + (o.openAngle === undefined ? -85 : o.openAngle));
+            f.push("speed=" + (o.speed === undefined ? 150 : o.speed));
+            f.push("startOpen=" + (o.startOpen ? "true" : "false"));
+            f.push("locked=" + (o.locked ? "true" : "false"));
+            f.push("slamBehind=" + (o.slamBehind ? "true" : "false"));
+            f.push("lockAfterSlam=" + (o.lockAfterSlam ? "true" : "false"));
+            f.push("autoClose=" + (o.autoClose === undefined ? 0 : o.autoClose));
+            f.push("player=Spieler");
+            if (handleName) f.push("handle=" + handleName);
+            node.setStr(leaf, "script", "innen_door.js{" + f.join(",") + "}");
+        }
+        doorCount++;
+        return leaf;
+    }
+
+    // The one that matters: you step into the box to make a call, and the door
+    // shuts behind you and stays shut. It starts open because you just walked
+    // through it.
+    door("Tuer.Zelle", [0, 0, -(0.65 + 0.06)], 0, DOOR.width, DOOR.height, M.metal,
+         { hinge: 1, openAngle: -95, speed: 260, startOpen: true,
+           slamBehind: true, lockAfterSlam: true });
+
+    // Hallway to hall: shut, not locked. E opens it - and until something
+    // opens it, the corridor ends here.
+    var hallDoorZ = flurZ - (flurDim.depth * 0.5 + flurDim.wall * 0.5);
+    door("Tuer.Halle", [0, 0, hallDoorZ], 0, 1.10, 2.10, M.wall,
+         { hinge: -1, openAngle: 90, speed: 130 });
+
+    // The three doors off the hallway. All locked: they are there so the
+    // corridor has doors, and so that trying them is answered.
+    door("Tuer.Flur.Links1", [-(flurDim.width * 0.5 + flurDim.wall * 0.5), 0, flurZ + 2.6],
+         90, 0.85, 1.98, M.wall, { hinge: 1, openAngle: -88, locked: true });
+    door("Tuer.Flur.Links2", [-(flurDim.width * 0.5 + flurDim.wall * 0.5), 0, flurZ - 1.9],
+         90, 0.85, 1.98, M.wall, { hinge: -1, openAngle: 88, locked: true });
+    door("Tuer.Flur.Rechts", [(flurDim.width * 0.5 + flurDim.wall * 0.5), 0, flurZ + 0.4],
+         90, 0.85, 1.98, M.wall, { hinge: 1, openAngle: 88, locked: true });
 
     // ------------------------------------------------------------ der Spieler
     // A capsule with the behaviour on it, a camera in its head and a spot
@@ -469,6 +592,9 @@
         modifier: hasModifier,
         player: player,
         script: hasScript,
+        doors: doorCount,
+        stairSteps: STAIR.steps,
+        stairPitch: Math.round(pitch * 180 / Math.PI * 10) / 10,
         collider: hasCollider,
         z: { zelle: 0, flur: flurZ, halle: halleZ }
     });

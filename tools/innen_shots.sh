@@ -14,6 +14,8 @@
 #   22-innen-halle.png    the room that is too big, with the stairs to nowhere
 #   23-innen-plan.png     all three from above the ceiling line
 #   24-innen-spieler.png  from the player's own eyes, torch on
+#   25-innen-tuer.png     the shut door at the end of the hallway
+#   26-innen-treppe.png   the staircase, from the foot of it
 #
 # It also saves the scene, so the editor can open exactly what was shot.
 set -uo pipefail
@@ -73,6 +75,15 @@ EYE=$($B js "var p=node.getPos(scene.find('Spieler')); JSON.stringify([p[0],p[1]
 if [ -n "$EYE" ]; then
     shot 24-innen-spieler "$EYE" "0,1.35,-6" 75
 fi
+
+# The door at the end of the corridor, shut, from a step in front of it: this
+# is what the player walks up to, and the picture is the only place a leaf that
+# hangs in the wrong plane or half inside its frame shows up.
+shot 25-innen-tuer    "0,1.60,-8.1"    "0,1.40,-10.5"    55
+# The staircase from its foot, looking up the flight: the treads are what you
+# see, the ramp under them is what you climb, and neither is worth anything if
+# the flight does not read as stairs.
+shot 26-innen-treppe  "-3.2,1.60,-10.0" "-3.2,2.6,-15.5"  62
 
 # The plan view is the only one taken with the ceilings switched off: with
 # them on it is a photograph of three lids, which says nothing about the rooms

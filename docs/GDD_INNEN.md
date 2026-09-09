@@ -224,9 +224,15 @@ Zone 3 ist die einzige, die je nach Spieler ganz anders ist → Replay-Grund.
 
 > **Stand:** die ersten drei Räume stehen — Zelle, Flur, Halle, gebaut als
 > `examples/scripts/innen_m0.js` über die Jarvis-Bridge, mit Türsockeln, die
-> nachweislich aneinander docken. Beschreibung, Zahlen und Prüfungen:
-> [`docs/INNEN_M0.md`](INNEN_M0.md). Es fehlen Spieler, Generator und Türen,
-> die aufgehen.
+> nachweislich aneinander docken. Dazu ein Spieler (First Person, Taschenlampe
+> mit Batterie), **Türen, die aufgehen** (`innen_door.js`, E zum Öffnen,
+> abgeschlossene Türen, und die Zellentür, die hinter dir zufällt und
+> verriegelt) und eine **begehbare Treppe** in der Halle. Beides im
+> ausgelieferten Runtime headless gemessen, nicht behauptet:
+> `tools/innen_walk.py` beweist, dass die geschlossene Tür den Spieler
+> aufhält, die offene nicht, und dass er 2,3 m Treppe hochkommt.
+> Beschreibung, Zahlen und Prüfungen: [`docs/INNEN_M0.md`](INNEN_M0.md).
+> Es fehlen der Generator und Schlüssel/Items, die eine Tür aufsperren.
 | M1 Vertical Slice | Zone 1 komplett, Puls, Umbau-Regel, 1 Telefon mit 5 Anrufen, Kopie | Spielbar 30 Min, ein Kernstück |
 | M2 | Zone 2–3, Wärter, Formular-Seed, 5 Angstvarianten | 2 h |
 | M3 | Archiv, Akten (41 Texte), Verbrennen, Twist | 4 h |

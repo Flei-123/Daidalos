@@ -54,6 +54,7 @@ test_talos
 test_font
 test_svg
 test_keys
+test_euler
 test_fracture
 test_update
 test_ui_window
@@ -459,8 +460,8 @@ if [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then
     [ -x build/daidalos_runtime ] || ./tools/build_runtime.sh linux >/dev/null 2>&1
 fi
 if [ -x build/daidalos_runtime ] && [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then
-    OUT=$(DAI_SHADER_DIR=shaders timeout 400 \
-          python3 tools/innen_walk.py --seconds 16 --port 8394 2>&1)
+    OUT=$(DAI_SHADER_DIR=shaders timeout 600 \
+          python3 tools/innen_walk.py --seconds 18 --port 8394 2>&1)
     RC=$?
     P=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ checks' | tail -1 | grep -oE '[0-9]+')
     F=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ failures' | tail -1 | grep -oE '[0-9]+')

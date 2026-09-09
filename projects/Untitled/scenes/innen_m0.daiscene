@@ -1,5 +1,5 @@
 daidalos-scene 1
-next-id 97
+next-id 109
 
 node 8
   name Zelle
@@ -21,7 +21,13 @@ node 66
   hidden 1
 end
 
-node 94
+node 95
+  name Tueren
+  nobody 1
+  hidden 1
+end
+
+node 106
   name Spieler
   tag Player
   pos 0 0.95 0.3
@@ -597,18 +603,147 @@ end
 node 93
   name Halle.Treppe
   parent 66
-  pos -3.2 0 -2.2
+  pos -3.2 0 2.9
+  rot 0 1 0 -4.371139e-08
   nobody 1
   nocollider 1
   materials materials/beton.daimat
   blockout 3
-  bosize 1.2 2.6 3.2
-  bosteps 13
+  bosize 1.2 4.35 6
+  bosteps 23
+  bopivot 0 -1 -1
 end
 
-node 95
+node 94
+  name Halle.Treppe.Rampe
+  parent 66
+  pos -3.2 2.0535583 -0.18804513
+  rot 0.3085365 0 0 0.9512125
+  scale 1.2 0.3 7.4109716
+  hidden 1
+end
+
+node 96
+  name Tuer.Zelle
+  parent 95
+  pos 0 1.01 -0.71
+  scale 0.93 2 0.045
+  motion 1
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-95,speed=260,startOpen=true,locked=false,slamBehind=true,lockAfterSlam=true,autoClose=0,player=Spieler,handle=Tuer.Zelle.Klinke}
+  materials materials/rost.daimat
+end
+
+node 97
+  name Tuer.Zelle.Klinke
+  parent 95
+  pos -0.395 0.95 -0.71
+  rot 0 0 0.70710677 0.70710677
+  nobody 1
+  nocollider 1
+  materials materials/rost.daimat
+  blockout 2
+  bosize 0.03 0.13 0.03
+  boseg 8
+end
+
+node 98
+  name Tuer.Halle
+  parent 95
+  pos 0 1.05 -9.86
+  scale 1.08 2.08 0.045
+  motion 1
+  script innen_door.js{width=1.08,hinge=-1,yaw=0,openAngle=90,speed=130,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.Halle.Klinke}
+  materials materials/raufaser.daimat
+end
+
+node 99
+  name Tuer.Halle.Klinke
+  parent 95
+  pos 0.47 0.99 -9.86
+  rot 0 0 0.70710677 0.70710677
+  nobody 1
+  nocollider 1
+  materials materials/rost.daimat
+  blockout 2
+  bosize 0.03 0.13 0.03
+  boseg 8
+end
+
+node 100
+  name Tuer.Flur.Links1
+  parent 95
+  pos -0.925 0.99 -2.685
+  rot 0 0.70710677 0 0.70710677
+  scale 0.83 1.96 0.045
+  motion 1
+  script innen_door.js{width=0.83,hinge=1,yaw=90,openAngle=-88,speed=150,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.Flur.Links1.Klinke}
+  materials materials/raufaser.daimat
+end
+
+node 101
+  name Tuer.Flur.Links1.Klinke
+  parent 95
+  pos -0.925 0.93 -2.34
+  rot -0.49999997 0.49999997 0.49999997 0.49999997
+  nobody 1
+  nocollider 1
+  materials materials/rost.daimat
+  blockout 2
+  bosize 0.03 0.13 0.03
+  boseg 8
+end
+
+node 102
+  name Tuer.Flur.Links2
+  parent 95
+  pos -0.925 0.99 -7.185
+  rot 0 0.70710677 0 0.70710677
+  scale 0.83 1.96 0.045
+  motion 1
+  script innen_door.js{width=0.83,hinge=-1,yaw=90,openAngle=88,speed=150,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.Flur.Links2.Klinke}
+  materials materials/raufaser.daimat
+end
+
+node 103
+  name Tuer.Flur.Links2.Klinke
+  parent 95
+  pos -0.925 0.93 -7.53
+  rot -0.49999997 0.49999997 0.49999997 0.49999997
+  nobody 1
+  nocollider 1
+  materials materials/rost.daimat
+  blockout 2
+  bosize 0.03 0.13 0.03
+  boseg 8
+end
+
+node 104
+  name Tuer.Flur.Rechts
+  parent 95
+  pos 0.925 0.99 -4.885
+  rot 0 0.70710677 0 0.70710677
+  scale 0.83 1.96 0.045
+  motion 1
+  script innen_door.js{width=0.83,hinge=1,yaw=90,openAngle=88,speed=150,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.Flur.Rechts.Klinke}
+  materials materials/raufaser.daimat
+end
+
+node 105
+  name Tuer.Flur.Rechts.Klinke
+  parent 95
+  pos 0.925 0.93 -4.54
+  rot -0.49999997 0.49999997 0.49999997 0.49999997
+  nobody 1
+  nocollider 1
+  materials materials/rost.daimat
+  blockout 2
+  bosize 0.03 0.13 0.03
+  boseg 8
+end
+
+node 107
   name Spieler.Kamera
-  parent 94
+  parent 106
   pos 0 0.62 0
   nobody 1
   camera 1
@@ -616,9 +751,9 @@ node 95
   hidden 1
 end
 
-node 96
+node 108
   name Spieler.Lampe
-  parent 94
+  parent 106
   pos 0.18 0.48 0
   scale 0.08 0.08 0.08
   nobody 1
@@ -665,6 +800,7 @@ node 23
   name Zelle.Telefon.Hoerer
   parent 21
   pos 0 0.2 -0.1
+  rot 0 0 0.70710677 0.70710677
   nobody 1
   nocollider 1
   materials materials/rost.daimat

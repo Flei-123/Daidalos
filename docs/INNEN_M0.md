@@ -73,6 +73,9 @@ that only reads from a drone shot is a room nobody has stood in.
 21-innen-flur.png    the hallway down its length, into the dark end
 22-innen-halle.png   the hall, with the stairs to nowhere
 23-innen-plan.png    all three from above, ceilings switched off for the shot
+24-innen-spieler.png from the player's own eyes, torch on
+25-innen-tuer.png    the shut door at the end of the hallway
+26-innen-treppe.png  the staircase, from the foot of it
 ```
 
 The ceilings go back on before the scene is saved, so the file on disk is the
@@ -116,12 +119,76 @@ never bound), `node.setNum()` a no-op (the component half of the node host was
 null), and every inspector field arriving as a *string*, so numbers fell back
 to their defaults. See the end of `docs/SCRIPTING.md`.
 
+## Doors
+
+`projects/Untitled/assets/innen_door.js` sits on the LEAF - one box the size of
+the opening, with a collider, standing in the doorway. The behaviour works out
+where the hinge edge is from the leaf's own pose (half a width to the hinge
+side, turned by the closed yaw), so a door is placed like any other box and
+never needs a second node dragged into place. `E` opens and closes it while you
+are within `range`; a locked one says no.
+
+Five leaves stand in the level: the phone box's door, which starts open because
+you just walked through it and **slams behind you and locks**; the door at the
+end of the hallway, shut but not locked; and the three doors off the corridor,
+all locked, so that trying them is answered.
+
+Three things this cost:
+
+* The leaf is **kinematic**. The runtime moves a node that has a body by
+  setting the BODY's transform - so a static one would be teleporting behind
+  the solver's back, and a dynamic one falls over.
+* Children of a moved body **do not follow**, because nothing writes the
+  document. The handle is therefore not a child: the door script carries it, by
+  name, and that is why `handle` is a field.
+* `slamBehind` fires only once the player is `slamAfter` metres **past** the
+  plane. The first version fired on the crossing itself, closed onto the player
+  still standing in the frame, and pushed him back into the phone box - the
+  walk test stopped dead at z = -0.41 and said "never left the box".
+
+## The staircase, and the thing that made it climbable
+
+The flight in the hall is 23 steps, 0.189 m of rise and 0.261 m of going, and
+it goes up **into** the ceiling. What the player walks on is not the treads: it
+is one invisible ramp under them, at the pitch of the flight
+(`Halle.Treppe.Rampe`).
+
+One collider box per step was the first version, and it does not work: a
+capsule in this engine has no step-up, so it walks into the 19 cm riser of step
+one and stops there with the motor running - `tools/innen_walk.py` measured
+0.25 m climbed in twelve seconds. With the ramp it measures 2.33 m. Every
+engine that ships stairs does this; the steps are what you see, the ramp is
+what you climb.
+
+The staircase is also turned 180 degrees, so it climbs the way the player
+walks. Which is where `transform.rotation` came in.
+
+## The property that was accepted and dropped
+
+`transform.rotation` had **no entry in the component table**. Every host took
+`node.setVec(n, "transform.rotation", 0, 180, 0)` without complaint and stored
+nothing: the document keeps a quaternion, the table only knew plain `dai_vec3`
+fields, and the conversion to degrees lived privately inside
+`src/dai_editor_ui.cpp`. The handset in the phone box and the whole staircase
+were written turned and came out straight, and nothing anywhere said so.
+
+There is now one conversion - `include/dai_euler.h`, ZYX degrees - used by the
+inspector and by `comp_get_vec`/`comp_set_vec`, plus `transform.position` for
+symmetry. `tests/test_euler.cpp` pins its meaning down (15 checks, including
+the sign that decides whether the stair ramp lifts or sinks), and
+`tools/innen_check.py` reads the ramp's pitch back out of the document, which
+is the same property end to end.
+
+A rotation has more than one spelling: `(0, 180, 0)` and `(180, 0, 180)` are
+the same half turn, and the document hands back whichever the conversion
+produced. The check therefore turns the staircase's own forward vector and asks
+where it points, instead of comparing three numbers.
+
 ## What M0 is not
 
-No doors that open, no room generator, no sound, no stairs you can climb (the
-staircase in the hall is scenery - it has no collider yet). It is the geometry
-contract plus a body to walk it: rooms that dock, openings that are holes, a
-level that is data. The
+No room generator, no sound, no keys to pick up (a locked door stays locked).
+It is the geometry contract plus a body to walk it: rooms that dock, openings
+that are holes, doors that open, stairs that carry, a level that is data. The
 generator (GDD §5, "Graph statt Grid") plugs into the sockets described here;
 the anti-pingpong rules of §5.2 are about which room is placed on a socket, not
 about how a socket works.

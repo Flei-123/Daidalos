@@ -5,6 +5,7 @@
 // is the model, and a second copy would be the thing that goes stale.
 
 #include "dai_editor_ui.h"
+#include "dai_euler.h"
 #include "dai_tr.h"
 #include "dai_dock.h"
 #include "dai_show_ui.h"
@@ -35,20 +36,7 @@ const char *const MOTIONS[] = { "Static", "Kinematic", "Dynamic" };
 // The document keeps a quaternion; the inspector shows degrees. Converting
 // back and forth every frame would drift, so the inspector keeps a cache and
 // only re-reads it when the node or its rotation changed from somewhere else.
-static void quat_to_euler(dai_quat q, float *deg) {
-    // ZYX order, the one every DCC tool's rotation fields use.
-    float sinr = 2.0f * (q.w * q.x + q.y * q.z);
-    float cosr = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
-    float roll = std::atan2(sinr, cosr);
-    float sinp = 2.0f * (q.w * q.y - q.z * q.x);
-    float pitch = std::fabs(sinp) >= 1.0f ? std::copysign(1.5707963f, sinp)
-                                          : std::asin(sinp);
-    float siny = 2.0f * (q.w * q.z + q.x * q.y);
-    float cosy = 1.0f - 2.0f * (q.y * q.y + q.z * q.z);
-    float yaw = std::atan2(siny, cosy);
-    const float R2D = 57.2957795f;
-    deg[0] = roll * R2D; deg[1] = pitch * R2D; deg[2] = yaw * R2D;
-}
+static void quat_to_euler(dai_quat q, float *deg) { dai_quat_to_euler(q, deg); }
 
 // The nearest spelling to `near_deg` of the same orientation. See above.
 static void quat_to_euler_near(dai_quat q, const float *near_deg, float *deg) {
@@ -75,21 +63,7 @@ static void quat_to_euler_near(dai_quat q, const float *near_deg, float *deg) {
     for (int i = 0; i < 3; ++i) deg[i] = win[i];
 }
 
-static dai_quat euler_to_quat(const float *deg) {
-    const float D2R = 3.14159265f / 180.0f;
-    float rx = deg[0] * D2R, ry = deg[1] * D2R, rz = deg[2] * D2R;
-    auto axis_q = [](float ax, float ay, float az, float a) {
-        float sn = std::sin(a * 0.5f);
-        return dai_quat{ ax * sn, ay * sn, az * sn, std::cos(a * 0.5f) };
-    };
-    auto qm = [](dai_quat a, dai_quat b) {
-        return dai_quat{ a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
-                         a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
-                         a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
-                         a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z };
-    };
-    return qm(qm(axis_q(0, 0, 1, rz), axis_q(0, 1, 0, ry)), axis_q(1, 0, 0, rx));
-}
+static dai_quat euler_to_quat(const float *deg) { return dai_euler_to_quat(deg); }
 
 static bool quat_eq(dai_quat a, dai_quat b) {
     return std::fabs(a.x - b.x) < 1e-5f && std::fabs(a.y - b.y) < 1e-5f &&

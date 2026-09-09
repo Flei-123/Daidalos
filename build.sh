@@ -379,6 +379,10 @@ if [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude tests/test_keys.cpp -o build/test_keys
     ./build/test_keys
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_strings.cpp src/dai_strings.cpp -o build/test_strings
+# Degrees <-> quaternion, the conversion the inspector and every level script
+# share since include/dai_euler.h exists. Header only, so it costs nothing.
+g++ $FLAGS $ARCH -Iinclude tests/test_euler.cpp -o build/test_euler
+./build/test_euler
 # The HUD, measured through the draw list: no GPU, no window, real coordinates.
 g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_hud.cpp src/dai_ui.cpp src/dai_font.cpp \
     src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp src/dai_strings.cpp \

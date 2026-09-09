@@ -72,6 +72,8 @@ the whole component table of `prop_ref()` — plus the tool half, bound as
 editor.begin("build a room");            // one undo step for everything after
 var wall = editor.add("Wall");           // -> node id
 node.setVec(wall, "transform.scale", 2, 3, 1);      // a box 2 x 3 x 1 metres
+node.setVec(wall, "transform.rotation", 0, 180, 0); // ZYX degrees, like the
+                                                    // inspector's own fields
 node.setNum(wall, "blockout.kind", 1);              // module 1's components
 editor.setMaterial(wall, "materials/raufaser.daimat");
 editor.commit();
@@ -81,6 +83,13 @@ editor.save("scenes/room.daiscene");
 editor.undo(); editor.redo();
 editor.count(); editor.at(0);            // walk the document
 ```
+
+`transform.rotation` and `transform.position` are answered by the same
+`node.getVec`/`node.setVec` as every component property, but they are not table
+entries: the document keeps a quaternion, and degrees are what a person and a
+script mean. The conversion is `include/dai_euler.h` — one of them, shared with
+the inspector. Until it existed the NAME was accepted and the value dropped,
+silently, in every host.
 
 A behaviour running in the game does **not** get `editor` — it is a separate
 binding that only a tool host installs, because a script that can delete nodes

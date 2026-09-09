@@ -56,6 +56,9 @@
 // @param bool  autoWalk     = false
 // @tooltip Degrees per second the automatic walk turns. 0 = straight ahead.
 // @param float autoTurn     = 0
+// @tooltip Which way the player faces when the level starts, in degrees.
+// @tooltip 0 looks down -Z, which is the way every room of INNEN is built.
+// @param float startYaw     = 0
 
 var P = (typeof params === "object" && params) ? params : {};
 function num(k, d) { var v = P[k]; return (typeof v === "number" && !isNaN(v)) ? v : d; }
@@ -114,7 +117,7 @@ function init() {
     // camera uses. Every room of INNEN is built along -Z and the box's door
     // faces that way, so this is "looking at the door" and not at the back
     // wall thirty centimetres behind your head.
-    yaw = 0;
+    yaw = num("startYaw", 0);
     headY = EYE_H;
 
     print("INNEN player on node " + self +

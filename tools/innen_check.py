@@ -144,6 +144,24 @@ POSE_JS = """
 """
 
 
+def euler_apply(deg, v):
+    """v turned by ZYX degrees - the same order include/dai_euler.h uses.
+
+    Written out here rather than compared as three numbers because a rotation
+    has more than one spelling: (0, 180, 0) and (180, 0, 180) are the same half
+    turn, and a test that insists on one of them fails on a document that is
+    perfectly correct.
+    """
+    import math
+    rx, ry, rz = (math.radians(a) for a in deg)
+    x, y, z = v
+    # X, then Y, then Z - the reverse of the name, which is how ZYX composes.
+    y, z = y * math.cos(rx) - z * math.sin(rx), y * math.sin(rx) + z * math.cos(rx)
+    x, z = x * math.cos(ry) + z * math.sin(ry), -x * math.sin(ry) + z * math.cos(ry)
+    x, y = x * math.cos(rz) - y * math.sin(rz), x * math.sin(rz) + y * math.cos(rz)
+    return x, y, z
+
+
 def near(a, b, eps=0.002):
     return abs(a - b) <= eps
 
@@ -258,6 +276,133 @@ def main(argv):
                   "the wall with the door is csg.op %r, not a subtraction" % hole.get("csg"))
             check(hole.get("slab") and hole.get("cut"),
                   "the subtraction has no slab or no opening under it: %r" % hole)
+
+        # ---- the doors ---------------------------------------------------
+        # A leaf is a box in a doorway with the door behaviour on it. What has
+        # to be true: it sits in the opening the sockets describe, it is not
+        # wider than that opening, it is KINEMATIC (a script moves it and a
+        # player walks into it), and it collides. A leaf that fails any of
+        # those is either a door that cannot open or a door you walk through.
+        doors, err = jsjson(b, """
+        (function () {
+          var want = ['Tuer.Zelle', 'Tuer.Halle', 'Tuer.Flur.Links1',
+                      'Tuer.Flur.Links2', 'Tuer.Flur.Rechts'];
+          var out = [];
+          for (var i = 0; i < want.length; i++) {
+            var n = scene.find(want[i]);
+            if (n < 0) { out.push({ name: want[i], found: false }); continue; }
+            var p = node.getPos(n);
+            var sc = node.getVec(n, 'transform.scale');
+            out.push({
+              name: want[i], found: true,
+              pos: [p[0], p[1], p[2]],
+              size: [sc[0], sc[1], sc[2]],
+              motion: node.getNum(n, 'rigidbody.motion'),
+              body: node.getNum(n, 'rigidbody.enabled'),
+              collider: node.getNum(n, 'collider.enabled'),
+              script: node.getStr(n, 'script')
+            });
+          }
+          return JSON.stringify(out);
+        })();
+        """)
+        check(doors is not None, "the document could not be asked about its doors: %s" % err)
+        for d in (doors or []):
+            check(d.get("found"), "the door leaf %s is missing" % d["name"])
+            if not d.get("found"):
+                continue
+            check("innen_door.js" in (d.get("script") or ""),
+                  "%s carries %r, not the door behaviour" % (d["name"], d.get("script")))
+            check(d.get("motion") == 1,
+                  "%s has motion %r - a door that a script moves and a player "
+                  "walks into is kinematic" % (d["name"], d.get("motion")))
+            check(d.get("body") == 1 and d.get("collider") == 1,
+                  "%s has no body or no collider, so it is a picture of a door"
+                  % d["name"])
+            check(d["size"][0] > 0.6 and d["size"][1] > 1.8 and d["size"][2] < 0.12,
+                  "%s is %.2f x %.2f x %.2f - that is not a door leaf"
+                  % (d["name"], d["size"][0], d["size"][1], d["size"][2]))
+
+        by_door = dict((d["name"], d) for d in (doors or []) if d.get("found"))
+        # The two leaves on the walked route stand IN their doorway: same place
+        # as the socket in the plane, and not wider than the hole.
+        for leaf_name, socket_name in (("Tuer.Zelle", "Zelle.Door.front0"),
+                                       ("Tuer.Halle", "Flur.Door.front0")):
+            leaf, sock = by_door.get(leaf_name), by_name.get(socket_name)
+            check(leaf is not None and sock is not None,
+                  "cannot compare %s with %s" % (leaf_name, socket_name))
+            if not (leaf and sock):
+                continue
+            check(near(leaf["pos"][0], sock["world"][0], 0.02) and
+                  near(leaf["pos"][2], sock["world"][2], 0.02),
+                  "%s stands at %s but its doorway is at %s"
+                  % (leaf_name, leaf["pos"], sock["world"]))
+            check(leaf["size"][0] <= sock["width"] + 0.001,
+                  "%s is %.3f m wide in a %.3f m opening - it cannot close"
+                  % (leaf_name, leaf["size"][0], sock["width"]))
+
+        # ---- the staircase you can actually walk on ----------------------
+        # The treads are a picture; the ramp under them is what carries a
+        # capsule. Its pitch is read back as DEGREES through the component
+        # table - which is also the end to end test of transform.rotation,
+        # the property that used to be accepted and dropped.
+        stairs, err = jsjson(b, """
+        (function () {
+          var t = scene.find('Halle.Treppe'), r = scene.find('Halle.Treppe.Rampe');
+          if (t < 0 || r < 0) return JSON.stringify({ found: false });
+          var sz = node.getVec(t, 'blockout.size');
+          var rr = node.getVec(r, 'transform.rotation');
+          var rp = node.getPos(r);
+          var rs = node.getVec(r, 'transform.scale');
+          var tr = node.getVec(t, 'transform.rotation');
+          return JSON.stringify({
+            found: true,
+            steps: node.getNum(t, 'blockout.steps'),
+            size: [sz[0], sz[1], sz[2]],
+            turned: [tr[0], tr[1], tr[2]],
+            ramp: { rot: [rr[0], rr[1], rr[2]], pos: [rp[0], rp[1], rp[2]],
+                    size: [rs[0], rs[1], rs[2]],
+                    body: node.getNum(r, 'rigidbody.enabled'),
+                    visible: node.getNum(r, 'renderer.enabled') }
+          });
+        })();
+        """)
+        check(stairs is not None and stairs.get("found"),
+              "the hall has no staircase with a ramp under it: %s" % err)
+        if stairs and stairs.get("found"):
+            import math
+            rise, run = stairs["size"][1], stairs["size"][2]
+            steps = stairs["steps"]
+            want_pitch = math.degrees(math.atan2(rise, run))
+            got = stairs["ramp"]["rot"][0]
+            check(abs(got - want_pitch) < 0.5,
+                  "the stair ramp is pitched %.2f degrees, the flight is %.2f - "
+                  "transform.rotation did not survive the trip into the document"
+                  % (got, want_pitch))
+            # The staircase has to climb TOWARDS the player, and the way to
+            # ask that is not "is pitch 180": (0,180,0) and (180,0,180) are the
+            # same turn spelled two ways, and the document hands back whichever
+            # the conversion produced. So the check turns the shape's own
+            # forward vector and looks where it points.
+            fx, fy, fz = euler_apply(stairs["turned"], (0, 0, 1))
+            check(fz < -0.99,
+                  "the staircase's +Z (the way it rises) points at (%.2f, %.2f, "
+                  "%.2f) - it has to climb towards the player, down -Z"
+                  % (fx, fy, fz))
+            check(abs(rise / steps - 0.19) < 0.03,
+                  "a step is %.3f m high - that is not a staircase, that is a wall"
+                  % (rise / steps))
+            check(abs(run / steps - 0.26) < 0.04,
+                  "a step is %.3f m deep - nobody can put a foot on that"
+                  % (run / steps))
+            check(stairs["ramp"]["body"] == 1 and stairs["ramp"]["visible"] == 0,
+                  "the ramp is %s and %s - it has to collide and stay unseen"
+                  % ("solid" if stairs["ramp"]["body"] else "bodyless",
+                     "visible" if stairs["ramp"]["visible"] else "invisible"))
+            length = (rise ** 2 + run ** 2) ** 0.5
+            check(abs(stairs["ramp"]["size"][2] - length) < 0.05,
+                  "the ramp is %.2f m long and the flight is %.2f m"
+                  % (stairs["ramp"]["size"][2], length))
 
         # ---- one script, one undo ---------------------------------------
         u = b.undo()

@@ -26,6 +26,8 @@
 #error "define DAI_PROPS_DOC to the dai_doc* this host owns before including"
 #endif
 
+#include "dai_euler.h"
+
 namespace {
 
 // Where the name points. Split so a getter and a setter cannot disagree about
@@ -57,6 +59,14 @@ PropRef prop_ref(dai_node_desc &r, const char *name) {
     if (!std::strcmp(name, "node.asset"))           return text(r.asset, sizeof(r.asset));
 
     if (!std::strcmp(name, "transform.scale"))      return vec(&r.scale);
+    // transform.position and transform.rotation are NOT in this table: they
+    // are not plain vec3 fields on the record - position is a vec3 but every
+    // host already answers it through node.getPos/setPos, and rotation is a
+    // QUATERNION that has to be spelled in degrees to be usable from a script.
+    // Both are handled in comp_get_vec/comp_set_vec below, before the table is
+    // consulted. Until they were, "transform.rotation" was a name every host
+    // accepted and none stored: the handset in the phone box and the whole
+    // staircase in the hall were written turned and came out straight.
 
     if (!std::strcmp(name, "rigidbody.density"))    return num(&r.density);
     if (!std::strcmp(name, "rigidbody.friction"))   return num(&r.friction);
@@ -149,11 +159,32 @@ void comp_set_num(dai_node id, const char *name, double value) {
     dai_doc_set(DAI_PROPS_DOC, id, &r);
 }
 
+// The two names that are not fields: the node's own place and orientation.
+// Degrees in ZYX, the same three numbers the inspector shows, converted by
+// include/dai_euler.h - one conversion for the editor and for scripts, so a
+// staircase turned by hand and one turned by a level script end up identical.
+int comp_transform_vec(const char *name) {
+    if (!name) return 0;
+    if (!std::strcmp(name, "transform.position")) return 1;
+    if (!std::strcmp(name, "transform.rotation")) return 2;
+    return 0;
+}
+
 int comp_get_vec(dai_node id, const char *name, double *xyz) {
     xyz[0] = xyz[1] = xyz[2] = 0.0;
     if (!DAI_PROPS_DOC) return 0;
     dai_node_desc r{};
     if (dai_doc_get(DAI_PROPS_DOC, id, &r) != DAI_OK) return 0;
+    if (int which = comp_transform_vec(name)) {
+        if (which == 1) {
+            xyz[0] = r.position.x; xyz[1] = r.position.y; xyz[2] = r.position.z;
+        } else {
+            float deg[3];
+            dai_quat_to_euler(r.rotation, deg);
+            xyz[0] = deg[0]; xyz[1] = deg[1]; xyz[2] = deg[2];
+        }
+        return 1;
+    }
     PropRef p = prop_ref(r, name);
     if (p.kind != P_VEC || !p.v) return 0;
     xyz[0] = p.v->x; xyz[1] = p.v->y; xyz[2] = p.v->z;
@@ -164,6 +195,16 @@ void comp_set_vec(dai_node id, const char *name, const double *xyz) {
     if (!DAI_PROPS_DOC) return;
     dai_node_desc r{};
     if (dai_doc_get(DAI_PROPS_DOC, id, &r) != DAI_OK) return;
+    if (int which = comp_transform_vec(name)) {
+        if (which == 1) {
+            r.position = { (float)xyz[0], (float)xyz[1], (float)xyz[2] };
+        } else {
+            float deg[3] = { (float)xyz[0], (float)xyz[1], (float)xyz[2] };
+            r.rotation = dai_euler_to_quat(deg);
+        }
+        dai_doc_set(DAI_PROPS_DOC, id, &r);
+        return;
+    }
     PropRef p = prop_ref(r, name);
     if (p.kind != P_VEC || !p.v) return;
     p.v->x = (float)xyz[0]; p.v->y = (float)xyz[1]; p.v->z = (float)xyz[2];
