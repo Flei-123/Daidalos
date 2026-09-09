@@ -78,10 +78,50 @@ that only reads from a drone shot is a room nobody has stood in.
 The ceilings go back on before the scene is saved, so the file on disk is the
 level and not the photograph.
 
+## The player
+
+`projects/Untitled/assets/innen_player.js` - first person, no jump, one torch.
+WASD walks relative to where you look, Shift is the fastest this game gets,
+Ctrl crouches, F switches the torch, and the torch's battery drains and starts
+to stutter under a quarter, without ever showing a number. The level script
+places the capsule, the camera in its head and the spot light in its hand, and
+writes the behaviour and its inspector values onto the node - so a player
+exists the moment the level does, and no one has to drag three nodes together.
+
+Two things about the capsule are worth knowing because they cost an evening:
+
+* `transform.scale` on a capsule is *radius* and *half height* factors of the
+  0.5 half extent, so `0.55 x 1.30` is 0.55 m across and 1.85 m tall. At 1.75
+  it came out exactly 2.30 m - the inner height of the phone box - and the
+  player stood wedged between floor and ceiling with the walk running.
+* A blockout or CSG node has the DEFAULT 1 m collider, not the shape it draws.
+  Every one of them is switched to graphics-only, and the walls with doorways
+  get invisible collider boxes around the hole (`*.Hit*`). Mesh and collider are
+  two different objects, on purpose.
+
+## Walking it, in the shipped game
+
+`tools/innen_walk.py` builds the level over the bridge, switches the player to
+`autoWalk`, saves the scene into a throwaway project and runs
+`build/daidalos_runtime --headless` - the SHIPPED binary, no window, no
+keyboard - while `walk_probe.js` prints position, velocity and grounded. The
+checks: the player stays on the floor, walks out of the phone box, through the
+hallway without touching its walls, through the second doorway into the hall,
+and stops at the far wall.
+
+That test found four real bugs in the runtime, all of the same family: an
+exported game did not run behaviours the way the editor does. No `self`
+(the object model was never installed), no `input`/`body` (the play host was
+never bound), `node.setNum()` a no-op (the component half of the node host was
+null), and every inspector field arriving as a *string*, so numbers fell back
+to their defaults. See the end of `docs/SCRIPTING.md`.
+
 ## What M0 is not
 
-No player, no doors that open, no room generator, no sound. It is the geometry
-contract: rooms that dock, openings that are holes, a level that is data. The
+No doors that open, no room generator, no sound, no stairs you can climb (the
+staircase in the hall is scenery - it has no collider yet). It is the geometry
+contract plus a body to walk it: rooms that dock, openings that are holes, a
+level that is data. The
 generator (GDD §5, "Graph statt Grid") plugs into the sockets described here;
 the anti-pingpong rules of §5.2 are about which room is placed on a socket, not
 about how a socket works.

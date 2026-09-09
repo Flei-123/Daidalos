@@ -144,7 +144,21 @@ The names the JS uses are the ones `prop_ref()` answers — one table, shared by
 the inspector, the behaviours and the bridge, so all three mean the same thing
 by `light.intensity`. The blockout components add theirs through
 `include/dai_blockout_props.inl` (`blockout.kind`, `blockout.size`, `csg.op`,
-`door.width`, `door.height`, `door.normal`). An unknown name is not an error —
+`door.width`, `door.height`, `door.normal`), and the ACTOR half through
+`include/dai_actor_props.inl`:
+
+| name | what it is |
+|---|---|
+| `script` | the behaviours on the node, `';'` separated, each optionally `file.js{key=value,...}` |
+| `collider.shape` | `dai_shape`: 0 box, 1 sphere, 2 capsule, 4 cylinder |
+| `collider.center` | offset of the shape from the node's origin |
+| `collider.enabled` | 0 = nothing can hit this (a blockout mesh, a hole) |
+| `rigidbody.freeze` | Unity's Constraints as a mask; 40 keeps a capsule upright |
+
+Without those five a level built over the socket could have walls and no
+player, because "put this behaviour on that capsule" had no name. The whole
+table now lives in `include/dai_props_host.inl`, which the editor, this host
+and the SHIPPED RUNTIME all include - one table, three programs. An unknown name is not an error —
 it answers the fallback — which is what lets a script written for a newer
 editor degrade instead of exploding, and what lets `innen_room.js` ask
 `supports()` before it commits to a shape.

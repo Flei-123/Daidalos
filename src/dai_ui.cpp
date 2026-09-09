@@ -3103,6 +3103,12 @@ const AcEntry AC_NODE[] = {
     { "text.anchor",          "0 top left .. 8 bottom right" },
     { "image.asset",          "the texture file" },
     { "image.size",           "[x, y, z], world units" },
+    // The actor half: what carries a behaviour, and what it collides with.
+    // Same table as the bridge and the inspector - include/dai_actor_props.inl.
+    { "script",               "behaviour files, ';' separated" },
+    { "collider.shape",       "0 box 1 sphere 2 capsule 3 compound 4 cylinder" },
+    { "collider.center",      "[x, y, z] - offset from the origin" },
+    { "collider.enabled",     "can anything hit this?" },
     // Blockout: the shapes a room is built out of. Same names the inspector
     // shows and the same the bridge writes - one table, see
     // include/dai_blockout_props.inl.

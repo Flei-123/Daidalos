@@ -446,6 +446,40 @@ else
     MISSING="$MISSING innen_shots"
 fi
 
+# The player, WALKED - in the shipped runtime, headless, with no window and no
+# keyboard: the level is built over the bridge, the player is switched to
+# autoWalk, and build/daidalos_runtime is asked to simulate it while a probe
+# behaviour prints where the capsule is. It is the only test in this suite that
+# proves BEHAVIOURS RUN IN THE EXPORT - which they did not until the runtime
+# learned the object model, the component table and the play bindings.
+#
+# The runtime template is not built by build.sh (it links what build.sh made),
+# so it is built here if it is missing.
+if [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then
+    [ -x build/daidalos_runtime ] || ./tools/build_runtime.sh linux >/dev/null 2>&1
+fi
+if [ -x build/daidalos_runtime ] && [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then
+    OUT=$(DAI_SHADER_DIR=shaders timeout 400 \
+          python3 tools/innen_walk.py --seconds 16 --port 8394 2>&1)
+    RC=$?
+    P=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ checks' | tail -1 | grep -oE '[0-9]+')
+    F=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ failures' | tail -1 | grep -oE '[0-9]+')
+    [ -z "${P:-}" ] && P=0
+    [ -z "${F:-}" ] && F=0
+    TOTAL_PASS=$((TOTAL_PASS + P - F))
+    TOTAL_FAIL=$((TOTAL_FAIL + F))
+    if [ "$RC" = "0" ] && [ "$F" = "0" ] && [ "$P" != "0" ]; then
+        printf '%-20s %3s/%-3s  ok\n' "innen_walk" "$P" "$F"
+        [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+    else
+        FAILED="$FAILED innen_walk"
+        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "innen_walk" "$P" "$F" "$RC"
+        printf '%s\n' "$OUT" | tail -12 | sed 's/^/    /'
+    fi
+else
+    MISSING="$MISSING innen_walk"
+fi
+
 # The blockout round's pictures: the room built through dai_doc in C++, drawn
 # by the real editor with the blockout host attached - the CSG wall with its
 # door hole, the stairs, the arch, the socket gizmo, and the modifier stack's

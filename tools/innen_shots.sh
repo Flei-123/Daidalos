@@ -13,6 +13,7 @@
 #   21-innen-flur.png     the hallway, down its length, into the dark end
 #   22-innen-halle.png    the room that is too big, with the stairs to nowhere
 #   23-innen-plan.png     all three from above the ceiling line
+#   24-innen-spieler.png  from the player's own eyes, torch on
 #
 # It also saves the scene, so the editor can open exactly what was shot.
 set -uo pipefail
@@ -63,6 +64,16 @@ shot() { # name eye target fov
 shot 20-innen-zelle   "0,1.55,0.45"    "0,1.35,-3"       60
 shot 21-innen-flur    "0,1.65,-1.6"    "0,1.45,-11"      55
 shot 22-innen-halle   "0,1.70,-10.2"   "-2.5,1.6,-15.5"  60
+# From the player's eyes: the same pose the behaviour puts the camera in, read
+# out of the scene rather than typed here, so a player that spawns somewhere
+# else changes the picture. The torch is a spot light in the document, so it
+# lights this shot even though no behaviour is running - which is the point of
+# the light being a NODE and not something a script invents.
+EYE=$($B js "var p=node.getPos(scene.find('Spieler')); JSON.stringify([p[0],p[1]+0.62,p[2]])" 2>/dev/null | tr -d '[]" ')
+if [ -n "$EYE" ]; then
+    shot 24-innen-spieler "$EYE" "0,1.35,-6" 75
+fi
+
 # The plan view is the only one taken with the ceilings switched off: with
 # them on it is a photograph of three lids, which says nothing about the rooms
 # underneath. They go back on before the scene is saved, so the file on disk is

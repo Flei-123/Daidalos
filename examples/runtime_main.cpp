@@ -44,6 +44,10 @@
 #include "dai_vfs.h"
 #ifdef DAI_WITH_SCRIPT
 #include "dai_script.h"
+// The JS object model the editor installs before every behaviour. Without it
+// `self` does not exist in an exported game and every behaviour that ever ran
+// in the editor dies on its first line.
+#include "dai_prelude.h"
 #endif
 
 #include <chrono>
@@ -466,8 +470,156 @@ static void sh_set_rot(double id, const double *xyzw, void *) {
     dai_quat q{ (float)xyzw[0], (float)xyzw[1], (float)xyzw[2], (float)xyzw[3] };
     live_set_transform((dai_node)(uint32_t)id, nullptr, &q);
 }
+// The node's Text component. The document is the truth for it: nothing
+// simulates a label, and draw_hud reads the document.
+static void sh_set_text(double id, const char *str, void *) {
+    dai_node_desc r{};
+    if (!g_doc || dai_doc_get(g_doc, (dai_node)(uint32_t)id, &r) != DAI_OK) return;
+    std::snprintf(r.text, sizeof(r.text), "%s", str ? str : "");
+    if (!r.text_on) r.text_on = 1;
+    dai_doc_set(g_doc, (dai_node)(uint32_t)id, &r);
+}
+
+// Seam: the component table - "light.intensity", "camera.fov", "blockout.size",
+// "script" - shared with the editor and the modelling host.
+// include/dai_props_host.inl. Until this was here the shipped game bound the
+// FIRST FIVE fields of dai_script_node_host and left the component half null,
+// so node.setNum() in an exported game silently did nothing while the same
+// behaviour worked in the editor.
+#define DAI_PROPS_DOC g_doc
+#include "dai_props_host.inl"
+
+static double sh_get_num(double id, const char *prop, void *) {
+    return comp_get_num((dai_node)(uint32_t)id, prop, 0.0);
+}
+static void sh_set_num(double id, const char *prop, double v, void *) {
+    comp_set_num((dai_node)(uint32_t)id, prop, v);
+}
+static int sh_get_vec(double id, const char *prop, double *xyz, void *) {
+    return comp_get_vec((dai_node)(uint32_t)id, prop, xyz);
+}
+static void sh_set_vec(double id, const char *prop, const double *xyz, void *) {
+    comp_set_vec((dai_node)(uint32_t)id, prop, xyz);
+}
+static const char *sh_get_str(double id, const char *prop, void *) {
+    return comp_get_str((dai_node)(uint32_t)id, prop);
+}
+static void sh_set_str(double id, const char *prop, const char *v, void *) {
+    comp_set_str((dai_node)(uint32_t)id, prop, v);
+}
+
 static dai_script_node_host g_node_host = { sh_find, sh_get_pos, sh_set_pos,
-                                            sh_get_rot, sh_set_rot, nullptr };
+                                            sh_get_rot, sh_set_rot, sh_set_text,
+                                            sh_get_num, sh_set_num,
+                                            sh_get_vec, sh_set_vec,
+                                            sh_get_str, sh_set_str, nullptr };
+
+// ---- the PLAY half: keys, the mouse, and the body ------------------------
+// The editor binds this from its play state; the runtime IS the play state.
+// Without it `input.key("w")` and `body.setVel()` do not exist in a shipped
+// game, which means every behaviour that moves anything is decoration.
+//
+// The window may be null - --headless has none - and then every key is up and
+// the mouse never moves. That is a game running with nobody at the controls,
+// which is exactly what a headless test wants.
+static dai_window *g_win_for_scripts = nullptr;
+static double g_mouse_dx = 0, g_mouse_dy = 0;
+static int    g_mouse_buttons = 0, g_mouse_have = 0, g_mouse_lx = 0, g_mouse_ly = 0;
+
+static void poll_mouse(void) {
+    g_mouse_dx = g_mouse_dy = 0;
+    if (!g_win_for_scripts) return;
+    int x = 0, y = 0; uint32_t b = 0;
+    if (!dai_window_mouse(g_win_for_scripts, &x, &y, &b)) return;
+    if (g_mouse_have) { g_mouse_dx = x - g_mouse_lx; g_mouse_dy = y - g_mouse_ly; }
+    g_mouse_lx = x; g_mouse_ly = y; g_mouse_have = 1;
+    g_mouse_buttons = (int)b;
+}
+
+static dai_body body_of(double id) {
+    dai_entity ent = g_sync ? dai_doc_sync_entity(g_sync, (dai_node)(uint32_t)id) : 0;
+    return (ent && g_scene) ? dai_scene_body(g_scene, ent) : 0;
+}
+
+// The same spelling the editor answers - one name table, or "w" would mean
+// something else in the game than it does in Play.
+static int sp_key(const char *name, void *) {
+    if (!name || !*name || !g_win_for_scripts) return 0;
+    uint32_t code = 0;
+    if (!name[1]) {
+        char c = name[0];
+        if (c >= 'a' && c <= 'z') code = (uint32_t)(c - 'a' + 'A');
+        else if (c >= 'A' && c <= 'Z') code = (uint32_t)c;
+        else code = (uint32_t)(unsigned char)c;
+    } else {
+        std::string n(name);
+        for (char &c : n) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (n == "space")      code = DAI_KEY_SPACE;
+        else if (n == "enter" || n == "return") code = DAI_KEY_RETURN;
+        else if (n == "escape" || n == "esc")   code = DAI_KEY_ESCAPE;
+        else if (n == "tab")   code = DAI_KEY_TAB;
+        else if (n == "left")  code = DAI_KEY_LEFT;
+        else if (n == "right") code = DAI_KEY_RIGHT;
+        else if (n == "up")    code = DAI_KEY_UP;
+        else if (n == "down")  code = DAI_KEY_DOWN;
+        else if (n == "shift")
+            return dai_window_key_down(g_win_for_scripts, DAI_KEY_SHIFT_L) ||
+                   dai_window_key_down(g_win_for_scripts, DAI_KEY_SHIFT_R);
+        else if (n == "ctrl" || n == "control")
+            return dai_window_key_down(g_win_for_scripts, DAI_KEY_CTRL_L) ||
+                   dai_window_key_down(g_win_for_scripts, DAI_KEY_CTRL_R);
+        else if (n == "alt")
+            return dai_window_key_down(g_win_for_scripts, DAI_KEY_ALT_L) ||
+                   dai_window_key_down(g_win_for_scripts, DAI_KEY_ALT_R);
+    }
+    if (!code) return 0;
+    return dai_window_key_down(g_win_for_scripts, code) ? 1 : 0;
+}
+
+static int sp_get_vel(double id, double *xyz, void *) {
+    if (!xyz) return 0;
+    xyz[0] = xyz[1] = xyz[2] = 0.0;
+    dai_body b = body_of(id);
+    if (!b) return 0;
+    dai_vec3 l{}, a{};
+    if (dai_body_get_velocity(g_world, b, &l, &a) != DAI_OK) return 0;
+    xyz[0] = l.x; xyz[1] = l.y; xyz[2] = l.z;
+    return 1;
+}
+
+static void sp_set_vel(double id, const double *xyz, void *) {
+    dai_body b = body_of(id);
+    if (!b || !xyz) return;
+    dai_vec3 l{}, a{};
+    dai_body_get_velocity(g_world, b, &l, &a);        // keep the spin
+    dai_body_set_velocity(g_world, b,
+                          dai_vec3{ (float)xyz[0], (float)xyz[1], (float)xyz[2] }, a);
+}
+
+static void sp_impulse(double id, const double *xyz, void *) {
+    dai_body b = body_of(id);
+    if (!b || !xyz) return;
+    dai_body_add_impulse(g_world, b,
+                         dai_vec3{ (float)xyz[0], (float)xyz[1], (float)xyz[2] });
+}
+
+// "Is there floor under me" - the same measurement the editor makes: a body
+// that is neither rising nor sinking is standing on something.
+static int sp_grounded(double id, void *) {
+    double v[3] = { 0, 0, 0 };
+    if (!sp_get_vel(id, v, nullptr)) return 0;
+    return (v[1] > -0.35 && v[1] < 0.35) ? 1 : 0;
+}
+
+static void sp_mouse(double *dx, double *dy, int *buttons, void *) {
+    if (dx) *dx = g_mouse_dx;
+    if (dy) *dy = g_mouse_dy;
+    if (buttons) *buttons = g_mouse_buttons;
+}
+
+static dai_script_play_host g_play_host = {
+    sp_key, sp_get_vel, sp_set_vel, sp_impulse, sp_grounded, sp_mouse, nullptr
+};
 
 struct RunningScript { dai_script *s; std::string path; };
 static std::vector<RunningScript> g_running;
@@ -475,6 +627,96 @@ static std::vector<RunningScript> g_running;
 // The node's `script` field, in the editor's own format:
 //   "a.js{target=Box};b.js"   path plus the references assigned in the
 //                             inspector, which arrive as `params`.
+
+// ---- an inspector value, with the TYPE the script declared ----------------
+//
+// The document stores a behaviour's fields as text: "walkSpeed=2.2,autoWalk=true".
+// The editor turns each one back into a number, a boolean or a string using the
+// type the script declared, and hands the script `params.walkSpeed = 2.2`.
+// The runtime used to hand it `params.walkSpeed = "2.2"` - EVERY field a
+// string - so a behaviour that checks `typeof v === "number"` fell back to its
+// default in the shipped game and worked in the editor. That is the worst kind
+// of bug: the game is not broken, it is subtly different.
+//
+// The types come out of the script itself, which is the only place they exist:
+//   // @param float speed = 6      an explicit declaration
+//   let sprinting = false;         a literal declaration (docs/SCRIPTING.md)
+// and anything the file does not declare falls back to what the text looks
+// like, because a value nobody declared still has to arrive as something.
+static std::string script_param_type(const char *code, size_t len,
+                                     const std::string &name) {
+    if (!code || !len || name.empty()) return std::string();
+    std::string src(code, len);
+    size_t pos = 0;
+    while ((pos = src.find("@param", pos)) != std::string::npos) {
+        size_t eol = src.find('\n', pos);
+        std::string line = src.substr(pos + 6, eol == std::string::npos ? eol : eol - pos - 6);
+        std::vector<std::string> tok;
+        size_t i = 0;
+        while (i < line.size()) {
+            while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
+            size_t st = i;
+            while (i < line.size() && line[i] != ' ' && line[i] != '\t' && line[i] != '=') ++i;
+            if (i > st) tok.push_back(line.substr(st, i - st));
+            if (i < line.size() && line[i] == '=') break;
+        }
+        pos = (eol == std::string::npos) ? src.size() : eol;
+        if (tok.size() >= 2 && tok[1] == name) return tok[0];
+        if (tok.size() == 1 && tok[0] == name) return std::string();
+    }
+    // "let name = <literal>" - the declaration IS the field.
+    std::string want = "let " + name;
+    size_t d = src.find(want);
+    if (d != std::string::npos) {
+        size_t eq = src.find('=', d);
+        size_t eol = src.find('\n', d);
+        if (eq != std::string::npos && (eol == std::string::npos || eq < eol)) {
+            size_t v = eq + 1;
+            while (v < src.size() && (src[v] == ' ' || src[v] == '\t')) ++v;
+            if (v < src.size()) {
+                if (src[v] == '"' || src[v] == '\'') return "string";
+                if (!src.compare(v, 4, "true") || !src.compare(v, 5, "false")) return "bool";
+                if ((src[v] >= '0' && src[v] <= '9') || src[v] == '-' || src[v] == '.') return "float";
+            }
+        }
+    }
+    return std::string();
+}
+
+// The value, spelled as JavaScript. A string is quoted (and its quotes and
+// backslashes escaped, or a Windows path in a text field would end the literal
+// and the whole params object with it).
+static std::string script_param_js(const std::string &val, const std::string &type) {
+    auto quoted = [&]() {
+        std::string out = "\"";
+        for (char c : val) {
+            if (c == '"' || c == '\\') out += '\\';
+            out += c;
+        }
+        out += '"';
+        return out;
+    };
+    auto looks_number = [&]() {
+        if (val.empty()) return false;
+        char *end = nullptr;
+        std::strtod(val.c_str(), &end);
+        return end && *end == 0;
+    };
+    if (type == "float" || type == "int")
+        return looks_number() ? val : std::string("0");
+    if (type == "bool")
+        return (val == "true" || val == "1") ? "true" : "false";
+    if (type == "string" || type == "node" || type == "camera" || type == "light" ||
+        type == "rigidbody" || type == "collider" || type == "sprite" ||
+        type == "audio" || type == "mesh" || type == "transform" || type == "object")
+        return quoted();
+    // Undeclared: what it looks like. A node reference is a name, so it stays
+    // a string - which is what scene.find() wants anyway.
+    if (val == "true" || val == "false") return val;
+    if (looks_number()) return val;
+    return quoted();
+}
+
 static void scripts_start(void) {
     if (!g_doc) return;
     uint32_t n = dai_doc_count(g_doc);
@@ -495,24 +737,12 @@ static void scripts_start(void) {
         }
         for (size_t ei = 0; ei < entries.size(); ++ei) {
             const std::string &entry = entries[ei];
-            std::string path = entry, params_js;
+            std::string path = entry, inner;
             size_t b = entry.find('{');
             if (b != std::string::npos) {
                 path = entry.substr(0, b);
                 size_t en = entry.find('}', b);
-                std::string inner = entry.substr(b + 1, en == std::string::npos ? en : en - b - 1);
-                params_js = "var params = {";
-                size_t pos = 0;
-                while (pos < inner.size()) {
-                    size_t comma = inner.find(',', pos);
-                    std::string kv = inner.substr(pos, comma == std::string::npos ? comma : comma - pos);
-                    size_t eq = kv.find('=');
-                    if (eq != std::string::npos && eq > 0)
-                        params_js += "\"" + kv.substr(0, eq) + "\":\"" + kv.substr(eq + 1) + "\",";
-                    if (comma == std::string::npos) break;
-                    pos = comma + 1;
-                }
-                params_js += "};";
+                inner = entry.substr(b + 1, en == std::string::npos ? en : en - b - 1);
             }
             // Scripts live under assets/ in the project, and the field holds
             // the path RELATIVE to that - the same string the editor writes.
@@ -526,10 +756,31 @@ static void scripts_start(void) {
             dai_script *s = dai_script_create(err, sizeof(err));
             if (!s) { rt_log("script: %s", err); dai_vfs_free(code); continue; }
             dai_script_bind_nodes(s, &g_node_host);
+            dai_script_bind_play(s, &g_play_host);
             // The node the behaviour is ON, so a script can move itself
             // without looking its own name up.
             dai_script_set_number(s, "self", (double)(uint32_t)all[k]);
-            if (!params_js.empty()) dai_script_eval(s, params_js.c_str(), "params", err, sizeof(err));
+            // The fields, typed the way the script declared them - see
+            // script_param_type above for why this is not "everything is a
+            // string".
+            if (!inner.empty()) {
+                std::string params_js = "var params = {";
+                size_t pos = 0;
+                while (pos < inner.size()) {
+                    size_t comma = inner.find(',', pos);
+                    std::string kv = inner.substr(pos, comma == std::string::npos ? comma : comma - pos);
+                    size_t eq = kv.find('=');
+                    if (eq != std::string::npos && eq > 0) {
+                        std::string key = kv.substr(0, eq), val = kv.substr(eq + 1);
+                        std::string ty = script_param_type((const char *)code, len, key);
+                        params_js += "\"" + key + "\":" + script_param_js(val, ty) + ",";
+                    }
+                    if (comma == std::string::npos) break;
+                    pos = comma + 1;
+                }
+                params_js += "};";
+                dai_script_eval(s, params_js.c_str(), "params", err, sizeof(err));
+            }
             if (dai_script_eval(s, (const char *)code, path.c_str(), err, sizeof(err)) != DAI_OK) {
                 rt_log("script %s: %s", path.c_str(), err);
                 dai_script_destroy(s);
@@ -537,6 +788,20 @@ static void scripts_start(void) {
                 continue;
             }
             dai_vfs_free(code);
+            // The object model, then `self` as one of its Nodes - the same two
+            // evals, in the same order, the editor does. state.self alone was
+            // not enough: every behaviour ever written says `self`, and in a
+            // shipped game it was not defined.
+            err[0] = 0;
+            if (dai_script_eval(s, DAI_JS_PRELUDE, "prelude", err, sizeof(err)) != DAI_OK && err[0])
+                rt_log("prelude: %s", err);
+            {
+                char selfjs[96];
+                std::snprintf(selfjs, sizeof(selfjs),
+                              "var self = __wrapSelf(%u);", (unsigned)(uint32_t)all[k]);
+                err[0] = 0;
+                dai_script_eval(s, selfjs, "self", err, sizeof(err));
+            }
             err[0] = 0;
             dai_script_call(s, "init", err, sizeof(err));
             if (err[0]) rt_log("script %s init: %s", path.c_str(), err);
@@ -549,10 +814,16 @@ static void scripts_start(void) {
     rt_log("scripts: %u running", (unsigned)g_running.size());
 }
 
-static void scripts_frame(void) {
+static void scripts_frame(double dt) {
+    poll_mouse();
     for (size_t i = 0; i < g_running.size(); ++i) {
         char err[192] = { 0 };
-        dai_script_call(g_running[i].s, "frame", err, sizeof(err));
+        // state.dt, so a behaviour can be frame rate independent without
+        // asking the host for a clock it does not have. The editor sets the
+        // same name; a script must not have to tell the two apart.
+        dai_script_set_number(g_running[i].s, "dt", dt);
+        if (dai_script_call(g_running[i].s, "frame", err, sizeof(err)) != DAI_OK && err[0])
+            rt_log("script %s: %s", g_running[i].path.c_str(), err);
     }
 }
 
@@ -562,7 +833,7 @@ static void scripts_stop(void) {
 }
 #else
 static void scripts_start(void) { rt_log("scripts: not compiled in"); }
-static void scripts_frame(void) {}
+static void scripts_frame(double) {}
 static void scripts_stop(void) {}
 #endif
 
@@ -742,6 +1013,11 @@ int main(int argc, char **argv) {
                                   err, sizeof(err));
             if (!win) { rt_log("window failed: %s", err); return 1; }
         }
+        // The keyboard and the mouse the behaviours read. Null in --headless,
+        // which is a game running with nobody at the controls.
+#ifdef DAI_WITH_SCRIPT
+        g_win_for_scripts = win;
+#endif
 
         g_assets.r = r;
         dai_doc_sync_resolver(g_sync, runtime_resolve, &g_assets);
@@ -797,7 +1073,7 @@ int main(int argc, char **argv) {
         for (int f = 0; f < headless_frames; ++f) {
             float alpha = 1.0f;
             dai_advance(g_world, dt, &alpha);
-            scripts_frame();
+            scripts_frame(dt);
             dai_doc_sync_apply(g_sync);
             uint32_t n = dai_scene_instances(g_scene, inst.data(), (uint32_t)inst.size(), alpha);
             if (f == 0 || f == headless_frames - 1) {
@@ -848,7 +1124,7 @@ int main(int argc, char **argv) {
 
             float alpha = 1.0f;
             dai_advance(g_world, dt, &alpha);
-            scripts_frame();
+            scripts_frame(dt);
             dai_doc_sync_apply(g_sync);
 
             uint32_t ww = (uint32_t)cfg.width, wh = (uint32_t)cfg.height;

@@ -63,79 +63,11 @@ static char           g_assets_dir[512] = { 0 };
 // by name". This host is that other host: the bridge's JS must mean exactly
 // the same thing here as it does in the editor, or a room that was built
 // through the socket would not open in the editor that photographs it.
-namespace {
-
-enum PropKind { P_NONE, P_NUM, P_VEC, P_STR };
-
-struct PropRef {
-    PropKind kind = P_NONE;
-    float   *f = nullptr;
-    int     *i = nullptr;
-    dai_vec3 *v = nullptr;
-    char    *str = nullptr;
-    size_t   str_len = 0;
-    int      bool_of_int = 0;
-    int      invert = 0;
-};
-
-PropRef prop_ref(dai_node_desc &r, const char *name) {
-    PropRef p;
-    auto num = [&](float *f) { p.kind = P_NUM; p.f = f; return p; };
-    auto ival = [&](int *i) { p.kind = P_NUM; p.i = i; return p; };
-    auto flag = [&](int *i, int inv) { p.kind = P_NUM; p.i = i; p.bool_of_int = 1; p.invert = inv; return p; };
-    auto vec = [&](dai_vec3 *v) { p.kind = P_VEC; p.v = v; return p; };
-    auto text = [&](char *c, size_t n) { p.kind = P_STR; p.str = c; p.str_len = n; return p; };
-    if (!name) return p;
-
-    if (!std::strcmp(name, "node.name"))            return text(r.name, sizeof(r.name));
-    if (!std::strcmp(name, "node.tag"))             return text(r.tag, sizeof(r.tag));
-    if (!std::strcmp(name, "node.asset"))           return text(r.asset, sizeof(r.asset));
-
-    if (!std::strcmp(name, "transform.scale"))      return vec(&r.scale);
-
-    if (!std::strcmp(name, "rigidbody.density"))    return num(&r.density);
-    if (!std::strcmp(name, "rigidbody.friction"))   return num(&r.friction);
-    if (!std::strcmp(name, "rigidbody.restitution"))return num(&r.restitution);
-    if (!std::strcmp(name, "rigidbody.motion"))     return ival(&r.motion);
-    if (!std::strcmp(name, "rigidbody.trigger"))    return flag(&r.trigger, 0);
-    if (!std::strcmp(name, "rigidbody.enabled"))    return flag(&r.no_body, 1);
-
-    // The RENDERER, as its own switch. A node that is only a place - the root
-    // of a room, an anchor, a spawn point - is still a 1 m box to the scene,
-    // and the example room came out with a crate standing in the middle of it.
-    // Named like the other component switches, and inverted the same way
-    // rigidbody.enabled is: the field says "hidden", the property says "on".
-    if (!std::strcmp(name, "renderer.enabled"))     return flag(&r.hidden, 1);
-
-    if (!std::strcmp(name, "camera.mode"))          return ival(&r.camera);
-    if (!std::strcmp(name, "camera.enabled"))       return flag(&r.camera, 0);
-    if (!std::strcmp(name, "camera.fov"))           return num(&r.camera_fov);
-    if (!std::strcmp(name, "camera.size"))          return num(&r.camera_size);
-
-    if (!std::strcmp(name, "light.mode"))           return ival(&r.light);
-    if (!std::strcmp(name, "light.enabled"))        return flag(&r.light, 0);
-    if (!std::strcmp(name, "light.range"))          return num(&r.light_range);
-    if (!std::strcmp(name, "light.intensity"))      return num(&r.light_intensity);
-    if (!std::strcmp(name, "light.cone"))           return num(&r.light_cone);
-    if (!std::strcmp(name, "light.color"))          return vec(&r.light_color);
-
-    if (!std::strcmp(name, "text.enabled"))         return flag(&r.text_on, 0);
-    if (!std::strcmp(name, "text.value"))           return text(r.text, sizeof(r.text));
-    if (!std::strcmp(name, "text.size"))            return num(&r.text_size);
-    if (!std::strcmp(name, "text.anchor"))          return ival(&r.text_anchor);
-    if (!std::strcmp(name, "text.color"))           return vec(&r.text_color);
-
-    #include "dai_blockout_props.inl"
-
-    if (!std::strcmp(name, "image.enabled"))        return flag(&r.sprite, 0);
-    if (!std::strcmp(name, "image.size"))           return vec(&r.sprite_size);
-    if (!std::strcmp(name, "image.asset"))          return text(r.asset, sizeof(r.asset));
-    return p;
-}
-
-char g_prop_str[512];
-
-} // namespace
+// Seam: the same component table the editor answers with -
+// include/dai_props_host.inl. The bridge's JS must mean exactly the same thing
+// here as it does in the editor.
+#define DAI_PROPS_DOC g_doc
+#include "dai_props_host.inl"
 
 static double sh_find(const char *name, void *) {
     if (!name || !*name || !g_doc) return -1.0;
@@ -181,66 +113,26 @@ static void sh_set_text(double id, const char *s, void *) {
     if (!r.text_on) r.text_on = 1;
     dai_doc_set(g_doc, (dai_node)(uint32_t)id, &r);
 }
+// The six component functions are the shared ones from
+// include/dai_props_host.inl - this host only wraps them in the signatures
+// dai_script_node_host wants, exactly as the editor does.
 static double sh_get_num(double id, const char *prop, void *) {
-    dai_node_desc r{};
-    if (!g_doc || dai_doc_get(g_doc, (dai_node)(uint32_t)id, &r) != DAI_OK) return 0.0;
-    PropRef p = prop_ref(r, prop);
-    if (p.kind != P_NUM) return 0.0;
-    if (p.f) return (double)*p.f;
-    if (!p.i) return 0.0;
-    int v = *p.i;
-    if (p.bool_of_int) return (p.invert ? (v == 0) : (v != 0)) ? 1.0 : 0.0;
-    return (double)v;
+    return comp_get_num((dai_node)(uint32_t)id, prop, 0.0);
 }
-static void sh_set_num(double id, const char *prop, double value, void *) {
-    dai_node_desc r{};
-    if (!g_doc || dai_doc_get(g_doc, (dai_node)(uint32_t)id, &r) != DAI_OK) return;
-    PropRef p = prop_ref(r, prop);
-    if (p.kind != P_NUM) return;
-    if (p.f) *p.f = (float)value;
-    else if (p.i) {
-        if (p.bool_of_int) {
-            int on = value != 0.0 ? 1 : 0;
-            if (p.invert)       *p.i = on ? 0 : 1;
-            else if (!on)       *p.i = 0;
-            else if (*p.i == 0) *p.i = 1;
-        } else {
-            *p.i = (int)value;
-        }
-    }
-    dai_doc_set(g_doc, (dai_node)(uint32_t)id, &r);
+static void sh_set_num(double id, const char *prop, double v, void *) {
+    comp_set_num((dai_node)(uint32_t)id, prop, v);
 }
 static int sh_get_vec(double id, const char *prop, double *xyz, void *) {
-    dai_node_desc r{};
-    if (!g_doc || dai_doc_get(g_doc, (dai_node)(uint32_t)id, &r) != DAI_OK) return 0;
-    PropRef p = prop_ref(r, prop);
-    if (p.kind != P_VEC || !p.v) return 0;
-    xyz[0] = p.v->x; xyz[1] = p.v->y; xyz[2] = p.v->z;
-    return 1;
+    return comp_get_vec((dai_node)(uint32_t)id, prop, xyz);
 }
 static void sh_set_vec(double id, const char *prop, const double *xyz, void *) {
-    dai_node_desc r{};
-    if (!g_doc || dai_doc_get(g_doc, (dai_node)(uint32_t)id, &r) != DAI_OK) return;
-    PropRef p = prop_ref(r, prop);
-    if (p.kind != P_VEC || !p.v) return;
-    *p.v = dai_vec3{ (float)xyz[0], (float)xyz[1], (float)xyz[2] };
-    dai_doc_set(g_doc, (dai_node)(uint32_t)id, &r);
+    comp_set_vec((dai_node)(uint32_t)id, prop, xyz);
 }
 static const char *sh_get_str(double id, const char *prop, void *) {
-    g_prop_str[0] = 0;
-    dai_node_desc r{};
-    if (!g_doc || dai_doc_get(g_doc, (dai_node)(uint32_t)id, &r) != DAI_OK) return g_prop_str;
-    PropRef p = prop_ref(r, prop);
-    if (p.kind == P_STR && p.str) std::snprintf(g_prop_str, sizeof(g_prop_str), "%s", p.str);
-    return g_prop_str;
+    return comp_get_str((dai_node)(uint32_t)id, prop);
 }
-static void sh_set_str(double id, const char *prop, const char *value, void *) {
-    dai_node_desc r{};
-    if (!g_doc || dai_doc_get(g_doc, (dai_node)(uint32_t)id, &r) != DAI_OK) return;
-    PropRef p = prop_ref(r, prop);
-    if (p.kind != P_STR || !p.str) return;
-    std::snprintf(p.str, p.str_len, "%s", value ? value : "");
-    dai_doc_set(g_doc, (dai_node)(uint32_t)id, &r);
+static void sh_set_str(double id, const char *prop, const char *v, void *) {
+    comp_set_str((dai_node)(uint32_t)id, prop, v);
 }
 
 static dai_script_node_host g_node_host = { sh_find, sh_get_pos, sh_set_pos, sh_get_rot, sh_set_rot,

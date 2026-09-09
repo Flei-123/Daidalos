@@ -293,3 +293,25 @@ There is no `<i>`. Slanting a glyph needs a slanted glyph and the atlas holds
 one shape per character - put an italic `.ttf` in the Text component's **Font**
 field instead. Bold is drawn out of the one face by striking it twice, a hair
 apart; it is not a real bold cut and does not pretend to be one.
+
+
+## The editor and the exported game run the same script
+
+A behaviour is loaded the same way in `examples/editor_demo.cpp` (Play) and in
+`examples/runtime_main.cpp` (the shipped game):
+
+1. the file is evaluated,
+2. `include/dai_prelude.h` installs the object model, and `self` becomes a
+   `Node` for the object the behaviour is on,
+3. the inspector's fields arrive as `params`, **typed** - `float`/`int` as a
+   number, `bool` as a boolean, `string` and every node reference as a string,
+4. `init()` runs once, `frame()` every frame with `state.dt` set.
+
+That list is written down because for a while it was only true in the editor.
+The runtime bound five of the twelve node functions, no play host and no
+prelude, so an exported game had no `self`, `input.key()` and `body.setVel()`
+did not exist, `node.setNum()` silently did nothing, and every field arrived as
+a string - which made `typeof v === "number"` false and every tuned number fall
+back to its default. A game that is subtly different from what the editor
+showed is worse than one that does not start; `tools/innen_walk.py` walks a
+player through three rooms in the real runtime to keep it honest.
