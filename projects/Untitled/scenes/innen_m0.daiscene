@@ -1,0 +1,520 @@
+daidalos-scene 1
+next-id 65
+
+node 5
+  name Zelle
+  nobody 1
+  hidden 1
+end
+
+node 20
+  name Flur
+  pos 0 0 -5.285
+  nobody 1
+  hidden 1
+end
+
+node 46
+  name Halle
+  pos 0 0 -13.46
+  nobody 1
+  hidden 1
+end
+
+node 6
+  name Zelle.Floor
+  parent 5
+  pos 0 -0.06 0
+  scale 1.54 0.12 1.54
+  materials materials/rost.daimat
+end
+
+node 7
+  name Zelle.Ceiling
+  parent 5
+  pos 0 2.36 0
+  scale 1.54 0.12 1.54
+  materials materials/rost.daimat
+end
+
+node 8
+  name Zelle.Wall.Front
+  parent 5
+  pos 0 1.15 -0.71
+  materials materials/rost.daimat
+  csg 2
+end
+
+node 11
+  name Zelle.Wall.Back
+  parent 5
+  pos 0 1.15 0.71
+  scale 1.54 2.3 0.12
+  materials materials/rost.daimat
+end
+
+node 12
+  name Zelle.Wall.Left
+  parent 5
+  pos -0.71 1.15 0
+  scale 0.12 2.3 1.3
+  materials materials/rost.daimat
+end
+
+node 13
+  name Zelle.Wall.Right
+  parent 5
+  pos 0.71 1.15 0
+  scale 0.12 2.3 1.3
+  materials materials/rost.daimat
+end
+
+node 14
+  name Zelle.Door.front0
+  parent 5
+  pos 0 1.01 -0.71
+  scale 0.05 0.05 0.05
+  nobody 1
+  doornrm 0 0 -1
+  doorsize 0.95 2.02
+end
+
+node 15
+  name Zelle.Telefon
+  parent 5
+  pos 0 1.15 0.52
+  nobody 1
+  hidden 1
+end
+
+node 19
+  name Zelle.Licht
+  parent 5
+  pos 0 2.14 0
+  scale 0.1 0.04 0.1
+  nobody 1
+  light 1
+  lcolor 1 0.86 0.62
+  lrange 3.2
+  lpower 6
+end
+
+node 21
+  name Flur.Floor
+  parent 20
+  pos 0 -0.075 0
+  scale 2 0.15 9.3
+  materials materials/pvc.daimat
+end
+
+node 22
+  name Flur.Ceiling
+  parent 20
+  pos 0 2.625 0
+  scale 2 0.15 9.3
+  materials materials/raufaser.daimat
+end
+
+node 23
+  name Flur.Wall.Front
+  parent 20
+  pos 0 1.275 -4.575
+  materials materials/raufaser.daimat
+  csg 2
+end
+
+node 26
+  name Flur.Wall.Back
+  parent 20
+  pos 0 1.275 4.575
+  materials materials/raufaser.daimat
+  csg 2
+end
+
+node 29
+  name Flur.Wall.Left
+  parent 20
+  pos -0.925 1.275 0
+  materials materials/raufaser.daimat
+  csg 2
+end
+
+node 33
+  name Flur.Wall.Right
+  parent 20
+  pos 0.925 1.275 0
+  materials materials/raufaser.daimat
+  csg 2
+end
+
+node 36
+  name Flur.Door.front0
+  parent 20
+  pos 0 1.05 -4.575
+  scale 0.05 0.05 0.05
+  nobody 1
+  doornrm 0 0 -1
+  doorsize 1.1 2.1
+end
+
+node 37
+  name Flur.Door.back0
+  parent 20
+  pos 0 1.01 4.575
+  scale 0.05 0.05 0.05
+  nobody 1
+  doornrm 0 0 1
+  doorsize 0.95 2.02
+end
+
+node 38
+  name Flur.Door.left0
+  parent 20
+  pos -0.925 0.99 2.6
+  scale 0.05 0.05 0.05
+  nobody 1
+  doornrm -1 0 0
+  doorsize 0.85 1.98
+end
+
+node 39
+  name Flur.Door.left1
+  parent 20
+  pos -0.925 0.99 -1.9
+  scale 0.05 0.05 0.05
+  nobody 1
+  doornrm -1 0 0
+  doorsize 0.85 1.98
+end
+
+node 40
+  name Flur.Door.right0
+  parent 20
+  pos 0.925 0.99 0.4
+  scale 0.05 0.05 0.05
+  nobody 1
+  doornrm 1 0 0
+  doorsize 0.85 1.98
+end
+
+node 41
+  name Flur.Licht.1
+  parent 20
+  pos 0 2.38 3.3
+  scale 0.22 0.05 0.22
+  nobody 1
+  light 1
+  lcolor 1 0.9 0.72
+  lrange 5
+  lpower 9
+end
+
+node 42
+  name Flur.Licht.2
+  parent 20
+  pos 0 2.38 0
+  scale 0.22 0.05 0.22
+  nobody 1
+  light 1
+  lcolor 1 0.88 0.7
+  lrange 4
+  lpower 4.5
+end
+
+node 43
+  name Flur.Licht.3
+  parent 20
+  pos 0 2.38 -3.3
+  scale 0.22 0.05 0.22
+  nobody 1
+  light 1
+  lcolor 0.95 0.85 0.7
+  lrange 3.2
+  lpower 2
+end
+
+node 44
+  name Flur.Sockelleiste.Links
+  parent 20
+  pos -0.84 0.06 0
+  materials materials/rost.daimat
+  blockout 1
+  bosize 0.02 0.12 9
+end
+
+node 45
+  name Flur.Sockelleiste.Rechts
+  parent 20
+  pos 0.84 0.06 0
+  materials materials/rost.daimat
+  blockout 1
+  bosize 0.02 0.12 9
+end
+
+node 47
+  name Halle.Floor
+  parent 46
+  pos 0 -0.1 0
+  scale 9.4 0.2 7.4
+  materials materials/pvc.daimat
+end
+
+node 48
+  name Halle.Ceiling
+  parent 46
+  pos 0 4.3 0
+  scale 9.4 0.2 7.4
+  materials materials/beton.daimat
+end
+
+node 49
+  name Halle.Wall.Front
+  parent 46
+  pos 0 2.1 -3.6
+  materials materials/raufaser.daimat
+  csg 2
+end
+
+node 52
+  name Halle.Wall.Back
+  parent 46
+  pos 0 2.1 3.6
+  materials materials/raufaser.daimat
+  csg 2
+end
+
+node 55
+  name Halle.Wall.Left
+  parent 46
+  pos -4.6 2.1 0
+  materials materials/raufaser.daimat
+  csg 2
+end
+
+node 58
+  name Halle.Wall.Right
+  parent 46
+  pos 4.6 2.1 0
+  scale 0.2 4.2 7
+  materials materials/raufaser.daimat
+end
+
+node 59
+  name Halle.Door.front0
+  parent 46
+  pos 2.8 1.05 -3.6
+  scale 0.05 0.05 0.05
+  nobody 1
+  doornrm 0 0 -1
+  doorsize 1.1 2.1
+end
+
+node 60
+  name Halle.Door.back0
+  parent 46
+  pos 0 1.05 3.6
+  scale 0.05 0.05 0.05
+  nobody 1
+  doornrm 0 0 1
+  doorsize 1.1 2.1
+end
+
+node 61
+  name Halle.Door.left0
+  parent 46
+  pos -4.6 1.05 -1
+  scale 0.05 0.05 0.05
+  nobody 1
+  doornrm -1 0 0
+  doorsize 1.1 2.1
+end
+
+node 62
+  name Halle.Licht.1
+  parent 46
+  pos -2.6 3.95 1.8
+  scale 0.5 0.06 0.5
+  nobody 1
+  light 1
+  lcolor 0.98 0.95 0.86
+  lrange 9
+  lpower 16
+end
+
+node 63
+  name Halle.Licht.2
+  parent 46
+  pos 2.6 3.95 -1.4
+  scale 0.5 0.06 0.5
+  nobody 1
+  light 1
+  lcolor 0.98 0.95 0.86
+  lrange 8
+  lpower 12
+end
+
+node 64
+  name Halle.Treppe
+  parent 46
+  pos -3.2 0 -2.2
+  materials materials/beton.daimat
+  blockout 3
+  bosize 1.2 2.6 3.2
+  bosteps 13
+end
+
+node 9
+  name Zelle.Wall.Front.Slab
+  parent 8
+  blockout 1
+  bosize 1.54 2.3 0.12
+end
+
+node 10
+  name Zelle.Wall.Front.Opening0
+  parent 8
+  pos 0 -0.14 0
+  blockout 1
+  bosize 0.95 2.02 0.36
+end
+
+node 16
+  name Zelle.Telefon.Korpus
+  parent 15
+  materials materials/rost.daimat
+  blockout 1
+  bosize 0.26 0.34 0.14
+  modcount 1
+  mod 0 1 0 0.012 2 0 0 0 0 0 0 0 0
+end
+
+node 17
+  name Zelle.Telefon.Hoerer
+  parent 15
+  pos 0 0.2 -0.1
+  materials materials/rost.daimat
+  blockout 2
+  bosize 0.05 0.22 0.05
+  boseg 12
+end
+
+node 18
+  name Zelle.Telefon.Ablage
+  parent 15
+  pos 0 -0.22 -0.09
+  scale 0.34 0.03 0.2
+  materials materials/rost.daimat
+end
+
+node 24
+  name Flur.Wall.Front.Slab
+  parent 23
+  blockout 1
+  bosize 2 2.55 0.15
+end
+
+node 25
+  name Flur.Wall.Front.Opening0
+  parent 23
+  pos 0 -0.225 0
+  blockout 1
+  bosize 1.1 2.1 0.45
+end
+
+node 27
+  name Flur.Wall.Back.Slab
+  parent 26
+  blockout 1
+  bosize 2 2.55 0.15
+end
+
+node 28
+  name Flur.Wall.Back.Opening0
+  parent 26
+  pos 0 -0.265 0
+  blockout 1
+  bosize 0.95 2.02 0.45
+end
+
+node 30
+  name Flur.Wall.Left.Slab
+  parent 29
+  blockout 1
+  bosize 0.15 2.55 9
+end
+
+node 31
+  name Flur.Wall.Left.Opening0
+  parent 29
+  pos 0 -0.285 2.6
+  blockout 1
+  bosize 0.45 1.98 0.85
+end
+
+node 32
+  name Flur.Wall.Left.Opening1
+  parent 29
+  pos 0 -0.285 -1.9
+  blockout 1
+  bosize 0.45 1.98 0.85
+end
+
+node 34
+  name Flur.Wall.Right.Slab
+  parent 33
+  blockout 1
+  bosize 0.15 2.55 9
+end
+
+node 35
+  name Flur.Wall.Right.Opening0
+  parent 33
+  pos 0 -0.285 0.4
+  blockout 1
+  bosize 0.45 1.98 0.85
+end
+
+node 50
+  name Halle.Wall.Front.Slab
+  parent 49
+  blockout 1
+  bosize 9.4 4.2 0.2
+end
+
+node 51
+  name Halle.Wall.Front.Opening0
+  parent 49
+  pos 2.8 -1.05 0
+  blockout 1
+  bosize 1.1 2.1 0.6
+end
+
+node 53
+  name Halle.Wall.Back.Slab
+  parent 52
+  blockout 1
+  bosize 9.4 4.2 0.2
+end
+
+node 54
+  name Halle.Wall.Back.Opening0
+  parent 52
+  pos 0 -1.05 0
+  blockout 1
+  bosize 1.1 2.1 0.6
+end
+
+node 56
+  name Halle.Wall.Left.Slab
+  parent 55
+  blockout 1
+  bosize 0.2 4.2 7
+end
+
+node 57
+  name Halle.Wall.Left.Opening0
+  parent 55
+  pos 0 -1.05 -1
+  blockout 1
+  bosize 0.6 2.1 1.1
+end

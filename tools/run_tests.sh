@@ -394,6 +394,58 @@ else
     MISSING="$MISSING modeling_shot"
 fi
 
+# INNEN M0 - the game's first three rooms, built through the bridge and then
+# ASKED about: do the door sockets of two neighbours sit on the same point in
+# the world, are the openings the same size, do the rooms stand next to each
+# other instead of inside each other, is a doorway a CSG hole, and is the whole
+# level one Ctrl-Z. That invariant is what the room generator will stand on,
+# so it is a test and not a screenshot. Headless: it drives tools/modeling_shot
+# in --serve mode, so it needs no screen.
+if [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then
+    OUT=$(DAI_SHADER_DIR=shaders timeout 300 \
+          python3 tools/innen_check.py --binary build/modeling_shot --port 8397 2>&1)
+    RC=$?
+    P=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ checks' | tail -1 | grep -oE '[0-9]+')
+    F=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ failures' | tail -1 | grep -oE '[0-9]+')
+    [ -z "${P:-}" ] && P=0
+    [ -z "${F:-}" ] && F=0
+    TOTAL_PASS=$((TOTAL_PASS + P - F))
+    TOTAL_FAIL=$((TOTAL_FAIL + F))
+    if [ "$RC" = "0" ] && [ "$F" = "0" ] && [ "$P" != "0" ]; then
+        printf '%-20s %3s/%-3s  ok\n' "innen_check" "$P" "$F"
+        [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+    else
+        FAILED="$FAILED innen_check"
+        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "innen_check" "$P" "$F" "$RC"
+        printf '%s\n' "$OUT" | tail -12 | sed 's/^/    /'
+    fi
+else
+    MISSING="$MISSING innen_check"
+fi
+
+# ...and the same three rooms photographed from eye height, in two sizes. The
+# pictures come out of the bridge, from examples/scripts/innen_m0.js, so a
+# level that changes changes them - which is the point of having them in git.
+if [ -x build/modeling_shot ]; then
+    for SET in 1600x900: 1100x700:narrow-; do
+        DIM=${SET%%:*}; TAG=${SET#*:}
+        SW=${DIM%%x*}; SH=${DIM##*x}
+        OUT=$(timeout 600 ./tools/innen_shots.sh "$SHOTS" "$SW" "$SH" "$TAG" 2>&1)
+        RC=$?
+        if [ "$RC" = "0" ]; then
+            printf '%-20s %3s/%-3s  ok  (%s/%s2[0-3]-innen-*.png %sx%s)\n' \
+                   "innen_shots ${TAG:-plain}" "-" "-" "$SHOTS" "$TAG" "$SW" "$SH"
+            [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+        else
+            FAILED="$FAILED innen_shots(${SW}x${SH})"
+            printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "innen_shots ${TAG:-plain}" "-" "-" "$RC"
+            printf '%s\n' "$OUT" | tail -10 | sed 's/^/    /'
+        fi
+    done
+else
+    MISSING="$MISSING innen_shots"
+fi
+
 # The blockout round's pictures: the room built through dai_doc in C++, drawn
 # by the real editor with the blockout host attached - the CSG wall with its
 # door hole, the stairs, the arch, the socket gizmo, and the modifier stack's

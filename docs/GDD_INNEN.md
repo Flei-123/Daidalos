@@ -221,6 +221,12 @@ Zone 3 ist die einzige, die je nach Spieler ganz anders ist → Replay-Grund.
 | MS | Inhalt | Ziel |
 |---|---|---|
 | **M0 Prototyp** (2–3 Wo) | Vorraum + 6 Raum-Module, Graph-Generator, Portale, Anker, Taschenlampe | „Läuft man 10 Min drin rum und es ist creepy?" |
+
+> **Stand:** die ersten drei Räume stehen — Zelle, Flur, Halle, gebaut als
+> `examples/scripts/innen_m0.js` über die Jarvis-Bridge, mit Türsockeln, die
+> nachweislich aneinander docken. Beschreibung, Zahlen und Prüfungen:
+> [`docs/INNEN_M0.md`](INNEN_M0.md). Es fehlen Spieler, Generator und Türen,
+> die aufgehen.
 | M1 Vertical Slice | Zone 1 komplett, Puls, Umbau-Regel, 1 Telefon mit 5 Anrufen, Kopie | Spielbar 30 Min, ein Kernstück |
 | M2 | Zone 2–3, Wärter, Formular-Seed, 5 Angstvarianten | 2 h |
 | M3 | Archiv, Akten (41 Texte), Verbrennen, Twist | 4 h |
