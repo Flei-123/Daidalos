@@ -458,9 +458,14 @@ if [ -f RUN.md ]; then
     else
         echo "-- no $WIN_LOG (run ./build_win.sh) - RUN.md's Windows tail is whatever it was"
     fi
-    if grep -q 'WIN_TAIL_PLACEHOLDER' RUN.md; then
+    # Only INSIDE the generated block. The paragraph under it explains what
+    # went wrong last round and has to be able to say the word out loud - a
+    # guard that cannot tell a quoted mistake from the mistake itself turns
+    # every honest post mortem red.
+    if awk '/BEGIN win tail/ { inb = 1; next } /END win tail/ { inb = 0 } inb' RUN.md |
+       grep -q 'WIN_TAIL_PLACEHOLDER'; then
         FAILED="$FAILED RUN.md(win-tail-placeholder)"
-        echo "-- RUN.md still contains WIN_TAIL_PLACEHOLDER"
+        echo "-- RUN.md's Windows tail block still contains WIN_TAIL_PLACEHOLDER"
     fi
     # And the number this script just made, next to the one the document
     # quotes. Said out loud rather than enforced: RUN.md is written after the
@@ -469,6 +474,25 @@ if [ -f RUN.md ]; then
     RUN_MD_TOTAL=$(grep -oE '^TOTAL [0-9]+ passed' RUN.md | tail -1 | grep -oE '[0-9]+')
     if [ -n "${RUN_MD_TOTAL:-}" ] && [ "$RUN_MD_TOTAL" != "$TOTAL_PASS" ]; then
         echo "-- RUN.md quotes TOTAL $RUN_MD_TOTAL passed, this run made $TOTAL_PASS"
+    fi
+    # ...and then it stops quoting and starts REPORTING. The Windows tail above
+    # is generated for a reason that applies to the total word for word: a
+    # number typed into a document by hand is a number that is one round out of
+    # date by the next review, and this one was - the file said 2219 while the
+    # suites made thousands more. Same two marker mechanism, same three lines
+    # the script prints at the bottom of this run.
+    if grep -q 'BEGIN totals' RUN.md; then
+        TOTALS_BLOCK=$(printf 'TOTAL %d passed, %d failed\nnot run (needs GPU): %s\n%s' \
+                       "$TOTAL_PASS" "$TOTAL_FAIL" "$GPU_ONLY" \
+                       "$([ -n "$FAILED" ] && echo "RED:$FAILED" || echo "all green")")
+        awk -v tot="$TOTALS_BLOCK" '
+            /BEGIN totals/ { print; print "```"; print tot; print "```"; skip = 1; next }
+            /END totals/   { skip = 0 }
+            !skip          { print }
+        ' RUN.md > build/RUN.md.tot && mv build/RUN.md.tot RUN.md
+        echo "-- RUN.md: the totals block refreshed from this run"
+    else
+        echo "-- RUN.md has no 'BEGIN totals' marker - the total in it is whatever was typed"
     fi
 fi
 

@@ -204,24 +204,56 @@ int main() {
     // Find the Position row by trying each row rather than hard coding a pixel
     // offset: the test would then only be checking my arithmetic, and it would
     // break every time a field is added above it.
-    const float FIELD_X = INSPECTOR_X + PAD + style->label_w + 8.0f;   // past the label column
+    // WHERE the drag handle of a number sits is not a constant any more: the
+    // label column measures the widest name it has to show, so "Position" and
+    // "Size (m)" do not start their fields at the same x, and neither of them
+    // starts at style->label_w. A test that hard codes that offset is testing
+    // its own arithmetic - it presses in the middle of a name and reports that
+    // dragging does nothing.
+    //
+    // So the handle is FOUND, in two cheap steps: hover the panel once per
+    // point and keep the places where the UI asks for the horizontal drag
+    // cursor (that is what a scrub handle is), then press and drag on those
+    // few candidates and keep the one that actually moves position.x.
+    auto hover_cursor = [&](float x, float y) {
+        frame(x, y, 0);
+        return dai_ui_cursor(ui);
+    };
+    auto scrub_moves = [&](dai_node node, float x, float y, float *dx_out) {
+        dai_node_desc a{}, b2{};
+        dai_doc_get(doc, node, &a);
+        uint32_t depth_before = dai_editor_undo_depth(ed);
+        frame(x, y, 0);
+        frame(x, y, 1);
+        for (int i = 1; i <= 4; ++i) frame(x + (float)i * 3.0f, y, 1);
+        frame(x + 12.0f, y, 0);
+        dai_doc_get(doc, node, &b2);
+        float dx = b2.position.x - a.position.x;
+        while (dai_editor_undo_depth(ed) > depth_before) dai_editor_undo(ed);
+        if (dx_out) *dx_out = dx;
+        return std::fabs(dx) > 1e-6f;
+    };
+    const float PANEL_R = INSPECTOR_X + PANEL_W - 6.0f;
+    float FIELD_X = INSPECTOR_X + PAD + style->label_w + 8.0f;   // a starting guess
     float pos_y = -1.0f;
     int rows_that_moved_x = 0;
-    for (float y = 90.0f; y < 400.0f; y += 4.0f) {
-        dai_node_desc a{}, b2{};
-        dai_doc_get(doc, parent, &a);
-        uint32_t depth_before = dai_editor_undo_depth(ed);
-        frame(FIELD_X, y, 0);
-        frame(FIELD_X, y, 1);
-        frame(FIELD_X + 12.0f, y, 1);
-        frame(FIELD_X + 12.0f, y, 0);
-        dai_doc_get(doc, parent, &b2);
-        if (std::fabs(b2.position.x - a.position.x) > 1e-6f) {
-            if (pos_y < 0.0f) pos_y = y;
-            ++rows_that_moved_x;
+    for (float y = 90.0f; y < 400.0f && pos_y < 0.0f; y += 4.0f) {
+        for (float x = INSPECTOR_X + PAD; x < PANEL_R && pos_y < 0.0f; x += 3.0f) {
+            if (hover_cursor(x, y) != DAI_CURSOR_SIZE_WE) continue;
+            float dx = 0.0f;
+            if (scrub_moves(parent, x, y, &dx)) { pos_y = y; FIELD_X = x; }
         }
-        while (dai_editor_undo_depth(ed) > depth_before) dai_editor_undo(ed);
     }
+    // How many DIFFERENT rows answer at that x - the overlap check below is
+    // about rows, so the sweep that counts them keeps the x it found.
+    if (pos_y > 0.0f) {
+        for (float y = 90.0f; y < 400.0f; y += 4.0f) {
+            float dx = 0.0f;
+            if (scrub_moves(parent, FIELD_X, y, &dx)) ++rows_that_moved_x;
+        }
+    }
+    std::printf("  X-Griff der Position-Zeile bei x=%.0f y=%.0f (%d Zeilen antworten)\n",
+                (double)FIELD_X, (double)pos_y, rows_that_moved_x);
     CHECK(pos_y > 0.0f, "no row in the inspector edits the X position");
     CHECK(rows_that_moved_x <= 8, "%d different rows changed position.x - fields overlap",
           rows_that_moved_x);
@@ -902,6 +934,12 @@ int main() {
             // that is its own step - not the operation switch under test.
             frame(-100.0f, -100.0f, 0);
 
+            // "Operation" is a longer word than "Position", so its value
+            // column starts further right - a dropdown probed at the x that
+            // found the Position handle presses the LABEL and never opens.
+            // The right hand end of the row is inside the value box whatever
+            // the name above it is, so that is where a dropdown is looked for.
+            const float OPT_X = INSPECTOR_X + PANEL_W - 24.0f;
             int switched = 0;
             uint32_t undo_before = dai_editor_undo_depth(ed);
             // The depth right before the click that opened the dropdown: the
@@ -909,23 +947,23 @@ int main() {
             // edited and was undone cannot be counted twice.
             uint32_t undo_at_open = undo_before;
             for (float y = 90.0f; y < 650.0f && !switched; y += 4.0f) {
-                frame(FIELD_X, y, 0);
+                frame(OPT_X, y, 0);
                 uint32_t v0 = total_verts(ui);
                 undo_at_open = dai_editor_undo_depth(ed);
-                frame(FIELD_X, y, 1);
-                frame(FIELD_X, y, 0);
+                frame(OPT_X, y, 1);
+                frame(OPT_X, y, 0);
                 if (!dai_ui_popup_active(ui)) {
                     // A click that edited something is undone like every
                     // other probe; a header it may have folded is put back.
                     while (dai_editor_undo_depth(ed) > undo_before) dai_editor_undo(ed);
-                    frame(FIELD_X, y, 0);
-                    if (total_verts(ui) != v0) { frame(FIELD_X, y, 1); frame(FIELD_X, y, 0); }
+                    frame(OPT_X, y, 0);
+                    if (total_verts(ui) != v0) { frame(OPT_X, y, 1); frame(OPT_X, y, 0); }
                     continue;
                 }
                 for (float y2 = y + 4.0f; y2 < y + 140.0f && !switched; y2 += 4.0f) {
-                    frame(FIELD_X, y2, 0);
-                    frame(FIELD_X, y2, 1);
-                    frame(FIELD_X, y2, 0);
+                    frame(OPT_X, y2, 0);
+                    frame(OPT_X, y2, 1);
+                    frame(OPT_X, y2, 0);
                     dai_node_desc q{};
                     dai_doc_get(doc, wall, &q);
                     if (q.csg != DAI_CSG_SUBTRACT) { switched = q.csg; break; }
@@ -934,10 +972,10 @@ int main() {
                 if (!switched) {
                     while (dai_editor_undo_depth(ed) > undo_before) dai_editor_undo(ed);
                     dai_ui_input in{};
-                    in.mouse_x = FIELD_X; in.mouse_y = y; in.key_escape = 1;
+                    in.mouse_x = OPT_X; in.mouse_y = y; in.key_escape = 1;
                     frame_in(in);
-                    frame(FIELD_X, y, 0);
-                    if (total_verts(ui) != v0) { frame(FIELD_X, y, 1); frame(FIELD_X, y, 0); }
+                    frame(OPT_X, y, 0);
+                    if (total_verts(ui) != v0) { frame(OPT_X, y, 1); frame(OPT_X, y, 0); }
                 }
             }
             CHECK(switched != 0, "no dropdown in the inspector switches the CSG operation");
