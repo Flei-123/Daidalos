@@ -727,6 +727,13 @@ PropRef prop_ref(dai_node_desc &r, const char *name) {
     // the normal case, and a script should not have to spell a double negative.
     if (!std::strcmp(name, "rigidbody.enabled"))    return flag(&r.no_body, 1);
 
+    // The RENDERER, as its own switch. A node that is only a place - the root
+    // of a room, an anchor, a spawn point - is still a 1 m box to the scene,
+    // and the example room came out with a crate standing in the middle of it.
+    // Named like the other component switches, and inverted the same way
+    // rigidbody.enabled is: the field says "hidden", the property says "on".
+    if (!std::strcmp(name, "renderer.enabled"))     return flag(&r.hidden, 1);
+
     if (!std::strcmp(name, "camera.mode"))          return ival(&r.camera);
     if (!std::strcmp(name, "camera.enabled"))       return flag(&r.camera, 0);
     if (!std::strcmp(name, "camera.fov"))           return num(&r.camera_fov);

@@ -596,6 +596,55 @@ int main() {
           "pull should be one named undo step, got '%s'", dai_doc_undo_name(d));
     CHECK(dai_doc_sync_apply(sy) == 0, "apply right after pull should have nothing to do");
 
+    // ---- 12b. a material takes the palette's guess away --------------------
+    //
+    // A renderable with no colour of its own is given one out of a palette, so
+    // a scene of untextured boxes is readable instead of uniformly grey. The
+    // shader MULTIPLIES that colour onto the material, and the day the object
+    // got a material file the guess turned into a lie: the example room's four
+    // walls wear the same near white raufaser map and came out pink, mint and
+    // gold, one palette entry each. So a material is the authority - unless
+    // somebody actually chose a colour, which still tints.
+    std::printf("material vs. the palette colour\n");
+    {
+        dai_node mn = add_named(d, "Painted", { 12, 0, 0 });
+        dai_doc_sync_apply(sy);
+        dai_entity me = dai_doc_sync_entity(sy, mn);
+        CHECK(me != DAI_INVALID_ENTITY, "no entity for the painted node");
+
+        auto colour_of = [&](dai_entity want) {
+            dai_render_instance inst[64];
+            uint32_t cnt = dai_scene_instances(sc, inst, 64, 1.0f);
+            (void)want;
+            // The node stands at x = 12 on its own, so the instance is found
+            // by where it is rather than by an entity id the render list does
+            // not carry.
+            for (uint32_t i = 0; i < cnt; ++i)
+                if (std::fabs(inst[i].position.x - 12.0f) < 1e-2f)
+                    return inst[i].color;
+            return dai_vec3{ -1, -1, -1 };
+        };
+
+        dai_vec3 auto_c = colour_of(me);
+        CHECK(auto_c.x >= 0.0f, "the painted node draws no instance");
+        CHECK(auto_c.x != 1.0f || auto_c.y != 1.0f || auto_c.z != 1.0f,
+              "a node with no material and no colour should get a palette colour, got white");
+
+        dai_scene_set_material(sc, me, 7);
+        dai_vec3 with_mat = colour_of(me);
+        CHECK(with_mat.x == 1.0f && with_mat.y == 1.0f && with_mat.z == 1.0f,
+              "a material must draw at full colour, got %.2f %.2f %.2f - the palette "
+              "guess is still multiplying the maps",
+              (double)with_mat.x, (double)with_mat.y, (double)with_mat.z);
+
+        // A colour somebody chose is not a guess and survives the material.
+        dai_scene_set_color(sc, me, dai_vec3{ 0.9f, 0.2f, 0.2f });
+        dai_vec3 tinted = colour_of(me);
+        CHECK(std::fabs(tinted.x - 0.9f) < 1e-4f && std::fabs(tinted.y - 0.2f) < 1e-4f,
+              "a chosen colour must still tint a material, got %.2f %.2f %.2f",
+              (double)tinted.x, (double)tinted.y, (double)tinted.z);
+    }
+
     // ---- 13. the asset resolver -------------------------------------------
     std::printf("asset resolver\n");
     {

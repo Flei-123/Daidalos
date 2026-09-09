@@ -3,6 +3,8 @@ next-id 15
 
 node 4
   name Room
+  nobody 1
+  hidden 1
 end
 
 node 5
@@ -73,7 +75,7 @@ node 14
   light 1
   lcolor 1 0.93 0.78
   lrange 9
-  lpower 2.4
+  lpower 15
 end
 
 node 11

@@ -29,7 +29,7 @@
       ] },
 
     { "id": "nrm", "type": "normal", "in": "height",
-      "params": { "strength": 3.0 } },
+      "params": { "strength": 1.5 } },
 
     { "id": "ao", "type": "ao", "in": "height",
       "params": { "radius": 6, "strength": 1.2 } },

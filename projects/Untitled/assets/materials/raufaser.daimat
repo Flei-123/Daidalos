@@ -10,5 +10,5 @@ base_color_map textures/raufaser_wand_basecolor.png
 orm_map textures/raufaser_wand_orm.png
 normal_map textures/raufaser_wand_normal.png
 triplanar 1
-triplanar_scale 1.5
+triplanar_scale 0.6
 triplanar_blend 4

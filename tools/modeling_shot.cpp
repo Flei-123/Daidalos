@@ -100,6 +100,13 @@ PropRef prop_ref(dai_node_desc &r, const char *name) {
     if (!std::strcmp(name, "rigidbody.trigger"))    return flag(&r.trigger, 0);
     if (!std::strcmp(name, "rigidbody.enabled"))    return flag(&r.no_body, 1);
 
+    // The RENDERER, as its own switch. A node that is only a place - the root
+    // of a room, an anchor, a spawn point - is still a 1 m box to the scene,
+    // and the example room came out with a crate standing in the middle of it.
+    // Named like the other component switches, and inverted the same way
+    // rigidbody.enabled is: the field says "hidden", the property says "on".
+    if (!std::strcmp(name, "renderer.enabled"))     return flag(&r.hidden, 1);
+
     if (!std::strcmp(name, "camera.mode"))          return ival(&r.camera);
     if (!std::strcmp(name, "camera.enabled"))       return flag(&r.camera, 0);
     if (!std::strcmp(name, "camera.fov"))           return num(&r.camera_fov);
@@ -261,6 +268,7 @@ static void modeling_select(dai_node n);
 #include "dai_material_host.inl"    // module 2: .daimat -> dai_material, maps
 #include "dai_daitex_host.inl"      // module 3: .daitex -> baked PNGs
 #include "dai_bridge_host.inl"      // module 4: the local JSON socket
+#include "dai_lights_host.inl"      // the Light component, as editor_demo lights it
 
 static void modeling_select(dai_node n) {
     if (g_ed) dai_editor_select(g_ed, n, 0);
@@ -341,6 +349,13 @@ static int modeling_editor_png(const char *path) {
         texes.push_back(draws[i].texture);
     }
     dai_render_ui(g_renderer, verts.data(), (uint32_t)verts.size(), counts.data(), texes.data(), nb);
+
+    // The Lamp the room script placed. Collected out of the document every
+    // frame, exactly as examples/editor_demo.cpp does it - the shared seam is
+    // include/dai_lights_host.inl, because this host used to skip the step and
+    // a room lit only by ambient made every material look like the same grey
+    // mud whatever its maps said.
+    dai_lights_host_collect(g_doc, g_ed, g_renderer);
 
     float vrx = 0, vry = 0, vrw = W, vrh = H;
     dai_editor_ui_viewport_rect(g_panels, &vrx, &vry, &vrw, &vrh);
@@ -698,7 +713,11 @@ int main(int argc, char **argv) {
     // the frame and the gizmo is a small cross inside it: the hole is read as
     // a hole, and the room behind it as a room.
     {
-        dai_vec3 e1{ 1.35f, 1.15f, -4.55f }, l1{ -0.30f, 0.95f, -1.20f };
+        // Two metres was right while the walls were untextured grey. With the
+        // maps on them a wall that fills the frame is a picture OF a wall, so
+        // the camera stands back far enough that the opening, the wall around
+        // it and the lit room behind are all in the same frame.
+        dai_vec3 e1{ 2.75f, 1.75f, -6.60f }, l1{ -0.15f, 1.05f, -1.40f };
         dai_editor_camera(g_ed, e1, l1, up, 60.0f, 0.05f, 300.0f, (float)g_width, (float)g_height);
         dai_render_camera(g_renderer, e1, l1, up, 60.0f, 0.05f, 300.0f);
     }

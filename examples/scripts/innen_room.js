@@ -66,6 +66,10 @@
 
     var root = editor.add("Room");
     node.setPos(root, 0, 0, 0);
+    // The root is a PLACE, not a thing: without this it is the 1 m box every
+    // fresh node starts as, standing in the middle of its own room.
+    node.setNum(root, "renderer.enabled", 0);
+    node.setNum(root, "rigidbody.enabled", 0);
 
     // ---- floor, ceiling, three solid walls --------------------------------
     box("Floor", root, [0, -R.wall * 0.5, 0],
@@ -139,7 +143,7 @@
     var lamp = editor.add("Lamp", root);
     node.setPos(lamp, 0, R.height - 0.35, 0);
     node.setNum(lamp, "light.mode", 1);
-    node.setNum(lamp, "light.intensity", 2.4);
+    node.setNum(lamp, "light.intensity", 15.0);
     node.setNum(lamp, "light.range", 9.0);
     node.setVec(lamp, "light.color", 1.0, 0.93, 0.78);
     node.setNum(lamp, "rigidbody.enabled", 0);

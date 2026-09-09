@@ -32,6 +32,10 @@ struct Renderable {
     uint32_t material = 0;
     bool     visible = true;
     bool     alive = false;
+    // The colour above was PICKED FOR IT out of the palette, not chosen by
+    // anyone. That difference decides what happens when a material is put on
+    // the object: see the note in dai_scene_instances.
+    bool     auto_colored = false;
     std::string name;
     // compound parts, empty for simple shapes
     std::vector<dai_compound_part> parts;
@@ -191,7 +195,8 @@ dai_entity dai_scene_attach(dai_scene *s, dai_body b, const dai_entity_desc *des
     r.scale = is_zero(desc->render_scale) ? scale : desc->render_scale;
     r.offset = desc->render_offset;
     r.param = param;
-    r.color = is_zero(desc->color) ? auto_color((uint32_t)s->ents.size()) : desc->color;
+    r.auto_colored = is_zero(desc->color);
+    r.color = r.auto_colored ? auto_color((uint32_t)s->ents.size()) : desc->color;
 
     if (desc->body.shape == DAI_SHAPE_COMPOUND && desc->body.parts && desc->body.part_count)
         r.parts.assign(desc->body.parts, desc->body.parts + desc->body.part_count);
@@ -264,6 +269,9 @@ dai_entity dai_scene_find(dai_scene *s, const char *name) {
 dai_result dai_scene_set_color(dai_scene *s, dai_entity e, dai_vec3 c) {
     if (!s || e == 0 || e >= s->ents.size() || !s->ents[e].alive) return DAI_ERR_NOT_FOUND;
     s->ents[e].color = c;
+    /* Somebody chose this. It is no longer the palette's guess, so a material
+     * put on the object later TINTS with it instead of replacing it. */
+    s->ents[e].auto_colored = false;
     return DAI_OK;
 }
 
@@ -316,6 +324,25 @@ dai_result dai_scene_set_name(dai_scene *s, dai_entity e, const char *name) {
     return DAI_OK;
 }
 
+
+// What colour an instance is drawn with.
+//
+// A renderable with no colour of its own gets one from the palette, so a scene
+// of untextured boxes is readable instead of uniformly grey. That guess is a
+// MULTIPLIER in the shader, and the day the object is given a material file it
+// became a lie: the walls of the example room wear a 256 px raufaser map that
+// is very nearly white, and they came out pink, mint and gold - one palette
+// entry each, one wall each, and every material in the project looking like a
+// different colour of the same mud.
+//
+// So: a material is the authority on colour. If the entity has one and nobody
+// ever chose its colour, the instance goes out white and the material decides.
+// A colour somebody DID choose still multiplies - tinting one crate red without
+// writing a second material is worth keeping.
+static inline dai_vec3 instance_color(const Renderable &r, uint32_t material) {
+    return (material && r.auto_colored) ? dai_vec3{ 1.0f, 1.0f, 1.0f } : r.color;
+}
+
 uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t max, float alpha) {
     if (!s || !out || !max) return 0;
     uint32_t cap = dai_scene_count(s) + 16;
@@ -332,7 +359,7 @@ uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t ma
         o.position = r.tpos;
         o.rotation = r.trot;
         o.scale = r.scale;
-        o.color = r.color;
+        o.color = instance_color(r, r.material);
         o.mesh = r.mesh;
         o.param = r.param;
         o.roughness = r.roughness;
@@ -362,7 +389,9 @@ uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t ma
                                t.position.z + rotate(t.rotation, local).z };
                 o.rotation = qmul(t.rotation, p.rotation);
                 o.scale = mul(p.scale, r.scale);
-                o.color = r.color;
+                // The PART's material, not the entity's: an imported model is
+                // a bag of pieces each with its own.
+                o.color = instance_color(r, p.material);
                 o.mesh = p.mesh;
                 o.roughness = r.roughness;
                 o.emissive = r.emissive;
@@ -380,7 +409,7 @@ uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t ma
             }
             o.rotation = t.rotation;
             o.scale = r.scale;
-            o.color = r.color;
+            o.color = instance_color(r, r.material);
             o.mesh = r.mesh;
             o.param = r.param;
             o.roughness = r.roughness;
@@ -399,7 +428,7 @@ uint32_t dai_scene_instances(dai_scene *s, dai_render_instance *out, uint32_t ma
                                t.position.z + rotate(t.rotation, p.offset).z };
                 o.rotation = qmul(t.rotation, p.rotation);
                 o.scale = mul(scale, r.scale);
-                o.color = r.color;
+                o.color = instance_color(r, r.material);
                 o.mesh = mesh;
                 o.param = param;
                 o.roughness = r.roughness;
