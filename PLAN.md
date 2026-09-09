@@ -407,3 +407,206 @@ run on the merged tree; a number typed before that run exists is fiction.
    triangle count (`tests/blockout_gltf_cases.hpp`, union as well as subtract).
 8. No test weakened, no assertion removed, no fixture thinned.
 9. Every number in RUN.md is a line from `build/last_run.log`.
+
+---
+
+# Round: the MODIFIER STACK
+
+Detail on a blockout does not come from placing vertices. It comes from a
+short list of RULES that are re-run whenever the rough shape moves - break
+the edges, divide the faces, give the plane a thickness, repeat it, mirror
+it. Blender calls that list the modifier stack. Daidalos has the rough shapes
+(`include/dai_blockout.h`), the boolean (`dai_blockout_csg.h`), the host that
+turns both into a mesh (`dai_blockout_host.inl`) and the inspector seams that
+show them. What it has not got is the list. This round builds it.
+
+Nothing below replaces what exists. `daiblock::Solid`, `csg()`, `finalise()`,
+`volume()`, `open_edges()`, `digest()` and the snapping rules stay exactly as
+they are and every modifier is written against them. `build.sh` and
+`build_win.sh` are NOT touched: new geometry is header-only for the reason
+`dai_blockout.h` gives at the top of itself, and new tests are `.hpp` case
+files included by a translation unit `build.sh` already names.
+
+## What is already standing (written by the lead, in the tree, compiling)
+
+* `include/dai_modifier.h` - the whole data model and the plumbing:
+  `daimod::Type`, `daimod::Mod` (one stack entry, the shape the document
+  holds it in), `daimod::Stack`, the five parameter structs (`Bevel`,
+  `Subdiv`, `Solidify`, `Array`, `Mirror`), the five `*_of(Mod)` readers that
+  are the ONLY definition of what a zero field means, `topology_of()` (edges
+  by welded position, sorted, with their two faces), `dihedral()`,
+  `bounds(Solid)`, `settle()`, `apply(Stack, Solid) -> Result`,
+  `finalise(Result)` / `finalise_smooth()` (positions identical, only the
+  normals averaged) and `digest(Stack)` for the host's rebuild cache.
+* `include/dai_modifier_dup.h` - `solidify()`, `array()`, `mirror()`, working
+  today: a 2x2 plane solidified 0.1 m is 0.4 m3 with zero open edges, three
+  boxes at 1.5 m spacing are 3.0 m3 and 36 triangles, half a box mirrored on
+  X is a closed 1.0 m3 box.
+* `include/dai_modifier_edge.h` - `subdivide()`, working today as the FLAT
+  division (level 2 on a cube: 96 faces, 192 triangles, volume unchanged,
+  zero open edges), and `bevel()`, which today returns its input unchanged
+  and is the one deliberate hole in the skeleton. It is B1's first job and it
+  is marked as such in the file.
+
+## Modules, and the files each one owns
+
+Two modules never edit the same file. That is the rule that lets all three
+run at once.
+
+### B1 - bevel and subdivide
+
+Owns `include/dai_modifier_edge.h`, `tests/modifier_bevel_cases.hpp` (new)
+and the include + call lines it adds to `tests/test_doc.cpp`.
+
+* `bevel()`: break only edges whose faces disagree by more than `p.angle`
+  degrees; each face shrinks back `p.width` in its own plane; each broken
+  edge becomes `p.segments` (1..4) quads; each corner closes with a face. On
+  a cube: 12 new edge faces with one segment, and a volume smaller by an
+  amount the test derives on paper (tolerance 1e-4) - the message must print
+  the formula's terms, not just "close enough". Must survive a CSG result:
+  wall minus door, bevelled, has zero degenerate triangles (area > 1e-9),
+  zero duplicate vertices inside the weld tolerance and zero open edges.
+* `subdivide()`: keep the flat path exactly as it is (it is what "flat"
+  means) and add the Catmull-Clark point rules behind `Subdiv::smooth`, so
+  level 2 on a cube lands between the cube's volume and the volume of the
+  sphere through its corners, and the face count is the one the test states.
+* Levels clamp 1..3 and segments 1..4 in `*_of()` - do not clamp a second
+  time somewhere else.
+
+### B2 - solidify, array and mirror
+
+Owns `include/dai_modifier_dup.h`, `tests/modifier_dup_cases.hpp` (new) and
+the include + call lines it adds to `tests/test_fracture.cpp` (the TU
+`blockout_gltf_cases.hpp` already rides).
+
+* Harden what stands: solidify on an OPEN surface is closed (every edge on
+  exactly two faces) and on a CLOSED one is a shell with the right volume;
+  `shift` -1 / 0 / +1 puts the material where it says.
+* `array()`: `n` copies is exactly `n` times the triangle count and a
+  bounding box grown by `(n-1) * step`; relative offset is a multiple of the
+  shape's own bounding size per axis; rotation per copy about X, Y or Z.
+  State in the header what happens when copies touch exactly, and test the
+  case the stair example uses.
+* `mirror()`: every point has a partner across the plane to 1e-5, faces that
+  lie entirely on the plane are dropped, the joined solid stays closed, and
+  the weld distance does what it says.
+* Determinism per operator: same input twice, `memcmp` of the vertex and
+  index arrays.
+
+### B3 - the stack on the node: document, inspector, bridge, pictures
+
+Owns `include/dai_doc.h`, `src/dai_doc_text.cpp`, `src/dai_editor_ui.cpp`
+(the multi-edit `DAI_MF` list and the AC_NODE completion table),
+`include/dai_blockout_props.inl`, `include/dai_blockout_host.inl`,
+`src/dai_editor_ui_blockout_inspector.inl`,
+`src/dai_editor_ui_blockout_addcomp.inl`,
+`src/dai_editor_ui_blockout_addcomp_apply.inl`, `tools/blockout_shot.cpp`,
+`tools/run_tests.sh`, `tools/bridge_check.py`, `examples/scripts/`,
+`docs/BLOCKOUT.md`, `RUN.md`, `tests/modifier_stack_cases.hpp` (new) and the
+include + call lines it adds to `tests/test_editor_ui.cpp`.
+
+The document contract, fixed here so the other two can be written against it:
+
+```c
+#define DAI_MODIFIER_MAX 8
+typedef enum dai_modifier_type {
+    DAI_MOD_NONE = 0, DAI_MOD_BEVEL, DAI_MOD_SUBDIVIDE,
+    DAI_MOD_SOLIDIFY, DAI_MOD_ARRAY, DAI_MOD_MIRROR, DAI_MOD_TYPE_COUNT
+} dai_modifier_type;
+#define DAI_MODF_SMOOTH   0x1u
+#define DAI_MODF_RELATIVE 0x2u
+typedef struct dai_modifier {
+    int      type;      /* dai_modifier_type, 0 = the slot is empty          */
+    int      off;       /* 1 = switched off: the stack skips it entirely     */
+    float    amount;    /* bevel width | solidify thickness | mirror weld, m */
+    int      count;     /* bevel segments 1..4 | subdiv level 1..3 | copies  */
+    float    angle;     /* bevel threshold deg | array degrees per copy      */
+    int      axis;      /* mirror axis | array rotation axis, 0 X 1 Y 2 Z    */
+    uint32_t flags;     /* DAI_MODF_*                                        */
+    dai_vec3 offset;    /* array step                                        */
+    float    param;     /* solidify shift -1..1                              */
+} dai_modifier;         /* all fields 4 bytes: no padding, memcmp is honest  */
+```
+
+and in `dai_node_desc`, right after the CSG field:
+`int modifier_count;` plus `dai_modifier modifiers[DAI_MODIFIER_MAX];`.
+That is what makes undo, multi-edit and the whole-record `memcmp` in
+`src/dai_doc.cpp` work with no new machinery at all.
+
+`daimod::Mod` in `include/dai_modifier.h` is the double-precision mirror of
+that struct; B3 writes the one conversion (`mod_of(const dai_modifier &)` /
+`stack_of(const dai_node_desc &)`) and puts it in `dai_blockout_host.inl`
+next to `shape_of()`, so there is exactly one.
+
+Scene file: one `mod` line per entry inside the node block, strictly parsed
+like every other key, plus the count; a scene without them loads unchanged
+and a round trip is byte identical.
+
+Property names for scripts and the bridge (`dai_blockout_props.inl`, index
+0..7 parsed out of the name):
+
+```
+modifier.count                     how many entries
+modifier.N.type                    1 bevel, 2 subdivide, 3 solidify, 4 array, 5 mirror
+modifier.N.off                     the tick box, inverted flag
+modifier.N.amount   (= .width, = .thickness, = .weld)
+modifier.N.count    (= .segments,  = .level, = .copies)
+modifier.N.angle
+modifier.N.axis
+modifier.N.offset                  vec3
+modifier.N.param    (= .shift)
+modifier.N.smooth                  flag bit 0
+modifier.N.relative                flag bit 1
+```
+
+`modifier.0.width` and `modifier.0.segments` must work - a script that says
+those two words gets a bevel. The aliases are the same storage, not a copy.
+
+Inspector: one Modifiers list under the existing blockout fields. Add
+Component > Modifier > Bevel / Subdivide / Solidify / Array / Mirror (kinds
+30..34, the 20..26 range is taken). Per entry a header row - type name, on/off
+tick, up, down, delete - then that type's fields and nothing else's. At
+1100x700 nothing clipped and nothing overlapping, asserted the way
+`dai_editor_ui_inspector_last_field` already asserts it.
+
+Host: hash the modifier array into the rebuild key in `hash_node()`, run
+`daimod::apply` on the solid the CSG produced, and finalise through
+`daimod::finalise(Result)` so a smooth subdivide is shaded smooth. Nothing
+else changes: the mesh is still derived, still never written back.
+
+Pictures 16..18 in `tools/blockout_shot.cpp`, both sizes, hooked into
+`tools/run_tests.sh` next to 14..15: the same shape without and with a bevel
+side by side, a stair built by an array of one step, a mirrored part - each
+with the inspector open on the node and the stack visible in it.
+
+## Sequencing
+
+All three start at once and never wait: B1 and B2 write pure geometry against
+headers that already compile, B3 writes the document, the panel and the
+bridge against the struct above and tests its own path with the modifiers
+that already work (array, mirror, subdivide). The order test
+(array-then-bevel differs from bevel-then-array) and the pictures that show a
+bevel are the two things that need B1 landed; they are the last things B3
+writes, not the first.
+
+## The bar for this round
+
+1. `./build.sh` and `./build_win.sh` green.
+2. `./tools/run_tests.sh` ends on `all green` with more than 5144 passed.
+3. The same stack computed twice is bit identical - vertices and indices.
+4. Bevel: 12 new edge faces on a cube at one segment and the volume the
+   formula predicts to 1e-4. Array: n times the triangles, box grown by
+   (n-1)*step. Mirror: every point has its partner to 1e-5. Solidify on an
+   open surface: closed. Subdivide level 2 on a cube: the stated face count
+   and a volume between the cube and its sphere.
+5. Bevel on a CSG result: zero degenerate triangles, no duplicate vertices
+   inside the weld tolerance, still closed.
+6. Order counts and is nailed down both ways; an entry that is off changes
+   nothing at all; undo of a parameter change gives back the old digest.
+7. `.gauntlet-shots/` shows it at 1920x1080 AND 1100x700: bevel on and off
+   visibly different, a stair from an array, a mirrored part, the inspector
+   with the stack - type, tick box, order.
+8. A script sets a modifier through the property names and the mesh measurably
+   changes.
+9. No existing test weakened, no assertion removed, no fixture thinned.
+10. Every number in RUN.md comes out of `build/last_run.log`.
