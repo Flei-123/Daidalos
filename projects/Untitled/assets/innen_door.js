@@ -55,6 +55,15 @@
 // @tooltip number. Its offset is taken from where it stands at the start.
 // @param string handle    =
 //
+// @header Vom Haus gesteuert
+// @tooltip The node's TAG is a channel the house writes to: "3>7" is the two
+// @tooltip rooms this door joins, and a leading "!" means the house has locked
+// @tooltip it - that is the "die Tuer geht beim vierten Mal nicht mehr auf"
+// @tooltip reaction of GDD 5.2. A tag is a real field, it survives a save and
+// @tooltip it is visible in the inspector, which is why it and not a hidden
+// @tooltip side channel. Off for doors nobody governs.
+// @param bool  readTag    = true
+
 // @header Test
 // @tooltip Seconds after the level starts at which the door opens by itself,
 // @tooltip unlocking first. 0 = off. tools/innen_walk.py uses this to prove
@@ -77,6 +86,7 @@ var half = 0;                        // signed half width, hinge side
 var PLAYER = -1, playerName = "Spieler";
 var HANDLE = -1, handOff = [0, 0, 0];
 var held = false, elapsed = 0, openedAt = -1;
+var READ_TAG = true, lastTag = null, nextTag = 0;
 var side0 = 0, slammed = false, autoFired = false;
 var myName = "Tuer";
 
@@ -141,6 +151,7 @@ function init() {
     SLAM_AFTER = num("slamAfter", 0.85);
     locked   = flag("locked", false);
     playerName = text("player", "Spieler");
+    READ_TAG = flag("readTag", true);
     myName   = node.getStr(self, "node.name") || ("Tuer" + self);
 
     var p = node.getPos(self);
@@ -196,6 +207,23 @@ function frame() {
                 if (LOCK_AFTER_SLAM) locked = true;
                 say("slam");
             }
+        }
+    }
+
+    // ---- what the house says ------------------------------------------
+    if (READ_TAG && elapsed >= nextTag) {
+        nextTag = elapsed + 0.25;
+        var tag = node.getStr(self, "node.tag") || "";
+        if (tag !== lastTag) {
+            if (lastTag !== null) {
+                var wants = tag.charAt(0) === "!";
+                if (wants !== locked) {
+                    locked = wants;
+                    if (locked && target !== 0) target = 0;   // it shuts, then it stays shut
+                    say(locked ? "the house locked it" : "the house let it go");
+                }
+            }
+            lastTag = tag;
         }
     }
 

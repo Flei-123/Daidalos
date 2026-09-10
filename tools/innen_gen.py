@@ -134,7 +134,7 @@ POSE_JS = """
         width: node.getNum(id, 'door.width'),
         height: node.getNum(id, 'door.height')
       };
-    } else if (nm.indexOf('Tuer.') === 0 && nm.indexOf('.Klinke') < 0) {
+    } else if (nm.indexOf('Tuer') === 0 && nm.indexOf('.Klinke') < 0) {
       out.doors++;
     } else if (nm === 'Spieler') {
       out.player = true;

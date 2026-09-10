@@ -1,5 +1,5 @@
 daidalos-scene 1
-next-id 403
+next-id 404
 
 node 8
   name Tueren
@@ -8,13 +8,14 @@ node 8
 end
 
 node 9
-  name R00_Vorraum
+  name Raum00
+  tag Vorraum
   nobody 1
   hidden 1
 end
 
 node 22
-  name R00_Vorraum.Licht.1
+  name Raum00.Licht.1
   pos 0 2.14 0
   scale 0.22 0.05 0.22
   nobody 1
@@ -25,14 +26,15 @@ node 22
 end
 
 node 23
-  name R01_Zimmer
+  name Raum01
+  tag Zimmer
   pos 0.9 0 -2.7
   nobody 1
   hidden 1
 end
 
 node 42
-  name R01_Zimmer.Licht.1
+  name Raum01.Licht.1
   pos 0.9 2.39 -2.7
   scale 0.22 0.05 0.22
   nobody 1
@@ -43,14 +45,15 @@ node 42
 end
 
 node 43
-  name R02_Flur
+  name Raum02
+  tag Flur
   pos 3.6 0 -3.6
   nobody 1
   hidden 1
 end
 
 node 78
-  name R02_Flur.Licht.1
+  name Raum02.Licht.1
   pos 3.6 2.39 -6.4875
   scale 0.22 0.05 0.22
   nobody 1
@@ -61,7 +64,7 @@ node 78
 end
 
 node 79
-  name R02_Flur.Licht.2
+  name Raum02.Licht.2
   pos 3.6 2.39 -3.6
   scale 0.22 0.05 0.22
   nobody 1
@@ -72,7 +75,7 @@ node 79
 end
 
 node 80
-  name R02_Flur.Licht.3
+  name Raum02.Licht.3
   pos 3.6 2.39 -0.7125
   scale 0.22 0.05 0.22
   nobody 1
@@ -83,14 +86,15 @@ node 80
 end
 
 node 81
-  name R03_Flur
+  name Raum03
+  tag Flur
   pos 5.4 0 -4.2
   nobody 1
   hidden 1
 end
 
 node 106
-  name R03_Flur.Licht.1
+  name Raum03.Licht.1
   pos 5.4 2.39 -6.2475
   scale 0.22 0.05 0.22
   nobody 1
@@ -101,7 +105,7 @@ node 106
 end
 
 node 107
-  name R03_Flur.Licht.2
+  name Raum03.Licht.2
   pos 5.4 2.39 -4.2
   scale 0.22 0.05 0.22
   nobody 1
@@ -112,7 +116,7 @@ node 107
 end
 
 node 108
-  name R03_Flur.Licht.3
+  name Raum03.Licht.3
   pos 5.4 2.39 -2.1525
   scale 0.22 0.05 0.22
   nobody 1
@@ -123,14 +127,15 @@ node 108
 end
 
 node 109
-  name R04_Kammer
+  name Raum04
+  tag Kammer
   pos 5.4 0 -8.1
   nobody 1
   hidden 1
 end
 
 node 128
-  name R04_Kammer.Licht.1
+  name Raum04.Licht.1
   pos 5.4 2.09 -8.1
   scale 0.22 0.05 0.22
   nobody 1
@@ -141,14 +146,15 @@ node 128
 end
 
 node 129
-  name R05_Kammer
+  name Raum05
+  tag Kammer
   pos 3.6 0 1.5
   nobody 1
   hidden 1
 end
 
 node 142
-  name R05_Kammer.Licht.1
+  name Raum05.Licht.1
   pos 3.6 2.24 1.5
   scale 0.22 0.05 0.22
   nobody 1
@@ -159,14 +165,15 @@ node 142
 end
 
 node 143
-  name R06_Treppenhaus
+  name Raum06
+  tag Treppenhaus
   pos 4.8 0 -10.8
   nobody 1
   hidden 1
 end
 
 node 168
-  name R06_Treppenhaus.Licht.1
+  name Raum06.Licht.1
   pos 4.8 3.69 -11.997
   scale 0.22 0.05 0.22
   nobody 1
@@ -177,7 +184,7 @@ node 168
 end
 
 node 169
-  name R06_Treppenhaus.Licht.2
+  name Raum06.Licht.2
   pos 4.8 3.69 -9.603
   scale 0.22 0.05 0.22
   nobody 1
@@ -188,14 +195,15 @@ node 169
 end
 
 node 170
-  name R07_Halle
+  name Raum07
+  tag Halle
   pos 10.2 0 -7.2
   nobody 1
   hidden 1
 end
 
 node 195
-  name R07_Halle.Licht.1
+  name Raum07.Licht.1
   pos 10.2 3.79 -10.28
   scale 0.22 0.05 0.22
   nobody 1
@@ -206,7 +214,7 @@ node 195
 end
 
 node 196
-  name R07_Halle.Licht.2
+  name Raum07.Licht.2
   pos 10.2 3.79 -4.12
   scale 0.22 0.05 0.22
   nobody 1
@@ -217,14 +225,15 @@ node 196
 end
 
 node 197
-  name R08_Maschine
+  name Raum08
+  tag Maschine
   pos 10.8 0 -13.8
   nobody 1
   hidden 1
 end
 
 node 222
-  name R08_Maschine.Licht.1
+  name Raum08.Licht.1
   pos 10.8 2.84 -15.2
   scale 0.22 0.05 0.22
   nobody 1
@@ -235,7 +244,7 @@ node 222
 end
 
 node 223
-  name R08_Maschine.Licht.2
+  name Raum08.Licht.2
   pos 10.8 2.84 -12.4
   scale 0.22 0.05 0.22
   nobody 1
@@ -246,14 +255,15 @@ node 223
 end
 
 node 224
-  name R09_Treppenhaus
+  name Raum09
+  tag Treppenhaus
   pos 4.8 0 -14.7
   nobody 1
   hidden 1
 end
 
 node 243
-  name R09_Treppenhaus.Licht.1
+  name Raum09.Licht.1
   pos 4.8 4.04 -16.107
   scale 0.22 0.05 0.22
   nobody 1
@@ -264,7 +274,7 @@ node 243
 end
 
 node 244
-  name R09_Treppenhaus.Licht.2
+  name Raum09.Licht.2
   pos 4.8 4.04 -13.293
   scale 0.22 0.05 0.22
   nobody 1
@@ -275,14 +285,15 @@ node 244
 end
 
 node 245
-  name R10_Halle
+  name Raum10
+  tag Halle
   pos 5.1 0 -20.7
   nobody 1
   hidden 1
 end
 
 node 274
-  name R10_Halle.Licht.1
+  name Raum10.Licht.1
   pos 5.1 3.69 -23.36
   scale 0.22 0.05 0.22
   nobody 1
@@ -293,7 +304,7 @@ node 274
 end
 
 node 275
-  name R10_Halle.Licht.2
+  name Raum10.Licht.2
   pos 5.1 3.69 -18.04
   scale 0.22 0.05 0.22
   nobody 1
@@ -304,14 +315,15 @@ node 275
 end
 
 node 276
-  name R11_Halle
+  name Raum11
+  tag Halle
   pos 9.6 0 -29.1
   nobody 1
   hidden 1
 end
 
 node 295
-  name R11_Halle.Licht.1
+  name Raum11.Licht.1
   pos 9.6 3.74 -32.18
   scale 0.22 0.05 0.22
   nobody 1
@@ -322,7 +334,7 @@ node 295
 end
 
 node 296
-  name R11_Halle.Licht.2
+  name Raum11.Licht.2
   pos 9.6 3.74 -26.02
   scale 0.22 0.05 0.22
   nobody 1
@@ -333,14 +345,15 @@ node 296
 end
 
 node 297
-  name R12_Flur
+  name Raum12
+  tag Flur
   pos 1.3322676e-15 0 -18
   nobody 1
   hidden 1
 end
 
 node 322
-  name R12_Flur.Licht.1
+  name Raum12.Licht.1
   pos 1.3322676e-15 2.44 -19.8375
   scale 0.22 0.05 0.22
   nobody 1
@@ -351,7 +364,7 @@ node 322
 end
 
 node 323
-  name R12_Flur.Licht.2
+  name Raum12.Licht.2
   pos 1.3322676e-15 2.44 -18
   scale 0.22 0.05 0.22
   nobody 1
@@ -362,7 +375,7 @@ node 323
 end
 
 node 324
-  name R12_Flur.Licht.3
+  name Raum12.Licht.3
   pos 1.3322676e-15 2.44 -16.1625
   scale 0.22 0.05 0.22
   nobody 1
@@ -373,14 +386,15 @@ node 324
 end
 
 node 325
-  name R13_Halle
+  name Raum13
+  tag Halle
   pos 0.6 0 -30.3
   nobody 1
   hidden 1
 end
 
 node 350
-  name R13_Halle.Licht.1
+  name Raum13.Licht.1
   pos 0.6 4.44 -32.54
   scale 0.22 0.05 0.22
   nobody 1
@@ -391,7 +405,7 @@ node 350
 end
 
 node 351
-  name R13_Halle.Licht.2
+  name Raum13.Licht.2
   pos 0.6 4.44 -28.06
   scale 0.22 0.05 0.22
   nobody 1
@@ -414,18 +428,26 @@ node 400
   hidden 1
 end
 
+node 403
+  name Haus
+  nobody 1
+  script innen_haus.js{rooms=14,doors=24,seed=7,warm=3,coldDistance=3,pingpong=3,anchors=0,player=Spieler}
+  hidden 1
+end
+
 node 352
-  name Tuer.00_R00_Vorraum
+  name Tuer00
+  tag 0>1
   parent 8
   pos 0 1.01 -0.6
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.00_R00_Vorraum.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer00.Klinke}
   materials materials/rost.daimat
 end
 
 node 353
-  name Tuer.00_R00_Vorraum.Klinke
+  name Tuer00.Klinke
   parent 8
   pos 0.395 0.95 -0.6
   rot 0 0 0.70710677 0.70710677
@@ -438,18 +460,19 @@ node 353
 end
 
 node 354
-  name Tuer.01_R01_Zimmer
+  name Tuer01
+  tag 1>2
   parent 8
   pos 2.7 1.01 -1.8
   rot 0 0.70710677 0 0.70710677
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=90,openAngle=-88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.01_R01_Zimmer.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=90,openAngle=-88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer01.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 355
-  name Tuer.01_R01_Zimmer.Klinke
+  name Tuer01.Klinke
   parent 8
   pos 2.7 0.95 -1.405
   rot -0.49999997 0.49999997 0.49999997 0.49999997
@@ -462,18 +485,19 @@ node 355
 end
 
 node 356
-  name Tuer.02_R02_Flur
+  name Tuer02
+  tag 2>3
   parent 8
   pos 4.5 1.01 -4.5
   rot 0 0.70710677 0 0.70710677
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=90,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.02_R02_Flur.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=90,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer02.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 357
-  name Tuer.02_R02_Flur.Klinke
+  name Tuer02.Klinke
   parent 8
   pos 4.5 0.95 -4.895
   rot -0.49999997 0.49999997 0.49999997 0.49999997
@@ -486,17 +510,18 @@ node 357
 end
 
 node 358
-  name Tuer.03_R03_Flur
+  name Tuer03
+  tag 3>4
   parent 8
   pos 5.4 1.01 -7.2
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.03_R03_Flur.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer03.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 359
-  name Tuer.03_R03_Flur.Klinke
+  name Tuer03.Klinke
   parent 8
   pos 5.005 0.95 -7.2
   rot 0 0 0.70710677 0.70710677
@@ -509,17 +534,18 @@ node 359
 end
 
 node 360
-  name Tuer.04_R02_Flur
+  name Tuer04
+  tag 2>5
   parent 8
   pos 3.6 1.01 0.6
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.04_R02_Flur.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer04.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 361
-  name Tuer.04_R02_Flur.Klinke
+  name Tuer04.Klinke
   parent 8
   pos 3.995 0.95 0.6
   rot 0 0 0.70710677 0.70710677
@@ -532,18 +558,19 @@ node 361
 end
 
 node 362
-  name Tuer.05_R02_Flur
+  name Tuer05
+  tag 2>-1
   parent 8
   pos 4.5 1.01 -1.5
   rot 0 0.70710677 0 0.70710677
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=90,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.05_R02_Flur.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=90,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer05.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 363
-  name Tuer.05_R02_Flur.Klinke
+  name Tuer05.Klinke
   parent 8
   pos 4.5 0.95 -1.105
   rot -0.49999997 0.49999997 0.49999997 0.49999997
@@ -556,17 +583,18 @@ node 363
 end
 
 node 364
-  name Tuer.06_R04_Kammer
+  name Tuer06
+  tag 4>6
   parent 8
   pos 5.4 1.01 -9
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.06_R04_Kammer.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer06.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 365
-  name Tuer.06_R04_Kammer.Klinke
+  name Tuer06.Klinke
   parent 8
   pos 5.795 0.95 -9
   rot 0 0 0.70710677 0.70710677
@@ -579,18 +607,19 @@ node 365
 end
 
 node 366
-  name Tuer.07_R03_Flur
+  name Tuer07
+  tag 3>7
   parent 8
   pos 6.3 1.01 -6
   rot 0 0.70710677 0 0.70710677
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=90,openAngle=-88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.07_R03_Flur.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=90,openAngle=-88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer07.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 367
-  name Tuer.07_R03_Flur.Klinke
+  name Tuer07.Klinke
   parent 8
   pos 6.3 0.95 -5.605
   rot -0.49999997 0.49999997 0.49999997 0.49999997
@@ -603,18 +632,19 @@ node 367
 end
 
 node 368
-  name Tuer.08_R06_Treppenhaus
+  name Tuer08
+  tag 6>-1
   parent 8
   pos 6.3 1.01 -10.8
   rot 0 0.70710677 0 0.70710677
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=90,openAngle=88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.08_R06_Treppenhaus.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=90,openAngle=88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer08.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 369
-  name Tuer.08_R06_Treppenhaus.Klinke
+  name Tuer08.Klinke
   parent 8
   pos 6.3 0.95 -11.195
   rot -0.49999997 0.49999997 0.49999997 0.49999997
@@ -627,17 +657,18 @@ node 369
 end
 
 node 370
-  name Tuer.09_R07_Halle
+  name Tuer09
+  tag 7>8
   parent 8
   pos 9.6 1.01 -11.7
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.09_R07_Halle.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer09.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 371
-  name Tuer.09_R07_Halle.Klinke
+  name Tuer09.Klinke
   parent 8
   pos 9.205 0.95 -11.7
   rot 0 0 0.70710677 0.70710677
@@ -650,17 +681,18 @@ node 371
 end
 
 node 372
-  name Tuer.10_R02_Flur
+  name Tuer10
+  tag 2>-1
   parent 8
   pos 3.6 1.01 -7.8
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.10_R02_Flur.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer10.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 373
-  name Tuer.10_R02_Flur.Klinke
+  name Tuer10.Klinke
   parent 8
   pos 3.995 0.95 -7.8
   rot 0 0 0.70710677 0.70710677
@@ -673,17 +705,18 @@ node 373
 end
 
 node 374
-  name Tuer.11_R06_Treppenhaus
+  name Tuer11
+  tag 6>9
   parent 8
   pos 4.8 1.01 -12.6
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.11_R06_Treppenhaus.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer11.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 375
-  name Tuer.11_R06_Treppenhaus.Klinke
+  name Tuer11.Klinke
   parent 8
   pos 4.405 0.95 -12.6
   rot 0 0 0.70710677 0.70710677
@@ -696,17 +729,18 @@ node 375
 end
 
 node 376
-  name Tuer.12_R09_Treppenhaus
+  name Tuer12
+  tag 9>10
   parent 8
   pos 5.4 1.01 -16.8
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.12_R09_Treppenhaus.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer12.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 377
-  name Tuer.12_R09_Treppenhaus.Klinke
+  name Tuer12.Klinke
   parent 8
   pos 5.795 0.95 -16.8
   rot 0 0 0.70710677 0.70710677
@@ -719,17 +753,18 @@ node 377
 end
 
 node 378
-  name Tuer.13_R10_Halle
+  name Tuer13
+  tag 10>11
   parent 8
   pos 8.4 1.01 -24.6
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.13_R10_Halle.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer13.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 379
-  name Tuer.13_R10_Halle.Klinke
+  name Tuer13.Klinke
   parent 8
   pos 8.005 0.95 -24.6
   rot 0 0 0.70710677 0.70710677
@@ -742,18 +777,19 @@ node 379
 end
 
 node 380
-  name Tuer.14_R10_Halle
+  name Tuer14
+  tag 10>12
   parent 8
   pos 0.9 1.01 -18.3
   rot 0 0.70710677 0 0.70710677
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=90,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.14_R10_Halle.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=90,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer14.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 381
-  name Tuer.14_R10_Halle.Klinke
+  name Tuer14.Klinke
   parent 8
   pos 0.9 0.95 -18.695
   rot -0.49999997 0.49999997 0.49999997 0.49999997
@@ -766,18 +802,19 @@ node 381
 end
 
 node 382
-  name Tuer.15_R08_Maschine
+  name Tuer15
+  tag 8>-1
   parent 8
   pos 8.4 1.01 -12.9
   rot 0 0.70710677 0 0.70710677
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=90,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.15_R08_Maschine.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=90,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer15.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 383
-  name Tuer.15_R08_Maschine.Klinke
+  name Tuer15.Klinke
   parent 8
   pos 8.4 0.95 -12.505
   rot -0.49999997 0.49999997 0.49999997 0.49999997
@@ -790,18 +827,19 @@ node 383
 end
 
 node 384
-  name Tuer.16_R11_Halle
+  name Tuer16
+  tag 11>13
   parent 8
   pos 5.7 1.01 -31.5
   rot 0 0.70710677 0 0.70710677
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=90,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.16_R11_Halle.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=90,openAngle=88,speed=140,startOpen=false,locked=false,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer16.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 385
-  name Tuer.16_R11_Halle.Klinke
+  name Tuer16.Klinke
   parent 8
   pos 5.7 0.95 -31.895
   rot -0.49999997 0.49999997 0.49999997 0.49999997
@@ -814,17 +852,18 @@ node 385
 end
 
 node 386
-  name Tuer.17_R07_Halle
+  name Tuer17
+  tag 7>-1
   parent 8
   pos 8.7 1.01 -2.7
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.17_R07_Halle.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer17.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 387
-  name Tuer.17_R07_Halle.Klinke
+  name Tuer17.Klinke
   parent 8
   pos 8.305 0.95 -2.7
   rot 0 0 0.70710677 0.70710677
@@ -837,17 +876,18 @@ node 387
 end
 
 node 388
-  name Tuer.18_R08_Maschine
+  name Tuer18
+  tag 8>-1
   parent 8
   pos 10.5 1.01 -15.9
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.18_R08_Maschine.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer18.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 389
-  name Tuer.18_R08_Maschine.Klinke
+  name Tuer18.Klinke
   parent 8
   pos 10.895 0.95 -15.9
   rot 0 0 0.70710677 0.70710677
@@ -860,17 +900,18 @@ node 389
 end
 
 node 390
-  name Tuer.19_R10_Halle
+  name Tuer19
+  tag 10>-1
   parent 8
   pos 4.5 1.01 -24.6
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.19_R10_Halle.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer19.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 391
-  name Tuer.19_R10_Halle.Klinke
+  name Tuer19.Klinke
   parent 8
   pos 4.105 0.95 -24.6
   rot 0 0 0.70710677 0.70710677
@@ -883,17 +924,18 @@ node 391
 end
 
 node 392
-  name Tuer.20_R12_Flur
+  name Tuer20
+  tag 12>-1
   parent 8
   pos 1.3322676e-15 1.01 -15.3
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.20_R12_Flur.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=0,openAngle=88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer20.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 393
-  name Tuer.20_R12_Flur.Klinke
+  name Tuer20.Klinke
   parent 8
   pos 0.395 0.95 -15.3
   rot 0 0 0.70710677 0.70710677
@@ -906,17 +948,18 @@ node 393
 end
 
 node 394
-  name Tuer.21_R12_Flur
+  name Tuer21
+  tag 12>-1
   parent 8
   pos 1.3322676e-15 1.01 -20.7
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.21_R12_Flur.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer21.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 395
-  name Tuer.21_R12_Flur.Klinke
+  name Tuer21.Klinke
   parent 8
   pos -0.395 0.95 -20.7
   rot 0 0 0.70710677 0.70710677
@@ -929,18 +972,19 @@ node 395
 end
 
 node 396
-  name Tuer.22_R13_Halle
+  name Tuer22
+  tag 13>-1
   parent 8
   pos -4.5 1.01 -30.6
   rot 0 0.70710677 0 0.70710677
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=90,openAngle=88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.22_R13_Halle.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=-1,yaw=90,openAngle=88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer22.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 397
-  name Tuer.22_R13_Halle.Klinke
+  name Tuer22.Klinke
   parent 8
   pos -4.5 0.95 -30.995
   rot -0.49999997 0.49999997 0.49999997 0.49999997
@@ -953,17 +997,18 @@ node 397
 end
 
 node 398
-  name Tuer.23_R13_Halle
+  name Tuer23
+  tag 13>-1
   parent 8
   pos 2.7 1.01 -27
   scale 0.93 2 0.045
   motion 1
-  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer.23_R13_Halle.Klinke}
+  script innen_door.js{width=0.9299999999999999,hinge=1,yaw=0,openAngle=-88,speed=140,startOpen=false,locked=true,slamBehind=false,lockAfterSlam=false,autoClose=0,player=Spieler,handle=Tuer23.Klinke}
   materials materials/raufaser.daimat
 end
 
 node 399
-  name Tuer.23_R13_Halle.Klinke
+  name Tuer23.Klinke
   parent 8
   pos 2.305 0.95 -27
   rot 0 0 0.70710677 0.70710677
@@ -976,7 +1021,7 @@ node 399
 end
 
 node 10
-  name R00_Vorraum.Floor
+  name Raum00.Floor
   parent 9
   pos 0 -0.06 0
   scale 1.32 0.12 1.32
@@ -984,7 +1029,7 @@ node 10
 end
 
 node 11
-  name R00_Vorraum.Ceiling
+  name Raum00.Ceiling
   parent 9
   pos 0 2.36 0
   scale 1.32 0.12 1.32
@@ -992,7 +1037,7 @@ node 11
 end
 
 node 12
-  name R00_Vorraum.Wall.Front
+  name Raum00.Wall.Front
   parent 9
   pos 0 1.15 -0.6
   nobody 1
@@ -1002,7 +1047,7 @@ node 12
 end
 
 node 15
-  name R00_Vorraum.Wall.Front.Hit0
+  name Raum00.Wall.Front.Hit0
   parent 9
   pos -0.5675 1.15 -0.6
   scale 0.185 2.3 0.12
@@ -1010,7 +1055,7 @@ node 15
 end
 
 node 16
-  name R00_Vorraum.Wall.Front.HitLintel0
+  name Raum00.Wall.Front.HitLintel0
   parent 9
   pos 0 2.16 -0.6
   scale 0.95 0.28 0.12
@@ -1018,7 +1063,7 @@ node 16
 end
 
 node 17
-  name R00_Vorraum.Wall.Front.HitEnd
+  name Raum00.Wall.Front.HitEnd
   parent 9
   pos 0.5675 1.15 -0.6
   scale 0.185 2.3 0.12
@@ -1026,7 +1071,7 @@ node 17
 end
 
 node 18
-  name R00_Vorraum.Wall.Back
+  name Raum00.Wall.Back
   parent 9
   pos 0 1.15 0.6
   scale 1.32 2.3 0.12
@@ -1034,7 +1079,7 @@ node 18
 end
 
 node 19
-  name R00_Vorraum.Wall.Left
+  name Raum00.Wall.Left
   parent 9
   pos -0.6 1.15 0
   scale 0.12 2.3 1.08
@@ -1042,7 +1087,7 @@ node 19
 end
 
 node 20
-  name R00_Vorraum.Wall.Right
+  name Raum00.Wall.Right
   parent 9
   pos 0.6 1.15 0
   scale 0.12 2.3 1.08
@@ -1050,7 +1095,7 @@ node 20
 end
 
 node 21
-  name R00_Vorraum.Door.front0
+  name Raum00.Door.front0
   parent 9
   pos 0 1.01 -0.6
   scale 0.05 0.05 0.05
@@ -1060,7 +1105,7 @@ node 21
 end
 
 node 24
-  name R01_Zimmer.Floor
+  name Raum01.Floor
   parent 23
   pos 0 -0.075 0
   scale 3.75 0.15 4.35
@@ -1068,7 +1113,7 @@ node 24
 end
 
 node 25
-  name R01_Zimmer.Ceiling
+  name Raum01.Ceiling
   parent 23
   pos 0 2.625 0
   scale 3.75 0.15 4.35
@@ -1076,7 +1121,7 @@ node 25
 end
 
 node 26
-  name R01_Zimmer.Wall.Front
+  name Raum01.Wall.Front
   parent 23
   pos 0 1.275 -2.1
   scale 3.75 2.55 0.15
@@ -1084,7 +1129,7 @@ node 26
 end
 
 node 27
-  name R01_Zimmer.Wall.Back
+  name Raum01.Wall.Back
   parent 23
   pos 0 1.275 2.1
   nobody 1
@@ -1094,7 +1139,7 @@ node 27
 end
 
 node 30
-  name R01_Zimmer.Wall.Back.Hit0
+  name Raum01.Wall.Back.Hit0
   parent 23
   pos -1.625 1.275 2.1
   scale 0.5 2.55 0.15
@@ -1102,7 +1147,7 @@ node 30
 end
 
 node 31
-  name R01_Zimmer.Wall.Back.HitLintel0
+  name Raum01.Wall.Back.HitLintel0
   parent 23
   pos -0.9 2.285 2.1
   scale 0.95 0.53 0.15
@@ -1110,7 +1155,7 @@ node 31
 end
 
 node 32
-  name R01_Zimmer.Wall.Back.HitEnd
+  name Raum01.Wall.Back.HitEnd
   parent 23
   pos 0.725 1.275 2.1
   scale 2.3 2.55 0.15
@@ -1118,7 +1163,7 @@ node 32
 end
 
 node 33
-  name R01_Zimmer.Wall.Left
+  name Raum01.Wall.Left
   parent 23
   pos -1.8 1.275 0
   scale 0.15 2.55 4.05
@@ -1126,7 +1171,7 @@ node 33
 end
 
 node 34
-  name R01_Zimmer.Wall.Right
+  name Raum01.Wall.Right
   parent 23
   pos 1.8 1.275 0
   nobody 1
@@ -1136,7 +1181,7 @@ node 34
 end
 
 node 37
-  name R01_Zimmer.Wall.Right.Hit0
+  name Raum01.Wall.Right.Hit0
   parent 23
   pos 1.8 1.275 -0.8
   scale 0.15 2.55 2.45
@@ -1144,7 +1189,7 @@ node 37
 end
 
 node 38
-  name R01_Zimmer.Wall.Right.HitLintel0
+  name Raum01.Wall.Right.HitLintel0
   parent 23
   pos 1.8 2.285 0.9
   scale 0.15 0.53 0.95
@@ -1152,7 +1197,7 @@ node 38
 end
 
 node 39
-  name R01_Zimmer.Wall.Right.HitEnd
+  name Raum01.Wall.Right.HitEnd
   parent 23
   pos 1.8 1.275 1.7
   scale 0.15 2.55 0.65
@@ -1160,7 +1205,7 @@ node 39
 end
 
 node 40
-  name R01_Zimmer.Door.back0
+  name Raum01.Door.back0
   parent 23
   pos -0.9 1.01 2.1
   scale 0.05 0.05 0.05
@@ -1170,7 +1215,7 @@ node 40
 end
 
 node 41
-  name R01_Zimmer.Door.right0
+  name Raum01.Door.right0
   parent 23
   pos 1.8 1.01 0.9
   scale 0.05 0.05 0.05
@@ -1180,7 +1225,7 @@ node 41
 end
 
 node 44
-  name R02_Flur.Floor
+  name Raum02.Floor
   parent 43
   pos 0 -0.075 0
   scale 1.95 0.15 8.55
@@ -1188,7 +1233,7 @@ node 44
 end
 
 node 45
-  name R02_Flur.Ceiling
+  name Raum02.Ceiling
   parent 43
   pos 0 2.625 0
   scale 1.95 0.15 8.55
@@ -1196,7 +1241,7 @@ node 45
 end
 
 node 46
-  name R02_Flur.Wall.Front
+  name Raum02.Wall.Front
   parent 43
   pos 0 1.275 -4.2
   nobody 1
@@ -1206,7 +1251,7 @@ node 46
 end
 
 node 49
-  name R02_Flur.Wall.Front.Hit0
+  name Raum02.Wall.Front.Hit0
   parent 43
   pos -0.725 1.275 -4.2
   scale 0.5 2.55 0.15
@@ -1214,7 +1259,7 @@ node 49
 end
 
 node 50
-  name R02_Flur.Wall.Front.HitLintel0
+  name Raum02.Wall.Front.HitLintel0
   parent 43
   pos -0 2.285 -4.2
   scale 0.95 0.53 0.15
@@ -1222,7 +1267,7 @@ node 50
 end
 
 node 51
-  name R02_Flur.Wall.Front.HitEnd
+  name Raum02.Wall.Front.HitEnd
   parent 43
   pos 0.725 1.275 -4.2
   scale 0.5 2.55 0.15
@@ -1230,7 +1275,7 @@ node 51
 end
 
 node 52
-  name R02_Flur.Wall.Back
+  name Raum02.Wall.Back
   parent 43
   pos 0 1.275 4.2
   nobody 1
@@ -1240,7 +1285,7 @@ node 52
 end
 
 node 55
-  name R02_Flur.Wall.Back.Hit0
+  name Raum02.Wall.Back.Hit0
   parent 43
   pos -0.725 1.275 4.2
   scale 0.5 2.55 0.15
@@ -1248,7 +1293,7 @@ node 55
 end
 
 node 56
-  name R02_Flur.Wall.Back.HitLintel0
+  name Raum02.Wall.Back.HitLintel0
   parent 43
   pos -0 2.285 4.2
   scale 0.95 0.53 0.15
@@ -1256,7 +1301,7 @@ node 56
 end
 
 node 57
-  name R02_Flur.Wall.Back.HitEnd
+  name Raum02.Wall.Back.HitEnd
   parent 43
   pos 0.725 1.275 4.2
   scale 0.5 2.55 0.15
@@ -1264,7 +1309,7 @@ node 57
 end
 
 node 58
-  name R02_Flur.Wall.Left
+  name Raum02.Wall.Left
   parent 43
   pos -0.9 1.275 0
   nobody 1
@@ -1274,7 +1319,7 @@ node 58
 end
 
 node 61
-  name R02_Flur.Wall.Left.Hit0
+  name Raum02.Wall.Left.Hit0
   parent 43
   pos -0.9 1.275 -1.4
   scale 0.15 2.55 5.45
@@ -1282,7 +1327,7 @@ node 61
 end
 
 node 62
-  name R02_Flur.Wall.Left.HitLintel0
+  name Raum02.Wall.Left.HitLintel0
   parent 43
   pos -0.9 2.285 1.8
   scale 0.15 0.53 0.95
@@ -1290,7 +1335,7 @@ node 62
 end
 
 node 63
-  name R02_Flur.Wall.Left.HitEnd
+  name Raum02.Wall.Left.HitEnd
   parent 43
   pos -0.9 1.275 3.2
   scale 0.15 2.55 1.85
@@ -1298,7 +1343,7 @@ node 63
 end
 
 node 64
-  name R02_Flur.Wall.Right
+  name Raum02.Wall.Right
   parent 43
   pos 0.9 1.275 0
   nobody 1
@@ -1308,7 +1353,7 @@ node 64
 end
 
 node 68
-  name R02_Flur.Wall.Right.Hit0
+  name Raum02.Wall.Right.Hit0
   parent 43
   pos 0.9 1.275 -2.75
   scale 0.15 2.55 2.75
@@ -1316,7 +1361,7 @@ node 68
 end
 
 node 69
-  name R02_Flur.Wall.Right.HitLintel0
+  name Raum02.Wall.Right.HitLintel0
   parent 43
   pos 0.9 2.285 -0.9
   scale 0.15 0.53 0.95
@@ -1324,7 +1369,7 @@ node 69
 end
 
 node 70
-  name R02_Flur.Wall.Right.Hit1
+  name Raum02.Wall.Right.Hit1
   parent 43
   pos 0.9 1.275 0.6
   scale 0.15 2.55 2.05
@@ -1332,7 +1377,7 @@ node 70
 end
 
 node 71
-  name R02_Flur.Wall.Right.HitLintel1
+  name Raum02.Wall.Right.HitLintel1
   parent 43
   pos 0.9 2.285 2.1
   scale 0.15 0.53 0.95
@@ -1340,7 +1385,7 @@ node 71
 end
 
 node 72
-  name R02_Flur.Wall.Right.HitEnd
+  name Raum02.Wall.Right.HitEnd
   parent 43
   pos 0.9 1.275 3.35
   scale 0.15 2.55 1.55
@@ -1348,7 +1393,7 @@ node 72
 end
 
 node 73
-  name R02_Flur.Door.front0
+  name Raum02.Door.front0
   parent 43
   pos -0 1.01 -4.2
   scale 0.05 0.05 0.05
@@ -1358,7 +1403,7 @@ node 73
 end
 
 node 74
-  name R02_Flur.Door.back0
+  name Raum02.Door.back0
   parent 43
   pos -0 1.01 4.2
   scale 0.05 0.05 0.05
@@ -1368,7 +1413,7 @@ node 74
 end
 
 node 75
-  name R02_Flur.Door.left0
+  name Raum02.Door.left0
   parent 43
   pos -0.9 1.01 1.8
   scale 0.05 0.05 0.05
@@ -1378,7 +1423,7 @@ node 75
 end
 
 node 76
-  name R02_Flur.Door.right0
+  name Raum02.Door.right0
   parent 43
   pos 0.9 1.01 -0.9
   scale 0.05 0.05 0.05
@@ -1388,7 +1433,7 @@ node 76
 end
 
 node 77
-  name R02_Flur.Door.right1
+  name Raum02.Door.right1
   parent 43
   pos 0.9 1.01 2.1
   scale 0.05 0.05 0.05
@@ -1398,7 +1443,7 @@ node 77
 end
 
 node 82
-  name R03_Flur.Floor
+  name Raum03.Floor
   parent 81
   pos 0 -0.075 0
   scale 1.95 0.15 6.15
@@ -1406,7 +1451,7 @@ node 82
 end
 
 node 83
-  name R03_Flur.Ceiling
+  name Raum03.Ceiling
   parent 81
   pos 0 2.625 0
   scale 1.95 0.15 6.15
@@ -1414,7 +1459,7 @@ node 83
 end
 
 node 84
-  name R03_Flur.Wall.Front
+  name Raum03.Wall.Front
   parent 81
   pos 0 1.275 -3
   nobody 1
@@ -1424,7 +1469,7 @@ node 84
 end
 
 node 87
-  name R03_Flur.Wall.Front.Hit0
+  name Raum03.Wall.Front.Hit0
   parent 81
   pos -0.725 1.275 -3
   scale 0.5 2.55 0.15
@@ -1432,7 +1477,7 @@ node 87
 end
 
 node 88
-  name R03_Flur.Wall.Front.HitLintel0
+  name Raum03.Wall.Front.HitLintel0
   parent 81
   pos 0 2.285 -3
   scale 0.95 0.53 0.15
@@ -1440,7 +1485,7 @@ node 88
 end
 
 node 89
-  name R03_Flur.Wall.Front.HitEnd
+  name Raum03.Wall.Front.HitEnd
   parent 81
   pos 0.725 1.275 -3
   scale 0.5 2.55 0.15
@@ -1448,7 +1493,7 @@ node 89
 end
 
 node 90
-  name R03_Flur.Wall.Back
+  name Raum03.Wall.Back
   parent 81
   pos 0 1.275 3
   scale 1.95 2.55 0.15
@@ -1456,7 +1501,7 @@ node 90
 end
 
 node 91
-  name R03_Flur.Wall.Left
+  name Raum03.Wall.Left
   parent 81
   pos -0.9 1.275 0
   nobody 1
@@ -1466,7 +1511,7 @@ node 91
 end
 
 node 94
-  name R03_Flur.Wall.Left.Hit0
+  name Raum03.Wall.Left.Hit0
   parent 81
   pos -0.9 1.275 -1.85
   scale 0.15 2.55 2.15
@@ -1474,7 +1519,7 @@ node 94
 end
 
 node 95
-  name R03_Flur.Wall.Left.HitLintel0
+  name Raum03.Wall.Left.HitLintel0
   parent 81
   pos -0.9 2.285 -0.3
   scale 0.15 0.53 0.95
@@ -1482,7 +1527,7 @@ node 95
 end
 
 node 96
-  name R03_Flur.Wall.Left.HitEnd
+  name Raum03.Wall.Left.HitEnd
   parent 81
   pos -0.9 1.275 1.55
   scale 0.15 2.55 2.75
@@ -1490,7 +1535,7 @@ node 96
 end
 
 node 97
-  name R03_Flur.Wall.Right
+  name Raum03.Wall.Right
   parent 81
   pos 0.9 1.275 0
   nobody 1
@@ -1500,7 +1545,7 @@ node 97
 end
 
 node 100
-  name R03_Flur.Wall.Right.Hit0
+  name Raum03.Wall.Right.Hit0
   parent 81
   pos 0.9 1.275 -2.6
   scale 0.15 2.55 0.65
@@ -1508,7 +1553,7 @@ node 100
 end
 
 node 101
-  name R03_Flur.Wall.Right.HitLintel0
+  name Raum03.Wall.Right.HitLintel0
   parent 81
   pos 0.9 2.285 -1.8
   scale 0.15 0.53 0.95
@@ -1516,7 +1561,7 @@ node 101
 end
 
 node 102
-  name R03_Flur.Wall.Right.HitEnd
+  name Raum03.Wall.Right.HitEnd
   parent 81
   pos 0.9 1.275 0.8
   scale 0.15 2.55 4.25
@@ -1524,7 +1569,7 @@ node 102
 end
 
 node 103
-  name R03_Flur.Door.front0
+  name Raum03.Door.front0
   parent 81
   pos 0 1.01 -3
   scale 0.05 0.05 0.05
@@ -1534,7 +1579,7 @@ node 103
 end
 
 node 104
-  name R03_Flur.Door.left0
+  name Raum03.Door.left0
   parent 81
   pos -0.9 1.01 -0.3
   scale 0.05 0.05 0.05
@@ -1544,7 +1589,7 @@ node 104
 end
 
 node 105
-  name R03_Flur.Door.right0
+  name Raum03.Door.right0
   parent 81
   pos 0.9 1.01 -1.8
   scale 0.05 0.05 0.05
@@ -1554,7 +1599,7 @@ node 105
 end
 
 node 110
-  name R04_Kammer.Floor
+  name Raum04.Floor
   parent 109
   pos 0 -0.06 0
   scale 1.92 0.12 1.92
@@ -1562,7 +1607,7 @@ node 110
 end
 
 node 111
-  name R04_Kammer.Ceiling
+  name Raum04.Ceiling
   parent 109
   pos 0 2.31 0
   scale 1.92 0.12 1.92
@@ -1570,7 +1615,7 @@ node 111
 end
 
 node 112
-  name R04_Kammer.Wall.Front
+  name Raum04.Wall.Front
   parent 109
   pos 0 1.125 -0.9
   nobody 1
@@ -1580,7 +1625,7 @@ node 112
 end
 
 node 115
-  name R04_Kammer.Wall.Front.Hit0
+  name Raum04.Wall.Front.Hit0
   parent 109
   pos -0.7175 1.125 -0.9
   scale 0.485 2.25 0.12
@@ -1588,7 +1633,7 @@ node 115
 end
 
 node 116
-  name R04_Kammer.Wall.Front.HitLintel0
+  name Raum04.Wall.Front.HitLintel0
   parent 109
   pos -0 2.135 -0.9
   scale 0.95 0.23 0.12
@@ -1596,7 +1641,7 @@ node 116
 end
 
 node 117
-  name R04_Kammer.Wall.Front.HitEnd
+  name Raum04.Wall.Front.HitEnd
   parent 109
   pos 0.7175 1.125 -0.9
   scale 0.485 2.25 0.12
@@ -1604,7 +1649,7 @@ node 117
 end
 
 node 118
-  name R04_Kammer.Wall.Back
+  name Raum04.Wall.Back
   parent 109
   pos 0 1.125 0.9
   nobody 1
@@ -1614,7 +1659,7 @@ node 118
 end
 
 node 121
-  name R04_Kammer.Wall.Back.Hit0
+  name Raum04.Wall.Back.Hit0
   parent 109
   pos -0.7175 1.125 0.9
   scale 0.485 2.25 0.12
@@ -1622,7 +1667,7 @@ node 121
 end
 
 node 122
-  name R04_Kammer.Wall.Back.HitLintel0
+  name Raum04.Wall.Back.HitLintel0
   parent 109
   pos -0 2.135 0.9
   scale 0.95 0.23 0.12
@@ -1630,7 +1675,7 @@ node 122
 end
 
 node 123
-  name R04_Kammer.Wall.Back.HitEnd
+  name Raum04.Wall.Back.HitEnd
   parent 109
   pos 0.7175 1.125 0.9
   scale 0.485 2.25 0.12
@@ -1638,7 +1683,7 @@ node 123
 end
 
 node 124
-  name R04_Kammer.Wall.Left
+  name Raum04.Wall.Left
   parent 109
   pos -0.9 1.125 0
   scale 0.12 2.25 1.68
@@ -1646,7 +1691,7 @@ node 124
 end
 
 node 125
-  name R04_Kammer.Wall.Right
+  name Raum04.Wall.Right
   parent 109
   pos 0.9 1.125 0
   scale 0.12 2.25 1.68
@@ -1654,7 +1699,7 @@ node 125
 end
 
 node 126
-  name R04_Kammer.Door.front0
+  name Raum04.Door.front0
   parent 109
   pos -0 1.01 -0.9
   scale 0.05 0.05 0.05
@@ -1664,7 +1709,7 @@ node 126
 end
 
 node 127
-  name R04_Kammer.Door.back0
+  name Raum04.Door.back0
   parent 109
   pos -0 1.01 0.9
   scale 0.05 0.05 0.05
@@ -1674,7 +1719,7 @@ node 127
 end
 
 node 130
-  name R05_Kammer.Floor
+  name Raum05.Floor
   parent 129
   pos 0 -0.06 0
   scale 1.92 0.12 1.92
@@ -1682,7 +1727,7 @@ node 130
 end
 
 node 131
-  name R05_Kammer.Ceiling
+  name Raum05.Ceiling
   parent 129
   pos 0 2.46 0
   scale 1.92 0.12 1.92
@@ -1690,7 +1735,7 @@ node 131
 end
 
 node 132
-  name R05_Kammer.Wall.Front
+  name Raum05.Wall.Front
   parent 129
   pos 0 1.2 -0.9
   nobody 1
@@ -1700,7 +1745,7 @@ node 132
 end
 
 node 135
-  name R05_Kammer.Wall.Front.Hit0
+  name Raum05.Wall.Front.Hit0
   parent 129
   pos -0.7175 1.2 -0.9
   scale 0.485 2.4 0.12
@@ -1708,7 +1753,7 @@ node 135
 end
 
 node 136
-  name R05_Kammer.Wall.Front.HitLintel0
+  name Raum05.Wall.Front.HitLintel0
   parent 129
   pos -0 2.21 -0.9
   scale 0.95 0.38 0.12
@@ -1716,7 +1761,7 @@ node 136
 end
 
 node 137
-  name R05_Kammer.Wall.Front.HitEnd
+  name Raum05.Wall.Front.HitEnd
   parent 129
   pos 0.7175 1.2 -0.9
   scale 0.485 2.4 0.12
@@ -1724,7 +1769,7 @@ node 137
 end
 
 node 138
-  name R05_Kammer.Wall.Back
+  name Raum05.Wall.Back
   parent 129
   pos 0 1.2 0.9
   scale 1.92 2.4 0.12
@@ -1732,7 +1777,7 @@ node 138
 end
 
 node 139
-  name R05_Kammer.Wall.Left
+  name Raum05.Wall.Left
   parent 129
   pos -0.9 1.2 0
   scale 0.12 2.4 1.68
@@ -1740,7 +1785,7 @@ node 139
 end
 
 node 140
-  name R05_Kammer.Wall.Right
+  name Raum05.Wall.Right
   parent 129
   pos 0.9 1.2 0
   scale 0.12 2.4 1.68
@@ -1748,7 +1793,7 @@ node 140
 end
 
 node 141
-  name R05_Kammer.Door.front0
+  name Raum05.Door.front0
   parent 129
   pos -0 1.01 -0.9
   scale 0.05 0.05 0.05
@@ -1758,7 +1803,7 @@ node 141
 end
 
 node 144
-  name R06_Treppenhaus.Floor
+  name Raum06.Floor
   parent 143
   pos 0 -0.09 0
   scale 3.18 0.18 3.78
@@ -1766,7 +1811,7 @@ node 144
 end
 
 node 145
-  name R06_Treppenhaus.Ceiling
+  name Raum06.Ceiling
   parent 143
   pos 0 3.94 0
   scale 3.18 0.18 3.78
@@ -1774,7 +1819,7 @@ node 145
 end
 
 node 146
-  name R06_Treppenhaus.Wall.Front
+  name Raum06.Wall.Front
   parent 143
   pos 0 1.925 -1.8
   nobody 1
@@ -1784,7 +1829,7 @@ node 146
 end
 
 node 149
-  name R06_Treppenhaus.Wall.Front.Hit0
+  name Raum06.Wall.Front.Hit0
   parent 143
   pos -1.0325 1.925 -1.8
   scale 1.115 3.85 0.18
@@ -1792,7 +1837,7 @@ node 149
 end
 
 node 150
-  name R06_Treppenhaus.Wall.Front.HitLintel0
+  name Raum06.Wall.Front.HitLintel0
   parent 143
   pos 0 2.935 -1.8
   scale 0.95 1.83 0.18
@@ -1800,7 +1845,7 @@ node 150
 end
 
 node 151
-  name R06_Treppenhaus.Wall.Front.HitEnd
+  name Raum06.Wall.Front.HitEnd
   parent 143
   pos 1.0325 1.925 -1.8
   scale 1.115 3.85 0.18
@@ -1808,7 +1853,7 @@ node 151
 end
 
 node 152
-  name R06_Treppenhaus.Wall.Back
+  name Raum06.Wall.Back
   parent 143
   pos 0 1.925 1.8
   nobody 1
@@ -1818,7 +1863,7 @@ node 152
 end
 
 node 155
-  name R06_Treppenhaus.Wall.Back.Hit0
+  name Raum06.Wall.Back.Hit0
   parent 143
   pos -0.7325 1.925 1.8
   scale 1.715 3.85 0.18
@@ -1826,7 +1871,7 @@ node 155
 end
 
 node 156
-  name R06_Treppenhaus.Wall.Back.HitLintel0
+  name Raum06.Wall.Back.HitLintel0
   parent 143
   pos 0.6 2.935 1.8
   scale 0.95 1.83 0.18
@@ -1834,7 +1879,7 @@ node 156
 end
 
 node 157
-  name R06_Treppenhaus.Wall.Back.HitEnd
+  name Raum06.Wall.Back.HitEnd
   parent 143
   pos 1.3325 1.925 1.8
   scale 0.515 3.85 0.18
@@ -1842,7 +1887,7 @@ node 157
 end
 
 node 158
-  name R06_Treppenhaus.Wall.Left
+  name Raum06.Wall.Left
   parent 143
   pos -1.5 1.925 0
   scale 0.18 3.85 3.42
@@ -1850,7 +1895,7 @@ node 158
 end
 
 node 159
-  name R06_Treppenhaus.Wall.Right
+  name Raum06.Wall.Right
   parent 143
   pos 1.5 1.925 0
   nobody 1
@@ -1860,7 +1905,7 @@ node 159
 end
 
 node 162
-  name R06_Treppenhaus.Wall.Right.Hit0
+  name Raum06.Wall.Right.Hit0
   parent 143
   pos 1.5 1.925 -1.0925
   scale 0.18 3.85 1.235
@@ -1868,7 +1913,7 @@ node 162
 end
 
 node 163
-  name R06_Treppenhaus.Wall.Right.HitLintel0
+  name Raum06.Wall.Right.HitLintel0
   parent 143
   pos 1.5 2.935 -0
   scale 0.18 1.83 0.95
@@ -1876,7 +1921,7 @@ node 163
 end
 
 node 164
-  name R06_Treppenhaus.Wall.Right.HitEnd
+  name Raum06.Wall.Right.HitEnd
   parent 143
   pos 1.5 1.925 1.0925
   scale 0.18 3.85 1.235
@@ -1884,7 +1929,7 @@ node 164
 end
 
 node 165
-  name R06_Treppenhaus.Door.front0
+  name Raum06.Door.front0
   parent 143
   pos 0 1.01 -1.8
   scale 0.05 0.05 0.05
@@ -1894,7 +1939,7 @@ node 165
 end
 
 node 166
-  name R06_Treppenhaus.Door.back0
+  name Raum06.Door.back0
   parent 143
   pos 0.6 1.01 1.8
   scale 0.05 0.05 0.05
@@ -1904,7 +1949,7 @@ node 166
 end
 
 node 167
-  name R06_Treppenhaus.Door.right0
+  name Raum06.Door.right0
   parent 143
   pos 1.5 1.01 -0
   scale 0.05 0.05 0.05
@@ -1914,7 +1959,7 @@ node 167
 end
 
 node 171
-  name R07_Halle.Floor
+  name Raum07.Floor
   parent 170
   pos 0 -0.1 0
   scale 8 0.2 9.2
@@ -1922,7 +1967,7 @@ node 171
 end
 
 node 172
-  name R07_Halle.Ceiling
+  name Raum07.Ceiling
   parent 170
   pos 0 4.05 0
   scale 8 0.2 9.2
@@ -1930,7 +1975,7 @@ node 172
 end
 
 node 173
-  name R07_Halle.Wall.Front
+  name Raum07.Wall.Front
   parent 170
   pos 0 1.975 -4.5
   nobody 1
@@ -1940,7 +1985,7 @@ node 173
 end
 
 node 176
-  name R07_Halle.Wall.Front.Hit0
+  name Raum07.Wall.Front.Hit0
   parent 170
   pos -2.5375 1.975 -4.5
   scale 2.925 3.95 0.2
@@ -1948,7 +1993,7 @@ node 176
 end
 
 node 177
-  name R07_Halle.Wall.Front.HitLintel0
+  name Raum07.Wall.Front.HitLintel0
   parent 170
   pos -0.6 2.985 -4.5
   scale 0.95 1.93 0.2
@@ -1956,7 +2001,7 @@ node 177
 end
 
 node 178
-  name R07_Halle.Wall.Front.HitEnd
+  name Raum07.Wall.Front.HitEnd
   parent 170
   pos 1.9375 1.975 -4.5
   scale 4.125 3.95 0.2
@@ -1964,7 +2009,7 @@ node 178
 end
 
 node 179
-  name R07_Halle.Wall.Back
+  name Raum07.Wall.Back
   parent 170
   pos 0 1.975 4.5
   nobody 1
@@ -1974,7 +2019,7 @@ node 179
 end
 
 node 182
-  name R07_Halle.Wall.Back.Hit0
+  name Raum07.Wall.Back.Hit0
   parent 170
   pos -2.9875 1.975 4.5
   scale 2.025 3.95 0.2
@@ -1982,7 +2027,7 @@ node 182
 end
 
 node 183
-  name R07_Halle.Wall.Back.HitLintel0
+  name Raum07.Wall.Back.HitLintel0
   parent 170
   pos -1.5 2.985 4.5
   scale 0.95 1.93 0.2
@@ -1990,7 +2035,7 @@ node 183
 end
 
 node 184
-  name R07_Halle.Wall.Back.HitEnd
+  name Raum07.Wall.Back.HitEnd
   parent 170
   pos 1.4875 1.975 4.5
   scale 5.025 3.95 0.2
@@ -1998,7 +2043,7 @@ node 184
 end
 
 node 185
-  name R07_Halle.Wall.Left
+  name Raum07.Wall.Left
   parent 170
   pos -3.9 1.975 0
   nobody 1
@@ -2008,7 +2053,7 @@ node 185
 end
 
 node 188
-  name R07_Halle.Wall.Left.Hit0
+  name Raum07.Wall.Left.Hit0
   parent 170
   pos -3.9 1.975 -1.8375
   scale 0.2 3.95 5.125
@@ -2016,7 +2061,7 @@ node 188
 end
 
 node 189
-  name R07_Halle.Wall.Left.HitLintel0
+  name Raum07.Wall.Left.HitLintel0
   parent 170
   pos -3.9 2.985 1.2
   scale 0.2 1.93 0.95
@@ -2024,7 +2069,7 @@ node 189
 end
 
 node 190
-  name R07_Halle.Wall.Left.HitEnd
+  name Raum07.Wall.Left.HitEnd
   parent 170
   pos -3.9 1.975 3.0375
   scale 0.2 3.95 2.725
@@ -2032,7 +2077,7 @@ node 190
 end
 
 node 191
-  name R07_Halle.Wall.Right
+  name Raum07.Wall.Right
   parent 170
   pos 3.9 1.975 0
   scale 0.2 3.95 8.8
@@ -2040,7 +2085,7 @@ node 191
 end
 
 node 192
-  name R07_Halle.Door.front0
+  name Raum07.Door.front0
   parent 170
   pos -0.6 1.01 -4.5
   scale 0.05 0.05 0.05
@@ -2050,7 +2095,7 @@ node 192
 end
 
 node 193
-  name R07_Halle.Door.back0
+  name Raum07.Door.back0
   parent 170
   pos -1.5 1.01 4.5
   scale 0.05 0.05 0.05
@@ -2060,7 +2105,7 @@ node 193
 end
 
 node 194
-  name R07_Halle.Door.left0
+  name Raum07.Door.left0
   parent 170
   pos -3.9 1.01 1.2
   scale 0.05 0.05 0.05
@@ -2070,7 +2115,7 @@ node 194
 end
 
 node 198
-  name R08_Maschine.Floor
+  name Raum08.Floor
   parent 197
   pos 0 -0.1 0
   scale 5 0.2 4.4
@@ -2078,7 +2123,7 @@ node 198
 end
 
 node 199
-  name R08_Maschine.Ceiling
+  name Raum08.Ceiling
   parent 197
   pos 0 3.1 0
   scale 5 0.2 4.4
@@ -2086,7 +2131,7 @@ node 199
 end
 
 node 200
-  name R08_Maschine.Wall.Front
+  name Raum08.Wall.Front
   parent 197
   pos 0 1.5 -2.1
   nobody 1
@@ -2096,7 +2141,7 @@ node 200
 end
 
 node 203
-  name R08_Maschine.Wall.Front.Hit0
+  name Raum08.Wall.Front.Hit0
   parent 197
   pos -1.6375 1.5 -2.1
   scale 1.725 3 0.2
@@ -2104,7 +2149,7 @@ node 203
 end
 
 node 204
-  name R08_Maschine.Wall.Front.HitLintel0
+  name Raum08.Wall.Front.HitLintel0
   parent 197
   pos -0.3 2.51 -2.1
   scale 0.95 0.98 0.2
@@ -2112,7 +2157,7 @@ node 204
 end
 
 node 205
-  name R08_Maschine.Wall.Front.HitEnd
+  name Raum08.Wall.Front.HitEnd
   parent 197
   pos 1.3375 1.5 -2.1
   scale 2.325 3 0.2
@@ -2120,7 +2165,7 @@ node 205
 end
 
 node 206
-  name R08_Maschine.Wall.Back
+  name Raum08.Wall.Back
   parent 197
   pos 0 1.5 2.1
   nobody 1
@@ -2130,7 +2175,7 @@ node 206
 end
 
 node 209
-  name R08_Maschine.Wall.Back.Hit0
+  name Raum08.Wall.Back.Hit0
   parent 197
   pos -2.0875 1.5 2.1
   scale 0.825 3 0.2
@@ -2138,7 +2183,7 @@ node 209
 end
 
 node 210
-  name R08_Maschine.Wall.Back.HitLintel0
+  name Raum08.Wall.Back.HitLintel0
   parent 197
   pos -1.2 2.51 2.1
   scale 0.95 0.98 0.2
@@ -2146,7 +2191,7 @@ node 210
 end
 
 node 211
-  name R08_Maschine.Wall.Back.HitEnd
+  name Raum08.Wall.Back.HitEnd
   parent 197
   pos 0.8875 1.5 2.1
   scale 3.225 3 0.2
@@ -2154,7 +2199,7 @@ node 211
 end
 
 node 212
-  name R08_Maschine.Wall.Left
+  name Raum08.Wall.Left
   parent 197
   pos -2.4 1.5 0
   nobody 1
@@ -2164,7 +2209,7 @@ node 212
 end
 
 node 215
-  name R08_Maschine.Wall.Left.Hit0
+  name Raum08.Wall.Left.Hit0
   parent 197
   pos -2.4 1.5 -0.7875
   scale 0.2 3 2.425
@@ -2172,7 +2217,7 @@ node 215
 end
 
 node 216
-  name R08_Maschine.Wall.Left.HitLintel0
+  name Raum08.Wall.Left.HitLintel0
   parent 197
   pos -2.4 2.51 0.9
   scale 0.2 0.98 0.95
@@ -2180,7 +2225,7 @@ node 216
 end
 
 node 217
-  name R08_Maschine.Wall.Left.HitEnd
+  name Raum08.Wall.Left.HitEnd
   parent 197
   pos -2.4 1.5 1.6875
   scale 0.2 3 0.625
@@ -2188,7 +2233,7 @@ node 217
 end
 
 node 218
-  name R08_Maschine.Wall.Right
+  name Raum08.Wall.Right
   parent 197
   pos 2.4 1.5 0
   scale 0.2 3 4
@@ -2196,7 +2241,7 @@ node 218
 end
 
 node 219
-  name R08_Maschine.Door.front0
+  name Raum08.Door.front0
   parent 197
   pos -0.3 1.01 -2.1
   scale 0.05 0.05 0.05
@@ -2206,7 +2251,7 @@ node 219
 end
 
 node 220
-  name R08_Maschine.Door.back0
+  name Raum08.Door.back0
   parent 197
   pos -1.2 1.01 2.1
   scale 0.05 0.05 0.05
@@ -2216,7 +2261,7 @@ node 220
 end
 
 node 221
-  name R08_Maschine.Door.left0
+  name Raum08.Door.left0
   parent 197
   pos -2.4 1.01 0.9
   scale 0.05 0.05 0.05
@@ -2226,7 +2271,7 @@ node 221
 end
 
 node 225
-  name R09_Treppenhaus.Floor
+  name Raum09.Floor
   parent 224
   pos 0 -0.09 0
   scale 3.18 0.18 4.38
@@ -2234,7 +2279,7 @@ node 225
 end
 
 node 226
-  name R09_Treppenhaus.Ceiling
+  name Raum09.Ceiling
   parent 224
   pos 0 4.29 0
   scale 3.18 0.18 4.38
@@ -2242,7 +2287,7 @@ node 226
 end
 
 node 227
-  name R09_Treppenhaus.Wall.Front
+  name Raum09.Wall.Front
   parent 224
   pos 0 2.1 -2.1
   nobody 1
@@ -2252,7 +2297,7 @@ node 227
 end
 
 node 230
-  name R09_Treppenhaus.Wall.Front.Hit0
+  name Raum09.Wall.Front.Hit0
   parent 224
   pos -0.7325 2.1 -2.1
   scale 1.715 4.2 0.18
@@ -2260,7 +2305,7 @@ node 230
 end
 
 node 231
-  name R09_Treppenhaus.Wall.Front.HitLintel0
+  name Raum09.Wall.Front.HitLintel0
   parent 224
   pos 0.6 3.11 -2.1
   scale 0.95 2.18 0.18
@@ -2268,7 +2313,7 @@ node 231
 end
 
 node 232
-  name R09_Treppenhaus.Wall.Front.HitEnd
+  name Raum09.Wall.Front.HitEnd
   parent 224
   pos 1.3325 2.1 -2.1
   scale 0.515 4.2 0.18
@@ -2276,7 +2321,7 @@ node 232
 end
 
 node 233
-  name R09_Treppenhaus.Wall.Back
+  name Raum09.Wall.Back
   parent 224
   pos 0 2.1 2.1
   nobody 1
@@ -2286,7 +2331,7 @@ node 233
 end
 
 node 236
-  name R09_Treppenhaus.Wall.Back.Hit0
+  name Raum09.Wall.Back.Hit0
   parent 224
   pos -1.0325 2.1 2.1
   scale 1.115 4.2 0.18
@@ -2294,7 +2339,7 @@ node 236
 end
 
 node 237
-  name R09_Treppenhaus.Wall.Back.HitLintel0
+  name Raum09.Wall.Back.HitLintel0
   parent 224
   pos 0 3.11 2.1
   scale 0.95 2.18 0.18
@@ -2302,7 +2347,7 @@ node 237
 end
 
 node 238
-  name R09_Treppenhaus.Wall.Back.HitEnd
+  name Raum09.Wall.Back.HitEnd
   parent 224
   pos 1.0325 2.1 2.1
   scale 1.115 4.2 0.18
@@ -2310,7 +2355,7 @@ node 238
 end
 
 node 239
-  name R09_Treppenhaus.Wall.Left
+  name Raum09.Wall.Left
   parent 224
   pos -1.5 2.1 0
   scale 0.18 4.2 4.02
@@ -2318,7 +2363,7 @@ node 239
 end
 
 node 240
-  name R09_Treppenhaus.Wall.Right
+  name Raum09.Wall.Right
   parent 224
   pos 1.5 2.1 0
   scale 0.18 4.2 4.02
@@ -2326,7 +2371,7 @@ node 240
 end
 
 node 241
-  name R09_Treppenhaus.Door.front0
+  name Raum09.Door.front0
   parent 224
   pos 0.6 1.01 -2.1
   scale 0.05 0.05 0.05
@@ -2336,7 +2381,7 @@ node 241
 end
 
 node 242
-  name R09_Treppenhaus.Door.back0
+  name Raum09.Door.back0
   parent 224
   pos 0 1.01 2.1
   scale 0.05 0.05 0.05
@@ -2346,7 +2391,7 @@ node 242
 end
 
 node 246
-  name R10_Halle.Floor
+  name Raum10.Floor
   parent 245
   pos 0 -0.1 0
   scale 8.6 0.2 8
@@ -2354,7 +2399,7 @@ node 246
 end
 
 node 247
-  name R10_Halle.Ceiling
+  name Raum10.Ceiling
   parent 245
   pos 0 3.95 0
   scale 8.6 0.2 8
@@ -2362,7 +2407,7 @@ node 247
 end
 
 node 248
-  name R10_Halle.Wall.Front
+  name Raum10.Wall.Front
   parent 245
   pos 0 1.925 -3.9
   nobody 1
@@ -2372,7 +2417,7 @@ node 248
 end
 
 node 252
-  name R10_Halle.Wall.Front.Hit0
+  name Raum10.Wall.Front.Hit0
   parent 245
   pos -2.6875 1.925 -3.9
   scale 3.225 3.85 0.2
@@ -2380,7 +2425,7 @@ node 252
 end
 
 node 253
-  name R10_Halle.Wall.Front.HitLintel0
+  name Raum10.Wall.Front.HitLintel0
   parent 245
   pos -0.6 2.935 -3.9
   scale 0.95 1.83 0.2
@@ -2388,7 +2433,7 @@ node 253
 end
 
 node 254
-  name R10_Halle.Wall.Front.Hit1
+  name Raum10.Wall.Front.Hit1
   parent 245
   pos 1.35 1.925 -3.9
   scale 2.95 3.85 0.2
@@ -2396,7 +2441,7 @@ node 254
 end
 
 node 255
-  name R10_Halle.Wall.Front.HitLintel1
+  name Raum10.Wall.Front.HitLintel1
   parent 245
   pos 3.3 2.935 -3.9
   scale 0.95 1.83 0.2
@@ -2404,7 +2449,7 @@ node 255
 end
 
 node 256
-  name R10_Halle.Wall.Front.HitEnd
+  name Raum10.Wall.Front.HitEnd
   parent 245
   pos 4.0375 1.925 -3.9
   scale 0.525 3.85 0.2
@@ -2412,7 +2457,7 @@ node 256
 end
 
 node 257
-  name R10_Halle.Wall.Back
+  name Raum10.Wall.Back
   parent 245
   pos 0 1.925 3.9
   nobody 1
@@ -2422,7 +2467,7 @@ node 257
 end
 
 node 260
-  name R10_Halle.Wall.Back.Hit0
+  name Raum10.Wall.Back.Hit0
   parent 245
   pos -2.2375 1.925 3.9
   scale 4.125 3.85 0.2
@@ -2430,7 +2475,7 @@ node 260
 end
 
 node 261
-  name R10_Halle.Wall.Back.HitLintel0
+  name Raum10.Wall.Back.HitLintel0
   parent 245
   pos 0.3 2.935 3.9
   scale 0.95 1.83 0.2
@@ -2438,7 +2483,7 @@ node 261
 end
 
 node 262
-  name R10_Halle.Wall.Back.HitEnd
+  name Raum10.Wall.Back.HitEnd
   parent 245
   pos 2.5375 1.925 3.9
   scale 3.525 3.85 0.2
@@ -2446,7 +2491,7 @@ node 262
 end
 
 node 263
-  name R10_Halle.Wall.Left
+  name Raum10.Wall.Left
   parent 245
   pos -4.2 1.925 0
   nobody 1
@@ -2456,7 +2501,7 @@ node 263
 end
 
 node 266
-  name R10_Halle.Wall.Left.Hit0
+  name Raum10.Wall.Left.Hit0
   parent 245
   pos -4.2 1.925 -0.9375
   scale 0.2 3.85 5.725
@@ -2464,7 +2509,7 @@ node 266
 end
 
 node 267
-  name R10_Halle.Wall.Left.HitLintel0
+  name Raum10.Wall.Left.HitLintel0
   parent 245
   pos -4.2 2.935 2.4
   scale 0.2 1.83 0.95
@@ -2472,7 +2517,7 @@ node 267
 end
 
 node 268
-  name R10_Halle.Wall.Left.HitEnd
+  name Raum10.Wall.Left.HitEnd
   parent 245
   pos -4.2 1.925 3.3375
   scale 0.2 3.85 0.925
@@ -2480,7 +2525,7 @@ node 268
 end
 
 node 269
-  name R10_Halle.Wall.Right
+  name Raum10.Wall.Right
   parent 245
   pos 4.2 1.925 0
   scale 0.2 3.85 7.6
@@ -2488,7 +2533,7 @@ node 269
 end
 
 node 270
-  name R10_Halle.Door.front0
+  name Raum10.Door.front0
   parent 245
   pos 3.3 1.01 -3.9
   scale 0.05 0.05 0.05
@@ -2498,7 +2543,7 @@ node 270
 end
 
 node 271
-  name R10_Halle.Door.front1
+  name Raum10.Door.front1
   parent 245
   pos -0.6 1.01 -3.9
   scale 0.05 0.05 0.05
@@ -2508,7 +2553,7 @@ node 271
 end
 
 node 272
-  name R10_Halle.Door.back0
+  name Raum10.Door.back0
   parent 245
   pos 0.3 1.01 3.9
   scale 0.05 0.05 0.05
@@ -2518,7 +2563,7 @@ node 272
 end
 
 node 273
-  name R10_Halle.Door.left0
+  name Raum10.Door.left0
   parent 245
   pos -4.2 1.01 2.4
   scale 0.05 0.05 0.05
@@ -2528,7 +2573,7 @@ node 273
 end
 
 node 277
-  name R11_Halle.Floor
+  name Raum11.Floor
   parent 276
   pos 0 -0.1 0
   scale 8 0.2 9.2
@@ -2536,7 +2581,7 @@ node 277
 end
 
 node 278
-  name R11_Halle.Ceiling
+  name Raum11.Ceiling
   parent 276
   pos 0 4 0
   scale 8 0.2 9.2
@@ -2544,7 +2589,7 @@ node 278
 end
 
 node 279
-  name R11_Halle.Wall.Front
+  name Raum11.Wall.Front
   parent 276
   pos 0 1.95 -4.5
   scale 8 3.9 0.2
@@ -2552,7 +2597,7 @@ node 279
 end
 
 node 280
-  name R11_Halle.Wall.Back
+  name Raum11.Wall.Back
   parent 276
   pos 0 1.95 4.5
   nobody 1
@@ -2562,7 +2607,7 @@ node 280
 end
 
 node 283
-  name R11_Halle.Wall.Back.Hit0
+  name Raum11.Wall.Back.Hit0
   parent 276
   pos -2.8375 1.95 4.5
   scale 2.325 3.9 0.2
@@ -2570,7 +2615,7 @@ node 283
 end
 
 node 284
-  name R11_Halle.Wall.Back.HitLintel0
+  name Raum11.Wall.Back.HitLintel0
   parent 276
   pos -1.2 2.96 4.5
   scale 0.95 1.88 0.2
@@ -2578,7 +2623,7 @@ node 284
 end
 
 node 285
-  name R11_Halle.Wall.Back.HitEnd
+  name Raum11.Wall.Back.HitEnd
   parent 276
   pos 1.6375 1.95 4.5
   scale 4.725 3.9 0.2
@@ -2586,7 +2631,7 @@ node 285
 end
 
 node 286
-  name R11_Halle.Wall.Left
+  name Raum11.Wall.Left
   parent 276
   pos -3.9 1.95 0
   nobody 1
@@ -2596,7 +2641,7 @@ node 286
 end
 
 node 289
-  name R11_Halle.Wall.Left.Hit0
+  name Raum11.Wall.Left.Hit0
   parent 276
   pos -3.9 1.95 -3.6375
   scale 0.2 3.9 1.525
@@ -2604,7 +2649,7 @@ node 289
 end
 
 node 290
-  name R11_Halle.Wall.Left.HitLintel0
+  name Raum11.Wall.Left.HitLintel0
   parent 276
   pos -3.9 2.96 -2.4
   scale 0.2 1.88 0.95
@@ -2612,7 +2657,7 @@ node 290
 end
 
 node 291
-  name R11_Halle.Wall.Left.HitEnd
+  name Raum11.Wall.Left.HitEnd
   parent 276
   pos -3.9 1.95 1.2375
   scale 0.2 3.9 6.325
@@ -2620,7 +2665,7 @@ node 291
 end
 
 node 292
-  name R11_Halle.Wall.Right
+  name Raum11.Wall.Right
   parent 276
   pos 3.9 1.95 0
   scale 0.2 3.9 8.8
@@ -2628,7 +2673,7 @@ node 292
 end
 
 node 293
-  name R11_Halle.Door.back0
+  name Raum11.Door.back0
   parent 276
   pos -1.2 1.01 4.5
   scale 0.05 0.05 0.05
@@ -2638,7 +2683,7 @@ node 293
 end
 
 node 294
-  name R11_Halle.Door.left0
+  name Raum11.Door.left0
   parent 276
   pos -3.9 1.01 -2.4
   scale 0.05 0.05 0.05
@@ -2648,7 +2693,7 @@ node 294
 end
 
 node 298
-  name R12_Flur.Floor
+  name Raum12.Floor
   parent 297
   pos 0 -0.075 0
   scale 1.95 0.15 5.55
@@ -2656,7 +2701,7 @@ node 298
 end
 
 node 299
-  name R12_Flur.Ceiling
+  name Raum12.Ceiling
   parent 297
   pos 0 2.675 0
   scale 1.95 0.15 5.55
@@ -2664,7 +2709,7 @@ node 299
 end
 
 node 300
-  name R12_Flur.Wall.Front
+  name Raum12.Wall.Front
   parent 297
   pos 0 1.3 -2.7
   nobody 1
@@ -2674,7 +2719,7 @@ node 300
 end
 
 node 303
-  name R12_Flur.Wall.Front.Hit0
+  name Raum12.Wall.Front.Hit0
   parent 297
   pos -0.725 1.3 -2.7
   scale 0.5 2.6 0.15
@@ -2682,7 +2727,7 @@ node 303
 end
 
 node 304
-  name R12_Flur.Wall.Front.HitLintel0
+  name Raum12.Wall.Front.HitLintel0
   parent 297
   pos -0 2.31 -2.7
   scale 0.95 0.58 0.15
@@ -2690,7 +2735,7 @@ node 304
 end
 
 node 305
-  name R12_Flur.Wall.Front.HitEnd
+  name Raum12.Wall.Front.HitEnd
   parent 297
   pos 0.725 1.3 -2.7
   scale 0.5 2.6 0.15
@@ -2698,7 +2743,7 @@ node 305
 end
 
 node 306
-  name R12_Flur.Wall.Back
+  name Raum12.Wall.Back
   parent 297
   pos 0 1.3 2.7
   nobody 1
@@ -2708,7 +2753,7 @@ node 306
 end
 
 node 309
-  name R12_Flur.Wall.Back.Hit0
+  name Raum12.Wall.Back.Hit0
   parent 297
   pos -0.725 1.3 2.7
   scale 0.5 2.6 0.15
@@ -2716,7 +2761,7 @@ node 309
 end
 
 node 310
-  name R12_Flur.Wall.Back.HitLintel0
+  name Raum12.Wall.Back.HitLintel0
   parent 297
   pos 0 2.31 2.7
   scale 0.95 0.58 0.15
@@ -2724,7 +2769,7 @@ node 310
 end
 
 node 311
-  name R12_Flur.Wall.Back.HitEnd
+  name Raum12.Wall.Back.HitEnd
   parent 297
   pos 0.725 1.3 2.7
   scale 0.5 2.6 0.15
@@ -2732,7 +2777,7 @@ node 311
 end
 
 node 312
-  name R12_Flur.Wall.Left
+  name Raum12.Wall.Left
   parent 297
   pos -0.9 1.3 0
   scale 0.15 2.6 5.25
@@ -2740,7 +2785,7 @@ node 312
 end
 
 node 313
-  name R12_Flur.Wall.Right
+  name Raum12.Wall.Right
   parent 297
   pos 0.9 1.3 0
   nobody 1
@@ -2750,7 +2795,7 @@ node 313
 end
 
 node 316
-  name R12_Flur.Wall.Right.Hit0
+  name Raum12.Wall.Right.Hit0
   parent 297
   pos 0.9 1.3 -1.7
   scale 0.15 2.6 1.85
@@ -2758,7 +2803,7 @@ node 316
 end
 
 node 317
-  name R12_Flur.Wall.Right.HitLintel0
+  name Raum12.Wall.Right.HitLintel0
   parent 297
   pos 0.9 2.31 -0.3
   scale 0.15 0.58 0.95
@@ -2766,7 +2811,7 @@ node 317
 end
 
 node 318
-  name R12_Flur.Wall.Right.HitEnd
+  name Raum12.Wall.Right.HitEnd
   parent 297
   pos 0.9 1.3 1.4
   scale 0.15 2.6 2.45
@@ -2774,7 +2819,7 @@ node 318
 end
 
 node 319
-  name R12_Flur.Door.front0
+  name Raum12.Door.front0
   parent 297
   pos -0 1.01 -2.7
   scale 0.05 0.05 0.05
@@ -2784,7 +2829,7 @@ node 319
 end
 
 node 320
-  name R12_Flur.Door.back0
+  name Raum12.Door.back0
   parent 297
   pos 0 1.01 2.7
   scale 0.05 0.05 0.05
@@ -2794,7 +2839,7 @@ node 320
 end
 
 node 321
-  name R12_Flur.Door.right0
+  name Raum12.Door.right0
   parent 297
   pos 0.9 1.01 -0.3
   scale 0.05 0.05 0.05
@@ -2804,7 +2849,7 @@ node 321
 end
 
 node 326
-  name R13_Halle.Floor
+  name Raum13.Floor
   parent 325
   pos 0 -0.1 0
   scale 10.4 0.2 6.8
@@ -2812,7 +2857,7 @@ node 326
 end
 
 node 327
-  name R13_Halle.Ceiling
+  name Raum13.Ceiling
   parent 325
   pos 0 4.7 0
   scale 10.4 0.2 6.8
@@ -2820,7 +2865,7 @@ node 327
 end
 
 node 328
-  name R13_Halle.Wall.Front
+  name Raum13.Wall.Front
   parent 325
   pos 0 2.3 -3.3
   scale 10.4 4.6 0.2
@@ -2828,7 +2873,7 @@ node 328
 end
 
 node 329
-  name R13_Halle.Wall.Back
+  name Raum13.Wall.Back
   parent 325
   pos 0 2.3 3.3
   nobody 1
@@ -2838,7 +2883,7 @@ node 329
 end
 
 node 332
-  name R13_Halle.Wall.Back.Hit0
+  name Raum13.Wall.Back.Hit0
   parent 325
   pos -1.7875 2.3 3.3
   scale 6.825 4.6 0.2
@@ -2846,7 +2891,7 @@ node 332
 end
 
 node 333
-  name R13_Halle.Wall.Back.HitLintel0
+  name Raum13.Wall.Back.HitLintel0
   parent 325
   pos 2.1 3.31 3.3
   scale 0.95 2.58 0.2
@@ -2854,7 +2899,7 @@ node 333
 end
 
 node 334
-  name R13_Halle.Wall.Back.HitEnd
+  name Raum13.Wall.Back.HitEnd
   parent 325
   pos 3.8875 2.3 3.3
   scale 2.625 4.6 0.2
@@ -2862,7 +2907,7 @@ node 334
 end
 
 node 335
-  name R13_Halle.Wall.Left
+  name Raum13.Wall.Left
   parent 325
   pos -5.1 2.3 0
   nobody 1
@@ -2872,7 +2917,7 @@ node 335
 end
 
 node 338
-  name R13_Halle.Wall.Left.Hit0
+  name Raum13.Wall.Left.Hit0
   parent 325
   pos -5.1 2.3 -1.9875
   scale 0.2 4.6 2.425
@@ -2880,7 +2925,7 @@ node 338
 end
 
 node 339
-  name R13_Halle.Wall.Left.HitLintel0
+  name Raum13.Wall.Left.HitLintel0
   parent 325
   pos -5.1 3.31 -0.3
   scale 0.2 2.58 0.95
@@ -2888,7 +2933,7 @@ node 339
 end
 
 node 340
-  name R13_Halle.Wall.Left.HitEnd
+  name Raum13.Wall.Left.HitEnd
   parent 325
   pos -5.1 2.3 1.6875
   scale 0.2 4.6 3.025
@@ -2896,7 +2941,7 @@ node 340
 end
 
 node 341
-  name R13_Halle.Wall.Right
+  name Raum13.Wall.Right
   parent 325
   pos 5.1 2.3 0
   nobody 1
@@ -2906,7 +2951,7 @@ node 341
 end
 
 node 344
-  name R13_Halle.Wall.Right.Hit0
+  name Raum13.Wall.Right.Hit0
   parent 325
   pos 5.1 2.3 -2.4375
   scale 0.2 4.6 1.525
@@ -2914,7 +2959,7 @@ node 344
 end
 
 node 345
-  name R13_Halle.Wall.Right.HitLintel0
+  name Raum13.Wall.Right.HitLintel0
   parent 325
   pos 5.1 3.31 -1.2
   scale 0.2 2.58 0.95
@@ -2922,7 +2967,7 @@ node 345
 end
 
 node 346
-  name R13_Halle.Wall.Right.HitEnd
+  name Raum13.Wall.Right.HitEnd
   parent 325
   pos 5.1 2.3 1.2375
   scale 0.2 4.6 3.925
@@ -2930,7 +2975,7 @@ node 346
 end
 
 node 347
-  name R13_Halle.Door.back0
+  name Raum13.Door.back0
   parent 325
   pos 2.1 1.01 3.3
   scale 0.05 0.05 0.05
@@ -2940,7 +2985,7 @@ node 347
 end
 
 node 348
-  name R13_Halle.Door.left0
+  name Raum13.Door.left0
   parent 325
   pos -5.1 1.01 -0.3
   scale 0.05 0.05 0.05
@@ -2950,7 +2995,7 @@ node 348
 end
 
 node 349
-  name R13_Halle.Door.right0
+  name Raum13.Door.right0
   parent 325
   pos 5.1 1.01 -1.2
   scale 0.05 0.05 0.05
@@ -2984,7 +3029,7 @@ node 402
 end
 
 node 13
-  name R00_Vorraum.Wall.Front.Slab
+  name Raum00.Wall.Front.Slab
   parent 12
   nobody 1
   nocollider 1
@@ -2993,7 +3038,7 @@ node 13
 end
 
 node 14
-  name R00_Vorraum.Wall.Front.Opening0
+  name Raum00.Wall.Front.Opening0
   parent 12
   pos 0 -0.14 0
   nobody 1
@@ -3003,7 +3048,7 @@ node 14
 end
 
 node 28
-  name R01_Zimmer.Wall.Back.Slab
+  name Raum01.Wall.Back.Slab
   parent 27
   nobody 1
   nocollider 1
@@ -3012,7 +3057,7 @@ node 28
 end
 
 node 29
-  name R01_Zimmer.Wall.Back.Opening0
+  name Raum01.Wall.Back.Opening0
   parent 27
   pos -0.9 -0.265 0
   nobody 1
@@ -3022,7 +3067,7 @@ node 29
 end
 
 node 35
-  name R01_Zimmer.Wall.Right.Slab
+  name Raum01.Wall.Right.Slab
   parent 34
   nobody 1
   nocollider 1
@@ -3031,7 +3076,7 @@ node 35
 end
 
 node 36
-  name R01_Zimmer.Wall.Right.Opening0
+  name Raum01.Wall.Right.Opening0
   parent 34
   pos 0 -0.265 0.9
   nobody 1
@@ -3041,7 +3086,7 @@ node 36
 end
 
 node 47
-  name R02_Flur.Wall.Front.Slab
+  name Raum02.Wall.Front.Slab
   parent 46
   nobody 1
   nocollider 1
@@ -3050,7 +3095,7 @@ node 47
 end
 
 node 48
-  name R02_Flur.Wall.Front.Opening0
+  name Raum02.Wall.Front.Opening0
   parent 46
   pos -0 -0.265 0
   nobody 1
@@ -3060,7 +3105,7 @@ node 48
 end
 
 node 53
-  name R02_Flur.Wall.Back.Slab
+  name Raum02.Wall.Back.Slab
   parent 52
   nobody 1
   nocollider 1
@@ -3069,7 +3114,7 @@ node 53
 end
 
 node 54
-  name R02_Flur.Wall.Back.Opening0
+  name Raum02.Wall.Back.Opening0
   parent 52
   pos -0 -0.265 0
   nobody 1
@@ -3079,7 +3124,7 @@ node 54
 end
 
 node 59
-  name R02_Flur.Wall.Left.Slab
+  name Raum02.Wall.Left.Slab
   parent 58
   nobody 1
   nocollider 1
@@ -3088,7 +3133,7 @@ node 59
 end
 
 node 60
-  name R02_Flur.Wall.Left.Opening0
+  name Raum02.Wall.Left.Opening0
   parent 58
   pos 0 -0.265 1.8
   nobody 1
@@ -3098,7 +3143,7 @@ node 60
 end
 
 node 65
-  name R02_Flur.Wall.Right.Slab
+  name Raum02.Wall.Right.Slab
   parent 64
   nobody 1
   nocollider 1
@@ -3107,7 +3152,7 @@ node 65
 end
 
 node 66
-  name R02_Flur.Wall.Right.Opening0
+  name Raum02.Wall.Right.Opening0
   parent 64
   pos 0 -0.265 -0.9
   nobody 1
@@ -3117,7 +3162,7 @@ node 66
 end
 
 node 67
-  name R02_Flur.Wall.Right.Opening1
+  name Raum02.Wall.Right.Opening1
   parent 64
   pos 0 -0.265 2.1
   nobody 1
@@ -3127,7 +3172,7 @@ node 67
 end
 
 node 85
-  name R03_Flur.Wall.Front.Slab
+  name Raum03.Wall.Front.Slab
   parent 84
   nobody 1
   nocollider 1
@@ -3136,7 +3181,7 @@ node 85
 end
 
 node 86
-  name R03_Flur.Wall.Front.Opening0
+  name Raum03.Wall.Front.Opening0
   parent 84
   pos 0 -0.265 0
   nobody 1
@@ -3146,7 +3191,7 @@ node 86
 end
 
 node 92
-  name R03_Flur.Wall.Left.Slab
+  name Raum03.Wall.Left.Slab
   parent 91
   nobody 1
   nocollider 1
@@ -3155,7 +3200,7 @@ node 92
 end
 
 node 93
-  name R03_Flur.Wall.Left.Opening0
+  name Raum03.Wall.Left.Opening0
   parent 91
   pos 0 -0.265 -0.3
   nobody 1
@@ -3165,7 +3210,7 @@ node 93
 end
 
 node 98
-  name R03_Flur.Wall.Right.Slab
+  name Raum03.Wall.Right.Slab
   parent 97
   nobody 1
   nocollider 1
@@ -3174,7 +3219,7 @@ node 98
 end
 
 node 99
-  name R03_Flur.Wall.Right.Opening0
+  name Raum03.Wall.Right.Opening0
   parent 97
   pos 0 -0.265 -1.8
   nobody 1
@@ -3184,7 +3229,7 @@ node 99
 end
 
 node 113
-  name R04_Kammer.Wall.Front.Slab
+  name Raum04.Wall.Front.Slab
   parent 112
   nobody 1
   nocollider 1
@@ -3193,7 +3238,7 @@ node 113
 end
 
 node 114
-  name R04_Kammer.Wall.Front.Opening0
+  name Raum04.Wall.Front.Opening0
   parent 112
   pos -0 -0.115 0
   nobody 1
@@ -3203,7 +3248,7 @@ node 114
 end
 
 node 119
-  name R04_Kammer.Wall.Back.Slab
+  name Raum04.Wall.Back.Slab
   parent 118
   nobody 1
   nocollider 1
@@ -3212,7 +3257,7 @@ node 119
 end
 
 node 120
-  name R04_Kammer.Wall.Back.Opening0
+  name Raum04.Wall.Back.Opening0
   parent 118
   pos -0 -0.115 0
   nobody 1
@@ -3222,7 +3267,7 @@ node 120
 end
 
 node 133
-  name R05_Kammer.Wall.Front.Slab
+  name Raum05.Wall.Front.Slab
   parent 132
   nobody 1
   nocollider 1
@@ -3231,7 +3276,7 @@ node 133
 end
 
 node 134
-  name R05_Kammer.Wall.Front.Opening0
+  name Raum05.Wall.Front.Opening0
   parent 132
   pos -0 -0.19 0
   nobody 1
@@ -3241,7 +3286,7 @@ node 134
 end
 
 node 147
-  name R06_Treppenhaus.Wall.Front.Slab
+  name Raum06.Wall.Front.Slab
   parent 146
   nobody 1
   nocollider 1
@@ -3250,7 +3295,7 @@ node 147
 end
 
 node 148
-  name R06_Treppenhaus.Wall.Front.Opening0
+  name Raum06.Wall.Front.Opening0
   parent 146
   pos 0 -0.915 0
   nobody 1
@@ -3260,7 +3305,7 @@ node 148
 end
 
 node 153
-  name R06_Treppenhaus.Wall.Back.Slab
+  name Raum06.Wall.Back.Slab
   parent 152
   nobody 1
   nocollider 1
@@ -3269,7 +3314,7 @@ node 153
 end
 
 node 154
-  name R06_Treppenhaus.Wall.Back.Opening0
+  name Raum06.Wall.Back.Opening0
   parent 152
   pos 0.6 -0.915 0
   nobody 1
@@ -3279,7 +3324,7 @@ node 154
 end
 
 node 160
-  name R06_Treppenhaus.Wall.Right.Slab
+  name Raum06.Wall.Right.Slab
   parent 159
   nobody 1
   nocollider 1
@@ -3288,7 +3333,7 @@ node 160
 end
 
 node 161
-  name R06_Treppenhaus.Wall.Right.Opening0
+  name Raum06.Wall.Right.Opening0
   parent 159
   pos 0 -0.915 -0
   nobody 1
@@ -3298,7 +3343,7 @@ node 161
 end
 
 node 174
-  name R07_Halle.Wall.Front.Slab
+  name Raum07.Wall.Front.Slab
   parent 173
   nobody 1
   nocollider 1
@@ -3307,7 +3352,7 @@ node 174
 end
 
 node 175
-  name R07_Halle.Wall.Front.Opening0
+  name Raum07.Wall.Front.Opening0
   parent 173
   pos -0.6 -0.965 0
   nobody 1
@@ -3317,7 +3362,7 @@ node 175
 end
 
 node 180
-  name R07_Halle.Wall.Back.Slab
+  name Raum07.Wall.Back.Slab
   parent 179
   nobody 1
   nocollider 1
@@ -3326,7 +3371,7 @@ node 180
 end
 
 node 181
-  name R07_Halle.Wall.Back.Opening0
+  name Raum07.Wall.Back.Opening0
   parent 179
   pos -1.5 -0.965 0
   nobody 1
@@ -3336,7 +3381,7 @@ node 181
 end
 
 node 186
-  name R07_Halle.Wall.Left.Slab
+  name Raum07.Wall.Left.Slab
   parent 185
   nobody 1
   nocollider 1
@@ -3345,7 +3390,7 @@ node 186
 end
 
 node 187
-  name R07_Halle.Wall.Left.Opening0
+  name Raum07.Wall.Left.Opening0
   parent 185
   pos 0 -0.965 1.2
   nobody 1
@@ -3355,7 +3400,7 @@ node 187
 end
 
 node 201
-  name R08_Maschine.Wall.Front.Slab
+  name Raum08.Wall.Front.Slab
   parent 200
   nobody 1
   nocollider 1
@@ -3364,7 +3409,7 @@ node 201
 end
 
 node 202
-  name R08_Maschine.Wall.Front.Opening0
+  name Raum08.Wall.Front.Opening0
   parent 200
   pos -0.3 -0.49 0
   nobody 1
@@ -3374,7 +3419,7 @@ node 202
 end
 
 node 207
-  name R08_Maschine.Wall.Back.Slab
+  name Raum08.Wall.Back.Slab
   parent 206
   nobody 1
   nocollider 1
@@ -3383,7 +3428,7 @@ node 207
 end
 
 node 208
-  name R08_Maschine.Wall.Back.Opening0
+  name Raum08.Wall.Back.Opening0
   parent 206
   pos -1.2 -0.49 0
   nobody 1
@@ -3393,7 +3438,7 @@ node 208
 end
 
 node 213
-  name R08_Maschine.Wall.Left.Slab
+  name Raum08.Wall.Left.Slab
   parent 212
   nobody 1
   nocollider 1
@@ -3402,7 +3447,7 @@ node 213
 end
 
 node 214
-  name R08_Maschine.Wall.Left.Opening0
+  name Raum08.Wall.Left.Opening0
   parent 212
   pos 0 -0.49 0.9
   nobody 1
@@ -3412,7 +3457,7 @@ node 214
 end
 
 node 228
-  name R09_Treppenhaus.Wall.Front.Slab
+  name Raum09.Wall.Front.Slab
   parent 227
   nobody 1
   nocollider 1
@@ -3421,7 +3466,7 @@ node 228
 end
 
 node 229
-  name R09_Treppenhaus.Wall.Front.Opening0
+  name Raum09.Wall.Front.Opening0
   parent 227
   pos 0.6 -1.09 0
   nobody 1
@@ -3431,7 +3476,7 @@ node 229
 end
 
 node 234
-  name R09_Treppenhaus.Wall.Back.Slab
+  name Raum09.Wall.Back.Slab
   parent 233
   nobody 1
   nocollider 1
@@ -3440,7 +3485,7 @@ node 234
 end
 
 node 235
-  name R09_Treppenhaus.Wall.Back.Opening0
+  name Raum09.Wall.Back.Opening0
   parent 233
   pos 0 -1.09 0
   nobody 1
@@ -3450,7 +3495,7 @@ node 235
 end
 
 node 249
-  name R10_Halle.Wall.Front.Slab
+  name Raum10.Wall.Front.Slab
   parent 248
   nobody 1
   nocollider 1
@@ -3459,7 +3504,7 @@ node 249
 end
 
 node 250
-  name R10_Halle.Wall.Front.Opening0
+  name Raum10.Wall.Front.Opening0
   parent 248
   pos 3.3 -0.915 0
   nobody 1
@@ -3469,7 +3514,7 @@ node 250
 end
 
 node 251
-  name R10_Halle.Wall.Front.Opening1
+  name Raum10.Wall.Front.Opening1
   parent 248
   pos -0.6 -0.915 0
   nobody 1
@@ -3479,7 +3524,7 @@ node 251
 end
 
 node 258
-  name R10_Halle.Wall.Back.Slab
+  name Raum10.Wall.Back.Slab
   parent 257
   nobody 1
   nocollider 1
@@ -3488,7 +3533,7 @@ node 258
 end
 
 node 259
-  name R10_Halle.Wall.Back.Opening0
+  name Raum10.Wall.Back.Opening0
   parent 257
   pos 0.3 -0.915 0
   nobody 1
@@ -3498,7 +3543,7 @@ node 259
 end
 
 node 264
-  name R10_Halle.Wall.Left.Slab
+  name Raum10.Wall.Left.Slab
   parent 263
   nobody 1
   nocollider 1
@@ -3507,7 +3552,7 @@ node 264
 end
 
 node 265
-  name R10_Halle.Wall.Left.Opening0
+  name Raum10.Wall.Left.Opening0
   parent 263
   pos 0 -0.915 2.4
   nobody 1
@@ -3517,7 +3562,7 @@ node 265
 end
 
 node 281
-  name R11_Halle.Wall.Back.Slab
+  name Raum11.Wall.Back.Slab
   parent 280
   nobody 1
   nocollider 1
@@ -3526,7 +3571,7 @@ node 281
 end
 
 node 282
-  name R11_Halle.Wall.Back.Opening0
+  name Raum11.Wall.Back.Opening0
   parent 280
   pos -1.2 -0.94 0
   nobody 1
@@ -3536,7 +3581,7 @@ node 282
 end
 
 node 287
-  name R11_Halle.Wall.Left.Slab
+  name Raum11.Wall.Left.Slab
   parent 286
   nobody 1
   nocollider 1
@@ -3545,7 +3590,7 @@ node 287
 end
 
 node 288
-  name R11_Halle.Wall.Left.Opening0
+  name Raum11.Wall.Left.Opening0
   parent 286
   pos 0 -0.94 -2.4
   nobody 1
@@ -3555,7 +3600,7 @@ node 288
 end
 
 node 301
-  name R12_Flur.Wall.Front.Slab
+  name Raum12.Wall.Front.Slab
   parent 300
   nobody 1
   nocollider 1
@@ -3564,7 +3609,7 @@ node 301
 end
 
 node 302
-  name R12_Flur.Wall.Front.Opening0
+  name Raum12.Wall.Front.Opening0
   parent 300
   pos -0 -0.29 0
   nobody 1
@@ -3574,7 +3619,7 @@ node 302
 end
 
 node 307
-  name R12_Flur.Wall.Back.Slab
+  name Raum12.Wall.Back.Slab
   parent 306
   nobody 1
   nocollider 1
@@ -3583,7 +3628,7 @@ node 307
 end
 
 node 308
-  name R12_Flur.Wall.Back.Opening0
+  name Raum12.Wall.Back.Opening0
   parent 306
   pos 0 -0.29 0
   nobody 1
@@ -3593,7 +3638,7 @@ node 308
 end
 
 node 314
-  name R12_Flur.Wall.Right.Slab
+  name Raum12.Wall.Right.Slab
   parent 313
   nobody 1
   nocollider 1
@@ -3602,7 +3647,7 @@ node 314
 end
 
 node 315
-  name R12_Flur.Wall.Right.Opening0
+  name Raum12.Wall.Right.Opening0
   parent 313
   pos 0 -0.29 -0.3
   nobody 1
@@ -3612,7 +3657,7 @@ node 315
 end
 
 node 330
-  name R13_Halle.Wall.Back.Slab
+  name Raum13.Wall.Back.Slab
   parent 329
   nobody 1
   nocollider 1
@@ -3621,7 +3666,7 @@ node 330
 end
 
 node 331
-  name R13_Halle.Wall.Back.Opening0
+  name Raum13.Wall.Back.Opening0
   parent 329
   pos 2.1 -1.29 0
   nobody 1
@@ -3631,7 +3676,7 @@ node 331
 end
 
 node 336
-  name R13_Halle.Wall.Left.Slab
+  name Raum13.Wall.Left.Slab
   parent 335
   nobody 1
   nocollider 1
@@ -3640,7 +3685,7 @@ node 336
 end
 
 node 337
-  name R13_Halle.Wall.Left.Opening0
+  name Raum13.Wall.Left.Opening0
   parent 335
   pos 0 -1.29 -0.3
   nobody 1
@@ -3650,7 +3695,7 @@ node 337
 end
 
 node 342
-  name R13_Halle.Wall.Right.Slab
+  name Raum13.Wall.Right.Slab
   parent 341
   nobody 1
   nocollider 1
@@ -3659,7 +3704,7 @@ node 342
 end
 
 node 343
-  name R13_Halle.Wall.Right.Opening0
+  name Raum13.Wall.Right.Opening0
   parent 341
   pos 0 -1.29 -1.2
   nobody 1

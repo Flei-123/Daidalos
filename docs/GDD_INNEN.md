@@ -236,8 +236,15 @@ Zone 3 ist die einzige, die je nach Spieler ganz anders ist → Replay-Grund.
 > [`docs/INNEN_GEN.md`](INNEN_GEN.md)): aus dem Vorraum wächst ein Grundriss
 > über Türsockel, Räume aus einer Zonen-Tabelle, alles aus einem Seed —
 > derselbe Seed ergibt denselben Grundriss, nachweislich (~100 Prüfungen in
-> `tools/innen_gen.py`). Es fehlen Umbau-Regel, warme Räume/Anti-Pingpong
-> (§5.2), Anker, Portale und Schlüssel/Items, die eine Tür aufsperren.
+> `tools/innen_gen.py`). **§5.2 läuft ebenfalls** — warme Räume, Umbau-Würfel
+> und Anti-Pingpong als `innen_haus.js` auf einem `Haus`-Knoten, im
+> ausgelieferten Runtime gemessen statt behauptet
+> ([`docs/INNEN_HAUS.md`](INNEN_HAUS.md)): 50/30/15/5 halten, ein warmer Raum
+> wird nie umgebaut (0 Verstöße in 4000 Zügen), das Gehäuse reagiert auf
+> Pingpong mit Tür-zu / Dunkelheit / Flackern. Die 20 % „Raum ersetzen" werden
+> gewürfelt und protokolliert, aber noch nicht ausgeführt: dafür fehlt eine
+> Spawn-API zur Laufzeit. Es fehlen außerdem Anker als Gegenstände, Portale,
+> die Kopie und Schlüssel, die eine Tür aufsperren.
 | M1 Vertical Slice | Zone 1 komplett, Puls, Umbau-Regel, 1 Telefon mit 5 Anrufen, Kopie | Spielbar 30 Min, ein Kernstück |
 | M2 | Zone 2–3, Wärter, Formular-Seed, 5 Angstvarianten | 2 h |
 | M3 | Archiv, Akten (41 Texte), Verbrennen, Twist | 4 h |

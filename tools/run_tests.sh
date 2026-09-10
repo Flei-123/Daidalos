@@ -451,6 +451,33 @@ else
     MISSING="$MISSING innen_gen"
 fi
 
+# INNEN - das Gehaeuse: the rules of GDD 5.2 (warm rooms, the rebuild dice, the
+# reaction to pingpong) measured in the SHIPPED runtime. The behaviour walks
+# the generated floor's own graph a few thousand times at startup and prints
+# what the rules did; the checker reads the distribution. Rules like these look
+# right in a play session and are wrong by a third in the numbers.
+if [ -x build/daidalos_runtime ] && [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then
+    OUT=$(DAI_SHADER_DIR=shaders timeout 700 \
+          python3 tools/innen_haus.py --port 8395 2>&1)
+    RC=$?
+    P=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ checks' | tail -1 | grep -oE '[0-9]+')
+    F=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ failures' | tail -1 | grep -oE '[0-9]+')
+    [ -z "${P:-}" ] && P=0
+    [ -z "${F:-}" ] && F=0
+    TOTAL_PASS=$((TOTAL_PASS + P - F))
+    TOTAL_FAIL=$((TOTAL_FAIL + F))
+    if [ "$RC" = "0" ] && [ "$F" = "0" ] && [ "$P" != "0" ]; then
+        printf '%-20s %3s/%-3s  ok\n' "innen_haus" "$P" "$F"
+        [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+    else
+        FAILED="$FAILED innen_haus"
+        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "innen_haus" "$P" "$F" "$RC"
+        printf '%s\n' "$OUT" | tail -12 | sed 's/^/    /'
+    fi
+else
+    MISSING="$MISSING innen_haus"
+fi
+
 # ...and that floor photographed: a plan view framed around whatever the seed
 # built, plus two from eye height inside it.
 if [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then

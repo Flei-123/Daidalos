@@ -116,6 +116,14 @@ about where it came from. There is now `dai_script_get_string_size()` and the
 bridge sizes the buffer to the value. `tools/bridge_check.py` asks for a ten
 kilobyte answer and checks its last characters.
 
+## The house that runs on top of it
+
+Every generated floor gets a `Haus` node carrying `innen_haus.js` - the rules
+of §5.2. It finds the rooms and doors by the names above, which is why they are
+"Raum03" and "Tuer07" with the kind and the joined rooms in the node tags: a
+behaviour has no editor to enumerate a document with. See
+[`INNEN_HAUS.md`](INNEN_HAUS.md).
+
 ## What it is not yet
 
 No rebuild rule, no warm rooms, no anti-pingpong (§5.2), no anchors, no

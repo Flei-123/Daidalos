@@ -169,7 +169,12 @@
         function addRoom(type, centre, dim, depth) {
             var r = {
                 index: rooms.length,
-                name: "R" + pad2(rooms.length) + "_" + type,
+                // The NAME is a data channel, the way the door sockets' names
+                // already are - a behaviour at play time has no editor to
+                // enumerate the document with, it can only look things up by
+                // name. So a room is "Raum03", findable from its index alone,
+                // and what KIND of room it is goes in the node's tag.
+                name: "Raum" + pad2(rooms.length),
                 type: type, centre: centre, dim: dim, depth: depth,
                 doors: { front: [], back: [], left: [], right: [] },
                 foot: foot(centre, dim)
@@ -433,7 +438,8 @@
             var r = p.rooms[i];
             var T = TYPES[r.type];
             var mats = MATS[T.mats];
-            INNEN.room(r.name, r.centre, r.dim, r.doors, mats);
+            var g = INNEN.room(r.name, r.centre, r.dim, r.doors, mats);
+            node.setStr(g.node, "node.tag", r.type);
 
             // Ceiling lights, spread along the room's length, the last one
             // always the weakest: a room whose far end is lit has nothing in
@@ -460,11 +466,15 @@
             var yaw = (s.side === "front" || s.side === "back") ? 0 : 90;
             var hinge = (e % 2) ? 1 : -1;
             var locked = ed.blocked ? true : (e % 7 === 3);
-            INNEN.door("Tuer." + pad2(e) + "_" + p.rooms[s.room].name, tueren,
+            // ...and a door is "Tuer04", with the two rooms it joins in its
+            // tag: "3>7", or "3>-1" when there is nothing behind it yet.
+            var leaf = INNEN.door("Tuer" + pad2(e), tueren,
                        [s.world[0], 0, s.world[2]], yaw, s.width, s.height,
                        MATS[TYPES[p.rooms[s.room].type].mats].wall,
                        { hinge: hinge, openAngle: hinge > 0 ? -88 : 88,
                          locked: locked, speed: 140 });
+            node.setStr(leaf, "node.tag",
+                        s.room + ">" + (ed.b ? ed.b.room : -1));
             leaves++;
         }
         return { lights: lit, leaves: leaves };
@@ -476,6 +486,17 @@
     if (!PLAN_ONLY) {
         made = build(p);
         if (WITH_PLAYER) INNEN.player("Spieler", [0, 0.95, 0.30], 0);
+
+        // Das Gehaeuse: the rules of GDD §5.2, on a node of their own. It
+        // finds the rooms and doors by the names above - "Raum03", "Tuer07" -
+        // because a behaviour has no editor to enumerate the document with.
+        if (has.script) {
+            var haus = INNEN.group("Haus", 0, [0, 0, 0]);
+            node.setStr(haus, "script",
+                "innen_haus.js{rooms=" + p.rooms.length +
+                ",doors=" + made.leaves + ",seed=" + SEED +
+                ",warm=3,coldDistance=3,pingpong=3,anchors=0,player=Spieler}");
+        }
     }
     editor.commit();
 
