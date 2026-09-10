@@ -27,6 +27,7 @@
 #endif
 
 #include "dai_euler.h"
+#include <string>
 
 namespace {
 
@@ -211,11 +212,34 @@ void comp_set_vec(dai_node id, const char *name, const double *xyz) {
     dai_doc_set(DAI_PROPS_DOC, id, &r);
 }
 
+// "material" is not in the table above because it is a STACK on the node
+// (dai_node_desc::materials, ';' separated) and the name means SLOT 0 - the
+// object's own surface, which is what anybody assigning "the wall material"
+// means. Written the same way the bridge's editor.setMaterial writes it, so a
+// wall re-skinned by a behaviour and one re-skinned by a tool end up with the
+// same field. Returns 1 when the name was the material.
+int comp_material_str(dai_node_desc &r, const char *name, const char *set, char *out, size_t out_len) {
+    if (!name || std::strcmp(name, "material")) return 0;
+    std::string all = r.materials;
+    size_t semi = all.find(';');
+    if (!set) {
+        std::string first = (semi == std::string::npos) ? all : all.substr(0, semi);
+        std::snprintf(out, out_len, "%s", first.c_str());
+        return 1;
+    }
+    std::string rest = (semi == std::string::npos) ? std::string() : all.substr(semi);
+    std::string joined = std::string(set) + rest;
+    if (joined.size() < sizeof(r.materials))
+        std::snprintf(r.materials, sizeof(r.materials), "%s", joined.c_str());
+    return 1;
+}
+
 const char *comp_get_str(dai_node id, const char *name) {
     g_prop_str[0] = 0;
     if (!DAI_PROPS_DOC) return g_prop_str;
     dai_node_desc r{};
     if (dai_doc_get(DAI_PROPS_DOC, id, &r) != DAI_OK) return g_prop_str;
+    if (comp_material_str(r, name, nullptr, g_prop_str, sizeof(g_prop_str))) return g_prop_str;
     PropRef p = prop_ref(r, name);
     if (p.kind != P_STR || !p.str) return g_prop_str;
     std::snprintf(g_prop_str, sizeof(g_prop_str), "%s", p.str);
@@ -226,6 +250,10 @@ void comp_set_str(dai_node id, const char *name, const char *value) {
     if (!DAI_PROPS_DOC) return;
     dai_node_desc r{};
     if (dai_doc_get(DAI_PROPS_DOC, id, &r) != DAI_OK) return;
+    if (comp_material_str(r, name, value ? value : "", nullptr, 0)) {
+        dai_doc_set(DAI_PROPS_DOC, id, &r);
+        return;
+    }
     PropRef p = prop_ref(r, name);
     if (p.kind != P_STR || !p.str) return;
     std::snprintf(p.str, p.str_len, "%s", value ? value : "");

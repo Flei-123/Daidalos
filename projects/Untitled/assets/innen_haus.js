@@ -8,10 +8,9 @@
 //   COLD            a room he has not been within `coldDistance` doors of
 //                   since he left it may change when he next walks in.
 //   REBUILD         50 % nothing, 30 % a detail, 15 % the same kind of room
-//                   again, 5 % something wrong. The last two need rooms to be
-//                   BUILT at play time and this engine cannot do that yet, so
-//                   they are drawn, counted and logged as `want=replace` -
-//                   see docs/INNEN_HAUS.md. The 80 % that can happen, happens.
+//                   again, 5 % something wrong. The last two BUILD a room
+//                   while the game runs, with scene.spawn() - see
+//                   docs/INNEN_HAUS.md. All of it happens now.
 //   PINGPONG        walking A-B-A-B through the same door `pingpong` times is
 //                   not answered with a reroll but with a REACTION: the door
 //                   stops opening, or the lights go out. It is recording you,
@@ -79,6 +78,7 @@ var elapsed = 0, nextLook = 0;
 var dark = 0;            // seconds of forced darkness left
 
 var stat = { enters: 0, identical: 0, detail: 0, wantReplace: 0, wantWrong: 0,
+             builtReplace: 0, builtWrong: 0,
              frozen: 0, reactions: 0, lockReact: 0, darkReact: 0, flickerReact: 0,
              warmViolations: 0 };
 
@@ -110,7 +110,8 @@ function readRooms(count) {
         }
         var room = { id: i, node: n, name: "Raum" + pad2(i),
                      type: node.getStr(n, "node.tag"),
-                     cx: p[0], cz: p[2], w: w, d: d, lights: [], doors: [] };
+                     cx: p[0], cy: p[1], cz: p[2], w: w, d: d,
+                     lights: [], doors: [], skin: skinOf(n) };
         // Its lights, by the generator's own naming.
         for (var l = 1; l <= 3; l++) {
             var li = scene.find(room.name + ".Licht." + l);
@@ -202,6 +203,119 @@ function lightsOf(room, on, tint) {
     }
 }
 
+// ---- building a room while the game runs ---------------------------------
+// A behaviour has no `editor` - it may not invent nodes - but since
+// include/dai_spawn_host.inl it may COPY one an author placed:
+//
+//   scene.spawn(src, parent, name)   the whole subtree, components and all
+//   scene.destroy(id)                the node and its descendants
+//
+// That is exactly the privilege this rule needs and no more. The 15 % and the
+// 5 % were counted and logged for a while because the engine could not do
+// this; now they are done.
+
+// Every material the room's own parts wear, in child order. A room re-skinned
+// with another room's skin is the same room in a different building - which
+// is what "derselbe Raum nochmal" is supposed to feel like.
+function skinOf(n) {
+    var out = [], c = scene.childCount(n);
+    for (var i = 0; i < c; i++) {
+        var k = scene.childAt(n, i).valueOf();
+        out.push(node.getStr(k, "material"));
+    }
+    return out;
+}
+
+function applySkin(n, skin) {
+    if (!skin || !skin.length) return 0;
+    var c = scene.childCount(n), used = 0;
+    for (var i = 0; i < c; i++) {
+        var m = skin[i % skin.length];
+        if (!m) continue;
+        node.setStr(scene.childAt(n, i).valueOf(), "material", m);
+        used++;
+    }
+    return used;
+}
+
+// The copy carries the SOURCE's names - "Raum07.Floor" under a room that is
+// now called Raum03. Renaming the subtree is not cosmetic: readRooms() finds a
+// room's floor slab by "Raum03.Floor", and a house whose rooms answer under
+// the wrong name is a house that measures the wrong rectangle.
+function renameSubtree(n, fromPrefix, toPrefix) {
+    var c = scene.childCount(n);
+    for (var i = 0; i < c; i++) {
+        var k = scene.childAt(n, i).valueOf();
+        var nm = node.getStr(k, "node.name") || "";
+        if (nm.indexOf(fromPrefix) === 0)
+            node.setStr(k, "node.name", toPrefix + nm.substring(fromPrefix.length));
+        renameSubtree(k, fromPrefix, toPrefix);
+    }
+}
+
+// Tear the room down and put one up in its place, out of `src`. The order
+// matters: the new one is standing before the old one comes down, because a
+// spawn that is refused (a budget, a bad id) must leave the player in a room
+// and not in the sky.
+function replaceRoom(room, src, srcName, srcType, skin) {
+    var r = ROOMS[room];
+    if (!r) return "nothing";
+    var made = scene.spawn(src, 0, r.name + ".neu").valueOf();
+    if (made < 0) { say("spawn refused room=" + room); return "nothing"; }
+
+    // Where the old one stood. Rooms are top level, so their own position IS
+    // the world position - and the copy has to land on the doorways that are
+    // already cut into the neighbours.
+    node.setPos(made, r.cx, r.cy, r.cz);
+    renameSubtree(made, srcName + ".", r.name + ".");
+    if (skin) applySkin(made, skin);
+
+    var old = r.node;
+    node.setStr(made, "node.name", r.name);
+    node.setStr(made, "node.tag", srcType);
+    scene.destroy(old);
+    r.node = made;
+    r.type = srcType;
+    r.skin = skinOf(made);
+    return "built";
+}
+
+// 15 %: the same kind of room, built again. The source is the room ITSELF -
+// which is the only source whose door holes are guaranteed to line up with the
+// doors already hanging in the neighbouring walls - and it comes back wearing
+// another room's surfaces. Same plan, different building.
+function rebuildSame(room) {
+    var r = ROOMS[room];
+    if (!r || r.node < 0) return "nothing";
+    var skin = null;
+    for (var t = 0; t < 6; t++) {
+        var o = ROOMS[Math.floor(rnd() * ROOMS.length)];
+        if (o && o.id !== room && o.skin && o.skin.length) { skin = o.skin; break; }
+    }
+    return replaceRoom(room, r.node, r.name, r.type, skin);
+}
+
+// 5 %: something is wrong. Another room entirely is standing where this one
+// was - so its door holes are in the wrong walls, its surfaces belong to a
+// different part of the house, and the door you came through opens into a
+// wall. That is the point: this is the roll that is allowed to be broken.
+function rebuildWrong(room) {
+    var r = ROOMS[room];
+    if (!r) return "nothing";
+    var best = null;
+    for (var i = 0; i < ROOMS.length; i++) {
+        var o = ROOMS[i];
+        if (!o || o.id === room || o.node < 0) continue;
+        // A room of roughly the same footprint stands in the hole; a much
+        // bigger one would poke through the neighbours, which is not eerie,
+        // it is a bug that looks like one.
+        if (Math.abs(o.w - r.w) > 1.2 || Math.abs(o.d - r.d) > 1.2) continue;
+        if (!best || rnd() < 0.5) best = o;
+    }
+    if (!best) return rebuildSame(room);
+    return replaceRoom(room, best.node, best.name, best.type, null);
+}
+
 // 30 %: a detail is different. Everything here is something the engine can do
 // to a room that already stands - the light is wrong, a lamp has moved, one
 // door does not open any more.
@@ -279,14 +393,15 @@ function enterRoom(room, viaDoor) {
         return "detail:" + what;
     }
     if (roll < 0.95) {
-        // 15 %: the same kind of room, built again. Needs a room to be built
-        // while the game runs, which needs a spawn API this engine does not
-        // have yet. Counted, logged, not faked.
         stat.wantReplace++;
-        return "want=replace";
+        var same = rebuildSame(room);
+        if (same === "built") stat.builtReplace++;
+        return "replace:" + same;
     }
     stat.wantWrong++;
-    return "want=wrong";
+    var wrong = rebuildWrong(room);
+    if (wrong === "built") stat.builtWrong++;
+    return "wrong:" + wrong;
 }
 
 // The house noticed. Weighted the way §5.2 weights it, with the two reactions
@@ -352,6 +467,7 @@ function selfTest(steps, bounce) {
         " frozen=" + stat.frozen + " warmChecked=" + warmChecked +
         " identical=" + stat.identical + " detail=" + stat.detail +
         " wantReplace=" + stat.wantReplace + " wantWrong=" + stat.wantWrong +
+        " builtReplace=" + stat.builtReplace + " builtWrong=" + stat.builtWrong +
         " reactions=" + stat.reactions +
         " lock=" + stat.lockReact + " dark=" + stat.darkReact +
         " flicker=" + stat.flickerReact +

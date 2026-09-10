@@ -327,6 +327,46 @@ JSValue js_scene_find(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv
     return JS_NewFloat64(ctx, r);
 }
 
+// ---- spawn: the only way a behaviour may bring something into the world ---
+// A copy of something that already exists, never a node out of nothing. See
+// the comment on dai_script_node_host::spawn in include/dai_script.h.
+JSValue js_scene_spawn(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_nodes || !s->nodes.spawn || argc < 1) return JS_NewFloat64(ctx, -1.0);
+    double src = arg_num(ctx, argv[0]);
+    double parent = (argc >= 2) ? arg_num(ctx, argv[1]) : 0.0;
+    const char *nm = (argc >= 3 && !JS_IsUndefined(argv[2]) && !JS_IsNull(argv[2]))
+                     ? JS_ToCString(ctx, argv[2]) : nullptr;
+    double r = s->nodes.spawn(src, parent, nm, s->nodes.user);
+    if (nm) JS_FreeCString(ctx, nm);
+    return JS_NewFloat64(ctx, r);
+}
+
+JSValue js_scene_destroy(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_nodes || !s->nodes.destroy || argc < 1) return JS_FALSE;
+    return s->nodes.destroy(arg_num(ctx, argv[0]), s->nodes.user) ? JS_TRUE : JS_FALSE;
+}
+
+JSValue js_scene_child_count(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_nodes || !s->nodes.child_count || argc < 1) return JS_NewFloat64(ctx, 0.0);
+    return JS_NewFloat64(ctx, s->nodes.child_count(arg_num(ctx, argv[0]), s->nodes.user));
+}
+
+JSValue js_scene_child_at(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_nodes || !s->nodes.child_at || argc < 2) return JS_NewFloat64(ctx, -1.0);
+    return JS_NewFloat64(ctx, s->nodes.child_at(arg_num(ctx, argv[0]),
+                                                arg_num(ctx, argv[1]), s->nodes.user));
+}
+
+JSValue js_scene_parent(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_nodes || !s->nodes.parent_of || argc < 1) return JS_NewFloat64(ctx, -1.0);
+    return JS_NewFloat64(ctx, s->nodes.parent_of(arg_num(ctx, argv[0]), s->nodes.user));
+}
+
 JSValue js_node_get_pos(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
     dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
     double xyz[3] = { 0, 0, 0 };
@@ -587,6 +627,11 @@ void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host) {
     JSValue global = JS_GetGlobalObject(s->ctx);
     JSValue scene = JS_NewObject(s->ctx);
     JS_SetPropertyStr(s->ctx, scene, "find", JS_NewCFunction(s->ctx, js_scene_find, "find", 1));
+    JS_SetPropertyStr(s->ctx, scene, "spawn", JS_NewCFunction(s->ctx, js_scene_spawn, "spawn", 3));
+    JS_SetPropertyStr(s->ctx, scene, "destroy", JS_NewCFunction(s->ctx, js_scene_destroy, "destroy", 1));
+    JS_SetPropertyStr(s->ctx, scene, "childCount", JS_NewCFunction(s->ctx, js_scene_child_count, "childCount", 1));
+    JS_SetPropertyStr(s->ctx, scene, "childAt", JS_NewCFunction(s->ctx, js_scene_child_at, "childAt", 2));
+    JS_SetPropertyStr(s->ctx, scene, "parent", JS_NewCFunction(s->ctx, js_scene_parent, "parent", 1));
     JS_SetPropertyStr(s->ctx, global, "scene", scene);
     JSValue node = JS_NewObject(s->ctx);
     JS_SetPropertyStr(s->ctx, node, "setText", JS_NewCFunction(s->ctx, js_node_set_text, "setText", 2));

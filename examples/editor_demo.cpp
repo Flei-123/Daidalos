@@ -710,10 +710,34 @@ static void sh_set_str(double id, const char *prop, const char *v, void *) {
     comp_set_str((dai_node)(uint32_t)id, prop, v);
 }
 
+
+// Seam: spawning - what scene.spawn()/scene.destroy() mean, shared by every
+// host that runs behaviours. include/dai_spawn_host.inl.
+#include "dai_spawn_host.inl"
+
+static double sh_spawn(double src, double parent, const char *name, void *) {
+    return comp_spawn((dai_node)(uint32_t)src, (dai_node)(uint32_t)parent, name);
+}
+static int sh_destroy(double id, void *) {
+    return comp_destroy((dai_node)(uint32_t)id);
+}
+static double sh_child_count(double id, void *) {
+    return comp_child_count((dai_node)(uint32_t)id);
+}
+static double sh_child_at(double id, double index, void *) {
+    return comp_child_at((dai_node)(uint32_t)id, index);
+}
+static double sh_parent_of(double id, void *) {
+    return comp_parent_of((dai_node)(uint32_t)id);
+}
+
 static dai_script_node_host g_node_host = { sh_find, sh_get_pos, sh_set_pos, sh_get_rot, sh_set_rot,
                                             sh_set_text,
                                             sh_get_num, sh_set_num, sh_get_vec, sh_set_vec,
-                                            sh_get_str, sh_set_str, nullptr };
+                                            sh_get_str, sh_set_str,
+                                            sh_spawn, sh_destroy,
+                                            sh_child_count, sh_child_at, sh_parent_of,
+                                            nullptr };
 
 // ---- native (C++) behaviours -------------------------------------------
 //

@@ -264,6 +264,35 @@ static const char *const DAI_JS_PRELUDE = R"JS(
     // is wanted, so scene.find("X") keeps working in old code too.
     var rawFind = scene.find;
     scene.find = function (name) { return new Node(rawFind(name)); };
+
+    // ---- spawn -----------------------------------------------------------
+    // scene.spawn(src, parent, name) copies a subtree an author placed and
+    // gives back a Node; scene.destroy() takes one away. Wrapped here for the
+    // same reason find() is: everything a behaviour holds should be a Node.
+    // A host older than the binding simply does not have it - spawning then
+    // answers an invalid Node instead of throwing, exactly as reading an
+    // unknown property answers 0.
+    var rawSpawn = scene.spawn, rawChildAt = scene.childAt, rawParent = scene.parent;
+    if (typeof rawSpawn === "function") {
+        scene.spawn = function (src, parent, name) {
+            return new Node(rawSpawn(+src, parent === undefined ? 0 : +parent,
+                                     name === undefined ? null : "" + name));
+        };
+        scene.childAt = function (n, i) { return new Node(rawChildAt(+n, i)); };
+        scene.parent = function (n) { return new Node(rawParent(+n)); };
+        // The children as an array, because every caller was about to write
+        // this loop and one of them was going to write it wrong.
+        scene.children = function (n) {
+            var out = [], c = scene.childCount(+n);
+            for (var i = 0; i < c; i++) out.push(new Node(rawChildAt(+n, i)));
+            return out;
+        };
+        Node.prototype.spawn = function (parent, name) {
+            return scene.spawn(this.__n, parent === undefined ? 0 : parent, name);
+        };
+        Node.prototype.destroy = function () { return scene.destroy(this.__n); };
+        Node.prototype.children = function () { return scene.children(this.__n); };
+    }
     globalThis.__wrapSelf = function (id) { return new Node(id); };
 })();
 )JS";

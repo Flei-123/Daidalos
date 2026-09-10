@@ -29,6 +29,12 @@ What it asserts:
   * **The dice are the dice the GDD says**: 50 % identical, 30 % a detail,
     15 % the same kind of room again, 5 % something wrong - within the
     tolerance of a few thousand draws.
+  * **The two rolls that BUILD a room really build it.** 15 % "the same kind
+    of room again" and 5 % "something wrong" are done with scene.spawn() /
+    scene.destroy() at play time - so every drawn one has to come back
+    `built`, and the house must not grow or shrink while doing it: a spawn
+    that forgets to destroy leaks a room per rebuild, and the instance count
+    of the last frame is where that shows.
   * **The house reacts** to pingpong at all, and uses all three reactions.
   * **The same seed behaves the same way**, twice.
 
@@ -228,6 +234,31 @@ def main(argv):
                   "%s came out at %.3f, the GDD says %.2f (%d draws)"
                   % (k, share[k], want[k], drawn))
 
+    # ---- the two rolls that BUILD ----------------------------------------
+    # Before include/dai_spawn_host.inl these were counted and logged and
+    # nothing happened. "Drawn" and "built" have to be the same number now,
+    # otherwise the rule is back to being 80 % of itself.
+    check(f.get("builtReplace", 0) == f.get("wantReplace", 0),
+          "%s rooms were drawn to be rebuilt and %s were really built"
+          % (f.get("wantReplace"), f.get("builtReplace")))
+    check(f.get("builtWrong", 0) == f.get("wantWrong", 0),
+          "%s wrong rooms were drawn and %s were really built"
+          % (f.get("wantWrong"), f.get("builtWrong")))
+    check("spawn refused" not in out,
+          "the spawn budget refused a room during a normal run")
+
+    # A spawn without its destroy leaks one room per rebuild - about 70 nodes,
+    # hundreds of times. The runtime prints how many instances it drew on the
+    # first and the last frame, and that is the honest place to see it.
+    counts = [int(m) for m in re.findall(r"frame \d+: tick \d+, (\d+) instances", out)]
+    check(len(counts) >= 2, "the runtime did not report its instance count")
+    if len(counts) >= 2:
+        first, last = counts[0], counts[-1]
+        check(abs(last - first) < max(40, first * 0.25),
+              "the house drew %d instances on the first frame and %d on the "
+              "last - %d rebuilds either leaked rooms or lost them"
+              % (first, last, f.get("builtReplace", 0) + f.get("builtWrong", 0)))
+
     # ---- the house reacts -------------------------------------------------
     check(f.get("reactions", 0) > 5,
           "the house reacted %s times to somebody walking through the same "
@@ -279,6 +310,8 @@ def main(argv):
           % (args.seed, f.get("steps"), drawn, f.get("frozen"),
              f.get("reactions"), f.get("lock"), f.get("dark"),
              f.get("flicker"), f.get("violations")))
+    print("      built: %s same-kind rooms, %s wrong ones, at play time"
+          % (f.get("builtReplace"), f.get("builtWrong")))
     if not args.keep:
         shutil.rmtree(proj, ignore_errors=True)
     print("ok: %d checks, %d failures" % (PASS + FAIL, FAIL))

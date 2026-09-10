@@ -66,6 +66,7 @@ test_script
 test_strings
 test_hud
 test_objmodel
+test_spawn
 test_assets
 test_thumb
 test_assetkind
@@ -628,6 +629,28 @@ if [ -d "$SHOTS" ]; then
     else
         SHOT_N=$(ls "$SHOTS"/*.png 2>/dev/null | wc -l)
         echo "-- $SHOT_N shots in $SHOTS, no two of them the same picture"
+    fi
+fi
+
+# The SHIPPED binary, and whether it is still this checkout.
+#
+# innen_walk, innen_haus and the door test all measure build/daidalos_runtime -
+# the exported game - on purpose: an editor that behaves and a game that does
+# not is the bug those tests exist to catch. But ./build.sh does not build the
+# runtime (tools/build_runtime.sh does), so the day somebody changes a host
+# binding and runs only ./build.sh, those tests keep passing against
+# YESTERDAY'S game and report numbers about code that no longer exists. That
+# happened here with scene.spawn: the rule worked, the test said "the house
+# never started", and the reason was a binary an hour old. Older than a source
+# file it was built from is now RED, not a surprise at three in the morning.
+RT_BIN=build/daidalos_runtime
+if [ -f "$RT_BIN" ]; then
+    RT_NEWER=$(find include src examples -type f \( -name '*.h' -o -name '*.inl' -o -name '*.cpp' -o -name '*.hpp' \) -newer "$RT_BIN" -print 2>/dev/null | head -3)
+    if [ -n "$RT_NEWER" ]; then
+        FAILED="$FAILED runtime(stale)"
+        echo "-- $RT_BIN is older than sources it was built from:"
+        echo "$RT_NEWER" | sed 's/^/     /'
+        echo "   re-run tools/build_runtime.sh linux - the game tests measure this binary"
     fi
 fi
 

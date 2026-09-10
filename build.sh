@@ -337,6 +337,9 @@ if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
     g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_script.cpp $SCRIPT_LIB $VKLIBS -o build/test_script
     # The object model behaviours are written against - self.transform.position.x
     g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_objmodel.cpp $SCRIPT_LIB $VKLIBS -o build/test_objmodel
+    # scene.spawn()/scene.destroy() over a REAL document, through the same
+    # include/dai_spawn_host.inl the editor and the shipped game include.
+    g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_spawn.cpp $SCRIPT_LIB $VKLIBS -o build/test_spawn
     # And the C++ example has to keep compiling: it is documentation that runs.
     g++ $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/PlayerController.cpp -o build/_playercontroller_check.so
     rm -f build/_playercontroller_check.so

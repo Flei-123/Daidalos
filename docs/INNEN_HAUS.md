@@ -24,22 +24,45 @@ The reaction is weighted the way §5.2 weights it: 40 % the door stops opening,
 and flickers. The two reactions that need a *Kopie* — a double of the player —
 are folded into darkness for now, because there is no Kopie yet.
 
-## What it can and cannot rebuild
+## What it rebuilds, and with what
 
 Everything under "a detail" is something the engine can do to a room that is
 already standing: the light is the wrong colour, a lamp has moved, one of the
 room's doors does not open any more ("eine Tür weniger"). That is the 30 %.
 
 The 15 % "same kind of room again" and the 5 % "something wrong" need a room to
-be **built while the game runs**, and this engine has no spawn API for a
-behaviour: `editor` is deliberately not bound in a game, and `scene` can only
-find nodes. So those two are drawn, counted and logged as `want=replace` /
-`want=wrong` and nothing happens. They are in the distribution the test checks,
-so the day a spawn API exists the numbers do not have to move — only the
-effect.
+be **built while the game runs**. Since `include/dai_spawn_host.inl` a
+behaviour can do that — not with `editor` (a game that can invent nodes and
+save over the scene is a save game corrupter waiting for a typo) but by
+**copying** something an author placed:
 
-That is the honest state: **80 % of the rebuild rule runs, 20 % is measured and
-not yet performed.**
+```js
+var made = scene.spawn(src, 0, "Raum03.neu");   // the whole subtree
+scene.destroy(old);                             // the node and its descendants
+```
+
+| roll | what actually happens |
+|---|---|
+| **15 % same kind** | The room is copied **from itself** — the only source whose door holes are guaranteed to line up with the doors already hanging in the neighbours' walls — the original is torn down, and the new one comes back wearing **another room's materials**. Same plan, different building. That is what déjà-vu is supposed to feel like. |
+| **5 % wrong** | Another room of roughly the same footprint is put up in the hole. Its door holes are in the wrong walls, its surfaces belong to a different part of the house, and the door you came through opens into plaster. This is the roll that is *allowed* to be broken. |
+
+Two details that are not decoration:
+
+* The copy is spawned **before** the original is destroyed. A spawn that is
+  refused (a bad id, the budget) has to leave the player standing in a room and
+  not in the sky.
+* The copy carries the SOURCE's child names — `Raum07.Floor` under a room now
+  called `Raum03`. The subtree is renamed, because `readRooms()` finds a room's
+  floor slab by name and a house whose rooms answer under the wrong name
+  measures the wrong rectangle.
+
+The room's **lights are not part of the subtree** (the generator parents them
+to the root), so they survive the rebuild. The room changes, the lamp that was
+above you stays where it was.
+
+**All of the rule runs now.** `builtReplace` and `builtWrong` in the self test
+line have to equal `wantReplace` and `wantWrong`, and
+`tools/innen_haus.py` fails if they do not.
 
 ## How it sees the house
 
@@ -99,3 +122,12 @@ reactions (400 lock / 373 dark / 236 flicker), 0 violations.
 Runtime room building (the 20 % above, and the growth of the house behind a
 door the player opens), the Kopie, anchors as items you can carry and drop,
 the light pulse of §5.4, and portals.
+
+## The leak test
+
+A spawn without its destroy leaks a room per rebuild — about seventy nodes,
+hundreds of times — and nothing in the rules would notice. The runtime prints
+how many instances it drew on the first and on the last frame, and
+`tools/innen_haus.py` compares them: at seed 7 the house builds **64 same-kind
+rooms and 20 wrong ones** over 4000 moves and draws the same number of
+instances at the end as at the start.

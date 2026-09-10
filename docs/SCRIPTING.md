@@ -224,6 +224,36 @@ expected, so `body.setVel(self, 4, 0, 0)` and `node.setPos(self, ...)` are
 unchanged. That is what `valueOf()` is for, and it is the reason the model
 could be added at all rather than replacing what was there.
 
+## Spawning
+
+A behaviour has no `editor` — a game that can add arbitrary nodes and save over
+the scene is a save game corrupter waiting for a typo. What it *can* do is
+**copy** something an author placed:
+
+```js
+var made = scene.spawn(src, parent, "Name");  // the whole subtree, -1 refused
+scene.destroy(made);                          // the node and its descendants
+scene.childCount(n); scene.childAt(n, i); scene.children(n); scene.parent(n);
+made.destroy();                               // the same thing on a Node
+```
+
+The copy is deep and it is the same record: the source's components, its
+material stack, its collider, its behaviours **and the parameters tuned into
+them** come along, because whatever is correct about the source is correct
+about the copy. It keeps the source's local transform until you move it, and it
+keeps the source's child *names* — rename them yourself if anything looks
+things up by name.
+
+Refused, rather than half done: an id that is not a node, a `parent` inside the
+source's own subtree (the copy would be its own child), and a subtree over
+`DAI_SPAWN_MAX_NODES` — that last one is what stops a spawn loop from eating the
+document in a second.
+
+This is what makes INNEN's house able to rebuild a room behind the player's
+back while the game runs — see `docs/INNEN_HAUS.md`. The implementation is one
+seam, `include/dai_spawn_host.inl`, included by the editor, the modelling host
+and the shipped runtime, so all three mean the same thing by it.
+
 ## C++ behaviours
 
 Same idea, in a header-only wrapper over the C function table:

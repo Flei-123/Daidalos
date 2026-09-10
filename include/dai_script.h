@@ -63,6 +63,36 @@ typedef struct dai_script_node_host {
     void     (*set_vec)(double id, const char *prop, const double *xyz, void *user);
     const char *(*get_str)(double id, const char *prop, void *user);
     void     (*set_str)(double id, const char *prop, const char *v, void *user);
+    /* ---- SPAWN, the half a behaviour used to be missing -----------------
+     * A behaviour has no `editor` on purpose - a game that can add arbitrary
+     * nodes and save over the scene is a save game corrupter waiting for a
+     * typo. But a game that cannot bring anything into the world at all is
+     * not a game: a door needs a key to drop, a house that rebuilds itself
+     * behind your back needs a room to exist that did not exist a second ago.
+     *
+     * So this is deliberately NOT editor.add(). The only thing a behaviour
+     * may create is a COPY of something an author already placed:
+     *
+     *   scene.spawn(src, parent, "Name") -> the new subtree's root, -1 refused
+     *   scene.destroy(id)                -> the node and its descendants
+     *   scene.childCount(id) / scene.childAt(id, i) / scene.parent(id)
+     *
+     * The copy is deep - the node, its components, its whole subtree - and it
+     * keeps the source's local transform unless the caller moves it. That
+     * makes the source a prefab in the only sense that matters here: whatever
+     * is correct about it (a wall's door hole, a collider, a script and its
+     * tuned parameters) is correct about the copy, because it IS the copy.
+     *
+     * `parent` 0 means the document root; a parent inside the source subtree
+     * is refused, or the copy would be its own child. `name` may be null to
+     * keep the source's name - and two nodes may share a name, which is why
+     * scene.find() answers the FIRST and a caller that spawns then renames is
+     * the caller that stays sane. */
+    double   (*spawn)(double src, double parent, const char *name, void *user);
+    int      (*destroy)(double id, void *user);
+    double   (*child_count)(double id, void *user);
+    double   (*child_at)(double id, double index, void *user);
+    double   (*parent_of)(double id, void *user);
     void    *user;
 } dai_script_node_host;
 DAI_API void dai_script_bind_nodes(dai_script *s, const dai_script_node_host *host);
