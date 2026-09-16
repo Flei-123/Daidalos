@@ -179,6 +179,78 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "api",
+        "description": "READ THIS FIRST if you have not worked in Daidalos before. The whole cheat "
+                       "sheet: the object model, every property name, the enums, the modifier fields, "
+                       "the two rules that are not guessable (csg.op sits on the PARENT; supports() is "
+                       "a library helper, not a builtin), which docs to read and the build-look-fix "
+                       "loop. No other engine's knowledge transfers - nobody has seen this one.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "docs",
+        "description": "Read a file from the repository - without a name it lists docs/. The documents "
+                       "worth reading: BRIDGE.md (socket + property table), SCRIPTING.md (behaviours, "
+                       "object model), BLOCKOUT.md (kinds + CSG), MATERIALS.md, GDD_INNEN.md (the game), "
+                       "INNEN_*.md (what is already built and measured).",
+        "inputSchema": {"type": "object", "properties": {
+            "file": {"type": "string", "description": "e.g. BRIDGE.md, or examples/scripts/innen_lib.js"},
+        }},
+    },
+    {
+        "name": "add",
+        "description": "Create a node and set its properties in one undo step - the structured form of "
+                       "editor.add, for when you do not want to write JavaScript. props is a map of "
+                       "property name to value: a list of three is written as a vector, a number as a "
+                       "number, anything else as text. See `api` for the names and enums.",
+        "inputSchema": {"type": "object", "properties": {
+            "name": {"type": "string"},
+            "parent": {"type": "integer", "description": "Parent node id. Remember: for CSG the PARENT carries csg.op."},
+            "props": {"type": "object", "description": 'e.g. {"blockout.kind":1,"blockout.size":[4,3,0.2],"transform.position":[0,1.5,0]}'},
+            "material": {"type": "string", "description": 'e.g. "materials/raufaser.daimat"'},
+        }, "required": ["name"]},
+    },
+    {
+        "name": "set",
+        "description": "Change properties of an existing node and READ THEM BACK, so the answer is what "
+                       "the document says rather than what was sent - an unknown property name answers a "
+                       "harmless fallback, which would otherwise look like success.",
+        "inputSchema": {"type": "object", "properties": {
+            "id": {"type": "integer"},
+            "props": {"type": "object"},
+            "material": {"type": "string"},
+        }, "required": ["id"]},
+    },
+    {
+        "name": "get",
+        "description": "Read properties of a node. Without a list of names it reads the usual ones "
+                       "(name, tag, transform, blockout, csg, modifier count, script, collider, body). "
+                       "Each value comes back read as number, vector AND text, because one table serves "
+                       "all three and guessing the kind from the name would be a second table to keep in step.",
+        "inputSchema": {"type": "object", "properties": {
+            "id": {"type": "integer"},
+            "props": {"type": "array", "items": {"type": "string"}},
+        }, "required": ["id"]},
+    },
+    {
+        "name": "remove",
+        "description": "Delete a node and its subtree (one undo step).",
+        "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]},
+    },
+    {
+        "name": "assets",
+        "description": "What is on disk to reference: materials (.daimat), textures, scenes (.daiscene) "
+                       "and the behaviour scripts. Use this instead of guessing a material path.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "undo",
+        "description": "Undo (or redo) whole steps. One bridge call was one step, however many nodes it touched.",
+        "inputSchema": {"type": "object", "properties": {
+            "steps": {"type": "integer"}, "redo": {"type": "boolean"},
+        }},
+    },
+    {
         "name": "js",
         "description": "Run JavaScript in the runtime's script context and return the value of the "
                        "last expression. This is how scenes are built in this project - the rooms "
@@ -396,8 +468,265 @@ def t_restart(_a):
     return [{"type": "text", "text": ("killed the old one; " if killed else "") + note}]
 
 
+
+# ---------------------------------------------------------------------------
+# the cheat sheet
+# ---------------------------------------------------------------------------
+# WHY THIS TOOL EXISTS AT ALL. A model that is handed Blender or Unity already
+# knows bpy and UnityEditor from its training - the MCP server there only has
+# to carry the calls. Nobody has ever seen Daidalos. So the server has to teach
+# it: the property names, the enums, and above all the two rules that are not
+# guessable and that cost a wrong render every time (csg.op sits on the PARENT;
+# supports() is a helper in innen_lib.js, not a builtin). Without this tool a
+# foreign agent writes plausible nonsense and the pictures look fine to it.
+
+API_TEXT = """DAIDALOS THROUGH MCP - everything a model needs to build in this engine.
+
+THE MODEL. A scene is a tree of nodes. A node is a record of components; you do
+not "add a component", you set its properties, and an unknown property name
+answers a harmless fallback instead of failing (that is what lets a script
+written for a newer editor degrade instead of exploding).
+
+ONE CALL IS ONE UNDO STEP, however many nodes it touched. editor.begin("label")
+/ editor.commit() nest inside that.
+
+BUILDING (tool: js, or the structured tools add/set/get/remove)
+  var n = editor.add("Name");          // -> node id
+  var c = editor.add("Child", n);      // with a parent
+  editor.remove(n);                    // and its subtree
+  node.setVec(n, "transform.position", 0, 1, 0);
+  node.setNum(n, "light.intensity", 3);
+  node.setStr(n, "script", "innen_door.js{width=0.9}");
+  node.getVec(n, "blockout.size"); node.getNum(...); node.getStr(...)
+  editor.setMaterial(n, "materials/raufaser.daimat");
+  editor.count(); editor.at(i);        // walk the document
+  editor.camera([5,3,-7], [0,1,0], 52);
+  editor.save("scenes/room.daiscene"); editor.undo(); editor.redo();
+  self / scene.find("Name") / node.transform.position.x also work (Unity-style),
+  and setting one component writes only that one.
+
+PROPERTY NAMES (one table, shared by inspector, behaviours and this bridge)
+  transform.position|rotation|scale     vectors; rotation in DEGREES
+  node.name|tag|asset                   tag is also the channel behaviours read
+  renderer.enabled
+  light.enabled|mode|color|intensity|range|cone
+  camera.enabled|mode|fov|size
+  text.enabled|value|size|color|anchor
+  image.enabled|asset|size
+  rigidbody.enabled|motion|density|friction|restitution|trigger|freeze
+  collider.shape|center|enabled         shape: 0 box 1 sphere 2 capsule 4 cylinder
+  script                                behaviours, ';' separated, each file.js{k=v,...}
+  blockout.enabled|kind|size|pivot|segments|steps|thickness|width
+  csg.enabled|op
+  door.enabled|width|height|normal|offset      the sockets the generator docks to
+  modifier.count and modifier.<0-7>.<field>
+
+ENUMS
+  blockout.kind : 0 none, 1 BOX, 2 CYLINDER, 3 STAIRS, 4 ARCH, 5 WEDGE
+  csg.op        : 0 none, 1 UNION, 2 SUBTRACT, 3 INTERSECT
+  modifier.type : 0 none, 1 BEVEL, 2 SUBDIVIDE, 3 SOLIDIFY, 4 ARRAY, 5 MIRROR
+  collider.shape: 0 BOX, 1 SPHERE, 2 CAPSULE, 3 COMPOUND, 4 CYLINDER
+  rigidbody.freeze is a mask like Unity's Constraints; 40 keeps a capsule upright
+
+MODIFIER FIELDS have a neutral name AND the name of the type that uses them -
+they are the same slot, so width==amount==thickness==weld, and
+count==segments==level==copies:
+  modifier.0.type|enabled|off
+  modifier.0.width   (= amount, thickness, weld)
+  modifier.0.count   (= segments, level, copies)
+  modifier.0.angle   (= rotation)
+  modifier.0.offset  (= step, a vector)
+  modifier.0.axis | .param (= shift) | .smooth | .relative
+  modifier.count     how many slots are live (set it, or the stack is ignored)
+
+TWO RULES THAT ARE NOT GUESSABLE - each one costs a wrong render:
+
+ 1. csg.op GOES ON THE PARENT. The parent is the operator, the children are the
+    operands: FIRST child = the base, every child after it = a tool. Putting
+    csg.op on the cylinder you want subtracted does nothing at all - it just
+    stands there as its own block. Correct:
+        var cut = editor.add("Wall");           node.setNum(cut,"csg.op",2);
+        var slab = editor.add("Wall.Slab",cut); node.setNum(slab,"blockout.kind",1);
+                                                node.setVec(slab,"blockout.size",4,3,0.2);
+        var hole = editor.add("Wall.Hole",cut); node.setNum(hole,"blockout.kind",1);
+                                                node.setVec(hole,"blockout.size",1,2.1,1);
+                                                node.setVec(hole,"transform.position",1,0,0);
+
+ 2. supports() IS NOT A BUILTIN. It is a helper in examples/scripts/innen_lib.js
+    that adds a __probe node, writes and reads a property back and removes it.
+    Load the library if you want it: js files:["examples/scripts/innen_lib.js",
+    "your_script.js"] - the files are concatenated into ONE eval, which is how a
+    level script gets its library in front of it. innen_lib.js also gives you
+    place/wall/group/collider and the INNEN constants.
+
+ 3. scene.spawn(src,parent,"Name") is for RUNTIME (a behaviour copying a room
+    while the game runs). In the editor it refuses with -1; use editor.add.
+
+WHAT TO READ BEFORE A BIG CHANGE
+  docs/BRIDGE.md        the socket, the commands, the property table
+  docs/SCRIPTING.md     behaviours, inspector fields, the object model, spawning
+  docs/BLOCKOUT.md      blockout kinds and CSG
+  docs/MATERIALS.md     material stack and .daimat
+  docs/GDD_INNEN.md     the game this engine is being built for
+  examples/scripts/     innen_lib.js (library), innen_m0.js (three real rooms)
+  tool `docs` reads any of them; tool `state` says whether a binary is stale.
+
+THE LOOP THAT WORKS
+  state -> js (build) -> shot (LOOK at it) -> fix -> shot again -> save -> tests
+  The shot comes back as a picture, so judge the picture, not the code. Note the
+  render currently photographs the whole editor, so panels take the sides and
+  the 3D view is the middle - that is a known limit, not your camera being wrong.
+"""
+
+
+def t_api(_a):
+    return [{"type": "text", "text": API_TEXT}]
+
+
+def t_docs(a):
+    name = a.get("file") or ""
+    if not name:
+        names = sorted(f for f in os.listdir(os.path.join(ROOT, "docs")) if f.endswith(".md"))
+        return [{"type": "text", "text": "docs/: " + ", ".join(names)}]
+    path = confine(name if name.startswith(("docs/", "examples/", "projects/", "tools/"))
+                   else os.path.join("docs", name), ROOT)
+    if not os.path.exists(path):
+        raise ValueError("no such file: %s" % os.path.relpath(path, ROOT))
+    with open(path, "r", errors="replace") as f:
+        text = f.read()
+    cut = 60000
+    return [{"type": "text", "text": text[:cut] + ("\n...(cut at %d chars)" % cut if len(text) > cut else "")}]
+
+
+def t_add(a):
+    name = str(a.get("name") or "Node")
+    parent = a.get("parent")
+    props = a.get("props") or {}
+    material = a.get("material")
+    lines = ['editor.begin("mcp add %s");' % name.replace('"', "'"),
+             'var n = editor.add(%s%s);' % (json.dumps(name), (", %d" % int(parent)) if parent not in (None, "",) else "")]
+    lines += _prop_lines("n", props)
+    if material:
+        lines.append("editor.setMaterial(n, %s);" % json.dumps(str(material)))
+    lines.append("editor.commit();")
+    lines.append('JSON.stringify({id:n, name:%s});' % json.dumps(name))
+    r = ask({"cmd": "eval", "code": "\n".join(lines)}, timeout=300.0)
+    if not r.get("ok", True):
+        return [{"type": "text", "text": "refused:\n" + json.dumps(r, indent=1, default=str)}]
+    return [{"type": "text", "text": json.dumps(r.get("result"), default=str)}]
+
+
+def _prop_lines(var, props):
+    """One setter per property, choosing setVec/setNum/setStr by the VALUE.
+    A list of three -> vector, a number -> number, anything else -> string."""
+    out = []
+    for key, val in props.items():
+        k = json.dumps(str(key))
+        if isinstance(val, (list, tuple)):
+            nums = ", ".join(repr(float(x)) for x in val)
+            out.append("node.setVec(%s, %s, %s);" % (var, k, nums))
+        elif isinstance(val, bool):
+            out.append("node.setNum(%s, %s, %d);" % (var, k, 1 if val else 0))
+        elif isinstance(val, (int, float)):
+            out.append("node.setNum(%s, %s, %s);" % (var, k, repr(val)))
+        else:
+            out.append("node.setStr(%s, %s, %s);" % (var, k, json.dumps(str(val))))
+    return out
+
+
+def t_set(a):
+    nid = a.get("id")
+    if nid is None:
+        raise ValueError("id is required")
+    props = a.get("props") or {}
+    if not props and not a.get("material"):
+        raise ValueError("give props and/or material")
+    lines = ['editor.begin("mcp set");', "var n = %d;" % int(nid)]
+    lines += _prop_lines("n", props)
+    if a.get("material"):
+        lines.append("editor.setMaterial(n, %s);" % json.dumps(str(a["material"])))
+    lines.append("editor.commit();")
+    # read every property back, so the answer is what the DOCUMENT says, not
+    # what was sent - a fallback property would otherwise look like a success.
+    reads = []
+    for key, val in props.items():
+        k = json.dumps(str(key))
+        if isinstance(val, (list, tuple)):
+            reads.append("%s: node.getVec(n, %s)" % (json.dumps(str(key)), k))
+        elif isinstance(val, (int, float, bool)):
+            reads.append("%s: node.getNum(n, %s)" % (json.dumps(str(key)), k))
+        else:
+            reads.append("%s: node.getStr(n, %s)" % (json.dumps(str(key)), k))
+    lines.append("JSON.stringify({id:n, now:{%s}});" % ", ".join(reads))
+    r = ask({"cmd": "eval", "code": "\n".join(lines)}, timeout=300.0)
+    if not r.get("ok", True):
+        return [{"type": "text", "text": "refused:\n" + json.dumps(r, indent=1, default=str)}]
+    return [{"type": "text", "text": json.dumps(r.get("result"), default=str)}]
+
+
+def t_get(a):
+    nid = a.get("id")
+    names = a.get("props")
+    if nid is None:
+        raise ValueError("id is required")
+    if not names:
+        names = ["node.name", "node.tag", "transform.position", "transform.rotation",
+                 "transform.scale", "blockout.kind", "blockout.size", "csg.op",
+                 "modifier.count", "script", "collider.shape", "rigidbody.enabled"]
+    parts = []
+    for nm in names:
+        k = json.dumps(str(nm))
+        # Read all three ways and let the caller see which one carries a value:
+        # one table serves numbers, vectors and strings, and guessing the kind
+        # from the name would be a second table to keep in step.
+        parts.append("%s: {num: node.getNum(n, %s), vec: node.getVec(n, %s), str: node.getStr(n, %s)}"
+                     % (json.dumps(str(nm)), k, k, k))
+    code = "var n = %d;\nJSON.stringify({id:n, props:{%s}});" % (int(nid), ", ".join(parts))
+    r = ask({"cmd": "eval", "code": code})
+    return [{"type": "text", "text": json.dumps(r.get("result"), indent=1, default=str)}]
+
+
+def t_remove(a):
+    nid = a.get("id")
+    if nid is None:
+        raise ValueError("id is required")
+    code = ('editor.begin("mcp remove");\nvar ok = editor.remove(%d);\neditor.commit();\n'
+            'JSON.stringify({removed:%d, ok:ok, count:editor.count()});' % (int(nid), int(nid)))
+    r = ask({"cmd": "eval", "code": code})
+    return [{"type": "text", "text": json.dumps(r.get("result"), default=str)}]
+
+
+def t_assets(_a):
+    """What is actually on disk to reference: materials, scenes, scripts."""
+    out = []
+    for sub, ext in (("projects/Untitled/assets/materials", ".daimat"),
+                     ("projects/Untitled/assets/textures", None),
+                     ("projects/Untitled/scenes", ".daiscene"),
+                     ("projects/Untitled/assets", ".js"),
+                     ("examples/scripts", ".js"),
+                     ("materials", ".daimat")):
+        d = os.path.join(ROOT, sub)
+        if not os.path.isdir(d):
+            continue
+        names = sorted(f for f in os.listdir(d) if (ext is None or f.endswith(ext)))
+        if names:
+            out.append("%s/  (%d)\n  %s" % (sub, len(names), "\n  ".join(names[:40])))
+    return [{"type": "text", "text": "\n\n".join(out) or "(nothing found)"}]
+
+
+def t_undo(a):
+    n = int(a.get("steps") or 1)
+    cmd = "redo" if a.get("redo") else "undo"
+    res = []
+    for _ in range(max(1, min(n, 50))):
+        res.append(ask({"cmd": cmd}).get("ok", True))
+    return [{"type": "text", "text": "%s x%d -> %s" % (cmd, len(res), "ok" if all(res) else "some refused")}]
+
+
 HANDLERS = {"state": t_state, "js": t_js, "shot": t_shot, "scene": t_scene,
-            "save": t_save, "build": t_build, "tests": t_tests, "restart": t_restart}
+            "save": t_save, "build": t_build, "tests": t_tests, "restart": t_restart,
+            "api": t_api, "docs": t_docs, "add": t_add, "set": t_set, "get": t_get,
+            "remove": t_remove, "assets": t_assets, "undo": t_undo}
 
 
 # ---------------------------------------------------------------------------
