@@ -526,7 +526,34 @@ ENUMS
   csg.op        : 0 none, 1 UNION, 2 SUBTRACT, 3 INTERSECT
   modifier.type : 0 none, 1 BEVEL, 2 SUBDIVIDE, 3 SOLIDIFY, 4 ARRAY, 5 MIRROR
   collider.shape: 0 BOX, 1 SPHERE, 2 CAPSULE, 3 COMPOUND, 4 CYLINDER
+  light.mode    : 0 = NO LIGHT AT ALL, 1 POINT, 2 SPOT, 3 DIRECTIONAL (sun)
   rigidbody.freeze is a mask like Unity's Constraints; 40 keeps a capsule upright
+
+FIVE MORE THINGS THAT HAVE ALREADY COST SOMEBODY A SCENE:
+
+ 4. light.mode 0 IS NOT A DEFAULT, IT IS OFF. A node with light.enabled 1 and
+    light.mode 0 emits nothing and looks like a broken renderer. Point light is
+    1, sun is 3. Set the mode every single time you make a light.
+
+ 5. A NODE WITHOUT BLOCKOUT STILL RENDERS - as a 1 m cube. So every node you
+    only use as a GROUP needs node.setNum(g, "renderer.enabled", 0), or your
+    scene quietly fills with white boxes at every group's origin.
+
+ 6. COLLIDERS AND BODIES ARE ON BY DEFAULT, on every node you create. In a
+    277-node level that means the physics has 277 bodies, the neon tubes are
+    solid, and a bucket held in front of the camera collides with the player.
+    Anything decorative wants collider.enabled 0 and rigidbody.enabled 0 -
+    check with get before you hand the level to a behaviour.
+
+ 7. THE ARRAY MODIFIER IS NOT A LEVEL BUILDER. It works on a small scene, but
+    in a big one the instances have been seen not to appear at all - tiles and
+    pillars silently missing. For anything structural, place real nodes in a
+    loop; keep ARRAY for small props you can verify in one shot.
+
+ 8. text.value DOES NOT RENDER in modeling_shot. The string sits in the
+    document and photographs as nothing, and painting letters into a texture
+    smears if the material is triplanar. A sign is a glowing panel until this
+    is solved - do not spend a run on it.
 
 MODIFIER FIELDS have a neutral name AND the name of the type that uses them -
 they are the same slot, so width==amount==thickness==weld, and
