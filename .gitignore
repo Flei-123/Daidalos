@@ -18,3 +18,6 @@ tools/history/
 
 # round scratch: hand written diagnostics that are not part of any build
 _dev_*.cpp
+
+# Renders des MCP-Servers (tools/dai_mcp.py) — Arbeitsmaterial, nicht Quelle
+.dai-mcp-shots/
