@@ -495,7 +495,46 @@
             node.setStr(haus, "script",
                 "innen_haus.js{rooms=" + p.rooms.length +
                 ",doors=" + made.leaves + ",seed=" + SEED +
-                ",warm=3,coldDistance=3,pingpong=3,anchors=0,player=Spieler}");
+                ",warm=3,coldDistance=3,pingpong=3,anchors=0,player=Spieler" +
+                ",puls=Puls,ankerNode=Anker,torch=Spieler.Lampe" +
+                ",torchCone=26,torchRange=16}");
+
+            // §5.4: the breathing, on a node of its own. It owns nothing but
+            // the clock - which phase it is is written into ITS tag, and the
+            // house above reads it. Two behaviours, one channel, the same one
+            // the house already uses to lock a door.
+            var puls = INNEN.group("Puls", 0, [0, 0, 0]);
+            node.setStr(puls, "script",
+                "innen_puls.js{rooms=" + p.rooms.length +
+                ",seed=" + SEED + ",hellMin=240,hellMax=420" +
+                ",dunkelMin=40,dunkelMax=90,flackerZeit=5" +
+                ",ersteHell=95,player=Spieler,torch=Spieler.Lampe,haus=Haus}");
+
+            // §5.3: the five real objects, and the behaviour that carries
+            // them. They start in the phone box - room 0, where the player
+            // steps out of his car's worth of belongings - laid out along its
+            // floor so that two of them are never in the same place.
+            made.anchors = 0;
+            if (p.rooms.length) {
+                var r0 = p.rooms[0];
+                for (var ai = 0; ai < INNEN.ANKER.length; ai++) {
+                    var off = (ai - (INNEN.ANKER.length - 1) * 0.5);
+                    var ax = r0.centre[0] + off * Math.min(0.42, r0.dim.width * 0.16);
+                    var az = r0.centre[2] + (ai % 2 ? 0.16 : -0.16);
+                    var ay = 0.06 + INNEN.ANKER[ai].size[1] * 0.5;
+                    if (INNEN.anker(ai, [ax, ay, az],
+                                    MATS[TYPES[r0.type].mats].wall) >= 0)
+                        made.anchors++;
+                }
+                var names = [];
+                for (var an = 0; an < INNEN.ANKER.length; an++)
+                    names.push("Anker." + INNEN.ANKER[an].key);
+                var ankerNode = INNEN.group("Anker", 0, [0, 0, 0]);
+                node.setStr(ankerNode, "script",
+                    "innen_anker.js{rooms=" + p.rooms.length +
+                    ",player=Spieler,haus=Haus,slots=4,ankerSlots=2" +
+                    ",reach=1.8,items=" + names.join("|") + "}");
+            }
         }
     }
     editor.commit();
@@ -505,6 +544,7 @@
     var out = {
         seed: SEED, rooms: [], edges: [], loops: p.loops,
         refused: p.refused, lights: made.lights, leaves: made.leaves,
+        anchors: made.anchors || 0,
         nodes: editor.count(), player: WITH_PLAYER && !PLAN_ONLY
     };
     for (var a = 0; a < p.rooms.length; a++) {

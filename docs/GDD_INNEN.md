@@ -242,9 +242,27 @@ Zone 3 ist die einzige, die je nach Spieler ganz anders ist → Replay-Grund.
 > ([`docs/INNEN_HAUS.md`](INNEN_HAUS.md)): 50/30/15/5 halten, ein warmer Raum
 > wird nie umgebaut (0 Verstöße in 4000 Zügen), das Gehäuse reagiert auf
 > Pingpong mit Tür-zu / Dunkelheit / Flackern. Die 20 % „Raum ersetzen" werden
-> gewürfelt und protokolliert, aber noch nicht ausgeführt: dafür fehlt eine
-> Spawn-API zur Laufzeit. Es fehlen außerdem Anker als Gegenstände, Portale,
-> die Kopie und Schlüssel, die eine Tür aufsperren.
+> seit `scene.spawn` auch wirklich **gebaut**, zur Laufzeit: bei Seed 7 sind
+> das 64 gleichartige und 20 falsche Räume in 4000 Zügen, ohne dass das Haus
+> dabei wächst oder schrumpft.
+> **§5.4 atmet** (`innen_puls.js`, [`docs/INNEN_PULS.md`](INNEN_PULS.md)): das
+> Gehäuse hat einen Zyklus, im ausgelieferten Runtime über 40 Zyklen gemessen
+> — Hellphase **248,9–415,1 s** (Soll 4–7 min), Dunkelphase **40,1–89,8 s**
+> (Soll 40–90 s), davor **5,03 s Flackern**, jedes Mal. In der Dunkelphase
+> greift die Umbau-Regel auch auf Räume, die der Spieler *sieht* — aber nur
+> außerhalb des 26°-Taschenlampenkegels; in der Hellphase schützt Hinsehen den
+> Raum. Die beiden Verhalten reden über `node.tag` miteinander, denselben
+> Kanal, über den das Haus schon seine Türen zusperrt.
+> **§5.3 liegt im Auto** (`innen_anker.js`,
+> [`docs/INNEN_ANKER.md`](INNEN_ANKER.md)): Warndreieck, Erste-Hilfe-Box,
+> Eiskratzer, Tankquittung und Foto sind aufnehmbar und ablegbar, Inventar
+> nach §5.9 (Taschenlampe in der Hand, 4 Jacken-Slots, ein Anker belegt 2 —
+> der dritte wird abgewiesen). Ein Anker friert seinen Raum ein, und zwar über
+> die `anchors`-Karte, die die Umbau-Würfel ohnehin schon fragen: gemessen
+> **0 Umbauten in 2000 Zügen** mit Anker im Raum und **26 Umbauten in 96
+> Besuchen**, nachdem er wieder aufgehoben wurde.
+> Es fehlen Portale, die Kopie, Schlüssel, die eine Tür aufsperren, und die
+> Telefone.
 | M1 Vertical Slice | Zone 1 komplett, Puls, Umbau-Regel, 1 Telefon mit 5 Anrufen, Kopie | Spielbar 30 Min, ein Kernstück |
 | M2 | Zone 2–3, Wärter, Formular-Seed, 5 Angstvarianten | 2 h |
 | M3 | Archiv, Akten (41 Texte), Verbrennen, Twist | 4 h |

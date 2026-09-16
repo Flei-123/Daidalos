@@ -16,7 +16,8 @@ tools/innen_haus.py                      the numbers they have to come out at
 | **warme Räume** | The last three rooms the player stood in are frozen, whatever else is true. The way back is always the way back. |
 | **kalt** | A room he has not been within three doors of since he left it may change when he next walks in. |
 | **Umbau** | 50 % nothing, 30 % a detail, 15 % the same kind of room again, 5 % something wrong. |
-| **Anker** | Listed rooms never change. The phone box is one from the start. |
+| **Anker** | Listed rooms never change. The phone box is one from the start, and since [`INNEN_ANKER.md`](INNEN_ANKER.md) the five objects the player carries add to the same list, through the `Anker` node's tag. |
+| **Puls** | While [`innen_puls.js`](INNEN_PULS.md) says `dunkel`, a room the player can **see** may be rebuilt too — but only outside his torch cone. In the bright phase, seeing a room protects it. |
 | **Pingpong** | Three times back and forth through the same door is not answered with a reroll but with a **reaction**. |
 
 The reaction is weighted the way §5.2 weights it: 40 % the door stops opening,
@@ -117,11 +118,33 @@ It checks, 22 of them:
 Typical run, seed 7: 4000 moves, 469 rebuild draws, 3531 frozen, 1009
 reactions (400 lock / 373 dark / 236 flicker), 0 violations.
 
+## The two rules that were added later
+
+Both of them live **inside** `enterRoom()` rather than beside it, because a
+second place that decides whether a room may change is a second place to keep
+in step:
+
+* **§5.3, the anchors.** First question asked, before warm rooms and before
+  the dice: `if (anchors[room])`. The map is the one that was always there;
+  `innen_anker.js` writes into it through the `Anker` node's tag. See
+  [`INNEN_ANKER.md`](INNEN_ANKER.md).
+* **§5.4, the sight rule.** After the warm and cold checks, before the dice:
+  a room the player can see is frozen — unless the pulse says `dunkel`, in
+  which case only the torch cone still protects it. See
+  [`INNEN_PULS.md`](INNEN_PULS.md).
+
+`enterRoom()` takes a `simulated` flag that gates the sight rule and nothing
+else. The self test walks the *graph* while the player's capsule stands still,
+so a geometric "can he see it" test would have answered about the spawn point
+four thousand times and quietly moved the measured distribution. Everything
+else — warm rooms, anchors, the dice, pingpong — is the same code on both
+paths.
+
 ## What is missing
 
-Runtime room building (the 20 % above, and the growth of the house behind a
-door the player opens), the Kopie, anchors as items you can carry and drop,
-the light pulse of §5.4, and portals.
+The growth of the house behind a door the player opens, the Kopie, portals,
+and the §5.2 pingpong reaction that is supposed to start a real dark phase
+(the house still makes its own local darkness instead of asking the pulse).
 
 ## The leak test
 

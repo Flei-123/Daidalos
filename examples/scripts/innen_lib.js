@@ -355,6 +355,39 @@ var INNEN = (function () {
     // a spot light in its hand, all three placed by whoever builds the level,
     // because a player that only exists when somebody drags three nodes
     // together by hand is a player no test can walk.
+    // The five things out of your car - GDD §5.3. They are the only objects
+    // in the house that are REAL: not built out of somebody's memory, so the
+    // house cannot overwrite them, and the room one lies in stops changing.
+    //
+    // They are plain boxes at the size the thing actually is. A warning
+    // triangle is 0.43 m across and a petrol receipt is a slip of paper, and
+    // the difference is the point: you can see across a room which one you
+    // left there. The colour is the one Rot the art direction allows (§8) for
+    // the triangle, and washed out 70s plastic for the rest.
+    //
+    // They are graphics only. An anchor is picked up by standing near it and
+    // pressing E - innen_anker.js measures the distance - and a dynamic body
+    // would spend the game rolling down the stair ramp in the hall.
+    var ANKER = [
+        { key: "Warndreieck",  size: [0.43, 0.40, 0.04] },
+        { key: "ErsteHilfe",   size: [0.26, 0.18, 0.11] },
+        { key: "Eiskratzer",   size: [0.12, 0.02, 0.24] },
+        { key: "Tankquittung", size: [0.08, 0.001, 0.14] },
+        { key: "Foto",         size: [0.09, 0.002, 0.13] }
+    ];
+
+    function anker(index, pos, material) {
+        var a = ANKER[index];
+        if (!a) return -1;
+        var n = editor.add("Anker." + a.key, 0);
+        node.setPos(n, pos[0], pos[1], pos[2]);
+        node.setVec(n, "transform.scale", a.size[0], a.size[1], a.size[2]);
+        node.setNum(n, "rigidbody.enabled", 0);     // picked up, not pushed
+        node.setStr(n, "node.tag", "Anker");
+        if (material) editor.setMaterial(n, material);
+        return n;
+    }
+
     function player(name, pos, yaw) {
         var p = editor.add(name || "Spieler", 0);
         // The transform is at the FEET and the capsule is lifted by
@@ -411,6 +444,7 @@ var INNEN = (function () {
         SIDES: SIDES,
         noPhysics: noPhysics, collider: collider, place: place, group: group,
         wall: wall, wallColliders: wallColliders, socket: socket, lamp: lamp,
-        room: room, door: door, player: player
+        room: room, door: door, player: player,
+        anker: anker, ANKER: ANKER
     };
 })();

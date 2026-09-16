@@ -1,5 +1,5 @@
 daidalos-scene 1
-next-id 404
+next-id 411
 
 node 8
   name Tueren
@@ -431,7 +431,66 @@ end
 node 403
   name Haus
   nobody 1
-  script innen_haus.js{rooms=14,doors=24,seed=7,warm=3,coldDistance=3,pingpong=3,anchors=0,player=Spieler}
+  script innen_haus.js{rooms=14,doors=24,seed=7,warm=3,coldDistance=3,pingpong=3,anchors=0,player=Spieler,puls=Puls,ankerNode=Anker,torch=Spieler.Lampe,torchCone=26,torchRange=16}
+  hidden 1
+end
+
+node 404
+  name Puls
+  nobody 1
+  script innen_puls.js{rooms=14,seed=7,hellMin=240,hellMax=420,dunkelMin=40,dunkelMax=90,flackerZeit=5,ersteHell=95,player=Spieler,torch=Spieler.Lampe,haus=Haus}
+  hidden 1
+end
+
+node 405
+  name Anker.Warndreieck
+  tag Anker
+  pos -0.3456 0.26 -0.16
+  scale 0.43 0.4 0.04
+  nobody 1
+  materials materials/rost.daimat
+end
+
+node 406
+  name Anker.ErsteHilfe
+  tag Anker
+  pos -0.1728 0.15 0.16
+  scale 0.26 0.18 0.11
+  nobody 1
+  materials materials/rost.daimat
+end
+
+node 407
+  name Anker.Eiskratzer
+  tag Anker
+  pos 0 0.07 -0.16
+  scale 0.12 0.02 0.24
+  nobody 1
+  materials materials/rost.daimat
+end
+
+node 408
+  name Anker.Tankquittung
+  tag Anker
+  pos 0.1728 0.0605 0.16
+  scale 0.08 0.001 0.14
+  nobody 1
+  materials materials/rost.daimat
+end
+
+node 409
+  name Anker.Foto
+  tag Anker
+  pos 0.3456 0.061 -0.16
+  scale 0.09 0.002 0.13
+  nobody 1
+  materials materials/rost.daimat
+end
+
+node 410
+  name Anker
+  nobody 1
+  script innen_anker.js{rooms=14,player=Spieler,haus=Haus,slots=4,ankerSlots=2,reach=1.8,items=Anker.Warndreieck|Anker.ErsteHilfe|Anker.Eiskratzer|Anker.Tankquittung|Anker.Foto}
   hidden 1
 end
 

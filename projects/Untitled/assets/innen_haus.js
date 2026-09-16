@@ -15,6 +15,14 @@
 //                   not answered with a reroll but with a REACTION: the door
 //                   stops opening, or the lights go out. It is recording you,
 //                   and it noticed you were testing it.
+//   PULS            §5.4. While innen_puls.js says "dunkel", a room the player
+//                   can SEE may be rebuilt too - but only outside the cone of
+//                   his torch. In the bright phase, seeing a room protects it.
+//   ANKER           §5.3. innen_anker.js writes the rooms that hold a real
+//                   object into its own tag, and they join `anchors` - the
+//                   map the dice below have always consulted. An anchored
+//                   room is frozen whatever else is true, and picking the
+//                   object back up gives the room to the house again.
 //
 // HOW IT SEES THE HOUSE: by name. A behaviour has no `editor` - it cannot
 // enumerate the document - so examples/scripts/innen_gen.js names its rooms
@@ -44,6 +52,23 @@
 // @tooltip The dice. The same seed makes the same house behave the same way.
 // @param float seed        = 1
 //
+// @header Puls & Anker
+// @tooltip The node carrying innen_puls.js. Its TAG is the phase - "hell",
+// @tooltip "flacker" or "dunkel" - and that is the whole channel. Empty: the
+// @tooltip house never goes dark and §5.4 is off.
+// @param string puls       = Puls
+// @tooltip The node carrying innen_anker.js. Its TAG is the list of rooms that
+// @tooltip hold a real object, "0,3,7". Empty: only the fixed `anchors` above.
+// @param string ankerNode  = Anker
+// @tooltip Degrees of the torch's cone, §5.4. A room the beam falls into is
+// @tooltip protected even in the dark. Has to match the spot light on the
+// @tooltip player - innen_lib builds it at 26.
+// @param float torchCone   = 26
+// @tooltip Metres the torch reaches.
+// @param float torchRange  = 16
+// @tooltip The player's torch, for where the beam points.
+// @param string torch      = Spieler.Lampe
+//
 // @header Test
 // @tooltip Instead of watching the player, walk the graph `testSteps` times by
 // @tooltip itself at startup and print what the rules did. That is how
@@ -54,6 +79,13 @@
 // @tooltip How strongly the simulated walker goes back where it came from -
 // @tooltip 0 never, 1 always. The pingpong rule has to be provoked to be seen.
 // @param float testBounce  = 0.55
+// @tooltip Report what the §5.4 sight rule answers for every room, once, from
+// @tooltip where the player stands. Measured by tools/innen_puls.py.
+// @param bool  sightTest   = false
+// @tooltip Anchor this room for the first half of the self test and release it
+// @tooltip for the second, counting rebuilds in both halves. -1 = off. This is
+// @tooltip how tools/innen_anker.py proves §5.3 in the shipped runtime.
+// @param float testAnchorRoom = -1
 
 var P = (typeof params === "object" && params) ? params : {};
 function num(k, d) { var v = P[k]; return (typeof v === "number" && !isNaN(v)) ? v : d; }
@@ -76,11 +108,22 @@ var pingCount = {};      // door -> how often it was crossed back and forth
 var lastDoor = -1, lastFrom = -1;
 var elapsed = 0, nextLook = 0;
 var dark = 0;            // seconds of forced darkness left
+var PULS = -1, ANKER_NODE = -1, TORCH = -1;
+var TORCH_COS = -1, TORCH_RANGE = 16;
+var phase = "hell";      // what innen_puls.js last said
+var lastAnkerTag = null;
+var fixedAnchors = {};   // the ones from the inspector field, never removed
 
 var stat = { enters: 0, identical: 0, detail: 0, wantReplace: 0, wantWrong: 0,
              builtReplace: 0, builtWrong: 0,
              frozen: 0, reactions: 0, lockReact: 0, darkReact: 0, flickerReact: 0,
-             warmViolations: 0 };
+             warmViolations: 0,
+             // §5.4 / §5.3
+             darkSeen: 0,        // rebuilt a room he could SEE, in the dark
+             darkInCone: 0,      // ...and the ones the torch saved
+             brightSeen: 0,      // seeing a room in the bright phase saved it
+             anchorFrozen: 0,    // the dice never ran: a real object lies there
+             anchorViolations: 0 };
 
 // The same LCG the generator uses. Not Math.random(): a house that behaves
 // differently in two runs of one seed cannot be tested and cannot be a bug
@@ -350,10 +393,108 @@ function rebuildDetail(room) {
 
 function say(line) { print("HAUS " + line); }
 
+// ---- §5.4: what the pulse changes ---------------------------------------
+// The phase is read off innen_puls.js's own tag, the same way innen_door.js
+// reads the tag this file writes to it. One channel for the whole game.
+function readPhase() {
+    if (PULS < 0) return "hell";
+    var t = node.getStr(PULS, "node.tag");
+    return (t === "dunkel" || t === "flacker") ? t : "hell";
+}
+
+// Can the player SEE into this room? Deliberately crude and deliberately
+// generous: the room's centre against the player's own position and facing.
+// A frustum-and-occlusion test is what §5.2's "kein Sichtkontakt" will
+// eventually mean (docs/GDD_INNEN.md §10), and it needs a renderer. What
+// matters for the RULE is the asymmetry: in the bright phase, a room you are
+// looking at is safe, and in the dark that protection shrinks to the beam.
+function playerLook() {
+    if (PLAYER < 0) return null;
+    var p = node.getPos(PLAYER);
+    // The torch is aimed where the head is aimed - innen_player.js writes the
+    // eye's rotation onto it every frame - so the beam IS the look direction,
+    // and taking it from the torch means there is one source for both.
+    var f = [0, 0, -1];
+    if (TORCH >= 0) {
+        var q = node.getRot(TORCH);
+        if (q && q.length === 4) {
+            var x = q[0], y = q[1], z = q[2], w = q[3];
+            // rotate (0,0,-1) by q
+            f = [-2 * (x * z + w * y),
+                 -2 * (y * z - w * x),
+                 -(1 - 2 * (x * x + y * y))];
+        }
+    }
+    return { x: p[0], y: p[1], z: p[2], fx: f[0], fy: f[1], fz: f[2] };
+}
+
+// Is the room's centre inside the torch's cone, and near enough to be lit?
+// This is the ONE thing that is safe during a dark phase - "alles aus ausser
+// deiner Taschenlampe", and the house may rebuild everything the beam is not
+// on. A player who wants a room to stay put has to keep the light on it.
+function inTorchCone(room, look) {
+    if (!look || TORCH < 0) return false;
+    if (!node.getNum(TORCH, "light.enabled")) return false;   // a dead torch protects nothing
+    var r = ROOMS[room];
+    if (!r) return false;
+    var dx = r.cx - look.x, dy = r.cy - look.y, dz = r.cz - look.z;
+    var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len > TORCH_RANGE) return false;
+    if (len < 0.0001) return true;
+    var dot = (dx * look.fx + dy * look.fy + dz * look.fz) / len;
+    return dot >= TORCH_COS;
+}
+
+// "Sichtkontakt" for the bright phase: the room is in front of the player and
+// within a few rooms' reach. Same crude measure, wider angle - the eye is not
+// a torch.
+function inSight(room, look) {
+    if (!look) return false;
+    var r = ROOMS[room];
+    if (!r) return false;
+    var dx = r.cx - look.x, dy = r.cy - look.y, dz = r.cz - look.z;
+    var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len > TORCH_RANGE * 1.5) return false;
+    if (len < 0.0001) return true;
+    var dot = (dx * look.fx + dy * look.fy + dz * look.fz) / len;
+    return dot >= 0.5;                       // a 60 degree half angle
+}
+
+// ---- §5.3: the anchors the player carries --------------------------------
+// innen_anker.js owns the objects; this owns the rule. Its tag is the list of
+// rooms that hold one, and it is read into the SAME `anchors` map the rebuild
+// dice have always consulted - so an anchored room is frozen by the rule that
+// was already there, not by a second one bolted next to it.
+function readAnchors() {
+    if (ANKER_NODE < 0) return;
+    var t = node.getStr(ANKER_NODE, "node.tag");
+    if (t === null || t === undefined || t === lastAnkerTag) return;
+    lastAnkerTag = t;
+    anchors = {};
+    for (var k in fixedAnchors)
+        if (fixedAnchors.hasOwnProperty(k)) anchors[k] = 1;
+    var bits = String(t).split(",");
+    for (var i = 0; i < bits.length; i++) {
+        var v = parseInt(bits[i], 10);
+        if (!isNaN(v)) anchors[v] = 1;
+    }
+    var list = [];
+    for (var a in anchors) if (anchors.hasOwnProperty(a)) list.push(a);
+    say("anchors now " + list.join(","));
+}
+
 // The whole rule, in one place: what happens when the player walks into a
 // room. Called by frame() when he really does, and by the self test thousands
 // of times so the distribution can be measured in the shipped game.
-function enterRoom(room, viaDoor) {
+//
+// `simulated` is true for the self test and false for the real walk, and it
+// gates exactly one thing: the §5.4 sight rule. The self test walks the GRAPH
+// - the player's capsule never moves - so asking "can he see this room from
+// where he is standing" would answer about the spawn point four thousand
+// times and silently freeze whichever rooms lie in front of it. Everything
+// else - warm rooms, anchors, the dice, pingpong - is the same code on both
+// paths, because a rules test against a different rule proves nothing.
+function enterRoom(room, viaDoor, simulated) {
     moves++;
     stat.enters++;
 
@@ -381,9 +522,24 @@ function enterRoom(room, viaDoor) {
     since[room] = 0;
     for (var k in since) if (since.hasOwnProperty(k) && +k !== room) since[k]++;
 
-    if (anchors[room]) { stat.frozen++; return "anchor"; }
+    // §5.3 first, and before anything else: a room with something REAL in it
+    // is not the house's to change. That is the whole mechanic - the house
+    // cannot overwrite what it did not build.
+    if (anchors[room]) { stat.frozen++; stat.anchorFrozen++; return "anchor"; }
     if (wasWarm) { stat.frozen++; return "warm"; }
     if (away < COLD_DIST) { stat.frozen++; return "near"; }
+
+    // §5.4: seeing a room is what protects it - and in the dark phase that
+    // protection shrinks from "wherever you look" to "wherever the beam is".
+    // The room he is walking INTO is the one being rolled for, so this is the
+    // rule that makes a dark phase feel different from a bright one: keep the
+    // torch on the doorway and the room stays; look away and it may not.
+    var look = simulated ? null : playerLook();
+    if (look && inSight(room, look)) {
+        if (phase !== "dunkel") { stat.frozen++; stat.brightSeen++; return "seen"; }
+        if (inTorchCone(room, look)) { stat.frozen++; stat.darkInCone++; return "cone"; }
+        stat.darkSeen++;                     // seen, dark, outside the beam: fair game
+    }
 
     var roll = rnd();
     if (roll < 0.50) { stat.identical++; return "identical"; }
@@ -436,7 +592,27 @@ function react(door, room) {
 function selfTest(steps, bounce) {
     var cur = 0, prevDoor = -1, prev = -1;
     var warmChecked = 0;
+
+    // §5.3, measured rather than asserted: one room is anchored for the FIRST
+    // half of the walk and released for the second. The promise is not "the
+    // dice are kind to it" - it is that the dice never run at all while the
+    // object lies there, and that the room goes back to being the house's the
+    // moment it is picked up. Both halves are counted below.
+    var probe = num("testAnchorRoom", -1);
+    var half = Math.floor(steps / 2);
+    var anchoredRebuilds = 0, releasedRebuilds = 0, releasedVisits = 0;
+    if (probe >= 0) {
+        anchors[probe] = 1;
+        say("test anchoring room " + probe + " for the first " + half + " moves");
+    }
+
     for (var i = 0; i < steps; i++) {
+        if (probe >= 0 && i === half) {
+            // The object is picked up again. Nothing else changes.
+            delete anchors[probe];
+            if (fixedAnchors[probe]) anchors[probe] = 1;
+            say("test releasing room " + probe + " at move " + i);
+        }
         var list = ADJ[cur] || [];
         if (!list.length) { cur = 0; prev = -1; prevDoor = -1; continue; }
         var goBack = prev >= 0 && rnd() < bounce;
@@ -451,7 +627,20 @@ function selfTest(steps, bounce) {
         // the move, by remembering what the answer has to be.
         var mustFreeze = isWarm(choice.room) || anchors[choice.room] ||
                          (since[choice.room] !== undefined && since[choice.room] < COLD_DIST);
-        var answer = enterRoom(choice.room, choice.door);
+        var answer = enterRoom(choice.room, choice.door, true);
+        if (probe >= 0 && choice.room === probe) {
+            var changed = (answer.indexOf("detail") === 0 ||
+                           answer.indexOf("replace") === 0 ||
+                           answer.indexOf("wrong") === 0);
+            if (i < half) {
+                if (changed) { anchoredRebuilds++; stat.anchorViolations++;
+                               say("ANCHOR VIOLATION room=" + probe +
+                                   " answer=" + answer); }
+            } else {
+                releasedVisits++;
+                if (changed) releasedRebuilds++;
+            }
+        }
         if (mustFreeze) {
             warmChecked++;
             if (answer !== "warm" && answer !== "anchor" && answer !== "near") {
@@ -463,6 +652,10 @@ function selfTest(steps, bounce) {
         prevDoor = choice.door;
         cur = choice.room;
     }
+    if (probe >= 0)
+        say("anchor probe room=" + probe + " anchoredRebuilds=" + anchoredRebuilds +
+            " releasedVisits=" + releasedVisits +
+            " releasedRebuilds=" + releasedRebuilds);
     say("test steps=" + steps + " enters=" + stat.enters +
         " frozen=" + stat.frozen + " warmChecked=" + warmChecked +
         " identical=" + stat.identical + " detail=" + stat.detail +
@@ -471,7 +664,79 @@ function selfTest(steps, bounce) {
         " reactions=" + stat.reactions +
         " lock=" + stat.lockReact + " dark=" + stat.darkReact +
         " flicker=" + stat.flickerReact +
-        " violations=" + stat.warmViolations);
+        " violations=" + stat.warmViolations +
+        " anchorFrozen=" + stat.anchorFrozen +
+        " anchorViolations=" + stat.anchorViolations +
+        " brightSeen=" + stat.brightSeen + " darkSeen=" + stat.darkSeen +
+        " darkInCone=" + stat.darkInCone);
+}
+
+// ---- the §5.4 self test --------------------------------------------------
+// The dice test above walks the graph with no player. This one does the
+// opposite: it does not walk at all, it puts the player somewhere, points the
+// torch at a known room, and asks the sight rule what it answers - in the
+// bright phase and in the dark one. That is the only way to see the asymmetry
+// the GDD is actually asking for:
+//
+//   hell    a room you can see is safe.
+//   dunkel  a room you can see is safe ONLY if the beam is on it.
+//
+// It reports one line per room, and tools/innen_puls.py reads it.
+function sightTest() {
+    if (PLAYER < 0 || !ROOMS.length) { say("sight test: no player"); return; }
+    var p = node.getPos(PLAYER);
+    var savedPhase = phase;
+
+    // THE BEAM POINTS ONE WAY. An earlier version of this test aimed the torch
+    // at each room in turn and then asked whether that room was in the cone -
+    // which every room within range obviously was. It measured the torch's
+    // RANGE and called it the cone, and it would have passed just as happily
+    // with the cone set to 180 degrees.
+    //
+    // What §5.4 actually promises is a CHOICE: the beam is somewhere, and the
+    // rooms it is not on are the ones the house may rebuild while you watch.
+    // So the torch is aimed ONCE - at the nearest room within its reach - and
+    // every other room is judged against that one direction, which is what the
+    // game does to them.
+    // Which room to point at: the one that leaves the most house in front of
+    // the player, because a beam aimed into a corner measures nothing. Every
+    // room within reach is tried as an aim point and the one that puts the
+    // most OTHER rooms in view wins - that is the situation §5.4 is about,
+    // standing in a corridor with rooms ahead of you and one torch.
+    var aim = null, aimRoom = -1, bestSeen = -1;
+    for (var a = 0; a < ROOMS.length; a++) {
+        var ra = ROOMS[a];
+        var ax = ra.cx - p[0], ay = ra.cy - p[1], az = ra.cz - p[2];
+        var al = Math.sqrt(ax * ax + ay * ay + az * az);
+        if (al < 0.5 || al > TORCH_RANGE) continue;
+        var cand = { x: p[0], y: p[1], z: p[2],
+                     fx: ax / al, fy: ay / al, fz: az / al };
+        var n = 0;
+        for (var b = 0; b < ROOMS.length; b++) if (inSight(b, cand)) n++;
+        if (n > bestSeen) { bestSeen = n; aimRoom = a; aim = cand; }
+    }
+    if (!aim) { say("sight test: no room within torch range"); return; }
+
+    var seen = 0, coneSaved = 0, exposed = 0, blind = 0;
+    for (var i = 0; i < ROOMS.length; i++) {
+        var r = ROOMS[i];
+        var dx = r.cx - p[0], dy = r.cy - p[1], dz = r.cz - p[2];
+        var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 0.0001) continue;
+        // Both questions against the SAME fixed look direction.
+        var sight = inSight(i, aim);
+        var cone = inTorchCone(i, aim);
+        if (sight) seen++; else blind++;
+        if (sight && cone) coneSaved++;
+        if (sight && !cone) exposed++;
+        say("sight room=" + i + " dist=" + len.toFixed(2) +
+            " seen=" + (sight ? 1 : 0) + " cone=" + (cone ? 1 : 0));
+    }
+    phase = savedPhase;
+    say("sight rooms=" + ROOMS.length + " aimedAt=" + aimRoom +
+        " seen=" + seen + " blind=" + blind +
+        " coneSaved=" + coneSaved + " exposed=" + exposed +
+        " torch=" + (TORCH >= 0 ? 1 : 0));
 }
 
 function init() {
@@ -487,15 +752,37 @@ function init() {
     var list = text("anchors", "0").split(",");
     for (var i = 0; i < list.length; i++) {
         var v = parseInt(list[i], 10);
-        if (!isNaN(v)) anchors[v] = 1;
+        // Kept separately as well: innen_anker.js rewrites `anchors` whenever
+        // an object is picked up, and the rooms the LEVEL declared anchored
+        // (the phone box) must survive that.
+        if (!isNaN(v)) { anchors[v] = 1; fixedAnchors[v] = 1; }
     }
 
     PLAYER = scene.find(text("player", "Spieler"));
+
+    // §5.4 and §5.3: the two nodes this one listens to. Both are optional -
+    // a floor without a Puls never goes dark, and one without an Anker node
+    // has only the anchors its level declared.
+    var pn = text("puls", "Puls");
+    PULS = pn ? scene.find(pn) : -1;
+    var an = text("ankerNode", "Anker");
+    ANKER_NODE = an ? scene.find(an) : -1;
+    var tn = text("torch", "Spieler.Lampe");
+    TORCH = tn ? scene.find(tn) : -1;
+    TORCH_RANGE = num("torchRange", 16);
+    // Half angle, as a cosine, compared once per test instead of an acos per
+    // room per move.
+    TORCH_COS = Math.cos(num("torchCone", 26) * 0.5 * Math.PI / 180);
+
     say("ready rooms=" + ROOMS.length + " doors=" + DOORS.length +
-        " warm=" + WARM + " cold=" + COLD_DIST + " pingpong=" + PINGPONG);
+        " warm=" + WARM + " cold=" + COLD_DIST + " pingpong=" + PINGPONG +
+        " puls=" + (PULS >= 0 ? "yes" : "no") +
+        " ankerNode=" + (ANKER_NODE >= 0 ? "yes" : "no") +
+        " torch=" + (TORCH >= 0 ? "yes" : "no"));
 
     if (flag("selfTest", false))
         selfTest(num("testSteps", 3000), num("testBounce", 0.55));
+    if (flag("sightTest", false)) sightTest();
 }
 
 function frame() {
@@ -514,6 +801,13 @@ function frame() {
     // rectangle test off the frame budget in a house of forty rooms.
     if (elapsed < nextLook) return;
     nextLook = elapsed + 0.25;
+
+    // The two channels, on the same beat as the doors': what phase the pulse
+    // is in, and which rooms hold something real.
+    var was = phase;
+    phase = readPhase();
+    if (phase !== was) say("phase=" + phase);
+    readAnchors();
     if (PLAYER < 0) { PLAYER = scene.find(text("player", "Spieler")); return; }
 
     var p = node.getPos(PLAYER);
@@ -526,7 +820,7 @@ function frame() {
     for (var j = 0; j < list.length; j++) if (list[j].room === r) via = list[j].door;
     var was = here;
     here = r;
-    var answer = enterRoom(r, via);
+    var answer = enterRoom(r, via, false);
     say("enter room=" + r + " (" + (ROOMS[r] ? ROOMS[r].type : "?") + ")" +
         " from=" + was + " door=" + via + " -> " + answer);
 }

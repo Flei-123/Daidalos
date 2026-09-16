@@ -479,6 +479,61 @@ else
     MISSING="$MISSING innen_haus"
 fi
 
+# INNEN - Licht & Puls: GDD 5.4, measured in the SHIPPED runtime. The house
+# breathes on a 4-7 minute cycle, goes dark for 40-90 s and flickers for 5 s
+# first. Nobody can check three numbers like that by playing - it would take
+# forty seven-minute cycles with a stopwatch - so the behaviour runs its own
+# clock at speed and prints the min/max of every phase it completed.
+if [ -x build/daidalos_runtime ] && [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then
+    OUT=$(DAI_SHADER_DIR=shaders timeout 700 \
+          python3 tools/innen_puls.py --port 8391 2>&1)
+    RC=$?
+    P=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ checks' | tail -1 | grep -oE '[0-9]+')
+    F=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ failures' | tail -1 | grep -oE '[0-9]+')
+    [ -z "${P:-}" ] && P=0
+    [ -z "${F:-}" ] && F=0
+    TOTAL_PASS=$((TOTAL_PASS + P - F))
+    TOTAL_FAIL=$((TOTAL_FAIL + F))
+    if [ "$RC" = "0" ] && [ "$F" = "0" ] && [ "$P" != "0" ]; then
+        printf '%-20s %3s/%-3s  ok\n' "innen_puls" "$P" "$F"
+        [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+    else
+        FAILED="$FAILED innen_puls"
+        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "innen_puls" "$P" "$F" "$RC"
+        printf '%s\n' "$OUT" | tail -12 | sed 's/^/    /'
+    fi
+else
+    MISSING="$MISSING innen_puls"
+fi
+
+# INNEN - Anker: GDD 5.3 and the inventory of 5.9. Five real objects, two
+# jacket pockets each, and the promise the whole mechanic rests on - a room
+# with one lying in it is never rebuilt again. The anchor list is one
+# behaviour's idea and the rebuild dice are another's, so the day they stop
+# agreeing nothing would look wrong. This walks a few thousand moves with a
+# room anchored for the first half and released for the second.
+if [ -x build/daidalos_runtime ] && [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then
+    OUT=$(DAI_SHADER_DIR=shaders timeout 700 \
+          python3 tools/innen_anker.py --port 8393 2>&1)
+    RC=$?
+    P=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ checks' | tail -1 | grep -oE '[0-9]+')
+    F=$(printf '%s\n' "$OUT" | grep -oE '[0-9]+ failures' | tail -1 | grep -oE '[0-9]+')
+    [ -z "${P:-}" ] && P=0
+    [ -z "${F:-}" ] && F=0
+    TOTAL_PASS=$((TOTAL_PASS + P - F))
+    TOTAL_FAIL=$((TOTAL_FAIL + F))
+    if [ "$RC" = "0" ] && [ "$F" = "0" ] && [ "$P" != "0" ]; then
+        printf '%-20s %3s/%-3s  ok\n' "innen_anker" "$P" "$F"
+        [ "$VERBOSE" = "1" ] && printf '%s\n' "$OUT" | sed 's/^/    /'
+    else
+        FAILED="$FAILED innen_anker"
+        printf '%-20s %3s/%-3s  rc=%s  FAIL\n' "innen_anker" "$P" "$F" "$RC"
+        printf '%s\n' "$OUT" | tail -12 | sed 's/^/    /'
+    fi
+else
+    MISSING="$MISSING innen_anker"
+fi
+
 # ...and that floor photographed: a plan view framed around whatever the seed
 # built, plus two from eye height inside it.
 if [ -x build/modeling_shot ] && command -v python3 >/dev/null 2>&1; then
