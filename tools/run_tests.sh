@@ -810,6 +810,25 @@ if [ -f RUN.md ]; then
     fi
 fi
 
+# ---- the screenshots have to be different pictures -------------------------
+# Gauntlet round 1 delivered four required shots that were ONE file under four
+# names (md5 b598614a...), and nothing here noticed; a human reading the report
+# found it. tools/shot_guard.py is that check: byte duplicates, near-duplicates
+# by perceptual hash, blank frames, and a canary that must be caught or the
+# comparison itself is declared broken. Judged on the VIEWPORT rectangle, not
+# the whole editor screenshot - a hash over the panels mostly measures the
+# inspector and calls two different rooms identical.
+if [ -d "$SHOTS" ] && ls "$SHOTS"/*.png >/dev/null 2>&1; then
+    if python3 tools/shot_guard.py "$SHOTS" --crop 184,150,840,463 --quiet; then
+        TOTAL_PASS=$((TOTAL_PASS + 1))
+    else
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+        FAILED="$FAILED shot_guard"
+    fi
+else
+    MISSING="$MISSING shot_guard(no shots)"
+fi
+
 echo "-------------------------------------------"
 printf 'TOTAL %d passed, %d failed\n' "$TOTAL_PASS" "$TOTAL_FAIL"
 echo "not run (needs GPU): $GPU_ONLY"

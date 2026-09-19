@@ -1,0 +1,5154 @@
+daidalos-scene 1
+next-id 570
+
+node 1
+  name FeedingHall
+  hidden 1
+end
+
+node 2
+  name Floor
+  parent 1
+  hidden 1
+end
+
+node 8
+  name Walls
+  parent 1
+  hidden 1
+end
+
+node 17
+  name Ceiling
+  parent 1
+  pos 0 6.85 0
+  materials materials/fh_dark.daimat
+  blockout 1
+  bosize 28 0.7 54
+end
+
+node 18
+  name Beams
+  parent 1
+  hidden 1
+end
+
+node 30
+  name Pillars
+  parent 1
+  hidden 1
+end
+
+node 73
+  name Neon
+  parent 1
+  hidden 1
+end
+
+node 114
+  name Sign
+  parent 1
+  hidden 1
+end
+
+node 159
+  name Herd
+  parent 1
+  hidden 1
+end
+
+node 496
+  name Obstacles
+  parent 1
+  hidden 1
+end
+
+node 525
+  name Truck
+  parent 1
+  pos 0 -60 0
+  hidden 1
+end
+
+node 535
+  name WheelRing
+  parent 1
+  pos 0 -60 0
+  materials materials/fh_dark.daimat
+  blockout 2
+  bosize 0.5 0.07 0.5
+  boseg 18
+end
+
+node 536
+  name WheelHub
+  parent 1
+  pos 0 -60 0
+  materials materials/fh_bucket_red.daimat
+  blockout 2
+  bosize 0.16 0.1 0.16
+  boseg 18
+end
+
+node 537
+  name Bucket
+  parent 1
+  pos -0.38 1.28 -20.28
+  rot 0.09461055 0.13311596 -0.07233149 0.9839193
+  hidden 1
+end
+
+node 546
+  name Stations
+  parent 1
+  hidden 1
+end
+
+node 556
+  name Sun
+  parent 1
+  rot 0.45473358 0.1540278 -0.0801818 0.8735351
+  light 3
+  lcolor 1 0.82 0.92
+  lpower 0.8
+  hidden 1
+end
+
+node 557
+  name Main Camera
+  tag MainCamera
+  parent 1
+  pos 0 1.75 -20
+  camera 1
+  camfov 66
+  hidden 1
+end
+
+node 558
+  name Wings
+  parent 1
+  hidden 1
+end
+
+node 569
+  name GameLogic
+  parent 1
+  script fh_game.js
+  hidden 1
+end
+
+node 3
+  name Floor.Slab
+  parent 2
+  pos 0 -0.2 0
+  materials materials/fh_floor_tiles.daimat
+  blockout 1
+  bosize 26 0.4 52
+end
+
+node 4
+  name Puddle0
+  parent 2
+  pos -7 0.04 -16
+  materials materials/fh_neon_cyan.daimat
+  blockout 1
+  bosize 5 0.03 4
+end
+
+node 5
+  name Puddle1
+  parent 2
+  pos 4 0.04 -5
+  materials materials/fh_neon_cyan.daimat
+  blockout 1
+  bosize 6 0.03 4.5
+end
+
+node 6
+  name Puddle2
+  parent 2
+  pos -3 0.04 8
+  materials materials/fh_neon_cyan.daimat
+  blockout 1
+  bosize 5 0.03 3.5
+end
+
+node 7
+  name Puddle3
+  parent 2
+  pos 8 0.04 16
+  materials materials/fh_neon_cyan.daimat
+  blockout 1
+  bosize 6 0.03 4
+end
+
+node 9
+  name Wall.Left
+  parent 8
+  pos -13.4 3.25 0
+  materials materials/fh_wall_tiles.daimat
+  blockout 1
+  bosize 0.8 6.5 52
+end
+
+node 10
+  name Wall.Right
+  parent 8
+  pos 13.4 3.25 0
+  materials materials/fh_wall_tiles.daimat
+  blockout 1
+  bosize 0.8 6.5 52
+end
+
+node 11
+  name Wall.Back
+  parent 8
+  pos 0 3.25 -26.4
+  materials materials/fh_wall_tiles.daimat
+  blockout 1
+  bosize 27.6 6.5 0.8
+end
+
+node 12
+  name Wall.Front
+  parent 8
+  pos 0 3.25 26.4
+  materials materials/fh_wall_tiles.daimat
+  blockout 1
+  bosize 27.6 6.5 0.8
+end
+
+node 13
+  name Wall.Base0
+  parent 8
+  pos -12.95 0.35 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 0.35 0.7 52
+end
+
+node 14
+  name Wall.Band0
+  parent 8
+  pos -12.95 3.1 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 0.3 0.5 52
+end
+
+node 15
+  name Wall.Base1
+  parent 8
+  pos 12.95 0.35 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 0.35 0.7 52
+end
+
+node 16
+  name Wall.Band1
+  parent 8
+  pos 12.95 3.1 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 0.3 0.5 52
+end
+
+node 19
+  name Beam0
+  parent 18
+  pos 0 6.3 -23
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 26 0.35 0.4
+end
+
+node 20
+  name Beam1
+  parent 18
+  pos 0 6.3 -18
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 26 0.35 0.4
+end
+
+node 21
+  name Beam2
+  parent 18
+  pos 0 6.3 -13
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 26 0.35 0.4
+end
+
+node 22
+  name Beam3
+  parent 18
+  pos 0 6.3 -8
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 26 0.35 0.4
+end
+
+node 23
+  name Beam4
+  parent 18
+  pos 0 6.3 -3
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 26 0.35 0.4
+end
+
+node 24
+  name Beam5
+  parent 18
+  pos 0 6.3 2
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 26 0.35 0.4
+end
+
+node 25
+  name Beam6
+  parent 18
+  pos 0 6.3 7
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 26 0.35 0.4
+end
+
+node 26
+  name Beam7
+  parent 18
+  pos 0 6.3 12
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 26 0.35 0.4
+end
+
+node 27
+  name Beam8
+  parent 18
+  pos 0 6.3 17
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 26 0.35 0.4
+end
+
+node 28
+  name Beam9
+  parent 18
+  pos 0 6.3 22
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 26 0.35 0.4
+end
+
+node 29
+  name Beam10
+  parent 18
+  pos 0 6.3 27
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 26 0.35 0.4
+end
+
+node 31
+  name Pillar0_0
+  parent 30
+  pos -7.5 3.25 -21
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 32
+  name PillarRing0_0
+  parent 30
+  pos -7.5 1.5 -21
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 33
+  name PillarTop0_0
+  parent 30
+  pos -7.5 6 -21
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 34
+  name Pillar0_1
+  parent 30
+  pos 7.5 3.25 -21
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 35
+  name PillarRing0_1
+  parent 30
+  pos 7.5 1.5 -21
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 36
+  name PillarTop0_1
+  parent 30
+  pos 7.5 6 -21
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 37
+  name Pillar1_0
+  parent 30
+  pos -7.5 3.25 -13.5
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 38
+  name PillarRing1_0
+  parent 30
+  pos -7.5 1.5 -13.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 39
+  name PillarTop1_0
+  parent 30
+  pos -7.5 6 -13.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 40
+  name Pillar1_1
+  parent 30
+  pos 7.5 3.25 -13.5
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 41
+  name PillarRing1_1
+  parent 30
+  pos 7.5 1.5 -13.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 42
+  name PillarTop1_1
+  parent 30
+  pos 7.5 6 -13.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 43
+  name Pillar2_0
+  parent 30
+  pos -7.5 3.25 -6
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 44
+  name PillarRing2_0
+  parent 30
+  pos -7.5 1.5 -6
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 45
+  name PillarTop2_0
+  parent 30
+  pos -7.5 6 -6
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 46
+  name Pillar2_1
+  parent 30
+  pos 7.5 3.25 -6
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 47
+  name PillarRing2_1
+  parent 30
+  pos 7.5 1.5 -6
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 48
+  name PillarTop2_1
+  parent 30
+  pos 7.5 6 -6
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 49
+  name Pillar3_0
+  parent 30
+  pos -7.5 3.25 1.5
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 50
+  name PillarRing3_0
+  parent 30
+  pos -7.5 1.5 1.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 51
+  name PillarTop3_0
+  parent 30
+  pos -7.5 6 1.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 52
+  name Pillar3_1
+  parent 30
+  pos 7.5 3.25 1.5
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 53
+  name PillarRing3_1
+  parent 30
+  pos 7.5 1.5 1.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 54
+  name PillarTop3_1
+  parent 30
+  pos 7.5 6 1.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 55
+  name Pillar4_0
+  parent 30
+  pos -7.5 3.25 9
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 56
+  name PillarRing4_0
+  parent 30
+  pos -7.5 1.5 9
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 57
+  name PillarTop4_0
+  parent 30
+  pos -7.5 6 9
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 58
+  name Pillar4_1
+  parent 30
+  pos 7.5 3.25 9
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 59
+  name PillarRing4_1
+  parent 30
+  pos 7.5 1.5 9
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 60
+  name PillarTop4_1
+  parent 30
+  pos 7.5 6 9
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 61
+  name Pillar5_0
+  parent 30
+  pos -7.5 3.25 16.5
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 62
+  name PillarRing5_0
+  parent 30
+  pos -7.5 1.5 16.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 63
+  name PillarTop5_0
+  parent 30
+  pos -7.5 6 16.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 64
+  name Pillar5_1
+  parent 30
+  pos 7.5 3.25 16.5
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 65
+  name PillarRing5_1
+  parent 30
+  pos 7.5 1.5 16.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 66
+  name PillarTop5_1
+  parent 30
+  pos 7.5 6 16.5
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 67
+  name Pillar6_0
+  parent 30
+  pos -7.5 3.25 24
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 68
+  name PillarRing6_0
+  parent 30
+  pos -7.5 1.5 24
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 69
+  name PillarTop6_0
+  parent 30
+  pos -7.5 6 24
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 70
+  name Pillar6_1
+  parent 30
+  pos 7.5 3.25 24
+  materials materials/fh_tile_yellow.daimat
+  blockout 2
+  bosize 2.3 6.5 2.3
+  boseg 18
+end
+
+node 71
+  name PillarRing6_1
+  parent 30
+  pos 7.5 1.5 24
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.7 2.6
+  boseg 18
+end
+
+node 72
+  name PillarTop6_1
+  parent 30
+  pos 7.5 6 24
+  materials materials/fh_tile_pink.daimat
+  blockout 2
+  bosize 2.6 0.5 2.6
+  boseg 18
+end
+
+node 74
+  name Neon.L0
+  parent 73
+  pos -12.45 3.9 -22
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 75
+  name Neon.R0
+  parent 73
+  pos 12.45 3.9 -22
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 76
+  name Neon.C0
+  parent 73
+  pos 0 5.85 -22
+  materials materials/fh_neon_yellow.daimat
+  blockout 1
+  bosize 1 0.16 4.6
+end
+
+node 77
+  name L.Warm0
+  parent 73
+  pos 0 5.2 -22
+  light 1
+  lcolor 1 0.86 0.45
+  lrange 20
+  lpower 9
+  hidden 1
+end
+
+node 78
+  name L.Pink0
+  parent 73
+  pos -9 3.4 -22
+  light 1
+  lcolor 1 0.25 0.7
+  lrange 13
+  lpower 5
+  hidden 1
+end
+
+node 79
+  name Neon.L1
+  parent 73
+  pos -12.45 3.9 -15.5
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 80
+  name Neon.R1
+  parent 73
+  pos 12.45 3.9 -15.5
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 81
+  name Neon.C1
+  parent 73
+  pos 0 5.85 -15.5
+  materials materials/fh_neon_yellow.daimat
+  blockout 1
+  bosize 1 0.16 4.6
+end
+
+node 82
+  name L.Warm1
+  parent 73
+  pos 0 5.2 -15.5
+  light 1
+  lcolor 1 0.86 0.45
+  lrange 20
+  lpower 9
+  hidden 1
+end
+
+node 83
+  name Neon.L2
+  parent 73
+  pos -12.45 3.9 -9
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 84
+  name Neon.R2
+  parent 73
+  pos 12.45 3.9 -9
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 85
+  name Neon.C2
+  parent 73
+  pos 0 5.85 -9
+  materials materials/fh_neon_yellow.daimat
+  blockout 1
+  bosize 1 0.16 4.6
+end
+
+node 86
+  name L.Warm2
+  parent 73
+  pos 0 5.2 -9
+  light 1
+  lcolor 1 0.86 0.45
+  lrange 20
+  lpower 9
+  hidden 1
+end
+
+node 87
+  name L.Pink2
+  parent 73
+  pos 9 3.4 -9
+  light 1
+  lcolor 1 0.25 0.7
+  lrange 13
+  lpower 5
+  hidden 1
+end
+
+node 88
+  name Neon.L3
+  parent 73
+  pos -12.45 3.9 -2.5
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 89
+  name Neon.R3
+  parent 73
+  pos 12.45 3.9 -2.5
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 90
+  name Neon.C3
+  parent 73
+  pos 0 5.85 -2.5
+  materials materials/fh_neon_yellow.daimat
+  blockout 1
+  bosize 1 0.16 4.6
+end
+
+node 91
+  name L.Warm3
+  parent 73
+  pos 0 5.2 -2.5
+  light 1
+  lcolor 1 0.86 0.45
+  lrange 20
+  lpower 9
+  hidden 1
+end
+
+node 92
+  name Neon.L4
+  parent 73
+  pos -12.45 3.9 4
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 93
+  name Neon.R4
+  parent 73
+  pos 12.45 3.9 4
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 94
+  name Neon.C4
+  parent 73
+  pos 0 5.85 4
+  materials materials/fh_neon_yellow.daimat
+  blockout 1
+  bosize 1 0.16 4.6
+end
+
+node 95
+  name L.Warm4
+  parent 73
+  pos 0 5.2 4
+  light 1
+  lcolor 1 0.86 0.45
+  lrange 20
+  lpower 9
+  hidden 1
+end
+
+node 96
+  name L.Pink4
+  parent 73
+  pos -9 3.4 4
+  light 1
+  lcolor 1 0.25 0.7
+  lrange 13
+  lpower 5
+  hidden 1
+end
+
+node 97
+  name Neon.L5
+  parent 73
+  pos -12.45 3.9 10.5
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 98
+  name Neon.R5
+  parent 73
+  pos 12.45 3.9 10.5
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 99
+  name Neon.C5
+  parent 73
+  pos 0 5.85 10.5
+  materials materials/fh_neon_yellow.daimat
+  blockout 1
+  bosize 1 0.16 4.6
+end
+
+node 100
+  name L.Warm5
+  parent 73
+  pos 0 5.2 10.5
+  light 1
+  lcolor 1 0.86 0.45
+  lrange 20
+  lpower 9
+  hidden 1
+end
+
+node 101
+  name Neon.L6
+  parent 73
+  pos -12.45 3.9 17
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 102
+  name Neon.R6
+  parent 73
+  pos 12.45 3.9 17
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 103
+  name Neon.C6
+  parent 73
+  pos 0 5.85 17
+  materials materials/fh_neon_yellow.daimat
+  blockout 1
+  bosize 1 0.16 4.6
+end
+
+node 104
+  name L.Warm6
+  parent 73
+  pos 0 5.2 17
+  light 1
+  lcolor 1 0.86 0.45
+  lrange 20
+  lpower 9
+  hidden 1
+end
+
+node 105
+  name L.Pink6
+  parent 73
+  pos 9 3.4 17
+  light 1
+  lcolor 1 0.25 0.7
+  lrange 13
+  lpower 5
+  hidden 1
+end
+
+node 106
+  name Neon.L7
+  parent 73
+  pos -12.45 3.9 23.5
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 107
+  name Neon.R7
+  parent 73
+  pos 12.45 3.9 23.5
+  materials materials/fh_neon_pink.daimat
+  blockout 1
+  bosize 0.22 0.22 4.2
+end
+
+node 108
+  name Neon.C7
+  parent 73
+  pos 0 5.85 23.5
+  materials materials/fh_neon_yellow.daimat
+  blockout 1
+  bosize 1 0.16 4.6
+end
+
+node 109
+  name L.Warm7
+  parent 73
+  pos 0 5.2 23.5
+  light 1
+  lcolor 1 0.86 0.45
+  lrange 20
+  lpower 9
+  hidden 1
+end
+
+node 110
+  name Neon.Low0
+  parent 73
+  pos 12.4 0.35 -18
+  materials materials/fh_neon_cyan.daimat
+  blockout 1
+  bosize 0.16 0.16 7
+end
+
+node 111
+  name Neon.Low1
+  parent 73
+  pos -12.4 0.35 -6
+  materials materials/fh_neon_cyan.daimat
+  blockout 1
+  bosize 0.16 0.16 7
+end
+
+node 112
+  name Neon.Low2
+  parent 73
+  pos 12.4 0.35 6
+  materials materials/fh_neon_cyan.daimat
+  blockout 1
+  bosize 0.16 0.16 7
+end
+
+node 113
+  name Neon.Low3
+  parent 73
+  pos -12.4 0.35 18
+  materials materials/fh_neon_cyan.daimat
+  blockout 1
+  bosize 0.16 0.16 7
+end
+
+node 115
+  name Sign.Frame
+  parent 114
+  pos 0 4.5 -25.05
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 12.4 3.1 0.18
+end
+
+node 116
+  name Sign.Panel
+  parent 114
+  pos 0 4.6 -24.55
+  materials materials/fh_dark.daimat
+  blockout 1
+  bosize 11.6 3.4 0.3
+end
+
+node 117
+  name Sign.FEEDING.0_0
+  parent 114
+  pos -2.9 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 1.015 0.14
+end
+
+node 118
+  name Sign.FEEDING.0_1
+  parent 114
+  pos -2.61 5.7925 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 119
+  name Sign.FEEDING.0_2
+  parent 114
+  pos -2.6825 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.29 0.145 0.14
+end
+
+node 120
+  name Sign.FEEDING.1_0
+  parent 114
+  pos -2.03 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 1.015 0.14
+end
+
+node 121
+  name Sign.FEEDING.1_1
+  parent 114
+  pos -1.74 5.7925 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 122
+  name Sign.FEEDING.1_2
+  parent 114
+  pos -1.8125 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.29 0.145 0.14
+end
+
+node 123
+  name Sign.FEEDING.1_3
+  parent 114
+  pos -1.74 4.9225 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 124
+  name Sign.FEEDING.2_0
+  parent 114
+  pos -1.16 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 1.015 0.14
+end
+
+node 125
+  name Sign.FEEDING.2_1
+  parent 114
+  pos -0.87 5.7925 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 126
+  name Sign.FEEDING.2_2
+  parent 114
+  pos -0.9425 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.29 0.145 0.14
+end
+
+node 127
+  name Sign.FEEDING.2_3
+  parent 114
+  pos -0.87 4.9225 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 128
+  name Sign.FEEDING.3_0
+  parent 114
+  pos -0.29 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 1.015 0.14
+end
+
+node 129
+  name Sign.FEEDING.3_1
+  parent 114
+  pos -2.7755576e-16 5.7925 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 130
+  name Sign.FEEDING.3_2
+  parent 114
+  pos -2.7755576e-16 4.9225 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 131
+  name Sign.FEEDING.3_3
+  parent 114
+  pos 0.29 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 0.725 0.14
+end
+
+node 132
+  name Sign.FEEDING.4_0
+  parent 114
+  pos 0.87 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 1.015 0.14
+end
+
+node 133
+  name Sign.FEEDING.4_1
+  parent 114
+  pos 0.87 5.7925 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.725 0.145 0.14
+end
+
+node 134
+  name Sign.FEEDING.4_2
+  parent 114
+  pos 0.87 4.9225 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.725 0.145 0.14
+end
+
+node 135
+  name Sign.FEEDING.5_0
+  parent 114
+  pos 1.45 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 1.015 0.14
+end
+
+node 136
+  name Sign.FEEDING.5_1
+  parent 114
+  pos 2.03 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 1.015 0.14
+end
+
+node 137
+  name Sign.FEEDING.5_2
+  parent 114
+  pos 1.595 5.575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 0.29 0.14
+end
+
+node 138
+  name Sign.FEEDING.5_3
+  parent 114
+  pos 1.74 5.285 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 0.29 0.14
+end
+
+node 139
+  name Sign.FEEDING.5_4
+  parent 114
+  pos 1.885 5.14 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 0.29 0.14
+end
+
+node 140
+  name Sign.FEEDING.6_0
+  parent 114
+  pos 2.61 5.7925 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 141
+  name Sign.FEEDING.6_1
+  parent 114
+  pos 2.32 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 0.725 0.14
+end
+
+node 142
+  name Sign.FEEDING.6_2
+  parent 114
+  pos 2.61 4.9225 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 143
+  name Sign.FEEDING.6_3
+  parent 114
+  pos 2.9 5.0675 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.145 0.435 0.14
+end
+
+node 144
+  name Sign.FEEDING.6_4
+  parent 114
+  pos 2.8275 5.3575 -24.38
+  materials materials/fh_letter_yellow.daimat
+  blockout 1
+  bosize 0.29 0.145 0.14
+end
+
+node 145
+  name Sign.HALL.0_0
+  parent 114
+  pos -1.595 4.1075 -24.38
+  materials materials/fh_letter_pink.daimat
+  blockout 1
+  bosize 0.145 1.015 0.14
+end
+
+node 146
+  name Sign.HALL.0_1
+  parent 114
+  pos -1.015 4.1075 -24.38
+  materials materials/fh_letter_pink.daimat
+  blockout 1
+  bosize 0.145 1.015 0.14
+end
+
+node 147
+  name Sign.HALL.0_2
+  parent 114
+  pos -1.305 4.1075 -24.38
+  materials materials/fh_letter_pink.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 148
+  name Sign.HALL.1_0
+  parent 114
+  pos -0.435 4.5425 -24.38
+  materials materials/fh_letter_pink.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 149
+  name Sign.HALL.1_1
+  parent 114
+  pos -0.725 4.035 -24.38
+  materials materials/fh_letter_pink.daimat
+  blockout 1
+  bosize 0.145 0.87 0.14
+end
+
+node 150
+  name Sign.HALL.1_2
+  parent 114
+  pos -0.145 4.035 -24.38
+  materials materials/fh_letter_pink.daimat
+  blockout 1
+  bosize 0.145 0.87 0.14
+end
+
+node 151
+  name Sign.HALL.1_3
+  parent 114
+  pos -0.435 4.1075 -24.38
+  materials materials/fh_letter_pink.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 152
+  name Sign.HALL.2_0
+  parent 114
+  pos 0.145 4.1075 -24.38
+  materials materials/fh_letter_pink.daimat
+  blockout 1
+  bosize 0.145 1.015 0.14
+end
+
+node 153
+  name Sign.HALL.2_1
+  parent 114
+  pos 0.435 3.6725 -24.38
+  materials materials/fh_letter_pink.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 154
+  name Sign.HALL.3_0
+  parent 114
+  pos 1.015 4.1075 -24.38
+  materials materials/fh_letter_pink.daimat
+  blockout 1
+  bosize 0.145 1.015 0.14
+end
+
+node 155
+  name Sign.HALL.3_1
+  parent 114
+  pos 1.305 3.6725 -24.38
+  materials materials/fh_letter_pink.daimat
+  blockout 1
+  bosize 0.435 0.145 0.14
+end
+
+node 156
+  name Sign.Glow
+  parent 114
+  pos 0 4.4 -22.8
+  light 1
+  lcolor 1 0.9 0.95
+  lrange 12
+  lpower 7
+  hidden 1
+end
+
+node 157
+  name Sign.Glow2
+  parent 114
+  pos -4.5 4.4 -22.8
+  light 1
+  lcolor 1 0.9 0.95
+  lrange 10
+  lpower 5
+  hidden 1
+end
+
+node 158
+  name Sign.Glow3
+  parent 114
+  pos 4.5 4.4 -22.8
+  light 1
+  lcolor 1 0.9 0.95
+  lrange 10
+  lpower 5
+  hidden 1
+end
+
+node 160
+  name Horse0
+  parent 159
+  pos 3 0 -18
+  hidden 1
+end
+
+node 172
+  name Horse1
+  parent 159
+  pos -3.391896 0 -16.3
+  rot 0 0.39874908 0 0.9170601
+  hidden 1
+end
+
+node 184
+  name Horse2
+  parent 159
+  pos 0.54203665 0 -14.6
+  rot 0 0.7313537 0 0.6819984
+  hidden 1
+end
+
+node 196
+  name Horse3
+  parent 159
+  pos 4.745827 0 -12.9
+  rot 0 0.9426415 0 0.3338069
+  hidden 1
+end
+
+node 208
+  name Horse4
+  parent 159
+  pos -9.256309 0 -11.2
+  rot 0 0.9975641 0 -0.06975648
+  hidden 1
+end
+
+node 220
+  name Horse5
+  parent 159
+  pos 9.2813015 0 -9.5
+  rot 0 0.8870108 0 -0.46174866
+  hidden 1
+end
+
+node 232
+  name Horse6
+  parent 159
+  pos -3.2709975 0 -7.8
+  rot 0 0.6293205 0 -0.77714586
+  hidden 1
+end
+
+node 244
+  name Horse7
+  parent 159
+  pos -1.3827254 0 -6.1
+  rot 0 0.26723844 0 -0.96363044
+  hidden 1
+end
+
+node 256
+  name Horse8
+  parent 159
+  pos 4.320881 0 -4.4
+  rot 0 0.1391731 0 0.99026805
+  hidden 1
+end
+
+node 268
+  name Horse9
+  parent 159
+  pos -5.7309375 0 -2.7
+  rot 0 0.52249855 0 0.85264015
+  hidden 1
+end
+
+node 280
+  name Horse10
+  parent 159
+  pos 3.3059826 0 -1
+  rot 0 0.81915206 0 0.57357645
+  hidden 1
+end
+
+node 292
+  name Horse11
+  parent 159
+  pos 2.813291 0 0.7
+  rot 0 0.9799247 0 0.19936794
+  hidden 1
+end
+
+node 304
+  name Horse12
+  parent 159
+  pos -9.517339 0 2.4
+  rot 0 0.9781476 0 -0.20791163
+  hidden 1
+end
+
+node 316
+  name Horse13
+  parent 159
+  pos 12.306107 0 4.1
+  rot 0 0.8141155 0 -0.58070296
+  hidden 1
+end
+
+node 328
+  name Horse14
+  parent 159
+  pos -1.7253804 0 5.8
+  rot 0 0.515038 0 -0.8571673
+  hidden 1
+end
+
+node 340
+  name Horse15
+  parent 159
+  pos -0.5911649 0 7.5
+  rot 0 0.13052632 0 -0.9914448
+  hidden 1
+end
+
+node 352
+  name Horse16
+  parent 159
+  pos 4.7408385 0 9.2
+  rot 0 0.27563736 0 0.9612617
+  hidden 1
+end
+
+node 364
+  name Horse17
+  parent 159
+  pos -7.793338 0 10.9
+  rot 0 0.6360782 0 0.7716246
+  hidden 1
+end
+
+node 376
+  name Horse18
+  parent 159
+  pos 6.662969 0 12.6
+  rot 0 0.8910065 0 0.45399052
+  hidden 1
+end
+
+node 388
+  name Horse19
+  parent 159
+  pos -0.50805795 0 14.3
+  rot 0 0.9981348 0 0.061048508
+  hidden 1
+end
+
+node 400
+  name Horse20
+  parent 159
+  pos -8.07298 0 16
+  rot 0 0.9396926 0 -0.34202012
+  hidden 1
+end
+
+node 412
+  name Horse21
+  parent 159
+  pos 2.97321 0 17.7
+  rot 0 0.7253744 0 -0.6883545
+  hidden 1
+end
+
+node 424
+  name Horse22
+  parent 159
+  pos -3.7759352 0 19.4
+  rot 0 0.39073116 0 -0.92050487
+  hidden 1
+end
+
+node 436
+  name Horse23
+  parent 159
+  pos 1.3607526 0 21.1
+  rot 0 0.008726535 0 0.9999619
+  hidden 1
+end
+
+node 448
+  name Horse24
+  parent 159
+  pos 3.8780482 0 22.8
+  rot 0 0.40673664 0 0.9135454
+  hidden 1
+end
+
+node 460
+  name Horse25
+  parent 159
+  pos -8.955329 0 24.5
+  rot 0 0.7372773 0 0.6755902
+  hidden 1
+end
+
+node 472
+  name Horse26
+  parent 159
+  pos 9.985675 0 26.2
+  rot 0 0.94551855 0 0.32556814
+  hidden 1
+end
+
+node 484
+  name Horse27
+  parent 159
+  pos -4.8642974 0 27.9
+  rot 0 0.9969173 0 -0.078459054
+  hidden 1
+end
+
+node 497
+  name Crate0
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 498
+  name CrateTop0
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 499
+  name Crate1
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 500
+  name CrateTop1
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 501
+  name Crate2
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 502
+  name CrateTop2
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 503
+  name Crate3
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 504
+  name CrateTop3
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 505
+  name Crate4
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 506
+  name CrateTop4
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 507
+  name Crate5
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 508
+  name CrateTop5
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 509
+  name Crate6
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 510
+  name CrateTop6
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 511
+  name Crate7
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 512
+  name CrateTop7
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 513
+  name Crate8
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 514
+  name CrateTop8
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 515
+  name Crate9
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 516
+  name CrateTop9
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 517
+  name Crate10
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 518
+  name CrateTop10
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 519
+  name Crate11
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 520
+  name CrateTop11
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 521
+  name Crate12
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 522
+  name CrateTop12
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 523
+  name Crate13
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.8 1.8 1.8
+end
+
+node 524
+  name CrateTop13
+  parent 496
+  pos 0 -60 0
+  materials materials/fh_tile_pink.daimat
+  blockout 1
+  bosize 1.9 0.18 1.9
+end
+
+node 526
+  name Truck.Body
+  parent 525
+  pos 0 0.85 0
+  materials materials/fh_bucket_red.daimat
+  blockout 1
+  bosize 2.3 0.75 5
+end
+
+node 527
+  name Truck.Bed
+  parent 525
+  pos 0 1.25 -1.4
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 2.1 0.5 2.2
+end
+
+node 528
+  name Truck.Cabin
+  parent 525
+  pos 0 1.6 0.9
+  materials materials/fh_bucket_red.daimat
+  blockout 1
+  bosize 2 0.85 1.9
+end
+
+node 529
+  name Truck.Hood
+  parent 525
+  pos 0 1.15 2.1
+  materials materials/fh_bucket_red.daimat
+  blockout 1
+  bosize 2.1 0.3 1.2
+end
+
+node 530
+  name Truck.Dash
+  parent 525
+  pos 0 1.45 0.05
+  materials materials/fh_dark.daimat
+  blockout 1
+  bosize 1.9 0.25 0.6
+end
+
+node 531
+  name Truck.Wheel0
+  parent 525
+  pos -1.15 0.45 1.7
+  rot 0 0 0.70710677 0.70710677
+  materials materials/fh_dark.daimat
+  blockout 2
+  bosize 0.9 0.35 0.9
+  boseg 18
+end
+
+node 532
+  name Truck.Wheel1
+  parent 525
+  pos 1.15 0.45 1.7
+  rot 0 0 0.70710677 0.70710677
+  materials materials/fh_dark.daimat
+  blockout 2
+  bosize 0.9 0.35 0.9
+  boseg 18
+end
+
+node 533
+  name Truck.Wheel2
+  parent 525
+  pos -1.15 0.45 -1.7
+  rot 0 0 0.70710677 0.70710677
+  materials materials/fh_dark.daimat
+  blockout 2
+  bosize 0.9 0.35 0.9
+  boseg 18
+end
+
+node 534
+  name Truck.Wheel3
+  parent 525
+  pos 1.15 0.45 -1.7
+  rot 0 0 0.70710677 0.70710677
+  materials materials/fh_dark.daimat
+  blockout 2
+  bosize 0.9 0.35 0.9
+  boseg 18
+end
+
+node 538
+  name Bucket.Body
+  parent 537
+  materials materials/fh_bucket_tex.daimat
+  blockout 2
+  bosize 0.32 0.24 0.32
+  boseg 18
+end
+
+node 539
+  name Bucket.Rim
+  parent 537
+  pos 0 0.13 0
+  materials materials/fh_bucket_red.daimat
+  blockout 2
+  bosize 0.34 0.04 0.34
+  boseg 18
+end
+
+node 540
+  name Bucket.Wing0
+  parent 537
+  pos 0.05 0.22 0.03
+  rot 0.1630679 0.103443556 0.0874972 0.9772679
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.1 0.06 0.13
+end
+
+node 541
+  name Bucket.Wing1
+  parent 537
+  pos -0.07 0.24 -0.03
+  rot -0.28041264 -0.17535438 0.053036526 0.942235
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.1 0.06 0.13
+end
+
+node 542
+  name Bucket.Wing2
+  parent 537
+  pos 0.01 0.26 -0.08
+  rot 0.42402112 0.25655767 -0.019089123 0.8683432
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.1 0.06 0.13
+end
+
+node 543
+  name Bucket.Wing3
+  parent 537
+  pos 0.09 0.22 -0.05
+  rot -0.12275523 -0.07810287 0.09492227 0.9847949
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.1 0.06 0.13
+end
+
+node 544
+  name Bucket.Wing4
+  parent 537
+  pos -0.09 0.21 0.07
+  rot 0.33265316 0.2060319 0.031002037 0.9197454
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.1 0.06 0.13
+end
+
+node 545
+  name Bucket.Arm
+  parent 537
+  pos 0.02 -0.3 -0.18
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.17 0.42 0.2
+end
+
+node 547
+  name Station0.Crate
+  parent 546
+  pos -11 0.45 -9
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.5 0.9 1.5
+end
+
+node 548
+  name Station0.Bucket
+  parent 546
+  pos -11 1.25 -9
+  materials materials/fh_bucket_tex.daimat
+  blockout 2
+  bosize 0.9 0.7 0.9
+  boseg 18
+end
+
+node 549
+  name Station0.Glow
+  parent 546
+  pos -11 1.9 -9
+  light 1
+  lcolor 1 0.7 0.25
+  lrange 8
+  lpower 4
+  hidden 1
+end
+
+node 550
+  name Station1.Crate
+  parent 546
+  pos 11 0.45 4
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.5 0.9 1.5
+end
+
+node 551
+  name Station1.Bucket
+  parent 546
+  pos 11 1.25 4
+  materials materials/fh_bucket_tex.daimat
+  blockout 2
+  bosize 0.9 0.7 0.9
+  boseg 18
+end
+
+node 552
+  name Station1.Glow
+  parent 546
+  pos 11 1.9 4
+  light 1
+  lcolor 1 0.7 0.25
+  lrange 8
+  lpower 4
+  hidden 1
+end
+
+node 553
+  name Station2.Crate
+  parent 546
+  pos -11 0.45 19
+  materials materials/fh_metal.daimat
+  blockout 1
+  bosize 1.5 0.9 1.5
+end
+
+node 554
+  name Station2.Bucket
+  parent 546
+  pos -11 1.25 19
+  materials materials/fh_bucket_tex.daimat
+  blockout 2
+  bosize 0.9 0.7 0.9
+  boseg 18
+end
+
+node 555
+  name Station2.Glow
+  parent 546
+  pos -11 1.9 19
+  light 1
+  lcolor 1 0.7 0.25
+  lrange 8
+  lpower 4
+  hidden 1
+end
+
+node 559
+  name Wing0
+  parent 558
+  pos 0 -60 0
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.18 0.11 0.24
+end
+
+node 560
+  name Wing1
+  parent 558
+  pos 0 -60 0
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.18 0.11 0.24
+end
+
+node 561
+  name Wing2
+  parent 558
+  pos 0 -60 0
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.18 0.11 0.24
+end
+
+node 562
+  name Wing3
+  parent 558
+  pos 0 -60 0
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.18 0.11 0.24
+end
+
+node 563
+  name Wing4
+  parent 558
+  pos 0 -60 0
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.18 0.11 0.24
+end
+
+node 564
+  name Wing5
+  parent 558
+  pos 0 -60 0
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.18 0.11 0.24
+end
+
+node 565
+  name Wing6
+  parent 558
+  pos 0 -60 0
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.18 0.11 0.24
+end
+
+node 566
+  name Wing7
+  parent 558
+  pos 0 -60 0
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.18 0.11 0.24
+end
+
+node 567
+  name Wing8
+  parent 558
+  pos 0 -60 0
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.18 0.11 0.24
+end
+
+node 568
+  name Wing9
+  parent 558
+  pos 0 -60 0
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.18 0.11 0.24
+end
+
+node 161
+  name Horse0.Body
+  parent 160
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 162
+  name Horse0.Neck
+  parent 160
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 163
+  name Horse0.Head
+  parent 160
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 164
+  name Horse0.EarL
+  parent 160
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 165
+  name Horse0.EarR
+  parent 160
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 166
+  name Horse0.Tail
+  parent 160
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 167
+  name Horse0.Leg0
+  parent 160
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 168
+  name Horse0.Leg1
+  parent 160
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 169
+  name Horse0.Leg2
+  parent 160
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 170
+  name Horse0.Leg3
+  parent 160
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 171
+  name Horse0.Crown
+  parent 160
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 173
+  name Horse1.Body
+  parent 172
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 174
+  name Horse1.Neck
+  parent 172
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 175
+  name Horse1.Head
+  parent 172
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 176
+  name Horse1.EarL
+  parent 172
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 177
+  name Horse1.EarR
+  parent 172
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 178
+  name Horse1.Tail
+  parent 172
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 179
+  name Horse1.Leg0
+  parent 172
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 180
+  name Horse1.Leg1
+  parent 172
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 181
+  name Horse1.Leg2
+  parent 172
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 182
+  name Horse1.Leg3
+  parent 172
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 183
+  name Horse1.Crown
+  parent 172
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 185
+  name Horse2.Body
+  parent 184
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 186
+  name Horse2.Neck
+  parent 184
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 187
+  name Horse2.Head
+  parent 184
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 188
+  name Horse2.EarL
+  parent 184
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 189
+  name Horse2.EarR
+  parent 184
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 190
+  name Horse2.Tail
+  parent 184
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 191
+  name Horse2.Leg0
+  parent 184
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 192
+  name Horse2.Leg1
+  parent 184
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 193
+  name Horse2.Leg2
+  parent 184
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 194
+  name Horse2.Leg3
+  parent 184
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 195
+  name Horse2.Crown
+  parent 184
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 197
+  name Horse3.Body
+  parent 196
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 198
+  name Horse3.Neck
+  parent 196
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 199
+  name Horse3.Head
+  parent 196
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 200
+  name Horse3.EarL
+  parent 196
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 201
+  name Horse3.EarR
+  parent 196
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 202
+  name Horse3.Tail
+  parent 196
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 203
+  name Horse3.Leg0
+  parent 196
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 204
+  name Horse3.Leg1
+  parent 196
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 205
+  name Horse3.Leg2
+  parent 196
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 206
+  name Horse3.Leg3
+  parent 196
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 207
+  name Horse3.Crown
+  parent 196
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 209
+  name Horse4.Body
+  parent 208
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 210
+  name Horse4.Neck
+  parent 208
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 211
+  name Horse4.Head
+  parent 208
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 212
+  name Horse4.EarL
+  parent 208
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 213
+  name Horse4.EarR
+  parent 208
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 214
+  name Horse4.Tail
+  parent 208
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 215
+  name Horse4.Leg0
+  parent 208
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 216
+  name Horse4.Leg1
+  parent 208
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 217
+  name Horse4.Leg2
+  parent 208
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 218
+  name Horse4.Leg3
+  parent 208
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 219
+  name Horse4.Crown
+  parent 208
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 221
+  name Horse5.Body
+  parent 220
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 222
+  name Horse5.Neck
+  parent 220
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 223
+  name Horse5.Head
+  parent 220
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 224
+  name Horse5.EarL
+  parent 220
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 225
+  name Horse5.EarR
+  parent 220
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 226
+  name Horse5.Tail
+  parent 220
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 227
+  name Horse5.Leg0
+  parent 220
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 228
+  name Horse5.Leg1
+  parent 220
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 229
+  name Horse5.Leg2
+  parent 220
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 230
+  name Horse5.Leg3
+  parent 220
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 231
+  name Horse5.Crown
+  parent 220
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 233
+  name Horse6.Body
+  parent 232
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 234
+  name Horse6.Neck
+  parent 232
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 235
+  name Horse6.Head
+  parent 232
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 236
+  name Horse6.EarL
+  parent 232
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 237
+  name Horse6.EarR
+  parent 232
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 238
+  name Horse6.Tail
+  parent 232
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 239
+  name Horse6.Leg0
+  parent 232
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 240
+  name Horse6.Leg1
+  parent 232
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 241
+  name Horse6.Leg2
+  parent 232
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 242
+  name Horse6.Leg3
+  parent 232
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 243
+  name Horse6.Crown
+  parent 232
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 245
+  name Horse7.Body
+  parent 244
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 246
+  name Horse7.Neck
+  parent 244
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 247
+  name Horse7.Head
+  parent 244
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 248
+  name Horse7.EarL
+  parent 244
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 249
+  name Horse7.EarR
+  parent 244
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 250
+  name Horse7.Tail
+  parent 244
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 251
+  name Horse7.Leg0
+  parent 244
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 252
+  name Horse7.Leg1
+  parent 244
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 253
+  name Horse7.Leg2
+  parent 244
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 254
+  name Horse7.Leg3
+  parent 244
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 255
+  name Horse7.Crown
+  parent 244
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 257
+  name Horse8.Body
+  parent 256
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 258
+  name Horse8.Neck
+  parent 256
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 259
+  name Horse8.Head
+  parent 256
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 260
+  name Horse8.EarL
+  parent 256
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 261
+  name Horse8.EarR
+  parent 256
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 262
+  name Horse8.Tail
+  parent 256
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 263
+  name Horse8.Leg0
+  parent 256
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 264
+  name Horse8.Leg1
+  parent 256
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 265
+  name Horse8.Leg2
+  parent 256
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 266
+  name Horse8.Leg3
+  parent 256
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 267
+  name Horse8.Crown
+  parent 256
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 269
+  name Horse9.Body
+  parent 268
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 270
+  name Horse9.Neck
+  parent 268
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 271
+  name Horse9.Head
+  parent 268
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 272
+  name Horse9.EarL
+  parent 268
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 273
+  name Horse9.EarR
+  parent 268
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 274
+  name Horse9.Tail
+  parent 268
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 275
+  name Horse9.Leg0
+  parent 268
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 276
+  name Horse9.Leg1
+  parent 268
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 277
+  name Horse9.Leg2
+  parent 268
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 278
+  name Horse9.Leg3
+  parent 268
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 279
+  name Horse9.Crown
+  parent 268
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 281
+  name Horse10.Body
+  parent 280
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 282
+  name Horse10.Neck
+  parent 280
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 283
+  name Horse10.Head
+  parent 280
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 284
+  name Horse10.EarL
+  parent 280
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 285
+  name Horse10.EarR
+  parent 280
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 286
+  name Horse10.Tail
+  parent 280
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 287
+  name Horse10.Leg0
+  parent 280
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 288
+  name Horse10.Leg1
+  parent 280
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 289
+  name Horse10.Leg2
+  parent 280
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 290
+  name Horse10.Leg3
+  parent 280
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 291
+  name Horse10.Crown
+  parent 280
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 293
+  name Horse11.Body
+  parent 292
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 294
+  name Horse11.Neck
+  parent 292
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 295
+  name Horse11.Head
+  parent 292
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 296
+  name Horse11.EarL
+  parent 292
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 297
+  name Horse11.EarR
+  parent 292
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 298
+  name Horse11.Tail
+  parent 292
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 299
+  name Horse11.Leg0
+  parent 292
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 300
+  name Horse11.Leg1
+  parent 292
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 301
+  name Horse11.Leg2
+  parent 292
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 302
+  name Horse11.Leg3
+  parent 292
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 303
+  name Horse11.Crown
+  parent 292
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 305
+  name Horse12.Body
+  parent 304
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 306
+  name Horse12.Neck
+  parent 304
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 307
+  name Horse12.Head
+  parent 304
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 308
+  name Horse12.EarL
+  parent 304
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 309
+  name Horse12.EarR
+  parent 304
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 310
+  name Horse12.Tail
+  parent 304
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 311
+  name Horse12.Leg0
+  parent 304
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 312
+  name Horse12.Leg1
+  parent 304
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 313
+  name Horse12.Leg2
+  parent 304
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 314
+  name Horse12.Leg3
+  parent 304
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 315
+  name Horse12.Crown
+  parent 304
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 317
+  name Horse13.Body
+  parent 316
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 318
+  name Horse13.Neck
+  parent 316
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 319
+  name Horse13.Head
+  parent 316
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 320
+  name Horse13.EarL
+  parent 316
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 321
+  name Horse13.EarR
+  parent 316
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 322
+  name Horse13.Tail
+  parent 316
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 323
+  name Horse13.Leg0
+  parent 316
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 324
+  name Horse13.Leg1
+  parent 316
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 325
+  name Horse13.Leg2
+  parent 316
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 326
+  name Horse13.Leg3
+  parent 316
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 327
+  name Horse13.Crown
+  parent 316
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 329
+  name Horse14.Body
+  parent 328
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 330
+  name Horse14.Neck
+  parent 328
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 331
+  name Horse14.Head
+  parent 328
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 332
+  name Horse14.EarL
+  parent 328
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 333
+  name Horse14.EarR
+  parent 328
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 334
+  name Horse14.Tail
+  parent 328
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 335
+  name Horse14.Leg0
+  parent 328
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 336
+  name Horse14.Leg1
+  parent 328
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 337
+  name Horse14.Leg2
+  parent 328
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 338
+  name Horse14.Leg3
+  parent 328
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 339
+  name Horse14.Crown
+  parent 328
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 341
+  name Horse15.Body
+  parent 340
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 342
+  name Horse15.Neck
+  parent 340
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 343
+  name Horse15.Head
+  parent 340
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 344
+  name Horse15.EarL
+  parent 340
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 345
+  name Horse15.EarR
+  parent 340
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 346
+  name Horse15.Tail
+  parent 340
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 347
+  name Horse15.Leg0
+  parent 340
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 348
+  name Horse15.Leg1
+  parent 340
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 349
+  name Horse15.Leg2
+  parent 340
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 350
+  name Horse15.Leg3
+  parent 340
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 351
+  name Horse15.Crown
+  parent 340
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 353
+  name Horse16.Body
+  parent 352
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 354
+  name Horse16.Neck
+  parent 352
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 355
+  name Horse16.Head
+  parent 352
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 356
+  name Horse16.EarL
+  parent 352
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 357
+  name Horse16.EarR
+  parent 352
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 358
+  name Horse16.Tail
+  parent 352
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 359
+  name Horse16.Leg0
+  parent 352
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 360
+  name Horse16.Leg1
+  parent 352
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 361
+  name Horse16.Leg2
+  parent 352
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 362
+  name Horse16.Leg3
+  parent 352
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 363
+  name Horse16.Crown
+  parent 352
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 365
+  name Horse17.Body
+  parent 364
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 366
+  name Horse17.Neck
+  parent 364
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 367
+  name Horse17.Head
+  parent 364
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 368
+  name Horse17.EarL
+  parent 364
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 369
+  name Horse17.EarR
+  parent 364
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 370
+  name Horse17.Tail
+  parent 364
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 371
+  name Horse17.Leg0
+  parent 364
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 372
+  name Horse17.Leg1
+  parent 364
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 373
+  name Horse17.Leg2
+  parent 364
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 374
+  name Horse17.Leg3
+  parent 364
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 375
+  name Horse17.Crown
+  parent 364
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 377
+  name Horse18.Body
+  parent 376
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 378
+  name Horse18.Neck
+  parent 376
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 379
+  name Horse18.Head
+  parent 376
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 380
+  name Horse18.EarL
+  parent 376
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 381
+  name Horse18.EarR
+  parent 376
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 382
+  name Horse18.Tail
+  parent 376
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 383
+  name Horse18.Leg0
+  parent 376
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 384
+  name Horse18.Leg1
+  parent 376
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 385
+  name Horse18.Leg2
+  parent 376
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 386
+  name Horse18.Leg3
+  parent 376
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 387
+  name Horse18.Crown
+  parent 376
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 389
+  name Horse19.Body
+  parent 388
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 390
+  name Horse19.Neck
+  parent 388
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 391
+  name Horse19.Head
+  parent 388
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 392
+  name Horse19.EarL
+  parent 388
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 393
+  name Horse19.EarR
+  parent 388
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 394
+  name Horse19.Tail
+  parent 388
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 395
+  name Horse19.Leg0
+  parent 388
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 396
+  name Horse19.Leg1
+  parent 388
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 397
+  name Horse19.Leg2
+  parent 388
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 398
+  name Horse19.Leg3
+  parent 388
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 399
+  name Horse19.Crown
+  parent 388
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 401
+  name Horse20.Body
+  parent 400
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 402
+  name Horse20.Neck
+  parent 400
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 403
+  name Horse20.Head
+  parent 400
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 404
+  name Horse20.EarL
+  parent 400
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 405
+  name Horse20.EarR
+  parent 400
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 406
+  name Horse20.Tail
+  parent 400
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 407
+  name Horse20.Leg0
+  parent 400
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 408
+  name Horse20.Leg1
+  parent 400
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 409
+  name Horse20.Leg2
+  parent 400
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 410
+  name Horse20.Leg3
+  parent 400
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 411
+  name Horse20.Crown
+  parent 400
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 413
+  name Horse21.Body
+  parent 412
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 414
+  name Horse21.Neck
+  parent 412
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 415
+  name Horse21.Head
+  parent 412
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 416
+  name Horse21.EarL
+  parent 412
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 417
+  name Horse21.EarR
+  parent 412
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 418
+  name Horse21.Tail
+  parent 412
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 419
+  name Horse21.Leg0
+  parent 412
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 420
+  name Horse21.Leg1
+  parent 412
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 421
+  name Horse21.Leg2
+  parent 412
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 422
+  name Horse21.Leg3
+  parent 412
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 423
+  name Horse21.Crown
+  parent 412
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 425
+  name Horse22.Body
+  parent 424
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 426
+  name Horse22.Neck
+  parent 424
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 427
+  name Horse22.Head
+  parent 424
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 428
+  name Horse22.EarL
+  parent 424
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 429
+  name Horse22.EarR
+  parent 424
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 430
+  name Horse22.Tail
+  parent 424
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 431
+  name Horse22.Leg0
+  parent 424
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 432
+  name Horse22.Leg1
+  parent 424
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 433
+  name Horse22.Leg2
+  parent 424
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 434
+  name Horse22.Leg3
+  parent 424
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 435
+  name Horse22.Crown
+  parent 424
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 437
+  name Horse23.Body
+  parent 436
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 438
+  name Horse23.Neck
+  parent 436
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 439
+  name Horse23.Head
+  parent 436
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 440
+  name Horse23.EarL
+  parent 436
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 441
+  name Horse23.EarR
+  parent 436
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 442
+  name Horse23.Tail
+  parent 436
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 443
+  name Horse23.Leg0
+  parent 436
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 444
+  name Horse23.Leg1
+  parent 436
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 445
+  name Horse23.Leg2
+  parent 436
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 446
+  name Horse23.Leg3
+  parent 436
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 447
+  name Horse23.Crown
+  parent 436
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 449
+  name Horse24.Body
+  parent 448
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 450
+  name Horse24.Neck
+  parent 448
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 451
+  name Horse24.Head
+  parent 448
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 452
+  name Horse24.EarL
+  parent 448
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 453
+  name Horse24.EarR
+  parent 448
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 454
+  name Horse24.Tail
+  parent 448
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 455
+  name Horse24.Leg0
+  parent 448
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 456
+  name Horse24.Leg1
+  parent 448
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 457
+  name Horse24.Leg2
+  parent 448
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 458
+  name Horse24.Leg3
+  parent 448
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 459
+  name Horse24.Crown
+  parent 448
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 461
+  name Horse25.Body
+  parent 460
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 462
+  name Horse25.Neck
+  parent 460
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 463
+  name Horse25.Head
+  parent 460
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 464
+  name Horse25.EarL
+  parent 460
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 465
+  name Horse25.EarR
+  parent 460
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 466
+  name Horse25.Tail
+  parent 460
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 467
+  name Horse25.Leg0
+  parent 460
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 468
+  name Horse25.Leg1
+  parent 460
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 469
+  name Horse25.Leg2
+  parent 460
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 470
+  name Horse25.Leg3
+  parent 460
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 471
+  name Horse25.Crown
+  parent 460
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 473
+  name Horse26.Body
+  parent 472
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 474
+  name Horse26.Neck
+  parent 472
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 475
+  name Horse26.Head
+  parent 472
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 476
+  name Horse26.EarL
+  parent 472
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 477
+  name Horse26.EarR
+  parent 472
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 478
+  name Horse26.Tail
+  parent 472
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 479
+  name Horse26.Leg0
+  parent 472
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 480
+  name Horse26.Leg1
+  parent 472
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 481
+  name Horse26.Leg2
+  parent 472
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 482
+  name Horse26.Leg3
+  parent 472
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 483
+  name Horse26.Crown
+  parent 472
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end
+
+node 485
+  name Horse27.Body
+  parent 484
+  pos 0 1.45 0
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.95 0.95 2.3
+end
+
+node 486
+  name Horse27.Neck
+  parent 484
+  pos 0 2 1.1
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.6 1.2 0.6
+end
+
+node 487
+  name Horse27.Head
+  parent 484
+  pos 0 2.55 1.5
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.55 0.5 1.05
+end
+
+node 488
+  name Horse27.EarL
+  parent 484
+  pos -0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 489
+  name Horse27.EarR
+  parent 484
+  pos 0.18 2.9 1.2
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.12 0.3 0.12
+end
+
+node 490
+  name Horse27.Tail
+  parent 484
+  pos 0 1.6 -1.3
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.22 0.8 0.22
+end
+
+node 491
+  name Horse27.Leg0
+  parent 484
+  pos -0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 492
+  name Horse27.Leg1
+  parent 484
+  pos 0.34 0.5 0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 493
+  name Horse27.Leg2
+  parent 484
+  pos -0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 494
+  name Horse27.Leg3
+  parent 484
+  pos 0.34 0.5 -0.85
+  materials materials/fh_horse.daimat
+  blockout 1
+  bosize 0.24 1 0.24
+end
+
+node 495
+  name Horse27.Crown
+  parent 484
+  pos 0 -60 1.35
+  materials materials/fh_wing.daimat
+  blockout 1
+  bosize 0.7 0.14 0.7
+end

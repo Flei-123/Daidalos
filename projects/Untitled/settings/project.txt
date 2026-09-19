@@ -1,2 +1,3 @@
 daidalos-project-settings 1
 # project settings - shared, belongs in version control
+default-scene scenes/feeding_hall.daiscene

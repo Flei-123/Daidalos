@@ -1488,6 +1488,22 @@ void dai_editor_live_set_transform(dai_editor *e, dai_node n,
     dai_entity ent = dai_doc_sync_entity(e->sync, n);
     dai_scene *sc = dai_doc_sync_scene(e->sync);
     if (!ent || !sc) return;
+    // A node with children is a pivot: the hierarchy is only resolved from the
+    // DOCUMENT, so moving one live entity would leave its children standing.
+    // Writing the parent to the document as well is what makes a script's
+    // "move the car" move the car's wheels (dai_doc_sync re-applies a moved
+    // parent's subtree).
+    {
+        dai_node kid[1];
+        if (dai_doc_children(e->doc, n, kid, 1) > 0) {
+            dai_node_desc rec{};
+            if (dai_doc_get(e->doc, n, &rec) == DAI_OK) {
+                if (pos) rec.position = *pos;
+                if (rot) rec.rotation = *rot;
+                dai_doc_set(e->doc, n, &rec);
+            }
+        }
+    }
     dai_body b = dai_scene_body(sc, ent);
     if (!b) {
         // Same rule as set_live_transform: a bodiless node still moves.

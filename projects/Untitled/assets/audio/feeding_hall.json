@@ -1,0 +1,49 @@
+{
+  // THE FEEDING HALL - Aulos-Bank. Alle Samples sind echte Aufnahmen aus
+  // Wikimedia Commons (public domain / CC0), Herkunft in HERKUNFT.md.
+  "buses": [
+    { "name": "master", "volume": 0.45 },
+    { "name": "sfx",    "parent": "master", "volume": 0.95 },
+    { "name": "music",  "parent": "master", "volume": 0.6 },
+    { "name": "ui",     "parent": "master", "volume": 0.9 }
+  ],
+
+  "events": [
+    { "name": "wing_throw", "bus": "sfx", "sample": "wing_throw.wav",
+      "volume": 0.55, "pitch_random": 0.18, "max_instances": 6 },
+
+    { "name": "wing_hit", "bus": "sfx", "sample": "wing_hit.wav",
+      "volume": 0.9, "pitch_random": 0.12, "spatial": true,
+      "min_distance": 3.0, "max_distance": 45.0, "rolloff": "inverse" },
+
+    { "name": "wing_splash", "bus": "sfx", "sample": "wing_splash.wav",
+      "volume": 0.7, "pitch_random": 0.15, "spatial": true,
+      "min_distance": 2.0, "max_distance": 30.0, "rolloff": "inverse" },
+
+    { "name": "horse_neigh", "bus": "sfx",
+      "samples": ["horse_neigh.wav", "horse_neigh_b.wav"],
+      "volume": 0.7, "pitch_random": 0.10, "volume_random": 0.15,
+      "spatial": true, "min_distance": 4.0, "max_distance": 60.0,
+      "rolloff": "inverse", "max_instances": 4 },
+
+    { "name": "horse_feed", "bus": "sfx", "sample": "horse_feed.wav",
+      "volume": 1.0, "pitch_random": 0.08, "spatial": true,
+      "min_distance": 2.0, "max_distance": 25.0, "rolloff": "inverse" },
+
+    { "name": "step", "bus": "sfx",
+      "samples": ["step_1.wav", "step_2.wav", "step_3.wav"],
+      "volume": 0.35, "pitch_random": 0.14, "volume_random": 0.2,
+      "max_instances": 3 },
+
+    { "name": "ammo_pickup", "bus": "ui", "sample": "ammo_pickup.wav",
+      "volume": 0.7, "pitch_random": 0.05 },
+
+    { "name": "level_clear", "bus": "ui", "sample": "level_clear.wav",
+      "volume": 0.9 },
+
+    { "name": "win", "bus": "ui", "sample": "win_applause.wav", "volume": 0.85 },
+
+    { "name": "hall_ambience", "bus": "music", "sample": "hall_hooves_loop.wav",
+      "loop": true, "volume": 0.35 }
+  ]
+}

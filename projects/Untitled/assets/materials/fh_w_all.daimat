@@ -1,0 +1,9 @@
+daidalos-material 1
+color 1 1 1
+roughness 0.3
+metallic 0
+emissive 0
+base_color_map textures/fh_w_all.png
+triplanar 1
+triplanar_scale 70
+triplanar_blend 8

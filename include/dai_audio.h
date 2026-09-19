@@ -47,6 +47,43 @@ enum {
  * with several worlds keeps the pointer it was given instead. */
 DAI_API dai_audio_backend *dai_audio_active(void);
 
+/* ---- lifecycle ----------------------------------------------------------
+ *
+ * A host that is not the engine's own world - the runtime, a test, a tool -
+ * opens the backend itself: bank path, the folder its samples are relative
+ * to, and whether to open a device (0 on a build server). These four used to
+ * be internal, which meant "only dai_engine may make a sound"; the shipped
+ * game is a host like any other. */
+DAI_API dai_audio_backend *dai_audio_open(const char *bank, const char *asset_root,
+                                          int enable_device, char *err, size_t err_len);
+/* The same, for a game that runs out of its own executable. A shipped build
+ * has no "assets/audio" folder - the bank and every wav are entries in an
+ * archive - so the host hands the mixer a way to fetch bytes by path instead
+ * of a directory. `read` returns 1 and fills out/len; `release` frees what it
+ * returned. Pass nulls and this is exactly dai_audio_open. */
+typedef int  (*dai_audio_read_fn)(const char *path, void **out, size_t *len, void *user);
+typedef void (*dai_audio_release_fn)(void *bytes, void *user);
+DAI_API dai_audio_backend *dai_audio_open_reader(const char *bank, const char *asset_root,
+                                                 int enable_device,
+                                                 dai_audio_read_fn read,
+                                                 dai_audio_release_fn release, void *user,
+                                                 char *err, size_t err_len);
+DAI_API void dai_audio_close(dai_audio_backend *b);
+/* Once per frame: copies the mixer gains in and retires finished voices. */
+DAI_API void dai_audio_update(dai_audio_backend *b);
+/* Where the ears are. Position, forward, up, velocity - velocity only matters
+ * for doppler. */
+DAI_API void dai_audio_listener(dai_audio_backend *b, dai_vec3 pos, dai_vec3 fwd,
+                                dai_vec3 up, dai_vec3 vel);
+
+/* Pulls `frames` stereo frames out of the mixer into an interleaved buffer.
+ * The offline path: with enable_device = 0 nothing is heard, and this is the
+ * only way to get the mix - which is how a headless run proves a sound was
+ * actually made. Returns the frames written. */
+DAI_API uint32_t dai_audio_render(dai_audio_backend *b, float *out_stereo, uint32_t frames);
+/* How many voices are alive right now. */
+DAI_API uint32_t dai_audio_voices(dai_audio_backend *b);
+
 /* ---- mixer ------------------------------------------------------------- */
 
 DAI_API void  dai_audio_bus_set(dai_audio_backend *b, int bus, float gain);

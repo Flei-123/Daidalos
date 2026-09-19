@@ -34,6 +34,8 @@
 #include <ctime>
 #ifdef DAI_WITH_SCRIPT
 #include "dai_script.h"
+#include "dai_audio.h"
+#include <dirent.h>
 #include "dai_prelude.h"
 #include "dai_native.h"
 #endif
@@ -1331,6 +1333,64 @@ static void scripts_stop() {
     g_native_time = 0.0f;
 }
 
+
+// ---- sound while playing ------------------------------------------------
+//
+// Ctrl+P is the game running, and a game without sound is half a game. The
+// bank is the first .json in <assets>/audio - a project has one sound bank,
+// and looking it up beats a setting nobody sets. Opened on the first play and
+// kept: reopening it per play would re-read every sample.
+static dai_audio_backend *g_play_audio = nullptr;
+static int g_play_audio_tried = 0;
+
+static void editor_audio_ensure(void) {
+    if (g_play_audio || g_play_audio_tried) return;
+    g_play_audio_tried = 1;
+    if (!g_assets_dir[0]) return;
+    std::string dir = std::string(g_assets_dir) + "/audio";
+    std::string bank;
+    if (DIR *d = opendir(dir.c_str())) {
+        while (dirent *e = readdir(d)) {
+            std::string n = e->d_name;
+            if (n.size() > 5 && n.compare(n.size() - 5, 5, ".json") == 0) {
+                bank = dir + "/" + n;
+                break;
+            }
+        }
+        closedir(d);
+    }
+    if (bank.empty()) return;
+    char aerr[256] = { 0 };
+    g_play_audio = dai_audio_open(bank.c_str(), (dir + "/").c_str(), 1, aerr, sizeof(aerr));
+    if (!g_play_audio && g_panels_for_log) dai_editor_ui_log(g_panels_for_log, 1, aerr);
+    else if (g_panels_for_log) {
+        char msg[400];
+        std::snprintf(msg, sizeof(msg), "audio bank: %s", bank.c_str());
+        dai_editor_ui_log(g_panels_for_log, 0, msg);
+    }
+}
+
+static double editor_audio_play(const char *event, const double *pos, double volume,
+                                double pitch, void *) {
+    if (!g_play_audio || !event || !*event) return 0;
+    dai_audio_event ev{};
+    std::snprintf(ev.name, sizeof(ev.name), "%s", event);
+    ev.volume = (float)(volume > 0 ? volume : 1.0);
+    ev.pitch  = (float)(pitch > 0 ? pitch : 1.0);
+    if (pos) { ev.is_3d = 1; ev.position = dai_vec3{ (float)pos[0], (float)pos[1], (float)pos[2] }; }
+    return (double)dai_audio_play_ex(g_play_audio, &ev, DAI_AUDIO_BUS_EVENT);
+}
+static void editor_audio_stop(double, void *) {}
+static void editor_audio_listener(const double *pos, const double *fwd, void *) {
+    if (!g_play_audio || !pos || !fwd) return;
+    dai_audio_listener(g_play_audio,
+                       dai_vec3{ (float)pos[0], (float)pos[1], (float)pos[2] },
+                       dai_vec3{ (float)fwd[0], (float)fwd[1], (float)fwd[2] },
+                       dai_vec3{ 0, 1, 0 }, dai_vec3{ 0, 0, 0 });
+}
+static dai_script_audio_host g_editor_audio_host = { editor_audio_play, editor_audio_stop,
+                                                     editor_audio_listener, nullptr };
+
 static void scripts_start() {
     scripts_stop();
     if (!g_scene_doc) return;
@@ -1444,6 +1504,8 @@ static void scripts_start() {
             dai_script_bind_nodes(s, &g_node_host);
             dai_script_bind_play(s, &g_play_host);
             dai_script_bind_gui(s, &g_gui_host);
+            editor_audio_ensure();
+            if (g_play_audio) dai_script_bind_audio(s, &g_editor_audio_host);
             if (dai_script_load(s, full, err, sizeof(err)) != DAI_OK) {
                 std::printf("script %s: %s\n", path.c_str(), err);
                 if (g_panels_for_log) {
@@ -4801,6 +4863,7 @@ int main(int argc, char **argv) {
             ext.renderer = r;
             ext.assets_dir = g_assets_dir;
             ext.asset_revision = assets ? dai_assets_revision(assets) : 0;
+            if (g_play_audio) dai_audio_update(g_play_audio);
             dai_daitex_host_poll(&ext);
             dai_material_host_apply(&ext);
             dai_blockout_host_sync(&ext);

@@ -49,9 +49,24 @@ JOLT_DEFS="-DJPH_DEBUG_RENDERER -DJPH_OBJECT_STREAM -DJPH_PROFILE_ENABLED \
 ARCH="-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse"
 FLAGS="-std=c++17 -O3 -fno-rtti -fno-exceptions -ffp-contract=fast -pthread -Wall -Wno-unused-parameter"
 
+# ccache in front of the compiler. Measured 19.09.2026: the same translation
+# unit is 2.38 s cold and 0.00 s on a cache hit, so a branch switch and back -
+# exactly what an agent does between iterations - costs nothing instead of six
+# minutes. It only ever helps: a miss adds ~0.2 s. Note it can only cache
+# COMPILES; the ~50 calls below that compile and link in one go are helped by
+# the parallelism, not by the cache.
+CXX="${CXX:-g++}"
+command -v ccache >/dev/null 2>&1 && CXX="ccache $CXX"
+
+# J / Jwait: run the compiler calls of a section at the same time and wait
+# wherever an artefact is consumed. See tools/parallel.sh for why this and not
+# a generated ninja file.
+. "$(dirname "$0")/tools/parallel.sh"
+
 AUDIO_FLAGS="-I$AULOS/include"
 AUDIO_LIB="$AULOS/build/libaulos.a"
 if [ "${1:-}" = "noaudio" ] || [ ! -f "$AULOS/build/libaulos.a" ]; then
+Jwait
     echo "-- building WITHOUT audio"
     AUDIO_FLAGS="-DDAI_NO_AUDIO"
     AUDIO_LIB=""
@@ -59,6 +74,7 @@ fi
 
 mkdir -p build
 
+Jwait
 echo "-- physics backend availability"
 # Deciding this BEFORE the engine core is compiled, because dai_engine.cpp is
 # what refuses DAI_PHYSICS_TALOS when the backend was not linked in.
@@ -68,14 +84,17 @@ else
     ENGINE_DEFS="-DDAI_NO_TALOS"
 fi
 
+Jwait
 echo "-- engine core (no Jolt include path - this is the leak test)"
-g++ $FLAGS $ARCH $ENGINE_DEFS -Iinclude -Isrc -c src/dai_engine.cpp -o build/dai_engine.o
+J $CXX $FLAGS $ARCH $ENGINE_DEFS -Iinclude -Isrc -c src/dai_engine.cpp -o build/dai_engine.o
 
+Jwait
 echo "-- physics backend: null"
-g++ $FLAGS $ARCH -Iinclude -Isrc -c src/physics_null.cpp -o build/physics_null.o
+J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/physics_null.cpp -o build/physics_null.o
 
+Jwait
 echo "-- physics backend: jolt"
-g++ $FLAGS $ARCH $JOLT_DEFS -Iinclude -Isrc -I"$JOLT_SRC" -c src/physics_jolt.cpp -o build/physics_jolt.o
+J $CXX $FLAGS $ARCH $JOLT_DEFS -Iinclude -Isrc -I"$JOLT_SRC" -c src/physics_jolt.cpp -o build/physics_jolt.o
 
 # Second real backend: Talos through its C API. Optional the same way audio is
 # - without it the engine still builds and DAI_PHYSICS_TALOS is refused rather
@@ -83,38 +102,44 @@ g++ $FLAGS $ARCH $JOLT_DEFS -Iinclude -Isrc -I"$JOLT_SRC" -c src/physics_jolt.cp
 TALOS_OBJ=""
 TALOS_LIB=""
 if [ -f "$TALOS/TalC/talos.h" ] && [ -f "$TALOS/build/libtalos.a" ]; then
+Jwait
     echo "-- physics backend: talos ($TALOS)"
-    g++ $FLAGS $ARCH -Iinclude -Isrc -I"$TALOS/TalC" -c src/physics_talos.cpp -o build/physics_talos.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -I"$TALOS/TalC" -c src/physics_talos.cpp -o build/physics_talos.o
     TALOS_OBJ=build/physics_talos.o
     TALOS_LIB="$TALOS/build/libtalos.a"
 else
+Jwait
     echo "-- physics backend: talos SKIPPED (no $TALOS/build/libtalos.a - run talos/build.sh)"
 fi
 
+Jwait
 echo "-- audio"
-g++ $FLAGS $ARCH $AUDIO_FLAGS -Iinclude -Isrc -c src/dai_audio.cpp -o build/dai_audio.o
+J $CXX $FLAGS $ARCH $AUDIO_FLAGS -Iinclude -Isrc -c src/dai_audio.cpp -o build/dai_audio.o
 
+Jwait
 echo "-- scene layer"
-g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_scene.cpp -o build/dai_scene.o
-g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_input.cpp -o build/dai_input.o
-g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor.cpp -o build/dai_editor.o
-g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_dock.cpp -o build/dai_dock.o
-g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_project.cpp -o build/dai_project.o
-g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_material.cpp -o build/dai_material.o
+J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_scene.cpp -o build/dai_scene.o
+J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_input.cpp -o build/dai_input.o
+J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor.cpp -o build/dai_editor.o
+J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_dock.cpp -o build/dai_dock.o
+J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_project.cpp -o build/dai_project.o
+J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_material.cpp -o build/dai_material.o
 
 # The drone show pipeline. Arithmetic on points and time: no renderer, no
 # window, no physics backend - which is why it sits in the plain archive next
 # to the engine and why build/test_droneshow runs on a machine with no GPU.
 # The panels that drive it are a different file and live with the editor UI.
+Jwait
 echo "-- drone show (sampling, assignment, layering, validation, export)"
 for f in dai_show dai_show_sample dai_show_assign dai_show_plan dai_show_check dai_show_export; do
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c "src/$f.cpp" -o "build/$f.o"
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c "src/$f.cpp" -o "build/$f.o"
 done
 
+Jwait
 echo "-- scene document (editor truth: stable ids, generic undo)"
-g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc.cpp -o build/dai_doc.o
-g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_text.cpp -o build/dai_doc_text.o
-g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_sync.cpp -o build/dai_doc_sync.o
+J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc.cpp -o build/dai_doc.o
+J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_text.cpp -o build/dai_doc_text.o
+J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_sync.cpp -o build/dai_doc_sync.o
 
 # rm FIRST. `ar rcs` REPLACES the members it is given and leaves every other
 # member of an existing archive exactly where it was - so an object that was
@@ -125,6 +150,7 @@ g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_sync.cpp -o build/dai_doc_sync.o
 # and the difference was invisible because the editor happens to link the vk
 # archive first. Same failure as the stale .spv two blocks down, same fix.
 rm -f build/libdaidalos.a build/libdaidalos_vk.a build/libdaidalos_assets.a
+Jwait
 ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o ${TALOS_OBJ} \
        build/dai_material.o \
        build/dai_audio.o build/dai_scene.o build/dai_input.o build/dai_editor.o \
@@ -132,6 +158,7 @@ ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics
        build/dai_show.o build/dai_show_sample.o build/dai_show_assign.o \
        build/dai_show_plan.o build/dai_show_check.o build/dai_show_export.o
 
+Jwait
 echo "-- shaders"
 if command -v glslangValidator >/dev/null 2>&1; then
     # A failed shader compile used to leave the previous .spv in place, so the
@@ -149,10 +176,11 @@ fi
 
 VK_OK=0
 if [ -f /usr/include/vulkan/vulkan.h ]; then
+Jwait
     echo "-- renderer: vulkan 1.3"
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan.cpp       -o build/rhi_vulkan.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_frame.cpp -o build/rhi_vulkan_frame.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_texture.cpp -o build/rhi_vulkan_texture.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan.cpp       -o build/rhi_vulkan.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_frame.cpp -o build/rhi_vulkan_frame.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_texture.cpp -o build/rhi_vulkan_texture.o
     # Window backend: DAI_WINDOW=x11|wayland|none (default: x11 if available).
     # Exactly one is linked - they define the same four entry points, which is
     # the same "one .cpp per platform" rule the renderer itself follows.
@@ -164,76 +192,85 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
     fi
     case "$DAI_WINDOW" in
     x11)
+Jwait
         echo "-- window backend: X11"
-        g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_window.cpp -o build/rhi_vulkan_window.o
+        J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_window.cpp -o build/rhi_vulkan_window.o
         WINDOW_OBJ=build/rhi_vulkan_window.o
         X11_LIB="-lX11"
         ;;
     wayland)
+Jwait
         echo "-- window backend: Wayland"
         gcc $ARCH -O2 -Iinclude -Isrc -c src/generated/xdg-shell-protocol.c -o build/xdg-shell-protocol.o
-        g++ $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_window_wayland.cpp -o build/rhi_vulkan_window.o
+        J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_window_wayland.cpp -o build/rhi_vulkan_window.o
         WINDOW_OBJ="build/rhi_vulkan_window.o build/xdg-shell-protocol.o"
         X11_LIB="-lwayland-client"
         ;;
     win32)
         # Cross compiled with mingw-w64 to prove it BUILDS; it has not been run
         # on Windows from here. Produces an object file, not a linked binary.
+Jwait
         echo "-- window backend: win32 (cross compile check only)"
         mkdir -p /tmp/vkinc && cp -r /usr/include/vulkan /tmp/vkinc/ 2>/dev/null || true
+Jwait
         x86_64-w64-mingw32-g++ -std=c++17 -O2 -fno-rtti -fno-exceptions \
             -Iinclude -Isrc -I/tmp/vkinc -c src/rhi_vulkan_window_win32.cpp -o build/rhi_vulkan_window_win32.o
         # The updater's Windows half (WinHTTP, the rename trick) is only
         # compiled on this path, so check it here rather than discover it on
         # the first Windows build.
+Jwait
         x86_64-w64-mingw32-g++ -std=c++17 -O2 -fno-rtti -fno-exceptions \
             -Iinclude -Isrc -c src/dai_update.cpp -o build/dai_update_win32.o
         echo "   ok: build/rhi_vulkan_window_win32.o, build/dai_update_win32.o"
         ;;
     *)
+Jwait
         echo "-- window backend: none (headless only)"
         ;;
     esac
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_meshgen.cpp      -o build/dai_meshgen.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_image.cpp        -o build/dai_image.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_inflate.cpp      -o build/dai_inflate.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_jpeg.cpp         -o build/dai_jpeg.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_json.cpp         -o build/dai_json.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf.cpp         -o build/dai_gltf.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf_geom.cpp    -o build/dai_gltf_geom.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_fracture.cpp     -o build/dai_fracture.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf_write.cpp   -o build/dai_gltf_write.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_particles.cpp    -o build/dai_particles.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_font.cpp          -o build/dai_font.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_meshgen.cpp      -o build/dai_meshgen.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_image.cpp        -o build/dai_image.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_inflate.cpp      -o build/dai_inflate.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_jpeg.cpp         -o build/dai_jpeg.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_json.cpp         -o build/dai_json.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf.cpp         -o build/dai_gltf.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf_geom.cpp    -o build/dai_gltf_geom.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_fracture.cpp     -o build/dai_fracture.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_gltf_write.cpp   -o build/dai_gltf_write.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_particles.cpp    -o build/dai_particles.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_font.cpp          -o build/dai_font.o
     # Vector icons: the SVG rasteriser and the atlas it packs. Same reasoning
     # as the TrueType loader next to it - a few hundred lines instead of a
     # dependency, and icons that are sharp at whatever size the display wants.
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_svg.cpp           -o build/dai_svg.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_svg.cpp           -o build/dai_svg.o
     # Asset thumbnails: a mesh rasterised into a 64 px icon. No GPU on
     # purpose - see include/dai_thumb.h - so it sits with the other things
     # that turn data into pixels rather than with the renderer.
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_thumb.cpp         -o build/dai_thumb.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_icons.cpp         -o build/dai_icons.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_ui.cpp            -o build/dai_ui.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_update.cpp       -o build/dai_update.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor_ui.cpp     -o build/dai_editor_ui.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_thumb.cpp         -o build/dai_thumb.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_icons.cpp         -o build/dai_icons.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_ui.cpp            -o build/dai_ui.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_update.cpp       -o build/dai_update.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_editor_ui.cpp     -o build/dai_editor_ui.o
     # The drone show panels. With the editor UI rather than with the pipeline,
     # because this is the one file that knows about both dai_show and dai_ui -
     # the same split dai_editor / dai_editor_ui exists for.
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_show_ui.cpp       -o build/dai_show_ui.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_show_ui.cpp       -o build/dai_show_ui.o
     # Native (C++) behaviours: compiles a .cpp in the project to a shared
     # library and dlopen()s it. Lives with the editor because only the editor
     # has a compiler on hand and a reason to rebuild while running.
+Jwait
     python3 tools/embed_native.py include/dai_native.h build/dai_native_header.cpp
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_native.cpp        -o build/dai_native.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_tr.cpp            -o build/dai_tr.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_native.cpp        -o build/dai_native.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_tr.cpp            -o build/dai_tr.o
     # The GAME's string tables (dai_strings) - not the editor's own (dai_tr).
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c src/dai_strings.cpp       -o build/dai_strings.o
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c build/dai_native_header.cpp -o build/dai_native_header.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_strings.cpp       -o build/dai_strings.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c build/dai_native_header.cpp -o build/dai_native_header.o
     # The shaders are also linked IN - the editor runs as one file anywhere,
     # and a shaders/ dir (or DAI_SHADER_DIR) still overrides when present.
+Jwait
     python3 tools/embed_shaders.py shaders build/dai_shaders_embed.cpp
-    g++ $FLAGS $ARCH -Iinclude -Isrc -c build/dai_shaders_embed.cpp -o build/dai_shaders_embed.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c build/dai_shaders_embed.cpp -o build/dai_shaders_embed.o
+Jwait
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
            build/dai_shaders_embed.o \
            $WINDOW_OBJ build/dai_dock.o build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_jpeg.o build/dai_json.o \
@@ -242,6 +279,7 @@ if [ -f /usr/include/vulkan/vulkan.h ]; then
            build/dai_strings.o
     VK_OK=1
 else
+Jwait
     echo "-- renderer: skipped (no vulkan headers)"
 fi
 
@@ -253,16 +291,19 @@ fi
 # and forcing -fno-exceptions on someone else's std::vector is not our call.
 ASSETS_LIB=""
 if [ "$VK_OK" = "1" ] && [ -f "$MNEMOSYNE/include/mnemosyne.h" ]; then
+Jwait
     echo "-- assets: Mnemosyne + glTF ($MNEMOSYNE)"
     MNE_FLAGS="-std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -pthread"
     for f in mne_path mne_vfs mne_pack mne_registry; do
-        g++ $MNE_FLAGS -I"$MNEMOSYNE/include" -I"$MNEMOSYNE/src" -c "$MNEMOSYNE/src/$f.cpp" -o "build/$f.o"
+        J $CXX $MNE_FLAGS -I"$MNEMOSYNE/include" -I"$MNEMOSYNE/src" -c "$MNEMOSYNE/src/$f.cpp" -o "build/$f.o"
     done
-    g++ $FLAGS $ARCH -Iinclude -Isrc -I"$MNEMOSYNE/include" -c src/dai_assets.cpp -o build/dai_assets.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -I"$MNEMOSYNE/include" -c src/dai_assets.cpp -o build/dai_assets.o
+Jwait
     ar rcs build/libdaidalos_assets.a build/dai_assets.o \
            build/mne_path.o build/mne_vfs.o build/mne_pack.o build/mne_registry.o
     ASSETS_LIB="build/libdaidalos_assets.a"
 else
+Jwait
     echo "-- assets: skipped (no Mnemosyne at $MNEMOSYNE)"
 fi
 
@@ -272,14 +313,17 @@ VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO
 # --- backend leak tests -------------------------------------------------
 # Same idea as the Jolt one, for the renderer: the RHI must be swappable for
 # D3D12/Metal/an emitter into someone else's engine by replacing rhi_*.cpp.
+Jwait
 echo "-- leak test: no talos.h outside src/physics_talos.cpp"
 if grep -l "talos\.h\|tal_world\|tal_body_id" src/*.cpp src/*.hpp include/*.h 2>/dev/null | grep -v "^src/physics_talos.cpp"; then
     echo "   !! a Talos type escaped the backend (files listed above)"; exit 1
 fi
+Jwait
 echo "-- leak test: no Vulkan outside src/rhi_vulkan*"
 if grep -l "vulkan/vulkan.h\|VkDevice\|vkCmd" src/*.cpp src/*.hpp include/*.h 2>/dev/null | grep -v "^src/rhi_vulkan"; then
     echo "   !! a Vulkan type escaped the backend (files listed above)"; exit 1
 fi
+Jwait
 echo "-- leak test: engine + scene link without a renderer"
 cat > build/_norender.cpp <<'EOT'
 #include "daidalos.h"
@@ -298,56 +342,61 @@ int main() {
     return n == 1 ? 0 : 2;
 }
 EOT
-g++ $FLAGS $ARCH -Iinclude build/_norender.cpp $LIBS -o build/_norender    # note: no -lvulkan
+J $CXX $FLAGS $ARCH -Iinclude build/_norender.cpp $LIBS -o build/_norender    # note: no -lvulkan
+Jwait
 ./build/_norender || { echo "   !! scene layer cannot run without a renderer"; exit 1; }
 rm -f build/_norender build/_norender.cpp
 
 # Scripting is optional: it is the only part that needs a vendored library
 QJS=extern/quickjs
 if [ -f "$QJS/libquickjs.a" ]; then
+Jwait
     echo "-- scripting: quickjs"
-    g++ $FLAGS $ARCH -Iinclude -Isrc -I"$QJS" -c src/dai_script.cpp -o build/dai_script.o
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -I"$QJS" -c src/dai_script.cpp -o build/dai_script.o
     SCRIPT_LIB="build/dai_script.o $QJS/libquickjs.a"
 else
+Jwait
     echo "-- scripting: skipped (extern/quickjs not built)"
     SCRIPT_LIB=""
 fi
 
+Jwait
 echo "-- tests"
-g++ $FLAGS $ARCH -Iinclude tests/test_daidalos.cpp $LIBS -o build/test_daidalos
-g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_image.cpp src/dai_inflate.cpp src/dai_jpeg.cpp -o build/test_image
-g++ $FLAGS $ARCH -Iinclude tests/test_merge.cpp $LIBS -o build/test_merge
-g++ $FLAGS $ARCH -Iinclude tests/test_save.cpp $LIBS -o build/test_save
-g++ $FLAGS $ARCH -Iinclude tests/test_input.cpp $LIBS -o build/test_input
-g++ $FLAGS $ARCH -Iinclude tests/test_editor.cpp $LIBS -o build/test_editor
+J $CXX $FLAGS $ARCH -Iinclude tests/test_daidalos.cpp $LIBS -o build/test_daidalos
+J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_image.cpp src/dai_inflate.cpp src/dai_jpeg.cpp -o build/test_image
+J $CXX $FLAGS $ARCH -Iinclude tests/test_merge.cpp $LIBS -o build/test_merge
+J $CXX $FLAGS $ARCH -Iinclude tests/test_save.cpp $LIBS -o build/test_save
+J $CXX $FLAGS $ARCH -Iinclude tests/test_input.cpp $LIBS -o build/test_input
+J $CXX $FLAGS $ARCH -Iinclude tests/test_editor.cpp $LIBS -o build/test_editor
 # Four bugs that were all the same question asked badly - "where is this object,
 # really". Run here rather than merely built: three of the four are measurements
 # (penetration depth, drag distance, roll distance) that a change to the physics
 # settings or the sync layer can move without breaking anything that compiles.
-g++ $FLAGS $ARCH -Iinclude tests/test_editor_live.cpp $LIBS -o build/test_editor_live
+J $CXX $FLAGS $ARCH -Iinclude tests/test_editor_live.cpp $LIBS -o build/test_editor_live
+Jwait
 ./build/test_editor_live
-g++ $FLAGS $ARCH -Iinclude tests/test_doc.cpp $LIBS -o build/test_doc
-g++ $FLAGS $ARCH -Iinclude tests/test_play.cpp $LIBS -o build/test_play
-g++ $FLAGS $ARCH -Iinclude tests/test_cam.cpp $LIBS -o build/test_cam
+J $CXX $FLAGS $ARCH -Iinclude tests/test_doc.cpp $LIBS -o build/test_doc
+J $CXX $FLAGS $ARCH -Iinclude tests/test_play.cpp $LIBS -o build/test_play
+J $CXX $FLAGS $ARCH -Iinclude tests/test_cam.cpp $LIBS -o build/test_cam
 if [ -n "${TALOS_LIB:-}" ]; then
     # The second real backend, held to the same claims as the first.
-    g++ $FLAGS $ARCH -Iinclude tests/test_talos.cpp $LIBS -o build/test_talos
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_talos.cpp $LIBS -o build/test_talos
 fi
 if [ -n "$SCRIPT_LIB" ] && [ "$VK_OK" = "1" ]; then
-    g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_script.cpp $SCRIPT_LIB $VKLIBS -o build/test_script
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_script.cpp $SCRIPT_LIB $VKLIBS -o build/test_script
     # The object model behaviours are written against - self.transform.position.x
-    g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_objmodel.cpp $SCRIPT_LIB $VKLIBS -o build/test_objmodel
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_objmodel.cpp $SCRIPT_LIB $VKLIBS -o build/test_objmodel
     # scene.spawn()/scene.destroy() over a REAL document, through the same
     # include/dai_spawn_host.inl the editor and the shipped game include.
-    g++ $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_spawn.cpp $SCRIPT_LIB $VKLIBS -o build/test_spawn
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -Iextern/quickjs tests/test_spawn.cpp $SCRIPT_LIB $VKLIBS -o build/test_spawn
     # And the C++ example has to keep compiling: it is documentation that runs.
-    g++ $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/PlayerController.cpp -o build/_playercontroller_check.so
+    J $CXX $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/PlayerController.cpp -o build/_playercontroller_check.so
     rm -f build/_playercontroller_check.so
     # The component classes, compiled the way the editor compiles a behaviour:
     # against dai_native.h and nothing else. This is the C++ half of the object
     # model, and a header that only compiles inside the engine is a header that
     # does not work.
-    g++ $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/LampFlicker.cpp -o build/_lampflicker_check.so
+    J $CXX $FLAGS $ARCH -Iinclude -shared -fPIC examples/scripts/LampFlicker.cpp -o build/_lampflicker_check.so
     rm -f build/_lampflicker_check.so
 fi
 # The drone show, end to end. Five sources into one binary (see
@@ -359,97 +408,107 @@ fi
 # expose an O(n^2) tick or an O(n^3) assignment, it asserts its own growth
 # against the 1,000 drone row, and it costs about ten seconds. A scaling
 # promise that the build skips is a scaling promise nobody is keeping.
-g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_droneshow.cpp \
+J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_droneshow.cpp \
     tests/droneshow_cases_sample.cpp tests/droneshow_cases_assign.cpp \
     tests/droneshow_cases_plan.cpp tests/droneshow_cases_io.cpp tests/droneshow_cases_edit.cpp \
     $LIBS -o build/test_droneshow
+Jwait
 ./build/test_droneshow
-g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/test_font
+J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_font.cpp src/dai_font.cpp -o build/test_font
 # The SVG rasteriser: no renderer, no font, no window - it turns text into
 # coverage, so the test reads the coverage back.
-g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_svg.cpp src/dai_svg.cpp src/dai_icons.cpp \
+J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_svg.cpp src/dai_svg.cpp src/dai_icons.cpp \
     -o build/test_svg
+Jwait
 ./build/test_svg
 # Thumbnails are arithmetic on triangles: no renderer, no window, and the
 # checks read the pixels back. Run here rather than merely built.
-g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_thumb.cpp src/dai_thumb.cpp \
+J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_thumb.cpp src/dai_thumb.cpp \
     -o build/test_thumb
+Jwait
 ./build/test_thumb
 if [ "$VK_OK" = "1" ]; then
-    g++ $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
     # Cheap and load bearing: dai_key must stay bit identical to the X11
     # keysyms it is defined as, or the X11 backend silently stops matching.
-    g++ $FLAGS $ARCH -Iinclude tests/test_keys.cpp -o build/test_keys
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_keys.cpp -o build/test_keys
+Jwait
     ./build/test_keys
-g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_strings.cpp src/dai_strings.cpp -o build/test_strings
+J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_strings.cpp src/dai_strings.cpp -o build/test_strings
 # Degrees <-> quaternion, the conversion the inspector and every level script
 # share since include/dai_euler.h exists. Header only, so it costs nothing.
-g++ $FLAGS $ARCH -Iinclude tests/test_euler.cpp -o build/test_euler
+J $CXX $FLAGS $ARCH -Iinclude tests/test_euler.cpp -o build/test_euler
+Jwait
 ./build/test_euler
 # The HUD, measured through the draw list: no GPU, no window, real coordinates.
-g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_hud.cpp src/dai_ui.cpp src/dai_font.cpp \
+J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_hud.cpp src/dai_ui.cpp src/dai_font.cpp \
     src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp src/dai_strings.cpp \
     src/dai_editor_ui.cpp src/dai_dock.cpp src/dai_show_ui.cpp \
     src/dai_inflate.cpp src/dai_jpeg.cpp $LIBS -o build/test_hud
     # Looks at the pixels: text that covers ~100%% of its own box is boxes, not
     # glyphs, which is how a broken font binding hid for so long.
-    g++ $FLAGS $ARCH -Iinclude tests/test_ui_text.cpp $VKLIBS -o build/test_ui_text
-    g++ $FLAGS $ARCH -Iinclude tests/test_gltf.cpp $VKLIBS -o build/test_gltf
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_ui_text.cpp $VKLIBS -o build/test_ui_text
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_gltf.cpp $VKLIBS -o build/test_gltf
     # No renderer: fracture is arithmetic on triangles, so the test runs
     # anywhere, including a machine with no GPU and no display.
-    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_fracture.cpp src/dai_fracture.cpp \
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_fracture.cpp src/dai_fracture.cpp \
         src/dai_gltf_geom.cpp src/dai_gltf_write.cpp src/dai_json.cpp -o build/test_fracture
-    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_update.cpp src/dai_update.cpp \
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_update.cpp src/dai_update.cpp \
         src/dai_json.cpp -o build/test_update
-    g++ $FLAGS $ARCH -Iinclude tests/test_particles.cpp $VKLIBS -o build/test_particles
-    g++ $FLAGS $ARCH -Iinclude tests/test_skinning.cpp $VKLIBS -o build/test_skinning
-    g++ $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_particles.cpp $VKLIBS -o build/test_particles
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_skinning.cpp $VKLIBS -o build/test_skinning
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui
     # The world clipped into the scene window, and picking in the same pixels.
-    g++ $FLAGS $ARCH -Iinclude tests/test_viewport.cpp $VKLIBS -o build/test_viewport
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_viewport.cpp $VKLIBS -o build/test_viewport
     DAI_SHADER_DIR=shaders ./build/test_viewport
     # Windows and the solid texel every rectangle in the interface is drawn
     # with. Needs no renderer: it reads the atlas and the vertices.
-    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_window.cpp src/dai_ui.cpp src/dai_font.cpp \
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_window.cpp src/dai_ui.cpp src/dai_font.cpp \
         src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp -o build/test_ui_window
     # Text fields: selection, caret, Home/End, Escape - and the resize edges.
     # No renderer: input in, vertices out.
-    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_field.cpp src/dai_ui.cpp src/dai_font.cpp \
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_field.cpp src/dai_ui.cpp src/dai_font.cpp \
         src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp -o build/test_ui_field
+Jwait
     ./build/test_ui_field
     # Docked panels tile and never overlap - the property the whole layout
     # rewrite exists for.
-    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_dock.cpp src/dai_dock.cpp src/dai_ui.cpp \
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_dock.cpp src/dai_dock.cpp src/dai_ui.cpp \
         src/dai_font.cpp src/dai_svg.cpp src/dai_icons.cpp src/dai_tr.cpp -o build/test_dock
+Jwait
     ./build/test_dock
     # A folder is a project: creation, validation, settings round trip.
-    g++ $FLAGS $ARCH -Iinclude -Isrc tests/test_project.cpp src/dai_project.cpp \
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_project.cpp src/dai_project.cpp \
         -o build/test_project
+Jwait
     ./build/test_project
-    g++ $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_editor_ui.cpp $VKLIBS -o build/test_editor_ui
     # Which files the scene can place, and which it can paint with. No window,
     # no renderer - it links the editor UI for two functions and asks them.
-    g++ $FLAGS $ARCH -Iinclude tests/test_assetkind.cpp $VKLIBS -o build/test_assetkind
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_assetkind.cpp $VKLIBS -o build/test_assetkind
+Jwait
     ./build/test_assetkind
-    [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
+    [ -n "${X11_LIB:-}" ] && J $CXX $FLAGS $ARCH -Iinclude tests/test_window.cpp $VKLIBS -o build/test_window
     # Two windows on one renderer: the claim that a torn off panel can be a
     # real OS window without a second render pass. Needs a display, so it is
     # built here and run by tools/run_tests.sh under Xvfb.
-    [ -n "${X11_LIB:-}" ] && g++ $FLAGS $ARCH -Iinclude tests/test_window_two.cpp $VKLIBS -o build/test_window_two
+    [ -n "${X11_LIB:-}" ] && J $CXX $FLAGS $ARCH -Iinclude tests/test_window_two.cpp $VKLIBS -o build/test_window_two
     if [ -n "$ASSETS_LIB" ]; then
-        g++ $FLAGS $ARCH -Iinclude -I"$MNEMOSYNE/include" tests/test_assets.cpp \
+        J $CXX $FLAGS $ARCH -Iinclude -I"$MNEMOSYNE/include" tests/test_assets.cpp \
             $ASSETS_LIB $LIBS $VKLIBS -o build/test_assets
     fi
 fi
 
+Jwait
 echo "-- diagnostics"
 if [ "$VK_OK" = "1" ]; then
-    g++ $FLAGS $ARCH -Iinclude tools/gizmo_shot.cpp $VKLIBS -o build/gizmo_shot
+    J $CXX $FLAGS $ARCH -Iinclude tools/gizmo_shot.cpp $VKLIBS -o build/gizmo_shot
     # The fracture baker needs no renderer: it reads geometry, cuts it and
     # writes geometry. Linking the Vulkan half in would make a build tool
     # depend on a GPU driver being present.
-    g++ $FLAGS $ARCH -Iinclude -Isrc tools/daifracture.cpp src/dai_fracture.cpp src/dai_gltf_geom.cpp \
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc tools/daifracture.cpp src/dai_fracture.cpp src/dai_gltf_geom.cpp \
         src/dai_gltf_write.cpp src/dai_json.cpp -o build/daifracture
-    g++ $FLAGS $ARCH -Iinclude tools/editor_shot.cpp $VKLIBS -o build/editor_shot
+    J $CXX $FLAGS $ARCH -Iinclude tools/editor_shot.cpp $VKLIBS -o build/editor_shot
     # The game-mode editor, photographed by the same tool and under the name
     # the review knows it by. The working shots go to build/editor_shots, the
     # one picture the drone show set is compared against goes next to it in
@@ -463,7 +522,7 @@ if [ "$VK_OK" = "1" ]; then
     # review. It opens a real droneshow project, so the pictures also carry the
     # claim that the project type works. No display needed - the renderer draws
     # into an image and writes the PNG.
-    g++ $FLAGS $ARCH -Iinclude tools/droneshow_shot.cpp $VKLIBS -o build/droneshow_shot
+    J $CXX $FLAGS $ARCH -Iinclude tools/droneshow_shot.cpp $VKLIBS -o build/droneshow_shot
     mkdir -p .gauntlet-shots
     # All three window sizes, from one command: the plain names are the
     # default 1600x900, `narrow-` is where a panel that guesses its layout
@@ -475,8 +534,9 @@ if [ "$VK_OK" = "1" ]; then
     DAI_SHADER_DIR=shaders ./build/droneshow_shot .gauntlet-shots 1920 1080 wide-
 fi
 
+Jwait
 echo "-- examples"
-g++ $FLAGS $ARCH -Iinclude examples/hello_daidalos.cpp $LIBS -o build/hello_daidalos
+J $CXX $FLAGS $ARCH -Iinclude examples/hello_daidalos.cpp $LIBS -o build/hello_daidalos
 if [ "$VK_OK" = "1" ]; then
     for ex in sandbox_demo vehicle_demo model_viewer window_demo particles_demo editor_demo; do
         [ -f "examples/$ex.cpp" ] || continue
@@ -493,9 +553,13 @@ if [ "$VK_OK" = "1" ]; then
             EXTRA="$EXTRA $SCRIPT_LIB"
             EXTRA_I="$EXTRA_I -DDAI_WITH_SCRIPT"
         fi
-        g++ $FLAGS $ARCH -Iinclude $EXTRA_I "examples/$ex.cpp" $EXTRA $VKLIBS -o "build/$ex"
+        J $CXX $FLAGS $ARCH -Iinclude $EXTRA_I "examples/$ex.cpp" $EXTRA $VKLIBS -o "build/$ex"
     done
 fi
 
+Jwait
 echo "-- ok"
+Jwait
 ls -la build/*.a build/test_daidalos build/hello_daidalos 2>/dev/null | sed 's/^/   /'
+
+Jwait

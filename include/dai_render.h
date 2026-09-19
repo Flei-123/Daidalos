@@ -105,6 +105,11 @@ typedef uint32_t dai_material;
 DAI_API dai_texture dai_render_texture_create(dai_renderer *r, const uint8_t *rgba,
                                               uint32_t w, uint32_t h, int srgb);
 DAI_API dai_texture dai_render_texture_load(dai_renderer *r, const char *path, int srgb);
+/* The same picture, already in memory. A shipped game has its PNGs inside its
+ * own executable, so there is no path to open - the host reads the bytes out
+ * of the archive and hands them over. */
+DAI_API dai_texture dai_render_texture_load_memory(dai_renderer *r, const void *bytes,
+                                                   size_t len, int srgb);
 DAI_API uint32_t    dai_render_texture_count(dai_renderer *r);
 /* Destroys the image and hands the slot back. Any material still sampling it
  * is pointed at the default texture first, so no descriptor is left dangling.
@@ -492,6 +497,20 @@ typedef enum dai_cursor {
     DAI_WINDOW_CURSOR_HAND
 } dai_cursor;
 DAI_API void dai_window_cursor(dai_window *w, int cursor);
+
+/* Mouse look: the pointer disappears, stops being able to leave the window,
+ * and dai_window_mouse_delta reports how far it moved since the last frame.
+ * This is what every first person game needs and what no host can build from
+ * dai_window_mouse alone: an absolute position stops at the edge of the
+ * screen, so the player turns until the cursor hits the taskbar and then the
+ * world stops turning. Call with on = 0 to give the pointer back (a pause
+ * menu, Alt+Tab, Escape). Returns 1 if the backend could do it.
+ *
+ * The delta is in window pixels and is CONSUMED by the read: calling twice in
+ * one frame gives the second caller zero, not the same movement again. */
+DAI_API int  dai_window_mouse_capture(dai_window *w, int on);
+DAI_API int  dai_window_mouse_captured(dai_window *w);
+DAI_API void dai_window_mouse_delta(dai_window *w, int *dx, int *dy);
 
 /* Paints the OS title bar in a colour (0xAABBGGRR, the UI's packing). The one
  * strip of the window the engine does not draw itself is the caption, so a

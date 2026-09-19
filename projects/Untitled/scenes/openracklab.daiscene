@@ -1,0 +1,7242 @@
+daidalos-scene 1
+next-id 670
+
+node 1
+  name OpenRackLab
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 2
+  name Floor
+  parent 1
+  pos 0 -0.012 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 4 0.024 4
+end
+
+node 3
+  name Rack
+  parent 1
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 120
+  name Busbar48V
+  parent 1
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 128
+  name PowerShelf
+  parent 1
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 151
+  name Chassis1
+  parent 1
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 387
+  name Chassis2
+  parent 1
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 537
+  name Chassis3
+  parent 1
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 649
+  name TorSwitch
+  parent 1
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 664
+  name Lights
+  parent 1
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 4
+  name Post_00
+  parent 3
+  pos -0.287 0.475 0.013
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.026 0.95 0.026
+end
+
+node 5
+  name Post_01
+  parent 3
+  pos -0.287 0.475 0.987
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.026 0.95 0.026
+end
+
+node 6
+  name Post_10
+  parent 3
+  pos 0.287 0.475 0.013
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.026 0.95 0.026
+end
+
+node 7
+  name Post_11
+  parent 3
+  pos 0.287 0.475 0.987
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.026 0.95 0.026
+end
+
+node 8
+  name Rail0
+  parent 3
+  pos -0.236 0.475 0.042
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.02 0.95 0.03
+end
+
+node 9
+  name RailHole0_0
+  parent 3
+  pos -0.236 0.035 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 10
+  name RailHole0_1
+  parent 3
+  pos -0.236 0.049816668 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 11
+  name RailHole0_2
+  parent 3
+  pos -0.236 0.06463333 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 12
+  name RailHole0_3
+  parent 3
+  pos -0.236 0.07945 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 13
+  name RailHole0_4
+  parent 3
+  pos -0.236 0.09426667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 14
+  name RailHole0_5
+  parent 3
+  pos -0.236 0.10908333 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 15
+  name RailHole0_6
+  parent 3
+  pos -0.236 0.1239 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 16
+  name RailHole0_7
+  parent 3
+  pos -0.236 0.13871667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 17
+  name RailHole0_8
+  parent 3
+  pos -0.236 0.15353334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 18
+  name RailHole0_9
+  parent 3
+  pos -0.236 0.16835 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 19
+  name RailHole0_10
+  parent 3
+  pos -0.236 0.18316667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 20
+  name RailHole0_11
+  parent 3
+  pos -0.236 0.19798334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 21
+  name RailHole0_12
+  parent 3
+  pos -0.236 0.2128 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 22
+  name RailHole0_13
+  parent 3
+  pos -0.236 0.22761667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 23
+  name RailHole0_14
+  parent 3
+  pos -0.236 0.24243334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 24
+  name RailHole0_15
+  parent 3
+  pos -0.236 0.25725 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 25
+  name RailHole0_16
+  parent 3
+  pos -0.236 0.27206665 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 26
+  name RailHole0_17
+  parent 3
+  pos -0.236 0.28688332 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 27
+  name RailHole0_18
+  parent 3
+  pos -0.236 0.3017 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 28
+  name RailHole0_19
+  parent 3
+  pos -0.236 0.31651667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 29
+  name RailHole0_20
+  parent 3
+  pos -0.236 0.33133334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 30
+  name RailHole0_21
+  parent 3
+  pos -0.236 0.34615 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 31
+  name RailHole0_22
+  parent 3
+  pos -0.236 0.36096665 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 32
+  name RailHole0_23
+  parent 3
+  pos -0.236 0.37578332 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 33
+  name RailHole0_24
+  parent 3
+  pos -0.236 0.3906 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 34
+  name RailHole0_25
+  parent 3
+  pos -0.236 0.40541667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 35
+  name RailHole0_26
+  parent 3
+  pos -0.236 0.42023334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 36
+  name RailHole0_27
+  parent 3
+  pos -0.236 0.43505 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 37
+  name RailHole0_28
+  parent 3
+  pos -0.236 0.44986665 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 38
+  name RailHole0_29
+  parent 3
+  pos -0.236 0.46468332 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 39
+  name RailHole0_30
+  parent 3
+  pos -0.236 0.4795 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 40
+  name RailHole0_31
+  parent 3
+  pos -0.236 0.49431667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 41
+  name RailHole0_32
+  parent 3
+  pos -0.236 0.50913334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 42
+  name RailHole0_33
+  parent 3
+  pos -0.236 0.52395 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 43
+  name RailHole0_34
+  parent 3
+  pos -0.236 0.5387667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 44
+  name RailHole0_35
+  parent 3
+  pos -0.236 0.5535833 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 45
+  name RailHole0_36
+  parent 3
+  pos -0.236 0.5684 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 46
+  name RailHole0_37
+  parent 3
+  pos -0.236 0.58321667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 47
+  name RailHole0_38
+  parent 3
+  pos -0.236 0.5980333 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 48
+  name RailHole0_39
+  parent 3
+  pos -0.236 0.61285 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 49
+  name RailHole0_40
+  parent 3
+  pos -0.236 0.62766665 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 50
+  name RailHole0_41
+  parent 3
+  pos -0.236 0.64248335 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 51
+  name RailHole0_42
+  parent 3
+  pos -0.236 0.6573 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 52
+  name RailHole0_43
+  parent 3
+  pos -0.236 0.67211664 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 53
+  name RailHole0_44
+  parent 3
+  pos -0.236 0.68693334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 54
+  name RailHole0_45
+  parent 3
+  pos -0.236 0.70175 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 55
+  name RailHole0_46
+  parent 3
+  pos -0.236 0.7165667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 56
+  name RailHole0_47
+  parent 3
+  pos -0.236 0.7313833 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 57
+  name RailHole0_48
+  parent 3
+  pos -0.236 0.7462 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 58
+  name RailHole0_49
+  parent 3
+  pos -0.236 0.76101667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 59
+  name RailHole0_50
+  parent 3
+  pos -0.236 0.7758333 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 60
+  name RailHole0_51
+  parent 3
+  pos -0.236 0.79065 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 61
+  name RailHole0_52
+  parent 3
+  pos -0.236 0.80546665 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 62
+  name RailHole0_53
+  parent 3
+  pos -0.236 0.82028335 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 63
+  name Rail1
+  parent 3
+  pos 0.236 0.475 0.042
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.02 0.95 0.03
+end
+
+node 64
+  name RailHole1_0
+  parent 3
+  pos 0.236 0.035 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 65
+  name RailHole1_1
+  parent 3
+  pos 0.236 0.049816668 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 66
+  name RailHole1_2
+  parent 3
+  pos 0.236 0.06463333 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 67
+  name RailHole1_3
+  parent 3
+  pos 0.236 0.07945 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 68
+  name RailHole1_4
+  parent 3
+  pos 0.236 0.09426667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 69
+  name RailHole1_5
+  parent 3
+  pos 0.236 0.10908333 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 70
+  name RailHole1_6
+  parent 3
+  pos 0.236 0.1239 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 71
+  name RailHole1_7
+  parent 3
+  pos 0.236 0.13871667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 72
+  name RailHole1_8
+  parent 3
+  pos 0.236 0.15353334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 73
+  name RailHole1_9
+  parent 3
+  pos 0.236 0.16835 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 74
+  name RailHole1_10
+  parent 3
+  pos 0.236 0.18316667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 75
+  name RailHole1_11
+  parent 3
+  pos 0.236 0.19798334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 76
+  name RailHole1_12
+  parent 3
+  pos 0.236 0.2128 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 77
+  name RailHole1_13
+  parent 3
+  pos 0.236 0.22761667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 78
+  name RailHole1_14
+  parent 3
+  pos 0.236 0.24243334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 79
+  name RailHole1_15
+  parent 3
+  pos 0.236 0.25725 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 80
+  name RailHole1_16
+  parent 3
+  pos 0.236 0.27206665 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 81
+  name RailHole1_17
+  parent 3
+  pos 0.236 0.28688332 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 82
+  name RailHole1_18
+  parent 3
+  pos 0.236 0.3017 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 83
+  name RailHole1_19
+  parent 3
+  pos 0.236 0.31651667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 84
+  name RailHole1_20
+  parent 3
+  pos 0.236 0.33133334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 85
+  name RailHole1_21
+  parent 3
+  pos 0.236 0.34615 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 86
+  name RailHole1_22
+  parent 3
+  pos 0.236 0.36096665 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 87
+  name RailHole1_23
+  parent 3
+  pos 0.236 0.37578332 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 88
+  name RailHole1_24
+  parent 3
+  pos 0.236 0.3906 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 89
+  name RailHole1_25
+  parent 3
+  pos 0.236 0.40541667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 90
+  name RailHole1_26
+  parent 3
+  pos 0.236 0.42023334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 91
+  name RailHole1_27
+  parent 3
+  pos 0.236 0.43505 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 92
+  name RailHole1_28
+  parent 3
+  pos 0.236 0.44986665 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 93
+  name RailHole1_29
+  parent 3
+  pos 0.236 0.46468332 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 94
+  name RailHole1_30
+  parent 3
+  pos 0.236 0.4795 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 95
+  name RailHole1_31
+  parent 3
+  pos 0.236 0.49431667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 96
+  name RailHole1_32
+  parent 3
+  pos 0.236 0.50913334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 97
+  name RailHole1_33
+  parent 3
+  pos 0.236 0.52395 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 98
+  name RailHole1_34
+  parent 3
+  pos 0.236 0.5387667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 99
+  name RailHole1_35
+  parent 3
+  pos 0.236 0.5535833 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 100
+  name RailHole1_36
+  parent 3
+  pos 0.236 0.5684 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 101
+  name RailHole1_37
+  parent 3
+  pos 0.236 0.58321667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 102
+  name RailHole1_38
+  parent 3
+  pos 0.236 0.5980333 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 103
+  name RailHole1_39
+  parent 3
+  pos 0.236 0.61285 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 104
+  name RailHole1_40
+  parent 3
+  pos 0.236 0.62766665 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 105
+  name RailHole1_41
+  parent 3
+  pos 0.236 0.64248335 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 106
+  name RailHole1_42
+  parent 3
+  pos 0.236 0.6573 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 107
+  name RailHole1_43
+  parent 3
+  pos 0.236 0.67211664 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 108
+  name RailHole1_44
+  parent 3
+  pos 0.236 0.68693334 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 109
+  name RailHole1_45
+  parent 3
+  pos 0.236 0.70175 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 110
+  name RailHole1_46
+  parent 3
+  pos 0.236 0.7165667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 111
+  name RailHole1_47
+  parent 3
+  pos 0.236 0.7313833 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 112
+  name RailHole1_48
+  parent 3
+  pos 0.236 0.7462 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 113
+  name RailHole1_49
+  parent 3
+  pos 0.236 0.76101667 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 114
+  name RailHole1_50
+  parent 3
+  pos 0.236 0.7758333 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 115
+  name RailHole1_51
+  parent 3
+  pos 0.236 0.79065 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 116
+  name RailHole1_52
+  parent 3
+  pos 0.236 0.80546665 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 117
+  name RailHole1_53
+  parent 3
+  pos 0.236 0.82028335 0.03
+  nobody 1
+  nocollider 1
+  materials materials/orl_floor.daimat
+  blockout 1
+  bosize 0.022 0.006 0.006
+end
+
+node 118
+  name Rack.Top
+  parent 3
+  pos 0 0.964 0.5
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.6 0.028 1
+end
+
+node 119
+  name Rack.Back
+  parent 3
+  pos 0 0.475 0.994
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.6 0.95 0.012
+end
+
+node 121
+  name Bus.Plus
+  parent 120
+  pos -0.075 0.48 0.47
+  nobody 1
+  nocollider 1
+  materials materials/orl_bus_pos.daimat
+  blockout 1
+  bosize 0.04 0.86 0.008
+end
+
+node 122
+  name Bus.Minus
+  parent 120
+  pos 0.075 0.48 0.47
+  nobody 1
+  nocollider 1
+  materials materials/orl_bus_neg.daimat
+  blockout 1
+  bosize 0.04 0.86 0.008
+end
+
+node 123
+  name Bus.Iso0
+  parent 120
+  pos 0 0.09 0.484
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.24 0.022 0.02
+end
+
+node 124
+  name Bus.Iso1
+  parent 120
+  pos 0 0.29 0.484
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.24 0.022 0.02
+end
+
+node 125
+  name Bus.Iso2
+  parent 120
+  pos 0 0.49 0.484
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.24 0.022 0.02
+end
+
+node 126
+  name Bus.Iso3
+  parent 120
+  pos 0 0.69 0.484
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.24 0.022 0.02
+end
+
+node 127
+  name Bus.Iso4
+  parent 120
+  pos 0 0.89 0.484
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.24 0.022 0.02
+end
+
+node 129
+  name PS.Case
+  parent 128
+  pos 0 0.086675 0.41
+  nobody 1
+  nocollider 1
+  materials materials/orl_psu.daimat
+  blockout 1
+  bosize 0.448 0.13335 0.62
+end
+
+node 130
+  name PS.Rect0
+  parent 128
+  pos -0.178 0.086675 0.128
+  nobody 1
+  nocollider 1
+  materials materials/orl_psu_mod.daimat
+  blockout 1
+  bosize 0.062 0.11335 0.26
+end
+
+node 131
+  name PS.Fan0
+  parent 128
+  pos -0.178 0.086675 0.006
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.048 0.008 0.048
+  boseg 16
+end
+
+node 132
+  name PS.Led0
+  parent 128
+  pos -0.178 0.13735 0.004
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.008 0.004 0.004
+end
+
+node 133
+  name PS.Rect1
+  parent 128
+  pos -0.107 0.086675 0.128
+  nobody 1
+  nocollider 1
+  materials materials/orl_psu_mod.daimat
+  blockout 1
+  bosize 0.062 0.11335 0.26
+end
+
+node 134
+  name PS.Fan1
+  parent 128
+  pos -0.107 0.086675 0.006
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.048 0.008 0.048
+  boseg 16
+end
+
+node 135
+  name PS.Led1
+  parent 128
+  pos -0.107 0.13735 0.004
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.008 0.004 0.004
+end
+
+node 136
+  name PS.Rect2
+  parent 128
+  pos -0.036 0.086675 0.128
+  nobody 1
+  nocollider 1
+  materials materials/orl_psu_mod.daimat
+  blockout 1
+  bosize 0.062 0.11335 0.26
+end
+
+node 137
+  name PS.Fan2
+  parent 128
+  pos -0.036 0.086675 0.006
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.048 0.008 0.048
+  boseg 16
+end
+
+node 138
+  name PS.Led2
+  parent 128
+  pos -0.036 0.13735 0.004
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.008 0.004 0.004
+end
+
+node 139
+  name PS.Rect3
+  parent 128
+  pos 0.035 0.086675 0.128
+  nobody 1
+  nocollider 1
+  materials materials/orl_psu_mod.daimat
+  blockout 1
+  bosize 0.062 0.11335 0.26
+end
+
+node 140
+  name PS.Fan3
+  parent 128
+  pos 0.035 0.086675 0.006
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.048 0.008 0.048
+  boseg 16
+end
+
+node 141
+  name PS.Led3
+  parent 128
+  pos 0.035 0.13735 0.004
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.008 0.004 0.004
+end
+
+node 142
+  name PS.Rect4
+  parent 128
+  pos 0.106 0.086675 0.128
+  nobody 1
+  nocollider 1
+  materials materials/orl_psu_mod.daimat
+  blockout 1
+  bosize 0.062 0.11335 0.26
+end
+
+node 143
+  name PS.Fan4
+  parent 128
+  pos 0.106 0.086675 0.006
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.048 0.008 0.048
+  boseg 16
+end
+
+node 144
+  name PS.Led4
+  parent 128
+  pos 0.106 0.13735 0.004
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.008 0.004 0.004
+end
+
+node 145
+  name PS.Rect5
+  parent 128
+  pos 0.177 0.086675 0.128
+  nobody 1
+  nocollider 1
+  materials materials/orl_psu_mod.daimat
+  blockout 1
+  bosize 0.062 0.11335 0.26
+end
+
+node 146
+  name PS.Fan5
+  parent 128
+  pos 0.177 0.086675 0.006
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.048 0.008 0.048
+  boseg 16
+end
+
+node 147
+  name PS.Led5
+  parent 128
+  pos 0.177 0.13735 0.004
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.008 0.004 0.004
+end
+
+node 148
+  name PS.BusClamp
+  parent 128
+  pos 0 0.086675 0.45
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.22 0.05 0.046
+end
+
+node 149
+  name PS.AcInlet
+  parent 128
+  pos 0.174 0.05 0.97
+  nobody 1
+  nocollider 1
+  materials materials/orl_cable.daimat
+  blockout 1
+  bosize 0.06 0.04 0.04
+end
+
+node 150
+  name PS.AcCable
+  parent 128
+  pos 0.174 0.05 1.14
+  nobody 1
+  nocollider 1
+  materials materials/orl_cable.daimat
+  blockout 1
+  bosize 0.022 0.022 0.3
+end
+
+node 152
+  name Ch.Floor
+  parent 151
+  pos 0 0.16735 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.448 0.008 0.62
+end
+
+node 153
+  name Ch.Top
+  parent 151
+  pos 0 0.33715 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.448 0.008 0.62
+end
+
+node 154
+  name Ch.SideL
+  parent 151
+  pos -0.228 0.25225 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.008 0.1778 0.62
+end
+
+node 155
+  name Ch.SideR
+  parent 151
+  pos 0.228 0.25225 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.008 0.1778 0.62
+end
+
+node 156
+  name Ch.Guide0
+  parent 151
+  pos -0.2205 0.17435 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 157
+  name Ch.Guide1
+  parent 151
+  pos -0.1775 0.17435 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 158
+  name Ch.Guide2
+  parent 151
+  pos -0.1345 0.17435 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 159
+  name Ch.Guide3
+  parent 151
+  pos -0.0915 0.17435 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 160
+  name Ch.Guide4
+  parent 151
+  pos -0.0485 0.17435 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 161
+  name Ch.Guide5
+  parent 151
+  pos -0.0055 0.17435 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 162
+  name Ch.Guide6
+  parent 151
+  pos 0.0375 0.17435 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 163
+  name Ch.Guide7
+  parent 151
+  pos 0.0805 0.17435 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 164
+  name Ch.Guide8
+  parent 151
+  pos 0.1235 0.17435 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 165
+  name Ch.Guide9
+  parent 151
+  pos 0.1665 0.17435 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 166
+  name Ch.Guide10
+  parent 151
+  pos 0.2095 0.17435 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 167
+  name Backplane
+  parent 151
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 201
+  name Blade1S_SoC
+  parent 151
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 219
+  name Blade1S_SoC (1)
+  parent 151
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 237
+  name Blade1S_SoC (2)
+  parent 151
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 255
+  name Blade1S_Storage
+  parent 151
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 276
+  name Blade1S_SoC (3)
+  parent 151
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 294
+  name Blade1S_SoC (4)
+  parent 151
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 312
+  name Blade1S_SoC (5)
+  parent 151
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 330
+  name Blade1S_Storage (1)
+  parent 151
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 351
+  name Blade1S_SoC (6)
+  parent 151
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 369
+  name Blade1S_SoC (7)
+  parent 151
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 388
+  name Ch.Floor
+  parent 387
+  pos 0 0.35315 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.448 0.008 0.62
+end
+
+node 389
+  name Ch.Top
+  parent 387
+  pos 0 0.52295 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.448 0.008 0.62
+end
+
+node 390
+  name Ch.SideL
+  parent 387
+  pos -0.228 0.43805 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.008 0.1778 0.62
+end
+
+node 391
+  name Ch.SideR
+  parent 387
+  pos 0.228 0.43805 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.008 0.1778 0.62
+end
+
+node 392
+  name Ch.Guide0
+  parent 387
+  pos -0.2205 0.36015 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 393
+  name Ch.Guide1
+  parent 387
+  pos -0.1775 0.36015 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 394
+  name Ch.Guide2
+  parent 387
+  pos -0.1345 0.36015 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 395
+  name Ch.Guide3
+  parent 387
+  pos -0.0915 0.36015 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 396
+  name Ch.Guide4
+  parent 387
+  pos -0.0485 0.36015 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 397
+  name Ch.Guide5
+  parent 387
+  pos -0.0055 0.36015 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 398
+  name Ch.Guide6
+  parent 387
+  pos 0.0375 0.36015 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 399
+  name Ch.Guide7
+  parent 387
+  pos 0.0805 0.36015 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 400
+  name Ch.Guide8
+  parent 387
+  pos 0.1235 0.36015 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 401
+  name Ch.Guide9
+  parent 387
+  pos 0.1665 0.36015 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 402
+  name Ch.Guide10
+  parent 387
+  pos 0.2095 0.36015 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 403
+  name Backplane
+  parent 387
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 437
+  name Blade2S_MiniITX
+  parent 387
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 457
+  name Blade2S_MiniITX (1)
+  parent 387
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 477
+  name Blade2S_MiniITX (2)
+  parent 387
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 497
+  name Blade2S_MiniITX (3)
+  parent 387
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 517
+  name Blade2S_MiniITX (4)
+  parent 387
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 538
+  name Ch.Floor
+  parent 537
+  pos 0 0.53895 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.448 0.008 0.62
+end
+
+node 539
+  name Ch.Top
+  parent 537
+  pos 0 0.70875 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.448 0.008 0.62
+end
+
+node 540
+  name Ch.SideL
+  parent 537
+  pos -0.228 0.62385 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.008 0.1778 0.62
+end
+
+node 541
+  name Ch.SideR
+  parent 537
+  pos 0.228 0.62385 0.3
+  nobody 1
+  nocollider 1
+  materials materials/orl_chassis.daimat
+  blockout 1
+  bosize 0.008 0.1778 0.62
+end
+
+node 542
+  name Ch.Guide0
+  parent 537
+  pos -0.2205 0.54595 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 543
+  name Ch.Guide1
+  parent 537
+  pos -0.1775 0.54595 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 544
+  name Ch.Guide2
+  parent 537
+  pos -0.1345 0.54595 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 545
+  name Ch.Guide3
+  parent 537
+  pos -0.0915 0.54595 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 546
+  name Ch.Guide4
+  parent 537
+  pos -0.0485 0.54595 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 547
+  name Ch.Guide5
+  parent 537
+  pos -0.0055 0.54595 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 548
+  name Ch.Guide6
+  parent 537
+  pos 0.0375 0.54595 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 549
+  name Ch.Guide7
+  parent 537
+  pos 0.0805 0.54595 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 550
+  name Ch.Guide8
+  parent 537
+  pos 0.1235 0.54595 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 551
+  name Ch.Guide9
+  parent 537
+  pos 0.1665 0.54595 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 552
+  name Ch.Guide10
+  parent 537
+  pos 0.2095 0.54595 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.003 0.01 0.35
+end
+
+node 553
+  name Backplane
+  parent 537
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 587
+  name Blade4S_GPU
+  parent 537
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 609
+  name Blade4S_GPU (1)
+  parent 537
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 631
+  name Blade1S_SoC
+  parent 537
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 650
+  name SW.Case
+  parent 649
+  pos 0 0.746975 0.25
+  nobody 1
+  nocollider 1
+  materials materials/orl_switch.daimat
+  blockout 1
+  bosize 0.448 0.04445 0.42
+end
+
+node 651
+  name SW.Port0
+  parent 649
+  pos -0.203 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 652
+  name SW.Port1
+  parent 649
+  pos -0.169 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 653
+  name SW.Port2
+  parent 649
+  pos -0.135 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 654
+  name SW.Port3
+  parent 649
+  pos -0.101 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 655
+  name SW.Port4
+  parent 649
+  pos -0.067 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 656
+  name SW.Port5
+  parent 649
+  pos -0.033 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 657
+  name SW.Port6
+  parent 649
+  pos 0.001 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 658
+  name SW.Port7
+  parent 649
+  pos 0.035 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 659
+  name SW.Port8
+  parent 649
+  pos 0.069 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 660
+  name SW.Port9
+  parent 649
+  pos 0.103 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 661
+  name SW.Port10
+  parent 649
+  pos 0.137 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 662
+  name SW.Port11
+  parent 649
+  pos 0.171 0.746975 0.036
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.018 0.012 0.01
+end
+
+node 663
+  name SW.BusClamp
+  parent 649
+  pos 0 0.746975 0.45
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.2 0.03 0.046
+end
+
+node 665
+  name Sun
+  parent 664
+  rot -0.41448805 0.29261872 0.14271969 0.84982646
+  nobody 1
+  nocollider 1
+  light 3
+  lcolor 1 0.98 0.94
+  lpower 1.15
+  hidden 1
+end
+
+node 666
+  name Fill.Front
+  parent 664
+  pos 0 0.75 -0.55
+  nobody 1
+  nocollider 1
+  light 1
+  lcolor 0.85 0.9 1
+  lrange 2.2
+  lpower 2.6
+  hidden 1
+end
+
+node 667
+  name Fill.Low
+  parent 664
+  pos -0.45 0.22 -0.3
+  nobody 1
+  nocollider 1
+  light 1
+  lcolor 0.8 0.85 1
+  lrange 1.6
+  lpower 1.5
+  hidden 1
+end
+
+node 668
+  name Bus.Glow
+  parent 664
+  pos 0 0.5 0.41
+  nobody 1
+  nocollider 1
+  light 1
+  lcolor 1 0.45 0.3
+  lrange 0.9
+  lpower 1.6
+  hidden 1
+end
+
+node 669
+  name Slot.Glow
+  parent 664
+  pos 0 0.43915 -0.1
+  nobody 1
+  nocollider 1
+  light 1
+  lcolor 1 0.95 0.85
+  lrange 1.1
+  lpower 2
+  hidden 1
+end
+
+node 168
+  name BP.Board
+  parent 167
+  pos 0 0.25225 0.412
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.448 0.1638 0.016
+end
+
+node 169
+  name BP.ClampP
+  parent 167
+  pos -0.075 0.25225 0.454
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.046 0.055 0.03
+end
+
+node 170
+  name BP.ClampN
+  parent 167
+  pos 0.075 0.25225 0.454
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.046 0.055 0.03
+end
+
+node 171
+  name BP.Fet0
+  parent 167
+  pos -0.199 0.19335 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 172
+  name BP.Shunt0
+  parent 167
+  pos -0.199 0.22135 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 173
+  name BP.Ctrl0
+  parent 167
+  pos -0.199 0.24535 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 174
+  name BP.Fet1
+  parent 167
+  pos -0.156 0.19335 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 175
+  name BP.Shunt1
+  parent 167
+  pos -0.156 0.22135 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 176
+  name BP.Ctrl1
+  parent 167
+  pos -0.156 0.24535 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 177
+  name BP.Fet2
+  parent 167
+  pos -0.113 0.19335 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 178
+  name BP.Shunt2
+  parent 167
+  pos -0.113 0.22135 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 179
+  name BP.Ctrl2
+  parent 167
+  pos -0.113 0.24535 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 180
+  name BP.Fet3
+  parent 167
+  pos -0.07 0.19335 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 181
+  name BP.Shunt3
+  parent 167
+  pos -0.07 0.22135 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 182
+  name BP.Ctrl3
+  parent 167
+  pos -0.07 0.24535 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 183
+  name BP.Fet4
+  parent 167
+  pos -0.027 0.19335 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 184
+  name BP.Shunt4
+  parent 167
+  pos -0.027 0.22135 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 185
+  name BP.Ctrl4
+  parent 167
+  pos -0.027 0.24535 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 186
+  name BP.Fet5
+  parent 167
+  pos 0.016 0.19335 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 187
+  name BP.Shunt5
+  parent 167
+  pos 0.016 0.22135 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 188
+  name BP.Ctrl5
+  parent 167
+  pos 0.016 0.24535 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 189
+  name BP.Fet6
+  parent 167
+  pos 0.059 0.19335 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 190
+  name BP.Shunt6
+  parent 167
+  pos 0.059 0.22135 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 191
+  name BP.Ctrl6
+  parent 167
+  pos 0.059 0.24535 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 192
+  name BP.Fet7
+  parent 167
+  pos 0.102 0.19335 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 193
+  name BP.Shunt7
+  parent 167
+  pos 0.102 0.22135 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 194
+  name BP.Ctrl7
+  parent 167
+  pos 0.102 0.24535 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 195
+  name BP.Fet8
+  parent 167
+  pos 0.145 0.19335 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 196
+  name BP.Shunt8
+  parent 167
+  pos 0.145 0.22135 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 197
+  name BP.Ctrl8
+  parent 167
+  pos 0.145 0.24535 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 198
+  name BP.Fet9
+  parent 167
+  pos 0.188 0.19335 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 199
+  name BP.Shunt9
+  parent 167
+  pos 0.188 0.22135 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 200
+  name BP.Ctrl9
+  parent 167
+  pos 0.188 0.24535 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 202
+  name Blade1S_SoC.Tray
+  parent 201
+  pos -0.199 0.17535 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.038 0.006 0.33
+end
+
+node 203
+  name Blade1S_SoC.PCB
+  parent 201
+  pos -0.199 0.18335 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.032 0.004 0.31
+end
+
+node 204
+  name Blade1S_SoC.Front
+  parent 201
+  pos -0.199 0.24625 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade1s.daimat
+  blockout 1
+  bosize 0.038 0.1618 0.008
+end
+
+node 205
+  name Blade1S_SoC.Grip
+  parent 201
+  pos -0.199 0.19335 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.0209 0.012 0.014
+end
+
+node 206
+  name Blade1S_SoC.LedPwr
+  parent 201
+  pos -0.20736 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 207
+  name Blade1S_SoC.LedAct
+  parent 201
+  pos -0.1952 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 208
+  name Blade1S_SoC.DCDC
+  parent 201
+  pos -0.199 0.19735 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.026 0.024 0.06
+end
+
+node 209
+  name Blade1S_SoC.DCDCfin
+  parent 201
+  pos -0.199 0.21335 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.022 0.01 0.056
+end
+
+node 210
+  name Contacts
+  parent 201
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 215
+  name SoC.Module
+  parent 201
+  pos -0.199 0.19535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_soc.daimat
+  blockout 1
+  bosize 0.028 0.02 0.09
+end
+
+node 216
+  name SoC.Sink
+  parent 201
+  pos -0.199 0.21535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.024 0.022 0.08
+end
+
+node 217
+  name SoC.Ram
+  parent 201
+  pos -0.199 0.19135 0.265
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.024 0.01 0.03
+end
+
+node 218
+  name SoC.Nvme
+  parent 201
+  pos -0.199 0.18935 0.11
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 220
+  name Blade1S_SoC.Tray
+  parent 219
+  pos -0.156 0.17535 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.038 0.006 0.33
+end
+
+node 221
+  name Blade1S_SoC.PCB
+  parent 219
+  pos -0.156 0.18335 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.032 0.004 0.31
+end
+
+node 222
+  name Blade1S_SoC.Front
+  parent 219
+  pos -0.156 0.24625 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade1s.daimat
+  blockout 1
+  bosize 0.038 0.1618 0.008
+end
+
+node 223
+  name Blade1S_SoC.Grip
+  parent 219
+  pos -0.156 0.19335 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.0209 0.012 0.014
+end
+
+node 224
+  name Blade1S_SoC.LedPwr
+  parent 219
+  pos -0.16436 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 225
+  name Blade1S_SoC.LedAct
+  parent 219
+  pos -0.1522 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 226
+  name Blade1S_SoC.DCDC
+  parent 219
+  pos -0.156 0.19735 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.026 0.024 0.06
+end
+
+node 227
+  name Blade1S_SoC.DCDCfin
+  parent 219
+  pos -0.156 0.21335 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.022 0.01 0.056
+end
+
+node 228
+  name Contacts
+  parent 219
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 233
+  name SoC.Module
+  parent 219
+  pos -0.156 0.19535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_soc.daimat
+  blockout 1
+  bosize 0.028 0.02 0.09
+end
+
+node 234
+  name SoC.Sink
+  parent 219
+  pos -0.156 0.21535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.024 0.022 0.08
+end
+
+node 235
+  name SoC.Ram
+  parent 219
+  pos -0.156 0.19135 0.265
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.024 0.01 0.03
+end
+
+node 236
+  name SoC.Nvme
+  parent 219
+  pos -0.156 0.18935 0.11
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 238
+  name Blade1S_SoC.Tray
+  parent 237
+  pos -0.113 0.17535 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.038 0.006 0.33
+end
+
+node 239
+  name Blade1S_SoC.PCB
+  parent 237
+  pos -0.113 0.18335 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.032 0.004 0.31
+end
+
+node 240
+  name Blade1S_SoC.Front
+  parent 237
+  pos -0.113 0.24625 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade1s.daimat
+  blockout 1
+  bosize 0.038 0.1618 0.008
+end
+
+node 241
+  name Blade1S_SoC.Grip
+  parent 237
+  pos -0.113 0.19335 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.0209 0.012 0.014
+end
+
+node 242
+  name Blade1S_SoC.LedPwr
+  parent 237
+  pos -0.12136 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 243
+  name Blade1S_SoC.LedAct
+  parent 237
+  pos -0.1092 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 244
+  name Blade1S_SoC.DCDC
+  parent 237
+  pos -0.113 0.19735 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.026 0.024 0.06
+end
+
+node 245
+  name Blade1S_SoC.DCDCfin
+  parent 237
+  pos -0.113 0.21335 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.022 0.01 0.056
+end
+
+node 246
+  name Contacts
+  parent 237
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 251
+  name SoC.Module
+  parent 237
+  pos -0.113 0.19535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_soc.daimat
+  blockout 1
+  bosize 0.028 0.02 0.09
+end
+
+node 252
+  name SoC.Sink
+  parent 237
+  pos -0.113 0.21535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.024 0.022 0.08
+end
+
+node 253
+  name SoC.Ram
+  parent 237
+  pos -0.113 0.19135 0.265
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.024 0.01 0.03
+end
+
+node 254
+  name SoC.Nvme
+  parent 237
+  pos -0.113 0.18935 0.11
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 256
+  name Blade1S_Storage.Tray
+  parent 255
+  pos -0.07 0.17535 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.038 0.006 0.33
+end
+
+node 257
+  name Blade1S_Storage.PCB
+  parent 255
+  pos -0.07 0.18335 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.032 0.004 0.31
+end
+
+node 258
+  name Blade1S_Storage.Front
+  parent 255
+  pos -0.07 0.24625 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade1s.daimat
+  blockout 1
+  bosize 0.038 0.1618 0.008
+end
+
+node 259
+  name Blade1S_Storage.Grip
+  parent 255
+  pos -0.07 0.19335 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.0209 0.012 0.014
+end
+
+node 260
+  name Blade1S_Storage.LedPwr
+  parent 255
+  pos -0.07836 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 261
+  name Blade1S_Storage.LedAct
+  parent 255
+  pos -0.0662 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 262
+  name Blade1S_Storage.DCDC
+  parent 255
+  pos -0.07 0.19735 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.026 0.024 0.06
+end
+
+node 263
+  name Blade1S_Storage.DCDCfin
+  parent 255
+  pos -0.07 0.21335 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.022 0.01 0.056
+end
+
+node 264
+  name Contacts
+  parent 255
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 269
+  name SSD0
+  parent 255
+  pos -0.07 0.19135 0.095
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 270
+  name SSD1
+  parent 255
+  pos -0.07 0.19135 0.135
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 271
+  name SSD2
+  parent 255
+  pos -0.07 0.19135 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 272
+  name SSD3
+  parent 255
+  pos -0.07 0.19135 0.215
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 273
+  name SSD4
+  parent 255
+  pos -0.07 0.19135 0.255
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 274
+  name SSD5
+  parent 255
+  pos -0.07 0.19135 0.295
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 275
+  name Sto.Ctrl
+  parent 255
+  pos -0.07 0.19335 0.345
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.024 0.014 0.028
+end
+
+node 277
+  name Blade1S_SoC.Tray
+  parent 276
+  pos -0.027 0.17535 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.038 0.006 0.33
+end
+
+node 278
+  name Blade1S_SoC.PCB
+  parent 276
+  pos -0.027 0.18335 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.032 0.004 0.31
+end
+
+node 279
+  name Blade1S_SoC.Front
+  parent 276
+  pos -0.027 0.24625 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade1s.daimat
+  blockout 1
+  bosize 0.038 0.1618 0.008
+end
+
+node 280
+  name Blade1S_SoC.Grip
+  parent 276
+  pos -0.027 0.19335 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.0209 0.012 0.014
+end
+
+node 281
+  name Blade1S_SoC.LedPwr
+  parent 276
+  pos -0.03536 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 282
+  name Blade1S_SoC.LedAct
+  parent 276
+  pos -0.0232 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 283
+  name Blade1S_SoC.DCDC
+  parent 276
+  pos -0.027 0.19735 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.026 0.024 0.06
+end
+
+node 284
+  name Blade1S_SoC.DCDCfin
+  parent 276
+  pos -0.027 0.21335 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.022 0.01 0.056
+end
+
+node 285
+  name Contacts
+  parent 276
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 290
+  name SoC.Module
+  parent 276
+  pos -0.027 0.19535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_soc.daimat
+  blockout 1
+  bosize 0.028 0.02 0.09
+end
+
+node 291
+  name SoC.Sink
+  parent 276
+  pos -0.027 0.21535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.024 0.022 0.08
+end
+
+node 292
+  name SoC.Ram
+  parent 276
+  pos -0.027 0.19135 0.265
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.024 0.01 0.03
+end
+
+node 293
+  name SoC.Nvme
+  parent 276
+  pos -0.027 0.18935 0.11
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 295
+  name Blade1S_SoC.Tray
+  parent 294
+  pos 0.016 0.17535 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.038 0.006 0.33
+end
+
+node 296
+  name Blade1S_SoC.PCB
+  parent 294
+  pos 0.016 0.18335 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.032 0.004 0.31
+end
+
+node 297
+  name Blade1S_SoC.Front
+  parent 294
+  pos 0.016 0.24625 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade1s.daimat
+  blockout 1
+  bosize 0.038 0.1618 0.008
+end
+
+node 298
+  name Blade1S_SoC.Grip
+  parent 294
+  pos 0.016 0.19335 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.0209 0.012 0.014
+end
+
+node 299
+  name Blade1S_SoC.LedPwr
+  parent 294
+  pos 0.00764 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 300
+  name Blade1S_SoC.LedAct
+  parent 294
+  pos 0.0198 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 301
+  name Blade1S_SoC.DCDC
+  parent 294
+  pos 0.016 0.19735 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.026 0.024 0.06
+end
+
+node 302
+  name Blade1S_SoC.DCDCfin
+  parent 294
+  pos 0.016 0.21335 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.022 0.01 0.056
+end
+
+node 303
+  name Contacts
+  parent 294
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 308
+  name SoC.Module
+  parent 294
+  pos 0.016 0.19535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_soc.daimat
+  blockout 1
+  bosize 0.028 0.02 0.09
+end
+
+node 309
+  name SoC.Sink
+  parent 294
+  pos 0.016 0.21535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.024 0.022 0.08
+end
+
+node 310
+  name SoC.Ram
+  parent 294
+  pos 0.016 0.19135 0.265
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.024 0.01 0.03
+end
+
+node 311
+  name SoC.Nvme
+  parent 294
+  pos 0.016 0.18935 0.11
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 313
+  name Blade1S_SoC.Tray
+  parent 312
+  pos 0.059 0.17535 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.038 0.006 0.33
+end
+
+node 314
+  name Blade1S_SoC.PCB
+  parent 312
+  pos 0.059 0.18335 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.032 0.004 0.31
+end
+
+node 315
+  name Blade1S_SoC.Front
+  parent 312
+  pos 0.059 0.24625 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade1s.daimat
+  blockout 1
+  bosize 0.038 0.1618 0.008
+end
+
+node 316
+  name Blade1S_SoC.Grip
+  parent 312
+  pos 0.059 0.19335 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.0209 0.012 0.014
+end
+
+node 317
+  name Blade1S_SoC.LedPwr
+  parent 312
+  pos 0.05064 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 318
+  name Blade1S_SoC.LedAct
+  parent 312
+  pos 0.0628 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 319
+  name Blade1S_SoC.DCDC
+  parent 312
+  pos 0.059 0.19735 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.026 0.024 0.06
+end
+
+node 320
+  name Blade1S_SoC.DCDCfin
+  parent 312
+  pos 0.059 0.21335 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.022 0.01 0.056
+end
+
+node 321
+  name Contacts
+  parent 312
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 326
+  name SoC.Module
+  parent 312
+  pos 0.059 0.19535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_soc.daimat
+  blockout 1
+  bosize 0.028 0.02 0.09
+end
+
+node 327
+  name SoC.Sink
+  parent 312
+  pos 0.059 0.21535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.024 0.022 0.08
+end
+
+node 328
+  name SoC.Ram
+  parent 312
+  pos 0.059 0.19135 0.265
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.024 0.01 0.03
+end
+
+node 329
+  name SoC.Nvme
+  parent 312
+  pos 0.059 0.18935 0.11
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 331
+  name Blade1S_Storage.Tray
+  parent 330
+  pos 0.102 0.17535 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.038 0.006 0.33
+end
+
+node 332
+  name Blade1S_Storage.PCB
+  parent 330
+  pos 0.102 0.18335 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.032 0.004 0.31
+end
+
+node 333
+  name Blade1S_Storage.Front
+  parent 330
+  pos 0.102 0.24625 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade1s.daimat
+  blockout 1
+  bosize 0.038 0.1618 0.008
+end
+
+node 334
+  name Blade1S_Storage.Grip
+  parent 330
+  pos 0.102 0.19335 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.0209 0.012 0.014
+end
+
+node 335
+  name Blade1S_Storage.LedPwr
+  parent 330
+  pos 0.09364 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 336
+  name Blade1S_Storage.LedAct
+  parent 330
+  pos 0.1058 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 337
+  name Blade1S_Storage.DCDC
+  parent 330
+  pos 0.102 0.19735 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.026 0.024 0.06
+end
+
+node 338
+  name Blade1S_Storage.DCDCfin
+  parent 330
+  pos 0.102 0.21335 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.022 0.01 0.056
+end
+
+node 339
+  name Contacts
+  parent 330
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 344
+  name SSD0
+  parent 330
+  pos 0.102 0.19135 0.095
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 345
+  name SSD1
+  parent 330
+  pos 0.102 0.19135 0.135
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 346
+  name SSD2
+  parent 330
+  pos 0.102 0.19135 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 347
+  name SSD3
+  parent 330
+  pos 0.102 0.19135 0.215
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 348
+  name SSD4
+  parent 330
+  pos 0.102 0.19135 0.255
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 349
+  name SSD5
+  parent 330
+  pos 0.102 0.19135 0.295
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.026 0.01 0.034
+end
+
+node 350
+  name Sto.Ctrl
+  parent 330
+  pos 0.102 0.19335 0.345
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.024 0.014 0.028
+end
+
+node 352
+  name Blade1S_SoC.Tray
+  parent 351
+  pos 0.145 0.17535 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.038 0.006 0.33
+end
+
+node 353
+  name Blade1S_SoC.PCB
+  parent 351
+  pos 0.145 0.18335 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.032 0.004 0.31
+end
+
+node 354
+  name Blade1S_SoC.Front
+  parent 351
+  pos 0.145 0.24625 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade1s.daimat
+  blockout 1
+  bosize 0.038 0.1618 0.008
+end
+
+node 355
+  name Blade1S_SoC.Grip
+  parent 351
+  pos 0.145 0.19335 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.0209 0.012 0.014
+end
+
+node 356
+  name Blade1S_SoC.LedPwr
+  parent 351
+  pos 0.13664 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 357
+  name Blade1S_SoC.LedAct
+  parent 351
+  pos 0.1488 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 358
+  name Blade1S_SoC.DCDC
+  parent 351
+  pos 0.145 0.19735 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.026 0.024 0.06
+end
+
+node 359
+  name Blade1S_SoC.DCDCfin
+  parent 351
+  pos 0.145 0.21335 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.022 0.01 0.056
+end
+
+node 360
+  name Contacts
+  parent 351
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 365
+  name SoC.Module
+  parent 351
+  pos 0.145 0.19535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_soc.daimat
+  blockout 1
+  bosize 0.028 0.02 0.09
+end
+
+node 366
+  name SoC.Sink
+  parent 351
+  pos 0.145 0.21535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.024 0.022 0.08
+end
+
+node 367
+  name SoC.Ram
+  parent 351
+  pos 0.145 0.19135 0.265
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.024 0.01 0.03
+end
+
+node 368
+  name SoC.Nvme
+  parent 351
+  pos 0.145 0.18935 0.11
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 370
+  name Blade1S_SoC.Tray
+  parent 369
+  pos 0.188 0.17535 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.038 0.006 0.33
+end
+
+node 371
+  name Blade1S_SoC.PCB
+  parent 369
+  pos 0.188 0.18335 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.032 0.004 0.31
+end
+
+node 372
+  name Blade1S_SoC.Front
+  parent 369
+  pos 0.188 0.24625 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade1s.daimat
+  blockout 1
+  bosize 0.038 0.1618 0.008
+end
+
+node 373
+  name Blade1S_SoC.Grip
+  parent 369
+  pos 0.188 0.19335 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.0209 0.012 0.014
+end
+
+node 374
+  name Blade1S_SoC.LedPwr
+  parent 369
+  pos 0.17964 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 375
+  name Blade1S_SoC.LedAct
+  parent 369
+  pos 0.1918 0.31115 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 376
+  name Blade1S_SoC.DCDC
+  parent 369
+  pos 0.188 0.19735 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.026 0.024 0.06
+end
+
+node 377
+  name Blade1S_SoC.DCDCfin
+  parent 369
+  pos 0.188 0.21335 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.022 0.01 0.056
+end
+
+node 378
+  name Contacts
+  parent 369
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 383
+  name SoC.Module
+  parent 369
+  pos 0.188 0.19535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_soc.daimat
+  blockout 1
+  bosize 0.028 0.02 0.09
+end
+
+node 384
+  name SoC.Sink
+  parent 369
+  pos 0.188 0.21535 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.024 0.022 0.08
+end
+
+node 385
+  name SoC.Ram
+  parent 369
+  pos 0.188 0.19135 0.265
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.024 0.01 0.03
+end
+
+node 386
+  name SoC.Nvme
+  parent 369
+  pos 0.188 0.18935 0.11
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 404
+  name BP.Board
+  parent 403
+  pos 0 0.43805 0.412
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.448 0.1638 0.016
+end
+
+node 405
+  name BP.ClampP
+  parent 403
+  pos -0.075 0.43805 0.454
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.046 0.055 0.03
+end
+
+node 406
+  name BP.ClampN
+  parent 403
+  pos 0.075 0.43805 0.454
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.046 0.055 0.03
+end
+
+node 407
+  name BP.Fet0
+  parent 403
+  pos -0.199 0.37915 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 408
+  name BP.Shunt0
+  parent 403
+  pos -0.199 0.40715 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 409
+  name BP.Ctrl0
+  parent 403
+  pos -0.199 0.43115 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 410
+  name BP.Fet1
+  parent 403
+  pos -0.156 0.37915 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 411
+  name BP.Shunt1
+  parent 403
+  pos -0.156 0.40715 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 412
+  name BP.Ctrl1
+  parent 403
+  pos -0.156 0.43115 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 413
+  name BP.Fet2
+  parent 403
+  pos -0.113 0.37915 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 414
+  name BP.Shunt2
+  parent 403
+  pos -0.113 0.40715 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 415
+  name BP.Ctrl2
+  parent 403
+  pos -0.113 0.43115 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 416
+  name BP.Fet3
+  parent 403
+  pos -0.07 0.37915 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 417
+  name BP.Shunt3
+  parent 403
+  pos -0.07 0.40715 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 418
+  name BP.Ctrl3
+  parent 403
+  pos -0.07 0.43115 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 419
+  name BP.Fet4
+  parent 403
+  pos -0.027 0.37915 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 420
+  name BP.Shunt4
+  parent 403
+  pos -0.027 0.40715 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 421
+  name BP.Ctrl4
+  parent 403
+  pos -0.027 0.43115 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 422
+  name BP.Fet5
+  parent 403
+  pos 0.016 0.37915 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 423
+  name BP.Shunt5
+  parent 403
+  pos 0.016 0.40715 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 424
+  name BP.Ctrl5
+  parent 403
+  pos 0.016 0.43115 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 425
+  name BP.Fet6
+  parent 403
+  pos 0.059 0.37915 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 426
+  name BP.Shunt6
+  parent 403
+  pos 0.059 0.40715 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 427
+  name BP.Ctrl6
+  parent 403
+  pos 0.059 0.43115 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 428
+  name BP.Fet7
+  parent 403
+  pos 0.102 0.37915 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 429
+  name BP.Shunt7
+  parent 403
+  pos 0.102 0.40715 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 430
+  name BP.Ctrl7
+  parent 403
+  pos 0.102 0.43115 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 431
+  name BP.Fet8
+  parent 403
+  pos 0.145 0.37915 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 432
+  name BP.Shunt8
+  parent 403
+  pos 0.145 0.40715 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 433
+  name BP.Ctrl8
+  parent 403
+  pos 0.145 0.43115 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 434
+  name BP.Fet9
+  parent 403
+  pos 0.188 0.37915 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 435
+  name BP.Shunt9
+  parent 403
+  pos 0.188 0.40715 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 436
+  name BP.Ctrl9
+  parent 403
+  pos 0.188 0.43115 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 438
+  name Blade2S_MiniITX.Tray
+  parent 437
+  pos -0.1775 0.36115 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.081 0.006 0.33
+end
+
+node 439
+  name Blade2S_MiniITX.PCB
+  parent 437
+  pos -0.1775 0.36915 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.075 0.004 0.31
+end
+
+node 440
+  name Blade2S_MiniITX.Front
+  parent 437
+  pos -0.1775 0.43205 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade2s.daimat
+  blockout 1
+  bosize 0.081 0.1618 0.008
+end
+
+node 441
+  name Blade2S_MiniITX.Grip
+  parent 437
+  pos -0.1775 0.37915 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.04455 0.012 0.014
+end
+
+node 442
+  name Blade2S_MiniITX.LedPwr
+  parent 437
+  pos -0.19532 0.49695 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 443
+  name Blade2S_MiniITX.LedAct
+  parent 437
+  pos -0.1694 0.49695 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 444
+  name Blade2S_MiniITX.DCDC
+  parent 437
+  pos -0.1775 0.38315 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.069 0.024 0.06
+end
+
+node 445
+  name Blade2S_MiniITX.DCDCfin
+  parent 437
+  pos -0.1775 0.39915 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.065 0.01 0.056
+end
+
+node 446
+  name Contacts
+  parent 437
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 451
+  name ITX.Board
+  parent 437
+  pos -0.1775 0.37115 0.205
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.069 0.004 0.17
+end
+
+node 452
+  name ITX.Cooler
+  parent 437
+  pos -0.1895 0.41115 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 2
+  bosize 0.076 0.07 0.076
+  boseg 16
+end
+
+node 453
+  name ITX.Ram0
+  parent 437
+  pos -0.1475 0.39915 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.008 0.052 0.028
+end
+
+node 454
+  name ITX.Ram1
+  parent 437
+  pos -0.1355 0.39915 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.008 0.052 0.028
+end
+
+node 455
+  name ITX.P12VO
+  parent 437
+  pos -0.2075 0.37915 0.305
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.03 0.014 0.012
+end
+
+node 456
+  name ITX.Nvme
+  parent 437
+  pos -0.1575 0.37515 0.27
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 458
+  name Blade2S_MiniITX.Tray
+  parent 457
+  pos -0.0915 0.36115 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.081 0.006 0.33
+end
+
+node 459
+  name Blade2S_MiniITX.PCB
+  parent 457
+  pos -0.0915 0.36915 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.075 0.004 0.31
+end
+
+node 460
+  name Blade2S_MiniITX.Front
+  parent 457
+  pos -0.0915 0.43205 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade2s.daimat
+  blockout 1
+  bosize 0.081 0.1618 0.008
+end
+
+node 461
+  name Blade2S_MiniITX.Grip
+  parent 457
+  pos -0.0915 0.37915 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.04455 0.012 0.014
+end
+
+node 462
+  name Blade2S_MiniITX.LedPwr
+  parent 457
+  pos -0.10932 0.49695 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 463
+  name Blade2S_MiniITX.LedAct
+  parent 457
+  pos -0.0834 0.49695 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 464
+  name Blade2S_MiniITX.DCDC
+  parent 457
+  pos -0.0915 0.38315 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.069 0.024 0.06
+end
+
+node 465
+  name Blade2S_MiniITX.DCDCfin
+  parent 457
+  pos -0.0915 0.39915 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.065 0.01 0.056
+end
+
+node 466
+  name Contacts
+  parent 457
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 471
+  name ITX.Board
+  parent 457
+  pos -0.0915 0.37115 0.205
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.069 0.004 0.17
+end
+
+node 472
+  name ITX.Cooler
+  parent 457
+  pos -0.1035 0.41115 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 2
+  bosize 0.076 0.07 0.076
+  boseg 16
+end
+
+node 473
+  name ITX.Ram0
+  parent 457
+  pos -0.0615 0.39915 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.008 0.052 0.028
+end
+
+node 474
+  name ITX.Ram1
+  parent 457
+  pos -0.0495 0.39915 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.008 0.052 0.028
+end
+
+node 475
+  name ITX.P12VO
+  parent 457
+  pos -0.1215 0.37915 0.305
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.03 0.014 0.012
+end
+
+node 476
+  name ITX.Nvme
+  parent 457
+  pos -0.0715 0.37515 0.27
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 478
+  name Blade2S_MiniITX.Tray
+  parent 477
+  pos -0.0055 0.36115 0.005
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.081 0.006 0.33
+end
+
+node 479
+  name Blade2S_MiniITX.PCB
+  parent 477
+  pos -0.0055 0.36915 0.005
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.075 0.004 0.31
+end
+
+node 480
+  name Blade2S_MiniITX.Front
+  parent 477
+  pos -0.0055 0.43205 -0.166
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade2s.daimat
+  blockout 1
+  bosize 0.081 0.1618 0.008
+end
+
+node 481
+  name Blade2S_MiniITX.Grip
+  parent 477
+  pos -0.0055 0.37915 -0.176
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.04455 0.012 0.014
+end
+
+node 482
+  name Blade2S_MiniITX.LedPwr
+  parent 477
+  pos -0.02332 0.49695 -0.172
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 483
+  name Blade2S_MiniITX.LedAct
+  parent 477
+  pos 0.0026 0.49695 -0.172
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 484
+  name Blade2S_MiniITX.DCDC
+  parent 477
+  pos -0.0055 0.38315 0.115
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.069 0.024 0.06
+end
+
+node 485
+  name Blade2S_MiniITX.DCDCfin
+  parent 477
+  pos -0.0055 0.39915 0.115
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.065 0.01 0.056
+end
+
+node 486
+  name Contacts
+  parent 477
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 491
+  name ITX.Board
+  parent 477
+  pos -0.0055 0.37115 -0.01
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.069 0.004 0.17
+end
+
+node 492
+  name ITX.Cooler
+  parent 477
+  pos -0.0175 0.41115 -0.04
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 2
+  bosize 0.076 0.07 0.076
+  boseg 16
+end
+
+node 493
+  name ITX.Ram0
+  parent 477
+  pos 0.0245 0.39915 -0.04
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.008 0.052 0.028
+end
+
+node 494
+  name ITX.Ram1
+  parent 477
+  pos 0.0365 0.39915 -0.04
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.008 0.052 0.028
+end
+
+node 495
+  name ITX.P12VO
+  parent 477
+  pos -0.0355 0.37915 0.09
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.03 0.014 0.012
+end
+
+node 496
+  name ITX.Nvme
+  parent 477
+  pos 0.0145 0.37515 0.055
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 498
+  name Blade2S_MiniITX.Tray
+  parent 497
+  pos 0.0805 0.36115 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.081 0.006 0.33
+end
+
+node 499
+  name Blade2S_MiniITX.PCB
+  parent 497
+  pos 0.0805 0.36915 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.075 0.004 0.31
+end
+
+node 500
+  name Blade2S_MiniITX.Front
+  parent 497
+  pos 0.0805 0.43205 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade2s.daimat
+  blockout 1
+  bosize 0.081 0.1618 0.008
+end
+
+node 501
+  name Blade2S_MiniITX.Grip
+  parent 497
+  pos 0.0805 0.37915 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.04455 0.012 0.014
+end
+
+node 502
+  name Blade2S_MiniITX.LedPwr
+  parent 497
+  pos 0.06268 0.49695 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 503
+  name Blade2S_MiniITX.LedAct
+  parent 497
+  pos 0.0886 0.49695 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 504
+  name Blade2S_MiniITX.DCDC
+  parent 497
+  pos 0.0805 0.38315 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.069 0.024 0.06
+end
+
+node 505
+  name Blade2S_MiniITX.DCDCfin
+  parent 497
+  pos 0.0805 0.39915 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.065 0.01 0.056
+end
+
+node 506
+  name Contacts
+  parent 497
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 511
+  name ITX.Board
+  parent 497
+  pos 0.0805 0.37115 0.205
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.069 0.004 0.17
+end
+
+node 512
+  name ITX.Cooler
+  parent 497
+  pos 0.0685 0.41115 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 2
+  bosize 0.076 0.07 0.076
+  boseg 16
+end
+
+node 513
+  name ITX.Ram0
+  parent 497
+  pos 0.1105 0.39915 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.008 0.052 0.028
+end
+
+node 514
+  name ITX.Ram1
+  parent 497
+  pos 0.1225 0.39915 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.008 0.052 0.028
+end
+
+node 515
+  name ITX.P12VO
+  parent 497
+  pos 0.0505 0.37915 0.305
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.03 0.014 0.012
+end
+
+node 516
+  name ITX.Nvme
+  parent 497
+  pos 0.1005 0.37515 0.27
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 518
+  name Blade2S_MiniITX.Tray
+  parent 517
+  pos 0.1665 0.36115 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.081 0.006 0.33
+end
+
+node 519
+  name Blade2S_MiniITX.PCB
+  parent 517
+  pos 0.1665 0.36915 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.075 0.004 0.31
+end
+
+node 520
+  name Blade2S_MiniITX.Front
+  parent 517
+  pos 0.1665 0.43205 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade2s.daimat
+  blockout 1
+  bosize 0.081 0.1618 0.008
+end
+
+node 521
+  name Blade2S_MiniITX.Grip
+  parent 517
+  pos 0.1665 0.37915 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.04455 0.012 0.014
+end
+
+node 522
+  name Blade2S_MiniITX.LedPwr
+  parent 517
+  pos 0.14868 0.49695 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 523
+  name Blade2S_MiniITX.LedAct
+  parent 517
+  pos 0.1746 0.49695 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 524
+  name Blade2S_MiniITX.DCDC
+  parent 517
+  pos 0.1665 0.38315 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.069 0.024 0.06
+end
+
+node 525
+  name Blade2S_MiniITX.DCDCfin
+  parent 517
+  pos 0.1665 0.39915 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.065 0.01 0.056
+end
+
+node 526
+  name Contacts
+  parent 517
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 531
+  name ITX.Board
+  parent 517
+  pos 0.1665 0.37115 0.205
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.069 0.004 0.17
+end
+
+node 532
+  name ITX.Cooler
+  parent 517
+  pos 0.1545 0.41115 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 2
+  bosize 0.076 0.07 0.076
+  boseg 16
+end
+
+node 533
+  name ITX.Ram0
+  parent 517
+  pos 0.1965 0.39915 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.008 0.052 0.028
+end
+
+node 534
+  name ITX.Ram1
+  parent 517
+  pos 0.2085 0.39915 0.175
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.008 0.052 0.028
+end
+
+node 535
+  name ITX.P12VO
+  parent 517
+  pos 0.1365 0.37915 0.305
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.03 0.014 0.012
+end
+
+node 536
+  name ITX.Nvme
+  parent 517
+  pos 0.1865 0.37515 0.27
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 554
+  name BP.Board
+  parent 553
+  pos 0 0.62385 0.412
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.448 0.1638 0.016
+end
+
+node 555
+  name BP.ClampP
+  parent 553
+  pos -0.075 0.62385 0.454
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.046 0.055 0.03
+end
+
+node 556
+  name BP.ClampN
+  parent 553
+  pos 0.075 0.62385 0.454
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.046 0.055 0.03
+end
+
+node 557
+  name BP.Fet0
+  parent 553
+  pos -0.199 0.56495 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 558
+  name BP.Shunt0
+  parent 553
+  pos -0.199 0.59295 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 559
+  name BP.Ctrl0
+  parent 553
+  pos -0.199 0.61695 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 560
+  name BP.Fet1
+  parent 553
+  pos -0.156 0.56495 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 561
+  name BP.Shunt1
+  parent 553
+  pos -0.156 0.59295 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 562
+  name BP.Ctrl1
+  parent 553
+  pos -0.156 0.61695 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 563
+  name BP.Fet2
+  parent 553
+  pos -0.113 0.56495 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 564
+  name BP.Shunt2
+  parent 553
+  pos -0.113 0.59295 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 565
+  name BP.Ctrl2
+  parent 553
+  pos -0.113 0.61695 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 566
+  name BP.Fet3
+  parent 553
+  pos -0.07 0.56495 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 567
+  name BP.Shunt3
+  parent 553
+  pos -0.07 0.59295 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 568
+  name BP.Ctrl3
+  parent 553
+  pos -0.07 0.61695 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 569
+  name BP.Fet4
+  parent 553
+  pos -0.027 0.56495 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 570
+  name BP.Shunt4
+  parent 553
+  pos -0.027 0.59295 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 571
+  name BP.Ctrl4
+  parent 553
+  pos -0.027 0.61695 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 572
+  name BP.Fet5
+  parent 553
+  pos 0.016 0.56495 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 573
+  name BP.Shunt5
+  parent 553
+  pos 0.016 0.59295 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 574
+  name BP.Ctrl5
+  parent 553
+  pos 0.016 0.61695 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 575
+  name BP.Fet6
+  parent 553
+  pos 0.059 0.56495 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 576
+  name BP.Shunt6
+  parent 553
+  pos 0.059 0.59295 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 577
+  name BP.Ctrl6
+  parent 553
+  pos 0.059 0.61695 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 578
+  name BP.Fet7
+  parent 553
+  pos 0.102 0.56495 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 579
+  name BP.Shunt7
+  parent 553
+  pos 0.102 0.59295 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 580
+  name BP.Ctrl7
+  parent 553
+  pos 0.102 0.61695 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 581
+  name BP.Fet8
+  parent 553
+  pos 0.145 0.56495 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 582
+  name BP.Shunt8
+  parent 553
+  pos 0.145 0.59295 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 583
+  name BP.Ctrl8
+  parent 553
+  pos 0.145 0.61695 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 584
+  name BP.Fet9
+  parent 553
+  pos 0.188 0.56495 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.014 0.02 0.008
+end
+
+node 585
+  name BP.Shunt9
+  parent 553
+  pos 0.188 0.59295 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.012 0.008 0.006
+end
+
+node 586
+  name BP.Ctrl9
+  parent 553
+  pos 0.188 0.61695 0.4
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.012 0.012 0.006
+end
+
+node 588
+  name Blade4S_GPU.Tray
+  parent 587
+  pos -0.1365 0.54695 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.163 0.006 0.33
+end
+
+node 589
+  name Blade4S_GPU.PCB
+  parent 587
+  pos -0.1365 0.55495 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.157 0.004 0.31
+end
+
+node 590
+  name Blade4S_GPU.Front
+  parent 587
+  pos -0.1365 0.61785 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade4s.daimat
+  blockout 1
+  bosize 0.163 0.1618 0.008
+end
+
+node 591
+  name Blade4S_GPU.Grip
+  parent 587
+  pos -0.1365 0.56495 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.08965 0.012 0.014
+end
+
+node 592
+  name Blade4S_GPU.LedPwr
+  parent 587
+  pos -0.17236 0.68275 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 593
+  name Blade4S_GPU.LedAct
+  parent 587
+  pos -0.1202 0.68275 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 594
+  name Blade4S_GPU.DCDC
+  parent 587
+  pos -0.1365 0.56895 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.151 0.024 0.06
+end
+
+node 595
+  name Blade4S_GPU.DCDCfin
+  parent 587
+  pos -0.1365 0.58495 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.147 0.01 0.056
+end
+
+node 596
+  name Contacts
+  parent 587
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 601
+  name GPU.Board
+  parent 587
+  pos -0.1365 0.55695 0.215
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.149 0.005 0.23
+end
+
+node 602
+  name GPU.Card
+  parent 587
+  pos -0.1665 0.59495 0.205
+  nobody 1
+  nocollider 1
+  materials materials/orl_gpu.daimat
+  blockout 1
+  bosize 0.07 0.07 0.21
+end
+
+node 603
+  name GPU.Sink
+  parent 587
+  pos -0.1665 0.63295 0.205
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.066 0.014 0.2
+end
+
+node 604
+  name GPU.Fan0
+  parent 587
+  pos -0.1665 0.63695 0.13
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.056 0.006 0.056
+  boseg 16
+end
+
+node 605
+  name GPU.Fan1
+  parent 587
+  pos -0.1665 0.63695 0.2
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.056 0.006 0.056
+  boseg 16
+end
+
+node 606
+  name GPU.Fan2
+  parent 587
+  pos -0.1665 0.63695 0.27
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.056 0.006 0.056
+  boseg 16
+end
+
+node 607
+  name GPU.Cpu
+  parent 587
+  pos -0.0915 0.58295 0.165
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.055 0.046 0.055
+end
+
+node 608
+  name GPU.Ram
+  parent 587
+  pos -0.0915 0.57895 0.245
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.048 0.038 0.026
+end
+
+node 610
+  name Blade4S_GPU.Tray
+  parent 609
+  pos 0.0355 0.54695 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.163 0.006 0.33
+end
+
+node 611
+  name Blade4S_GPU.PCB
+  parent 609
+  pos 0.0355 0.55495 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.157 0.004 0.31
+end
+
+node 612
+  name Blade4S_GPU.Front
+  parent 609
+  pos 0.0355 0.61785 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade4s.daimat
+  blockout 1
+  bosize 0.163 0.1618 0.008
+end
+
+node 613
+  name Blade4S_GPU.Grip
+  parent 609
+  pos 0.0355 0.56495 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.08965 0.012 0.014
+end
+
+node 614
+  name Blade4S_GPU.LedPwr
+  parent 609
+  pos -0.00036 0.68275 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 615
+  name Blade4S_GPU.LedAct
+  parent 609
+  pos 0.0518 0.68275 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 616
+  name Blade4S_GPU.DCDC
+  parent 609
+  pos 0.0355 0.56895 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.151 0.024 0.06
+end
+
+node 617
+  name Blade4S_GPU.DCDCfin
+  parent 609
+  pos 0.0355 0.58495 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.147 0.01 0.056
+end
+
+node 618
+  name Contacts
+  parent 609
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 623
+  name GPU.Board
+  parent 609
+  pos 0.0355 0.55695 0.215
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.149 0.005 0.23
+end
+
+node 624
+  name GPU.Card
+  parent 609
+  pos 0.0055 0.59495 0.205
+  nobody 1
+  nocollider 1
+  materials materials/orl_gpu.daimat
+  blockout 1
+  bosize 0.07 0.07 0.21
+end
+
+node 625
+  name GPU.Sink
+  parent 609
+  pos 0.0055 0.63295 0.205
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.066 0.014 0.2
+end
+
+node 626
+  name GPU.Fan0
+  parent 609
+  pos 0.0055 0.63695 0.13
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.056 0.006 0.056
+  boseg 16
+end
+
+node 627
+  name GPU.Fan1
+  parent 609
+  pos 0.0055 0.63695 0.2
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.056 0.006 0.056
+  boseg 16
+end
+
+node 628
+  name GPU.Fan2
+  parent 609
+  pos 0.0055 0.63695 0.27
+  nobody 1
+  nocollider 1
+  materials materials/orl_fan.daimat
+  blockout 2
+  bosize 0.056 0.006 0.056
+  boseg 16
+end
+
+node 629
+  name GPU.Cpu
+  parent 609
+  pos 0.0805 0.58295 0.165
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.055 0.046 0.055
+end
+
+node 630
+  name GPU.Ram
+  parent 609
+  pos 0.0805 0.57895 0.245
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.048 0.038 0.026
+end
+
+node 632
+  name Blade1S_SoC.Tray
+  parent 631
+  pos 0.145 0.54695 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_rack.daimat
+  blockout 1
+  bosize 0.038 0.006 0.33
+end
+
+node 633
+  name Blade1S_SoC.PCB
+  parent 631
+  pos 0.145 0.55495 0.22
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb.daimat
+  blockout 1
+  bosize 0.032 0.004 0.31
+end
+
+node 634
+  name Blade1S_SoC.Front
+  parent 631
+  pos 0.145 0.61785 0.049
+  nobody 1
+  nocollider 1
+  materials materials/orl_blade1s.daimat
+  blockout 1
+  bosize 0.038 0.1618 0.008
+end
+
+node 635
+  name Blade1S_SoC.Grip
+  parent 631
+  pos 0.145 0.56495 0.039
+  nobody 1
+  nocollider 1
+  materials materials/orl_frame.daimat
+  blockout 1
+  bosize 0.0209 0.012 0.014
+end
+
+node 636
+  name Blade1S_SoC.LedPwr
+  parent 631
+  pos 0.13664 0.68275 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_grn.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 637
+  name Blade1S_SoC.LedAct
+  parent 631
+  pos 0.1488 0.68275 0.043
+  nobody 1
+  nocollider 1
+  materials materials/orl_led_amb.daimat
+  blockout 1
+  bosize 0.006 0.006 0.004
+end
+
+node 638
+  name Blade1S_SoC.DCDC
+  parent 631
+  pos 0.145 0.56895 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_dcdc.daimat
+  blockout 1
+  bosize 0.026 0.024 0.06
+end
+
+node 639
+  name Blade1S_SoC.DCDCfin
+  parent 631
+  pos 0.145 0.58495 0.33
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.022 0.01 0.056
+end
+
+node 640
+  name Contacts
+  parent 631
+  nobody 1
+  nocollider 1
+  hidden 1
+end
+
+node 645
+  name SoC.Module
+  parent 631
+  pos 0.145 0.56695 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_soc.daimat
+  blockout 1
+  bosize 0.028 0.02 0.09
+end
+
+node 646
+  name SoC.Sink
+  parent 631
+  pos 0.145 0.58695 0.185
+  nobody 1
+  nocollider 1
+  materials materials/orl_heatsink.daimat
+  blockout 1
+  bosize 0.024 0.022 0.08
+end
+
+node 647
+  name SoC.Ram
+  parent 631
+  pos 0.145 0.56295 0.265
+  nobody 1
+  nocollider 1
+  materials materials/orl_pcb_dark.daimat
+  blockout 1
+  bosize 0.024 0.01 0.03
+end
+
+node 648
+  name SoC.Nvme
+  parent 631
+  pos 0.145 0.56095 0.11
+  nobody 1
+  nocollider 1
+  materials materials/orl_ssd.daimat
+  blockout 1
+  bosize 0.022 0.005 0.07
+end
+
+node 211
+  name C1.GND
+  parent 210
+  pos -0.2104 0.19335 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 212
+  name C2.Precharge
+  parent 210
+  pos -0.2028 0.19335 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 213
+  name C3.Power48
+  parent 210
+  pos -0.19444 0.19335 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 214
+  name C4.Present
+  parent 210
+  pos -0.18684 0.19335 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 229
+  name C1.GND
+  parent 228
+  pos -0.1674 0.19335 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 230
+  name C2.Precharge
+  parent 228
+  pos -0.1598 0.19335 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 231
+  name C3.Power48
+  parent 228
+  pos -0.15144 0.19335 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 232
+  name C4.Present
+  parent 228
+  pos -0.14384 0.19335 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 247
+  name C1.GND
+  parent 246
+  pos -0.1244 0.19335 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 248
+  name C2.Precharge
+  parent 246
+  pos -0.1168 0.19335 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 249
+  name C3.Power48
+  parent 246
+  pos -0.10844 0.19335 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 250
+  name C4.Present
+  parent 246
+  pos -0.10084 0.19335 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 265
+  name C1.GND
+  parent 264
+  pos -0.0814 0.19335 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 266
+  name C2.Precharge
+  parent 264
+  pos -0.0738 0.19335 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 267
+  name C3.Power48
+  parent 264
+  pos -0.06544 0.19335 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 268
+  name C4.Present
+  parent 264
+  pos -0.05784 0.19335 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 286
+  name C1.GND
+  parent 285
+  pos -0.0384 0.19335 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 287
+  name C2.Precharge
+  parent 285
+  pos -0.0308 0.19335 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 288
+  name C3.Power48
+  parent 285
+  pos -0.02244 0.19335 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 289
+  name C4.Present
+  parent 285
+  pos -0.01484 0.19335 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 304
+  name C1.GND
+  parent 303
+  pos 0.0046 0.19335 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 305
+  name C2.Precharge
+  parent 303
+  pos 0.0122 0.19335 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 306
+  name C3.Power48
+  parent 303
+  pos 0.02056 0.19335 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 307
+  name C4.Present
+  parent 303
+  pos 0.02816 0.19335 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 322
+  name C1.GND
+  parent 321
+  pos 0.0476 0.19335 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 323
+  name C2.Precharge
+  parent 321
+  pos 0.0552 0.19335 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 324
+  name C3.Power48
+  parent 321
+  pos 0.06356 0.19335 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 325
+  name C4.Present
+  parent 321
+  pos 0.07116 0.19335 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 340
+  name C1.GND
+  parent 339
+  pos 0.0906 0.19335 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 341
+  name C2.Precharge
+  parent 339
+  pos 0.0982 0.19335 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 342
+  name C3.Power48
+  parent 339
+  pos 0.10656 0.19335 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 343
+  name C4.Present
+  parent 339
+  pos 0.11416 0.19335 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 361
+  name C1.GND
+  parent 360
+  pos 0.1336 0.19335 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 362
+  name C2.Precharge
+  parent 360
+  pos 0.1412 0.19335 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 363
+  name C3.Power48
+  parent 360
+  pos 0.14956 0.19335 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 364
+  name C4.Present
+  parent 360
+  pos 0.15716 0.19335 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 379
+  name C1.GND
+  parent 378
+  pos 0.1766 0.19335 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 380
+  name C2.Precharge
+  parent 378
+  pos 0.1842 0.19335 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 381
+  name C3.Power48
+  parent 378
+  pos 0.19256 0.19335 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 382
+  name C4.Present
+  parent 378
+  pos 0.20016 0.19335 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 447
+  name C1.GND
+  parent 446
+  pos -0.2018 0.37915 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 448
+  name C2.Precharge
+  parent 446
+  pos -0.1856 0.37915 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 449
+  name C3.Power48
+  parent 446
+  pos -0.16778 0.37915 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 450
+  name C4.Present
+  parent 446
+  pos -0.15158 0.37915 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 467
+  name C1.GND
+  parent 466
+  pos -0.1158 0.37915 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 468
+  name C2.Precharge
+  parent 466
+  pos -0.0996 0.37915 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 469
+  name C3.Power48
+  parent 466
+  pos -0.08178 0.37915 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 470
+  name C4.Present
+  parent 466
+  pos -0.06558 0.37915 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 487
+  name C1.GND
+  parent 486
+  pos -0.0298 0.37915 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 488
+  name C2.Precharge
+  parent 486
+  pos -0.0136 0.37915 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 489
+  name C3.Power48
+  parent 486
+  pos 0.00422 0.37915 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 490
+  name C4.Present
+  parent 486
+  pos 0.02042 0.37915 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 507
+  name C1.GND
+  parent 506
+  pos 0.0562 0.37915 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 508
+  name C2.Precharge
+  parent 506
+  pos 0.0724 0.37915 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 509
+  name C3.Power48
+  parent 506
+  pos 0.09022 0.37915 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 510
+  name C4.Present
+  parent 506
+  pos 0.10642 0.37915 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 527
+  name C1.GND
+  parent 526
+  pos 0.1422 0.37915 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 528
+  name C2.Precharge
+  parent 526
+  pos 0.1584 0.37915 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 529
+  name C3.Power48
+  parent 526
+  pos 0.17622 0.37915 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 530
+  name C4.Present
+  parent 526
+  pos 0.19242 0.37915 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 597
+  name C1.GND
+  parent 596
+  pos -0.1854 0.56495 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 598
+  name C2.Precharge
+  parent 596
+  pos -0.1528 0.56495 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 599
+  name C3.Power48
+  parent 596
+  pos -0.11694 0.56495 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 600
+  name C4.Present
+  parent 596
+  pos -0.08434 0.56495 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 619
+  name C1.GND
+  parent 618
+  pos -0.0134 0.56495 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 620
+  name C2.Precharge
+  parent 618
+  pos 0.0192 0.56495 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 621
+  name C3.Power48
+  parent 618
+  pos 0.05506 0.56495 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 622
+  name C4.Present
+  parent 618
+  pos 0.08766 0.56495 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end
+
+node 641
+  name C1.GND
+  parent 640
+  pos 0.1336 0.56495 0.405
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.012 0.026 0.04
+end
+
+node 642
+  name C2.Precharge
+  parent 640
+  pos 0.1412 0.56495 0.399
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.008 0.018 0.028
+end
+
+node 643
+  name C3.Power48
+  parent 640
+  pos 0.14956 0.56495 0.395
+  nobody 1
+  nocollider 1
+  materials materials/orl_copper.daimat
+  blockout 1
+  bosize 0.016 0.028 0.02
+end
+
+node 644
+  name C4.Present
+  parent 640
+  pos 0.15716 0.56495 0.391
+  nobody 1
+  nocollider 1
+  materials materials/orl_gold.daimat
+  blockout 1
+  bosize 0.006 0.012 0.012
+end

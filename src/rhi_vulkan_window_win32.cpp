@@ -51,6 +51,11 @@ struct dai_window {
 
     bool keys[256] = {};
     int mouse_x = 0, mouse_y = 0;
+    // Mouse look: pointer hidden, held in the middle of the client area, and
+    // what the host reads is the distance travelled. See dai_window_mouse_capture.
+    bool captured = false;
+    int  cap_dx = 0, cap_dy = 0;
+    bool ignore_next_move = false;
     uint32_t buttons = 0;
 
     // Text events, as they arrived: TranslateMessage turns WM_KEYDOWN into
@@ -171,6 +176,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // WM_KILLFOCUS in every one of those paths.
     case WM_ACTIVATE:
         if (LOWORD(wp) == WA_INACTIVE) {
+            // Alt+Tab out of a captured game: give the pointer back, or the
+            // desktop is unusable until the game is killed.
+            if (w->captured) dai_window_mouse_capture(w, 0);
             std::memset(w->keys, 0, sizeof(w->keys));
             w->buttons = 0;
             if (GetCapture() == hwnd) ReleaseCapture();
@@ -206,7 +214,29 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // window manager's business.
         if (LOWORD(lp) == HTCLIENT && w->cursor) { SetCursor(w->cursor); return TRUE; }
         break;
-    case WM_MOUSEMOVE:  w->mouse_x = (int)(short)LOWORD(lp); w->mouse_y = (int)(short)HIWORD(lp); return 0;
+    case WM_MOUSEMOVE: {
+        int mx = (int)(short)LOWORD(lp), my = (int)(short)HIWORD(lp);
+        if (w->captured) {
+            RECT rc{};
+            GetClientRect(hwnd, &rc);
+            int cx = (int)(rc.right - rc.left) / 2, cy = (int)(rc.bottom - rc.top) / 2;
+            if (w->ignore_next_move && mx == cx && my == cy) {
+                w->ignore_next_move = false;   /* our own SetCursorPos, not the user */
+                return 0;
+            }
+            w->cap_dx += mx - cx;
+            w->cap_dy += my - cy;
+            w->mouse_x = cx; w->mouse_y = cy;
+            if (mx != cx || my != cy) {
+                POINT mid{ cx, cy };
+                ClientToScreen(hwnd, &mid);
+                w->ignore_next_move = true;
+                SetCursorPos(mid.x, mid.y);
+            }
+            return 0;
+        }
+        w->mouse_x = mx; w->mouse_y = my; return 0;
+    }
     // SetCapture while any button is held: without it a drag that leaves the
     // client area never sees its own button-up, and the editor is left
     // believing the button is still down for ever after.
@@ -694,6 +724,46 @@ void dai_window_cursor(dai_window *w, int cursor) {
     w->cursor = h;
     w->cursor_id = cursor;
     SetCursor(h);
+}
+
+int dai_window_mouse_capture(dai_window *w, int on) {
+    if (!w || !w->hwnd) return 0;
+    if ((on != 0) == w->captured) return 1;
+    if (on) {
+        SetCapture(w->hwnd);
+        // ClipCursor as well as the warp: with two monitors a fast flick can
+        // outrun the warp and land the click in the other screen's window.
+        RECT rc{};
+        GetClientRect(w->hwnd, &rc);
+        POINT tl{ rc.left, rc.top }, br{ rc.right, rc.bottom };
+        ClientToScreen(w->hwnd, &tl);
+        ClientToScreen(w->hwnd, &br);
+        RECT screen{ tl.x, tl.y, br.x, br.y };
+        ClipCursor(&screen);
+        while (ShowCursor(FALSE) >= 0) { }      /* the counter, not a flag */
+        POINT mid{ (rc.right - rc.left) / 2, (rc.bottom - rc.top) / 2 };
+        w->mouse_x = mid.x; w->mouse_y = mid.y;
+        ClientToScreen(w->hwnd, &mid);
+        w->ignore_next_move = true;
+        SetCursorPos(mid.x, mid.y);
+        w->cap_dx = w->cap_dy = 0;
+        w->captured = true;
+    } else {
+        ClipCursor(nullptr);
+        if (GetCapture() == w->hwnd) ReleaseCapture();
+        while (ShowCursor(TRUE) < 0) { }
+        w->captured = false;
+    }
+    return 1;
+}
+
+int dai_window_mouse_captured(dai_window *w) { return (w && w->captured) ? 1 : 0; }
+
+void dai_window_mouse_delta(dai_window *w, int *dx, int *dy) {
+    if (!w) { if (dx) *dx = 0; if (dy) *dy = 0; return; }
+    if (dx) *dx = w->cap_dx;
+    if (dy) *dy = w->cap_dy;
+    w->cap_dx = w->cap_dy = 0;
 }
 
 float dai_window_dpi_scale(dai_window *w) {

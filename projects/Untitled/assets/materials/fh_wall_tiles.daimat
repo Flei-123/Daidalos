@@ -1,0 +1,10 @@
+daidalos-material 1
+# THE FEEDING HALL
+color 1 1 1
+roughness 0.3
+metallic 0
+emissive 0.1
+base_color_map textures/fh_wall_basecolor.png
+triplanar 1
+triplanar_scale 2.5
+triplanar_blend 6

@@ -176,6 +176,10 @@ typedef struct dai_boot_config {
      * then a Text component shows whatever it holds - which is exactly what
      * a project with no translations wants. */
     char  language[16];
+    /* The Aulos sound bank, archive/project relative (e.g.
+     * "assets/audio/game.json"). "" = the game runs silent, which is what a
+     * project without a bank wants and not an error. */
+    char  audio_bank[DAI_VFS_PATH_MAX];
 } dai_boot_config;
 
 DAI_API dai_boot_config dai_boot_config_default(void);

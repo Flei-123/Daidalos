@@ -119,8 +119,16 @@ build_windows() {
 
     # Same flags build_win.sh uses, including -DDAI_NO_AUDIO: Aulos is a
     # separate project and is not part of what the export proves.
+    # Audio: in when Aulos has a Windows archive (build_win.sh links the same
+    # way). A shipped game with no sound is not a shipped game.
+    WAUDIO_LIB=""
+    WAUDIO_DEF="-DDAI_NO_AUDIO"
+    if [ -f "$AULOS/build-win/libaulos.a" ]; then
+        WAUDIO_LIB="$AULOS/build-win/libaulos.a"
+        WAUDIO_DEF="-I$AULOS/include"
+    fi
     WFLAGS="-std=c++17 -O2 -fno-rtti -fno-exceptions -Wall -Wno-unused-function \
-            -DUNICODE -D_UNICODE -DDAI_NO_AUDIO"
+            -DUNICODE -D_UNICODE $WAUDIO_DEF"
     VKINC=/tmp/dai_vkinc
     mkdir -p "$VKINC" && cp -r /usr/include/vulkan "$VKINC/" 2>/dev/null || true
     mkdir -p "$VKINC/vk_video" && cp -r /usr/include/vk_video/* "$VKINC/vk_video/" 2>/dev/null || true
@@ -150,8 +158,9 @@ build_windows() {
     [ -f "$TALOS/build-win/libtalos.a" ] && TALOS_LINK="$TALOS/build-win/libtalos.a"
 
     LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a \
-          ${TALOS_LINK:-} -L$JOLT_LIB_WIN -lJolt -L$OUT -lvulkan-1 -lwinhttp -lgdi32 \
-          -luser32 -lshell32 -lcomdlg32 $SCRIPT_OBJ -static -static-libgcc -static-libstdc++ -lpthread"
+          ${TALOS_LINK:-} ${WAUDIO_LIB:-} -L$JOLT_LIB_WIN -lJolt -L$OUT -lvulkan-1 -lwinhttp -lgdi32 \
+          -luser32 -lshell32 -lcomdlg32 $SCRIPT_OBJ -lole32 -lwinmm -lavrt -lksuser \
+          -static -static-libgcc -static-libstdc++ -lpthread"
 
     # -mwindows is the whole Windows finish: SUBSYSTEM:WINDOWS, so a double
     # clicked game does not flash a black console box behind its window. The

@@ -12,6 +12,8 @@
 namespace daiimg {
 bool read_png_file(const char *path, std::vector<uint8_t> &rgba, uint32_t *w, uint32_t *h,
                    char *err, size_t err_len);
+bool read_png(const uint8_t *file, size_t size, std::vector<uint8_t> &rgba,
+              uint32_t *w, uint32_t *h, char *err, size_t err_len);
 }
 
 namespace {
@@ -256,6 +258,20 @@ dai_texture dai_render_texture_create(dai_renderer *r, const uint8_t *rgba, uint
     }
     r->textures.push_back(t);
     return (dai_texture)(r->textures.size() - 1);
+}
+
+dai_texture dai_render_texture_load_memory(dai_renderer *r, const void *bytes, size_t len,
+                                           int srgb) {
+    if (!r || !bytes || !len) return 0;
+    std::vector<uint8_t> px;
+    uint32_t w = 0, h = 0;
+    char err[200] = {0};
+    if (!daiimg::read_png((const uint8_t *)bytes, len, px, &w, &h, err, sizeof(err))) {
+        std::snprintf(r->err, sizeof(r->err), "%s", err);
+        return 0;
+    }
+    std::snprintf(r->err, sizeof(r->err), "%s", err);
+    return dai_render_texture_create(r, px.data(), w, h, srgb);
 }
 
 dai_texture dai_render_texture_load(dai_renderer *r, const char *path, int srgb) {

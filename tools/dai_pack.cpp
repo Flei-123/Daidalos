@@ -156,6 +156,32 @@ int main(int argc, char **argv) {
 
     dai_boot_config cfg = dai_boot_config_default();
     defaults_from_project(project, &cfg);
+    // A project that already HAS a boot.cfg has answered these questions once,
+    // by hand: window title, msaa, and - the one nothing else carries -
+    // audio_bank. project.txt knows nothing about sound, so without this the
+    // export was silent while the editor and the dev run were not. Read first,
+    // command line still wins.
+    {
+        std::string bp = std::string(project) + "/" + DAI_PACK_BOOT_PATH;
+        if (FILE *bf = std::fopen(bp.c_str(), "rb")) {
+            std::string text;
+            char chunk[1024]; size_t r;
+            while ((r = std::fread(chunk, 1, sizeof chunk, bf)) > 0) text.append(chunk, r);
+            std::fclose(bf);
+            dai_boot_config from_file = dai_boot_config_default();
+            if (dai_boot_config_parse(text.c_str(), text.size(), &from_file) == DAI_OK) {
+                if (from_file.audio_bank[0])
+                    std::snprintf(cfg.audio_bank, sizeof(cfg.audio_bank), "%s", from_file.audio_bank);
+                if (from_file.title[0])
+                    std::snprintf(cfg.title, sizeof(cfg.title), "%s", from_file.title);
+                if (from_file.scene[0])
+                    std::snprintf(cfg.scene, sizeof(cfg.scene), "%s", from_file.scene);
+                if (from_file.width > 0)  cfg.width  = from_file.width;
+                if (from_file.height > 0) cfg.height = from_file.height;
+                if (from_file.msaa > 0)   cfg.msaa   = from_file.msaa;
+            }
+        }
+    }
 
     for (int i = need; i < argc; ++i) {
         std::string a = argv[i];

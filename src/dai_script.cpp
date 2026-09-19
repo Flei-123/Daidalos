@@ -29,6 +29,8 @@ struct dai_script {
     int has_anim = 0;
     dai_script_editor_host editor{};
     int has_editor = 0;
+    dai_script_audio_host audio{};
+    int has_audio = 0;
     std::string last_path;
     uint32_t errors = 0;
 };
@@ -494,7 +496,12 @@ JSValue js_input_mouse_button(JSContext *ctx, JSValueConst, int argc, JSValueCon
     double dx = 0, dy = 0; int b = 0;
     if (s->has_play && s->play.mouse) s->play.mouse(&dx, &dy, &b, s->play.user);
     int which = argc >= 1 ? (int)arg_num(ctx, argv[0]) : 0;
-    int bit = which == 1 ? 2 : (which == 2 ? 4 : 1);   // 0 left, 1 right, 2 middle
+    // The mask comes straight from dai_window_mouse, and that one follows X11's
+    // button NUMBERS: bit 1 is left, bit 2 middle, bit 3 right (Win32 sets the
+    // same bits on purpose). This used to test bit 0 for left - a bit no
+    // backend ever sets - so input.mouseButton(0) was false for ever and no
+    // game could shoot, throw or click anything.
+    int bit = which == 1 ? (1 << 3) : (which == 2 ? (1 << 2) : (1 << 1));
     return (b & bit) ? JS_TRUE : JS_FALSE;
 }
 
@@ -583,7 +590,61 @@ JSValue js_gui_size(JSContext *ctx, JSValueConst, int, JSValueConst *) {
     return arr;
 }
 
+/* ------------------------------------------------------------------ audio
+ * audio.play(name [, volume, pitch]) and audio.play3d(name, x, y, z [, ...]).
+ * A name the bank does not know is not an error here: the host returns 0 and
+ * the game carries on without that sound. */
+JSValue js_audio_play_common(JSContext *ctx, int argc, JSValueConst *argv, int spatial) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_audio || !s->audio.play || argc < 1) return JS_NewFloat64(ctx, 0);
+    std::string name = str(ctx, argv[0]);
+    double pos[3] = { 0, 0, 0 };
+    int extra = 1;
+    if (spatial) {
+        for (int i = 0; i < 3; ++i) pos[i] = argc > i + 1 ? num(ctx, argv[i + 1]) : 0.0;
+        extra = 4;
+    }
+    double vol = argc > extra ? num(ctx, argv[extra], 1.0) : 1.0;
+    double pitch = argc > extra + 1 ? num(ctx, argv[extra + 1], 1.0) : 1.0;
+    double h = s->audio.play(name.c_str(), spatial ? pos : nullptr, vol, pitch, s->audio.user);
+    return JS_NewFloat64(ctx, h);
+}
+JSValue js_audio_play(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    return js_audio_play_common(ctx, argc, argv, 0);
+}
+JSValue js_audio_play3d(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    return js_audio_play_common(ctx, argc, argv, 1);
+}
+JSValue js_audio_stop(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (s->has_audio && s->audio.stop && argc >= 1) s->audio.stop(num(ctx, argv[0]), s->audio.user);
+    return JS_UNDEFINED;
+}
+JSValue js_audio_listener(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = (dai_script *)JS_GetContextOpaque(ctx);
+    if (!s->has_audio || !s->audio.listener) return JS_UNDEFINED;
+    double pos[3] = { 0, 0, 0 }, fwd[3] = { 0, 0, -1 };
+    for (int i = 0; i < 3 && i + 0 < argc; ++i) pos[i] = num(ctx, argv[i]);
+    for (int i = 0; i < 3 && i + 3 < argc; ++i) fwd[i] = num(ctx, argv[i + 3]);
+    s->audio.listener(pos, fwd, s->audio.user);
+    return JS_UNDEFINED;
+}
+
 } // namespace
+
+void dai_script_bind_audio(dai_script *s, const dai_script_audio_host *host) {
+    if (!s || !host) return;
+    s->audio = *host;
+    s->has_audio = 1;
+    JSValue global = JS_GetGlobalObject(s->ctx);
+    JSValue audio = JS_NewObject(s->ctx);
+    JS_SetPropertyStr(s->ctx, audio, "play", JS_NewCFunction(s->ctx, js_audio_play, "play", 3));
+    JS_SetPropertyStr(s->ctx, audio, "play3d", JS_NewCFunction(s->ctx, js_audio_play3d, "play3d", 6));
+    JS_SetPropertyStr(s->ctx, audio, "stop", JS_NewCFunction(s->ctx, js_audio_stop, "stop", 1));
+    JS_SetPropertyStr(s->ctx, audio, "listener", JS_NewCFunction(s->ctx, js_audio_listener, "listener", 6));
+    JS_SetPropertyStr(s->ctx, global, "audio", audio);
+    JS_FreeValue(s->ctx, global);
+}
 
 void dai_script_bind_gui(dai_script *s, const dai_script_gui_host *host) {
     if (!s || !host) return;

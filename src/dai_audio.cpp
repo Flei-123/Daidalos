@@ -46,10 +46,14 @@ extern "C" {
 
 dai_audio_backend *dai_audio_active(void) { return g_active; }
 
-dai_audio_backend *dai_audio_open(const char *bank, const char *asset_root,
-                                  int enable_device, char *err, size_t err_len) {
+dai_audio_backend *dai_audio_open_reader(const char *bank, const char *asset_root,
+                                        int enable_device,
+                                        dai_audio_read_fn read_fn,
+                                        dai_audio_release_fn release_fn, void *user,
+                                        char *err, size_t err_len) {
 #ifdef DAI_NO_AUDIO
     (void)bank; (void)asset_root; (void)enable_device;
+    (void)read_fn; (void)release_fn; (void)user;
     if (err && err_len) std::snprintf(err, err_len, "built without audio (DAI_NO_AUDIO)");
     return nullptr;
 #else
@@ -64,6 +68,8 @@ dai_audio_backend *dai_audio_open(const char *bank, const char *asset_root,
         if (err && err_len) std::snprintf(err, err_len, "aul_create failed");
         return nullptr;
     }
+    /* Before the bank is read, not after: the bank IS the first file. */
+    if (read_fn) aul_set_reader(sys, (aul_read_fn)read_fn, (aul_release_fn)release_fn, user);
     if (aul_load_bank(sys, bank) != AUL_OK) {
         if (err && err_len) std::snprintf(err, err_len, "aul_load_bank: %s", aul_last_error(sys));
         aul_destroy(sys);
@@ -83,6 +89,12 @@ dai_audio_backend *dai_audio_open(const char *bank, const char *asset_root,
     g_active = b;
     return b;
 #endif
+}
+
+dai_audio_backend *dai_audio_open(const char *bank, const char *asset_root,
+                                  int enable_device, char *err, size_t err_len) {
+    return dai_audio_open_reader(bank, asset_root, enable_device,
+                                 nullptr, nullptr, nullptr, err, err_len);
 }
 
 void dai_audio_close(dai_audio_backend *b) {

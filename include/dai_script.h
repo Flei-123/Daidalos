@@ -261,6 +261,30 @@ typedef struct dai_script_gui_host {
 } dai_script_gui_host;
 DAI_API void dai_script_bind_gui(dai_script *s, const dai_script_gui_host *host);
 
+
+/* Sound from a behaviour, as the global `audio`. The names are EVENT names
+ * from the Aulos bank, not file names: what a sound is made of belongs in the
+ * bank, and a script that says "wing_hit" keeps working when that event grows
+ * three samples and a pitch randomiser.
+ *
+ *   audio.play("wing_hit")                    -> handle (0 = nothing played)
+ *   audio.play("wing_hit", 0.8, 1.2)          -> volume, pitch
+ *   audio.play3d("horse_neigh", x, y, z)      -> positioned, same extras after
+ *   audio.stop(handle)
+ *   audio.listener(x, y, z, fwdX, fwdY, fwdZ) -> where the ears are
+ *
+ * Every entry point is optional: a host that binds nothing leaves `audio`
+ * undefined, and a host that binds only `play` still answers play3d by
+ * ignoring the position. A missing sound must never stop a game. */
+typedef struct dai_script_audio_host {
+    /* pos may be NULL for a 2D voice. Returns the instance handle. */
+    double (*play)(const char *event, const double *pos, double volume, double pitch, void *user);
+    void   (*stop)(double handle, void *user);
+    void   (*listener)(const double *pos, const double *fwd, void *user);
+    void  *user;
+} dai_script_audio_host;
+DAI_API void dai_script_bind_audio(dai_script *s, const dai_script_audio_host *host);
+
 /* Any host value scripts can read through `state.<name>`. */
 DAI_API void dai_script_set_number(dai_script *s, const char *name, double value);
 DAI_API void dai_script_set_string(dai_script *s, const char *name, const char *value);

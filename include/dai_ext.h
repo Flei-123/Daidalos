@@ -57,6 +57,16 @@ typedef struct dai_ext_host {
     /* Bumped by the host whenever assets were (re)loaded, so a seam can cache
      * derived data and rebuild only when this moves. */
     uint32_t      asset_revision;
+    /* A host whose assets are NOT a folder. The shipped game runs out of one
+     * executable: "assets/materials/x.daimat" is an archive entry, and fopen
+     * on it fails - which is why an exported build drew every blockout in a
+     * random placeholder colour while the editor showed the real materials.
+     * When `read` is set, a seam asks for bytes instead of opening a file:
+     * return 1 and fill out/len, and `release` frees what was returned.
+     * Paths are still assets_dir + "/" + the document's reference. */
+    int         (*read)(const char *path, void **out, size_t *len, void *user);
+    void        (*release)(void *bytes, void *user);
+    void         *read_user;
 } dai_ext_host;
 
 #ifdef __cplusplus

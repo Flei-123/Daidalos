@@ -49,6 +49,13 @@ struct dai_window {
     // input state, filled by dai_window_poll
     bool keys[256] = {};                 // hashed keysym -> down
     int mouse_x = 0, mouse_y = 0;
+    // Mouse look. While captured the pointer is invisible and warped back to
+    // the middle after every move, so it can never reach an edge; what the
+    // host reads is the distance it travelled, not where it ended up.
+    bool captured = false;
+    int  cap_dx = 0, cap_dy = 0;
+    Cursor blank_cursor = 0;
+    bool ignore_next_motion = false;
     uint32_t buttons = 0;
 
     // Text events from XLookupString: one code point per press, shift and
@@ -446,7 +453,24 @@ int dai_window_poll(dai_window *w) {
             if (e.xbutton.button != 4 && e.xbutton.button != 5)
                 w->buttons &= ~(1u << e.xbutton.button);
             break;
-        case MotionNotify:  w->mouse_x = e.xmotion.x; w->mouse_y = e.xmotion.y; break;
+        case MotionNotify:
+            if (w->captured) {
+                int cx = (int)w->width / 2, cy = (int)w->height / 2;
+                if (w->ignore_next_motion && e.xmotion.x == cx && e.xmotion.y == cy) {
+                    // our own XWarpPointer coming back as an event; not movement
+                    w->ignore_next_motion = false;
+                    break;
+                }
+                w->cap_dx += e.xmotion.x - cx;
+                w->cap_dy += e.xmotion.y - cy;
+                w->mouse_x = cx; w->mouse_y = cy;
+                if (e.xmotion.x != cx || e.xmotion.y != cy) {
+                    w->ignore_next_motion = true;
+                    XWarpPointer(w->dpy, None, w->win, 0, 0, 0, 0, cx, cy);
+                }
+                break;
+            }
+            w->mouse_x = e.xmotion.x; w->mouse_y = e.xmotion.y; break;
         case ConfigureNotify:
             if ((uint32_t)e.xconfigure.width != w->width || (uint32_t)e.xconfigure.height != w->height) {
                 w->width = (uint32_t)e.xconfigure.width;
@@ -657,6 +681,47 @@ int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {
     if (y) *y = (int)((double)w->mouse_y * sy);
     if (buttons) *buttons = w->buttons;
     return 1;
+}
+
+int dai_window_mouse_capture(dai_window *w, int on) {
+    if (!w || !w->dpy || !w->win) return 0;
+    if ((on != 0) == w->captured) return 1;
+    if (on) {
+        if (!w->blank_cursor) {
+            // A cursor made of one transparent pixel: X11 has no "hide the
+            // pointer", only "use this shape".
+            char none[8] = { 0 };
+            Pixmap pm = XCreateBitmapFromData(w->dpy, w->win, none, 8, 8);
+            XColor black{};
+            w->blank_cursor = XCreatePixmapCursor(w->dpy, pm, pm, &black, &black, 0, 0);
+            XFreePixmap(w->dpy, pm);
+        }
+        XDefineCursor(w->dpy, w->win, w->blank_cursor);
+        XGrabPointer(w->dpy, w->win, True,
+                     ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                     GrabModeAsync, GrabModeAsync, w->win, w->blank_cursor, CurrentTime);
+        int cx = (int)w->width / 2, cy = (int)w->height / 2;
+        w->ignore_next_motion = true;
+        XWarpPointer(w->dpy, None, w->win, 0, 0, 0, 0, cx, cy);
+        w->mouse_x = cx; w->mouse_y = cy;
+        w->cap_dx = w->cap_dy = 0;
+        w->captured = true;
+    } else {
+        XUngrabPointer(w->dpy, CurrentTime);
+        XUndefineCursor(w->dpy, w->win);
+        w->captured = false;
+    }
+    XFlush(w->dpy);
+    return 1;
+}
+
+int dai_window_mouse_captured(dai_window *w) { return (w && w->captured) ? 1 : 0; }
+
+void dai_window_mouse_delta(dai_window *w, int *dx, int *dy) {
+    if (!w) { if (dx) *dx = 0; if (dy) *dy = 0; return; }
+    if (dx) *dx = w->cap_dx;
+    if (dy) *dy = w->cap_dy;
+    w->cap_dx = w->cap_dy = 0;
 }
 
 float dai_window_dpi_scale(dai_window *w) {

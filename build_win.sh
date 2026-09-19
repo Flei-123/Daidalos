@@ -45,7 +45,18 @@ TALOS=${TALOS:-/root/projects/talos}
 TALOS_WIN_LIB=${TALOS_WIN_LIB:-$TALOS/build-win/libtalos.a}
 OUT=build-win
 
-FLAGS="-std=c++17 -O2 -fno-rtti -fno-exceptions -Wall -Wno-unused-function -DUNICODE -D_UNICODE -DDAI_NO_AUDIO"
+AULOS=${AULOS:-/root/projects/aulos}
+AUDIO_LIB_WIN=""
+AUDIO_DEF="-DDAI_NO_AUDIO"
+# Audio is IN when Aulos has a Windows archive: the shipped game is the one
+# build where silence is not acceptable. Cross-build it once with
+#   x86_64-w64-mingw32-g++-posix -std=c++17 -O2 -Iinclude -Iextern -c src/aulos.cpp
+# and archive it together with miniaudio_impl.o into build-win/libaulos.a.
+if [ -f "$AULOS/build-win/libaulos.a" ]; then
+    AUDIO_LIB_WIN="$AULOS/build-win/libaulos.a"
+    AUDIO_DEF="-I$AULOS/include"
+fi
+FLAGS="-std=c++17 -O2 -fno-rtti -fno-exceptions -Wall -Wno-unused-function -DUNICODE -D_UNICODE $AUDIO_DEF"
 # EXACTLY the defines libJolt.a was built with, and the same -m flags. Jolt's
 # headers change structure layout on JPH_PROFILE_ENABLED and JPH_DEBUG_RENDERER,
 # so a caller compiled without them links fine and then crashes on the first
@@ -182,8 +193,8 @@ fi
 # layer calls back into dai_gltf_*, and a static archive is only scanned
 # once at the position it is written. One extra name, no extra bytes.
 LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a $ASSETS $OUT/libdaidalos.a \
-      ${TALOS_LINK:-} $JOLT_LINK -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 -lcomdlg32 \
-      "$QJS_WIN" -static -static-libgcc -static-libstdc++ -lpthread"
+      ${TALOS_LINK:-} $JOLT_LINK ${AUDIO_LIB_WIN:-} -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 -lcomdlg32 \
+      "$QJS_WIN" -lole32 -lwinmm -lavrt -lksuser -static -static-libgcc -static-libstdc++ -lpthread"
 
 echo "-- programs"
 # The editor carries the app icon (resource 1 = assets/daidalos.ico); the

@@ -44,10 +44,22 @@
 #include "dai_vfs.h"
 #ifdef DAI_WITH_SCRIPT
 #include "dai_script.h"
+#include "dai_audio.h"
+#include "dai_material.h"
 // The JS object model the editor installs before every behaviour. Without it
 // `self` does not exist in an exported game and every behaviour that ever ran
 // in the editor dies on its first line.
 #include "dai_prelude.h"
+// The same seam the editor uses to turn a .daimat into a real dai_material.
+// Without it a blockout scene reaches the runtime grey: the document stores a
+// PATH, and nothing on this side used to read it.
+#include "dai_ext.h"
+#include "dai_material_host.inl"
+// Module 1: the blockout meshes themselves. Without it every box, cylinder
+// and CSG cut in the document reaches the runtime as the default cube - the
+// document stores the SHAPE, and building it is the host's job in the editor
+// and here alike.
+#include "dai_blockout_host.inl"
 #endif
 
 #include <chrono>
@@ -59,6 +71,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <map>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -329,13 +342,361 @@ static const char *hud_resolve(const char *text, void *) {
 static dai_doc       *g_doc = nullptr;
 static dai_doc_sync  *g_sync = nullptr;
 
+// ---- sound --------------------------------------------------------------
+//
+// The bank is named in boot.cfg ("audio_bank assets/audio/game.json"). It is
+// opened from the FILE SYSTEM, not the VFS: Aulos reads its bank and its
+// samples itself, which is fine for a project folder and is the one thing a
+// .dpk cannot do yet - the log says so rather than failing silently.
+static std::string        g_project_dir;      /* "" when we run from an archive */
+static dai_audio_backend *g_audio = nullptr;
+static std::string        g_audio_root;
+
+static double rt_audio_play(const char *event, const double *pos, double volume,
+                            double pitch, void *) {
+    if (!g_audio || !event || !*event) return 0;
+    dai_audio_event ev{};
+    std::snprintf(ev.name, sizeof(ev.name), "%s", event);
+    ev.volume = (float)(volume > 0 ? volume : 1.0);
+    ev.pitch  = (float)(pitch  > 0 ? pitch  : 1.0);
+    if (pos) {
+        ev.is_3d = 1;
+        ev.position = dai_vec3{ (float)pos[0], (float)pos[1], (float)pos[2] };
+    }
+    uint32_t inst = dai_audio_play_ex(g_audio, &ev, DAI_AUDIO_BUS_EVENT);
+    // THE LOG HAS TO SAY WHETHER SOUND IS ACTUALLY COMING OUT. Until this was
+    // here, "audio: bank ... out of the archive" was the last word on the
+    // subject - and that line only means the BANK parsed. A game that loaded
+    // its bank, bound audio to the script and then played into a closed device
+    // or a missing event looked identical in the log to one you can hear. So:
+    // report the first event that plays and the first one that does not, with
+    // its name. Two lines, once each, and silence stops being a mystery.
+    static int said_ok = 0, said_bad = 0;
+    if (inst && !said_ok) {
+        said_ok = 1;
+        rt_log("audio: first event '%s' started (voice %u) - the mixer is running",
+               event, inst);
+    } else if (!inst && !said_bad) {
+        said_bad = 1;
+        rt_log("audio: event '%s' did NOT start - no voice. Wrong event name, "
+               "no free voice, or the device never opened. THE GAME IS SILENT.",
+               event);
+    }
+    return (double)inst;
+}
+static void rt_audio_stop(double handle, void *) {
+    // Stopping is "move it nowhere and let it finish" until Aulos grows a
+    // stop-by-handle; a one shot is over in under a second anyway.
+    (void)handle;
+}
+static void rt_audio_listener(const double *pos, const double *fwd, void *) {
+    if (!g_audio || !pos || !fwd) return;
+    dai_audio_listener(g_audio,
+                       dai_vec3{ (float)pos[0], (float)pos[1], (float)pos[2] },
+                       dai_vec3{ (float)fwd[0], (float)fwd[1], (float)fwd[2] },
+                       dai_vec3{ 0, 1, 0 }, dai_vec3{ 0, 0, 0 });
+}
+/* Aulos asks for a path, dai_vfs hands over the bytes. The archive keeps the
+ * entry compressed, so this is a real read and a real allocation - which is
+ * why the pair has a release. */
+static int rt_audio_vfs_read(const char *path, void **out, size_t *len, void *) {
+    if (!path || !out || !len) return 0;
+    size_t n = 0;
+    void *bytes = dai_vfs_read(path, &n);
+    if (!bytes) return 0;
+    *out = bytes; *len = n;
+    return 1;
+}
+static void rt_audio_vfs_release(void *bytes, void *) { if (bytes) dai_vfs_free(bytes); }
+
+static dai_script_audio_host g_audio_host = { rt_audio_play, rt_audio_stop,
+                                              rt_audio_listener, nullptr };
+
+// .daimat -> dai_material, once per frame after the sync, exactly like the
+// editor does it. Needs real paths, so it only runs from a project folder.
+static void rt_apply_materials(dai_renderer *r, bool entities_changed) {
+    if (!r) return;
+    // Two ways to find a .daimat and its maps. A dev run has a folder; the
+    // shipped game has the archive appended to its own executable, and until
+    // this had the second case an exported build drew every blockout in the
+    // renderer's placeholder colour - the screenshot everybody read as
+    // "missing textures".
+    static std::string assets = g_project_dir.empty() ? std::string("assets")
+                                                      : g_project_dir + "/assets";
+    dai_ext_host h{};
+    h.doc = g_doc;
+    h.sync = g_sync;
+    h.scene = g_scene;
+    h.renderer = r;
+    h.assets_dir = assets.c_str();
+    if (g_project_dir.empty()) {
+        h.read = rt_audio_vfs_read;          /* same archive, same bytes */
+        h.release = rt_audio_vfs_release;
+    }
+    // Same order as the editor: the material first, then the mesh it is drawn
+    // on (see examples/editor_demo.cpp).
+    // A SHIPPED GAME IS NOT AN EDITOR. Nobody is repainting a material while
+    // the game runs, so resolving all of them from scratch every frame is pure
+    // waste - and it was expensive waste: dai_material_host_apply walked all
+    // 569 nodes, copied a dai_node_desc out of the document and built a
+    // std::string per node EVERY FRAME, which measured 6.8 ms. Together with
+    // the rest of the per-frame work that put the CPU over the 16.7 ms a 60 Hz
+    // frame has before a single triangle is drawn - the stutter that got
+    // reported as "laggt sehr im Vergleich zum Browser".
+    //
+    // So: do the expensive resolve rarely, remember what came out of it, and
+    // spend the other frames on the only part that actually has to repeat.
+    // That part is real - the sync layer throws an entity away and respawns it
+    // when a node's mesh or scale changes, and a respawned entity wears the
+    // default material - but re-applying a REMEMBERED handle is two cheap
+    // lookups, not a filesystem walk.
+    static std::vector<std::pair<dai_node, dai_material>> mat_cache;
+    static uint64_t mat_frame = 0;
+    static uint32_t mat_nodes = 0;
+    static bool blockout_dirty = true;
+
+    // dai_doc_count() WALKS THE WHOLE NODE MAP - it counts the living nodes
+    // one by one. Calling it every frame to ask "did the scene change size?"
+    // cost more than the work it was guarding (3.4 ms of the 9 ms this
+    // function used to take). The answer changes when a node is spawned or
+    // destroyed, so asking twice a second is plenty - and 29 out of 30 frames
+    // pay nothing at all.
+    static uint32_t cached_count = 0;
+    static uint64_t count_frame = 0;
+    if ((count_frame++ % 30) == 0 || cached_count == 0) cached_count = dai_doc_count(g_doc);
+    uint32_t now_nodes = cached_count;
+    // When to pay for a full rebuild. Not on a plain timer: a periodic
+    // rebuild costs a ~9 ms spike, and a hitch every single second is worse
+    // to play than a slightly higher steady cost - that hitch IS the lag.
+    // And not on "the count changed" alone either: a running game spawns and
+    // retires wings and horses, so that condition is true forever rather than
+    // once. So both, with a floor of two seconds between rebuilds. A node
+    // that appears without a material waits a few frames for it, which is
+    // invisible; a shipped game has no editor repainting materials underneath
+    // it, so nothing else can make this stale.
+    if (mat_cache.empty() || (now_nodes != mat_nodes && (mat_frame % 120) == 0)) {
+        // dai_material_host_apply() is NOT called here any more. It resolves
+        // every node's material and assigns it - which is exactly what the
+        // loop below already does while it fills the cache. Calling both meant
+        // doing the whole expensive pass TWICE per rebuild.
+        mat_nodes = now_nodes;
+        blockout_dirty = true;
+        mat_cache.clear();
+        std::vector<dai_node> ids(now_nodes);
+        if (now_nodes) dai_doc_nodes(g_doc, ids.data(), now_nodes);
+        // One resolve per material PATH. dai_material_host_for() stat()s the
+        // .daimat and all three of its maps, so asking it once per NODE means
+        // ~2000 syscalls for the dozen materials a scene actually has.
+        std::map<std::string, dai_material> seen;
+        for (dai_node n : ids) {
+            dai_node_desc d{};
+            if (dai_doc_get(g_doc, n, &d) != DAI_OK || !d.materials[0]) continue;
+            std::string first = d.materials;
+            size_t semi = first.find(';');
+            if (semi != std::string::npos) first = first.substr(0, semi);
+            if (!dai_matfile_is_file(first.c_str())) continue;
+            dai_material m;
+            std::map<std::string, dai_material>::iterator sit = seen.find(first);
+            if (sit != seen.end()) m = sit->second;
+            else { m = dai_material_host_for(&h, first); seen[first] = m; }
+            if (!m) continue;
+            mat_cache.push_back(std::make_pair(n, m));
+            dai_entity e = dai_doc_sync_entity(g_sync, n);
+            if (e) dai_scene_set_material(g_scene, e, m);
+        }
+        // Said once, on the first build: the number that tells a missing
+        // texture apart from a missing material. 0 painted here is what the
+        // "everything is placeholder colours" bug looks like from the inside.
+        static int said = 0;
+        if (!said) {
+            said = 1;
+            rt_log("materials: %zu objects painted from %zu distinct materials (%s)",
+                   mat_cache.size(), seen.size(),
+                   g_project_dir.empty() ? "archive" : "folder");
+        }
+    } else if (entities_changed) {
+        // Re-applying costs 569 sync lookups, so it only happens on the frames
+        // where the sync layer actually touched something. dai_doc_sync_apply
+        // returning 0 means no entity was created, updated or destroyed - and
+        // an entity that was never respawned is still wearing its material.
+        for (size_t i = 0; i < mat_cache.size(); ++i) {
+            dai_entity e = dai_doc_sync_entity(g_sync, mat_cache[i].first);
+            if (e) dai_scene_set_material(g_scene, e, mat_cache[i].second);
+        }
+    }
+    ++mat_frame;
+
+    // The blockout meshes are built from a hash of each node's SHAPE, and a
+    // game moves things without reshaping them - so this only ever finds work
+    // on the frames where the scene itself changed. Same rebuild rule.
+    if (blockout_dirty) { dai_blockout_host_sync(&h); blockout_dirty = false; }
+}
+
+// A blockout node carries its SHAPE (blockout.size), but its collision/cull
+// box stays at the document default of 0.5 m unless an editor widget touched
+// it. The scene layer culls by that box, so a 13x26 m floor whose centre sits
+// outside the frustum vanishes - which is exactly what happened here: walls
+// (centre in view) drew, the floor did not. Fixing it up once at load is the
+// same thing the inspector does when the size is dragged.
+static void rt_fix_blockout_extents(void) {
+    if (!g_doc) return;
+    uint32_t n = dai_doc_count(g_doc);
+    std::vector<dai_node> ids(n);
+    if (n) dai_doc_nodes(g_doc, ids.data(), n);
+    uint32_t fixed = 0;
+    for (dai_node id : ids) {
+        dai_node_desc r{};
+        if (dai_doc_get(g_doc, id, &r) != DAI_OK) continue;
+        if (!r.blockout) continue;
+        dai_vec3 half{ r.blockout_size.x * 0.5f, r.blockout_size.y * 0.5f,
+                       r.blockout_size.z * 0.5f };
+        if (half.x <= 0 || half.y <= 0 || half.z <= 0) continue;
+        if (std::fabs(half.x - r.half_extent.x) < 1e-4f &&
+            std::fabs(half.y - r.half_extent.y) < 1e-4f &&
+            std::fabs(half.z - r.half_extent.z) < 1e-4f) continue;
+        r.half_extent = half;
+        dai_doc_set(g_doc, id, &r);
+        ++fixed;
+    }
+    if (fixed) rt_log("blockout: %u cull boxes taken from blockout.size", fixed);
+}
+
+// Light components, straight from the document - the scene layer does not
+// carry them, so the host collects them every frame. The editor does exactly
+// this; without it a scene lit by its own lamps arrives here lit by nothing
+// but the default sun, which is why a neon hall came out grey.
+static void rt_apply_lights(dai_renderer *r) {
+    if (!r || !g_doc) return;
+    static std::vector<dai_light> lights;
+    static std::vector<dai_node> ids;
+    lights.clear();
+    // A scene has a handful of lights and hundreds of everything else, so
+    // reading every node's whole descriptor each frame to find them was the
+    // wrong way round - dai_doc_count plus dai_doc_nodes plus 569 dai_doc_get
+    // measured 1.4 ms per frame for what is usually three lamps. The LIST of
+    // light nodes is what changes rarely; where those lights point can still
+    // change every frame, and does, because that is read below as before.
+    static std::vector<dai_node> light_ids;
+    static uint64_t light_frame = 0;
+    if ((light_frame++ % 30) == 0 || light_ids.empty()) {
+        uint32_t n = dai_doc_count(g_doc);
+        ids.resize(n);
+        if (n) dai_doc_nodes(g_doc, ids.data(), n);
+        light_ids.clear();
+        for (dai_node id : ids) {
+            dai_node_desc lr{};
+            if (dai_doc_get(g_doc, id, &lr) == DAI_OK && lr.light) light_ids.push_back(id);
+        }
+    }
+    int sun_seen = 0;
+    for (dai_node id : light_ids) {
+        dai_node_desc lr{};
+        if (dai_doc_get(g_doc, id, &lr) != DAI_OK || !lr.light) continue;
+        dai_vec3 wp{}, ws{ 1, 1, 1 };
+        dai_quat wr{ 0, 0, 0, 1 };
+        dai_doc_world_transform(g_doc, id, &wp, &wr, &ws);
+        dai_vec3 col = (lr.light_color.x || lr.light_color.y || lr.light_color.z)
+                     ? lr.light_color : dai_vec3{ 1, 1, 1 };
+        float power = lr.light_intensity > 0.0f ? lr.light_intensity : 1.0f;
+        float range = lr.light_range > 0.0f ? lr.light_range : 10.0f;
+        float x = wr.x, y = wr.y, z = wr.z, w = wr.w;
+        dai_vec3 dir{ 2*(x*z + w*y), 2*(y*z - w*x), 1 - 2*(x*x + y*y) };
+        if (lr.light == 3) {                     /* a sun, not a point */
+            dai_render_sun(r, dai_vec3{ -dir.x, -dir.y, -dir.z }, col, power);
+            sun_seen = 1;
+            continue;
+        }
+        dai_light L{};
+        L.position = wp; L.color = col; L.intensity = power; L.range = range;
+        if (lr.light == 2) {
+            L.direction = dai_vec3{ -dir.x, -dir.y, -dir.z };
+            L.type = DAI_LIGHT_SPOT;
+            float cone = lr.light_cone > 0.0f ? lr.light_cone : 30.0f;
+            L.inner_deg = cone * 0.7f;
+            L.outer_deg = cone;
+        } else {
+            L.type = DAI_LIGHT_POINT;
+        }
+        lights.push_back(L);
+    }
+    (void)sun_seen;
+    dai_render_lights(r, lights.empty() ? nullptr : lights.data(), (uint32_t)lights.size());
+}
+
 // One place both the window loop and --shot go through: a screenshot that
 // does not contain the HUD cannot be used to check the HUD.
+
+// ---- gui: what a behaviour asked to be drawn this frame --------------------
+//
+// The editor has had this since behaviours could draw (examples/editor_demo.cpp,
+// gui_text_cb and friends); the shipped game did not, so every game that puts
+// its score on the screen with gui.text() ran with NO HUD once it was
+// exported - the one difference between Ctrl+P and the thing you hand to a
+// player. Same shape as the editor's: the calls land in a list during the
+// frame and the list is played back in one place, after the world is drawn.
+struct RtGuiCmd {
+    int kind;                       // 0 text, 1 rect, 2 image, 3 button
+    float x, y, w, h, size;
+    uint32_t color;
+    std::string text;
+};
+static std::vector<RtGuiCmd> g_gui_cmds;
+static float g_gui_w = 0, g_gui_h = 0;
+
+static uint32_t rt_gui_col(double v) {
+    if (!(v >= 0.0)) return 0xFFFFFFFFu;
+    if (v > 4294967295.0) return 0xFFFFFFFFu;
+    return (uint32_t)v;
+}
+static void rt_gui_text(double x, double y, const char *t, double size, double rgba, void *) {
+    RtGuiCmd c{}; c.kind = 0; c.x = (float)x; c.y = (float)y;
+    c.size = size > 0 ? (float)size : 24.0f; c.color = rt_gui_col(rgba); c.text = t ? t : "";
+    g_gui_cmds.push_back(c);
+}
+static void rt_gui_rect(double x, double y, double w, double h, double rgba, void *) {
+    RtGuiCmd c{}; c.kind = 1; c.x = (float)x; c.y = (float)y; c.w = (float)w; c.h = (float)h;
+    c.color = rt_gui_col(rgba);
+    g_gui_cmds.push_back(c);
+}
+static void rt_gui_image(double x, double y, double w, double h, const char *path,
+                         double rgba, void *) {
+    RtGuiCmd c{}; c.kind = 2; c.x = (float)x; c.y = (float)y; c.w = (float)w; c.h = (float)h;
+    c.color = rt_gui_col(rgba); c.text = path ? path : "";
+    g_gui_cmds.push_back(c);
+}
+static int rt_gui_button(double, double, double, double, const char *, void *) {
+    return 0;   /* a game reads the mouse itself; no pointer UI in the runtime */
+}
+static void rt_gui_size(double *w, double *h, void *) {
+    if (w) *w = g_gui_w;
+    if (h) *h = g_gui_h;
+}
+static dai_script_gui_host g_gui_host = {
+    rt_gui_text, rt_gui_rect, rt_gui_image, rt_gui_button, rt_gui_size, nullptr
+};
+
 static void draw_hud(dai_renderer *r, float w, float h) {
     if (!g_ui || !r || !g_doc) return;
     dai_ui_input uin{};      // no pointer, no keys: a HUD is drawn, not operated
+    g_gui_w = w; g_gui_h = h;
     dai_ui_begin(g_ui, w, h, &uin);
     dai_hud_draw(g_ui, g_doc, 0.0f, 0.0f, w, h, 1.0f, hud_resolve, nullptr);
+    // ...and what the behaviours asked for, on top of it.
+    if (!g_gui_cmds.empty()) {
+        const float base = dai_ui_text_height(g_ui) > 0.0f ? dai_ui_text_height(g_ui) : 13.0f;
+        for (const RtGuiCmd &c : g_gui_cmds) {
+            if (c.kind == 1) {
+                dai_ui_rect(g_ui, c.x, c.y, c.w, c.h, c.color);
+            } else if (c.kind == 0) {
+                float k = c.size / base;
+                /* the shadow first: white text on a bright wall is unreadable
+                 * without it, and a HUD that cannot be read is not a HUD */
+                dai_ui_text_scaled(g_ui, c.x + 1.0f, c.y + 1.0f, c.text.c_str(), 0xB0000000u, k);
+                dai_ui_text_scaled(g_ui, c.x, c.y, c.text.c_str(), c.color, k);
+            }
+        }
+        g_gui_cmds.clear();
+    }
     dai_ui_end(g_ui);
     const dai_ui_draw *draws = nullptr;
     uint32_t nb = dai_ui_draws(g_ui, &draws);
@@ -414,6 +775,21 @@ static void live_set_transform(dai_node n, const dai_vec3 *pos, const dai_quat *
         dai_doc_set(g_doc, n, &rec);
         dai_doc_commit(g_doc);
         return;
+    }
+    // A node with children is a pivot: writing only its body would leave the
+    // children standing where they were, because their own revision never
+    // moved. The document is the only place the hierarchy is resolved from,
+    // so a parent goes there as well.
+    dai_node kids[1];
+    if (dai_doc_children(g_doc, n, kids, 1) > 0) {
+        dai_node_desc rec{};
+        if (dai_doc_get(g_doc, n, &rec) == DAI_OK) {
+            dai_doc_begin(g_doc, "script");
+            if (pos) rec.position = *pos;
+            if (rot) rec.rotation = *rot;
+            dai_doc_set(g_doc, n, &rec);
+            dai_doc_commit(g_doc);
+        }
     }
     dai_transform t{};
     if (dai_body_get(g_world, b, &t) != DAI_OK) return;
@@ -555,8 +931,18 @@ static void poll_mouse(void) {
     if (!g_win_for_scripts) return;
     int x = 0, y = 0; uint32_t b = 0;
     if (!dai_window_mouse(g_win_for_scripts, &x, &y, &b)) return;
-    if (g_mouse_have) { g_mouse_dx = x - g_mouse_lx; g_mouse_dy = y - g_mouse_ly; }
-    g_mouse_lx = x; g_mouse_ly = y; g_mouse_have = 1;
+    if (dai_window_mouse_captured(g_win_for_scripts)) {
+        // Mouse look: the backend already measured the movement, and the
+        // pointer itself never leaves the middle. Subtracting positions here
+        // would give zero for every frame and the player could not turn.
+        int mdx = 0, mdy = 0;
+        dai_window_mouse_delta(g_win_for_scripts, &mdx, &mdy);
+        g_mouse_dx = mdx; g_mouse_dy = mdy;
+        g_mouse_have = 0;              /* the absolute history means nothing now */
+    } else {
+        if (g_mouse_have) { g_mouse_dx = x - g_mouse_lx; g_mouse_dy = y - g_mouse_ly; }
+        g_mouse_lx = x; g_mouse_ly = y; g_mouse_have = 1;
+    }
     g_mouse_buttons = (int)b;
 }
 
@@ -571,9 +957,14 @@ static int sp_key(const char *name, void *) {
     if (!name || !*name || !g_win_for_scripts) return 0;
     uint32_t code = 0;
     if (!name[1]) {
+        // LOWER case. Every window backend stores a letter key as its lower
+        // case code point (see dai_key_from_vk: "A".."Z" + 0x20), and the
+        // editor asks the same way. This asked for 'W' and got a permanent 0,
+        // which is why WASD did nothing in an exported game while it worked
+        // fine under Ctrl+P - the one bug that made the shipped build
+        // unplayable.
         char c = name[0];
-        if (c >= 'a' && c <= 'z') code = (uint32_t)(c - 'a' + 'A');
-        else if (c >= 'A' && c <= 'Z') code = (uint32_t)c;
+        if (c >= 'A' && c <= 'Z') code = (uint32_t)(c - 'A' + 'a');
         else code = (uint32_t)(unsigned char)c;
     } else {
         std::string n(name);
@@ -781,6 +1172,8 @@ static void scripts_start(void) {
             if (!s) { rt_log("script: %s", err); dai_vfs_free(code); continue; }
             dai_script_bind_nodes(s, &g_node_host);
             dai_script_bind_play(s, &g_play_host);
+            dai_script_bind_gui(s, &g_gui_host);
+            if (g_audio) dai_script_bind_audio(s, &g_audio_host);
             // The node the behaviour is ON, so a script can move itself
             // without looking its own name up.
             dai_script_set_number(s, "self", (double)(uint32_t)all[k]);
@@ -928,13 +1321,18 @@ int main(int argc, char **argv) {
     const char *source = nullptr;   // a project dir or a .dpk, when given
     const char *shot_path = nullptr;
     int headless_frames = 0;
+    // Offline mix: every frame the same number of samples the tick is worth is
+    // pulled out of the mixer and written to a WAV at the end. That is how a
+    // build server hears a game - the pictures already have --shot.
+    const char *audio_dump = nullptr;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--headless") { headless_frames = (i + 1 < argc) ? std::atoi(argv[++i]) : 120; }
         else if (a == "--shot") { shot_path = (i + 1 < argc) ? argv[++i] : nullptr; }
+        else if (a == "--audio-dump") { audio_dump = (i + 1 < argc) ? argv[++i] : nullptr; }
         else if (a == "--help" || a == "-h") {
-            rt_log("usage: %s [project-dir | archive.dpk] [--headless <frames>] [--shot <file.ppm>]",
-                   argv[0]);
+            rt_log("usage: %s [project-dir | archive.dpk] [--headless <frames>] "
+                   "[--shot <file.ppm>] [--audio-dump <file.wav>]", argv[0]);
             return 0;
         } else if (!source) source = argv[i];
     }
@@ -955,6 +1353,7 @@ int main(int argc, char **argv) {
     if (!mounted && source) {
         if (dai_vfs_mount_dir(source, 0) == DAI_OK) {
             rt_log("mounted: %s", dai_vfs_mount_name(0));
+            g_project_dir = source;
             mounted = 1;
         } else if (dai_vfs_mount_archive(source, 0, err, sizeof(err)) == DAI_OK) {
             rt_log("mounted: %s", dai_vfs_mount_name(0));
@@ -994,6 +1393,36 @@ int main(int argc, char **argv) {
            cfg.scene, cfg.title, cfg.width, cfg.height, cfg.msaa, cfg.tick_hz, cfg.physics_backend);
     if (cfg.fullscreen)
         rt_log("note: fullscreen was requested; the window backend has no full screen mode yet");
+
+    // ---- sound. Opened before the world so a script that plays something in
+    // init() already has a backend behind it.
+    if (cfg.audio_bank[0]) {
+        char aerr[256] = { 0 };
+        if (g_project_dir.empty()) {
+            /* Shipped build: the bank and every wav live in the archive that is
+             * appended to this executable. The mixer gets a reader instead of a
+             * folder - see dai_audio_open_reader. This used to print "skipped"
+             * and the exported game was silent, which made every sound the
+             * editor plays a lie about the thing you hand to a player. */
+            std::string bank = cfg.audio_bank;
+            std::string root = bank.substr(0, bank.find_last_of('/') + 1);
+            g_audio = dai_audio_open_reader(bank.c_str(), root.c_str(),
+                                            headless_frames ? 0 : 1,
+                                            rt_audio_vfs_read, rt_audio_vfs_release, nullptr,
+                                            aerr, sizeof(aerr));
+            if (!g_audio) rt_log("audio: %s (the game runs silent)", aerr);
+            else          rt_log("audio: bank '%s' out of the archive", bank.c_str());
+            g_audio_root = root;
+        } else {
+            std::string bank = g_project_dir + "/" + cfg.audio_bank;
+            std::string root = bank.substr(0, bank.find_last_of('/') + 1);
+            g_audio = dai_audio_open(bank.c_str(), root.c_str(), headless_frames ? 0 : 1,
+                                     aerr, sizeof(aerr));
+            if (!g_audio) rt_log("audio: %s (the game runs silent)", aerr);
+            else          rt_log("audio: bank '%s', samples from '%s'", bank.c_str(), root.c_str());
+            g_audio_root = root;
+        }
+    }
 
     // ---- the world
     dai_config wc{};
@@ -1076,6 +1505,7 @@ int main(int argc, char **argv) {
         hud_strings_load(cfg.language);
     }
 
+    rt_fix_blockout_extents();
     dai_doc_sync_apply(g_sync);
     rt_log("live: %u entities", dai_scene_count(g_scene));
 
@@ -1094,11 +1524,21 @@ int main(int argc, char **argv) {
         // on a build server, and it is a real end to end test of everything
         // except the pixels.
         double dt = 1.0 / (double)cfg.tick_hz;
+        std::vector<float> mix;                       /* interleaved stereo */
+        const uint32_t mix_rate = 48000;
+        const uint32_t mix_per_frame = (uint32_t)(mix_rate / (cfg.tick_hz > 0 ? cfg.tick_hz : 60));
+        if (audio_dump && g_audio) mix.reserve((size_t)headless_frames * mix_per_frame * 2);
         for (int f = 0; f < headless_frames; ++f) {
             float alpha = 1.0f;
             dai_advance(g_world, dt, &alpha);
             scripts_frame(dt);
             dai_doc_sync_apply(g_sync);
+            if (g_audio) dai_audio_update(g_audio);
+            if (audio_dump && g_audio) {
+                size_t at = mix.size();
+                mix.resize(at + (size_t)mix_per_frame * 2, 0.0f);
+                dai_audio_render(g_audio, mix.data() + at, mix_per_frame);
+            }
             uint32_t n = dai_scene_instances(g_scene, inst.data(), (uint32_t)inst.size(), alpha);
             if (f == 0 || f == headless_frames - 1) {
                 rt_log("frame %d: tick %llu, %u instances", f,
@@ -1123,6 +1563,8 @@ int main(int argc, char **argv) {
         if (shot_path && r) {
             dai_render_camera(r, eye, look, dai_vec3{ 0, 1, 0 }, 60.0f, 0.1f, 500.0f);
             float alpha = 1.0f;
+            rt_apply_materials(r, true);
+            rt_apply_lights(r);
             uint32_t n = dai_scene_instances(g_scene, inst.data(), (uint32_t)inst.size(), alpha);
             // The HUD belongs in the screenshot too. A --shot that leaves it
             // out is a --shot that cannot be used to check it, which is the
@@ -1136,20 +1578,92 @@ int main(int argc, char **argv) {
                             : dai_render_write_ppm(r, shot_path);
             rt_log("shot: %s (%u instances) -> %s", shot_path, n, wr == DAI_OK ? "ok" : "FAILED");
         }
+        if (audio_dump && !mix.empty()) {
+            // A 16 bit PCM WAV, written by hand: the engine has no sound file
+            // writer and this is eleven lines.
+            FILE *w = std::fopen(audio_dump, "wb");
+            if (!w) rt_log("audio dump: cannot write %s", audio_dump);
+            else {
+                uint32_t frames_n = (uint32_t)(mix.size() / 2);
+                uint32_t data_bytes = frames_n * 2 * 2;
+                uint32_t riff = 36 + data_bytes;
+                uint16_t ch = 2, bits = 16, fmt = 1;
+                uint32_t rate = mix_rate, byte_rate = rate * ch * bits / 8;
+                uint16_t align = (uint16_t)(ch * bits / 8);
+                std::fwrite("RIFF", 1, 4, w); std::fwrite(&riff, 4, 1, w);
+                std::fwrite("WAVEfmt ", 1, 8, w);
+                uint32_t sub1 = 16; std::fwrite(&sub1, 4, 1, w);
+                std::fwrite(&fmt, 2, 1, w); std::fwrite(&ch, 2, 1, w);
+                std::fwrite(&rate, 4, 1, w); std::fwrite(&byte_rate, 4, 1, w);
+                std::fwrite(&align, 2, 1, w); std::fwrite(&bits, 2, 1, w);
+                std::fwrite("data", 1, 4, w); std::fwrite(&data_bytes, 4, 1, w);
+                double peak = 0;
+                for (float v : mix) { double a2 = v < 0 ? -v : v; if (a2 > peak) peak = a2; }
+                for (float v : mix) {
+                    float c = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+                    int16_t q = (int16_t)(c * 32767.0f);
+                    std::fwrite(&q, 2, 1, w);
+                }
+                std::fclose(w);
+                rt_log("audio dump: %s, %.2f s, peak %.3f", audio_dump,
+                       (double)frames_n / (double)mix_rate, peak);
+            }
+        }
         rt_log("headless run finished after %d frames", headless_frames);
     } else {
+        // A first person game owns the mouse: hidden, held in the middle, and
+        // reported as movement. Without this the player turns until the cursor
+        // reaches the edge of the screen and the world simply stops turning -
+        // and the desktop cursor sits on top of the game the whole time.
+        dai_window_mouse_capture(win, 1);
+        int esc_was_down = 0;
         while (dai_window_poll(win)) {
             auto now = std::chrono::high_resolution_clock::now();
             double dt = std::chrono::duration<double>(now - last).count();
             last = now;
             if (dt > 0.25) dt = 0.25;          // a dragged window is not a jump
 
-            if (dai_window_key_down(win, DAI_KEY_ESCAPE)) break;
+            // Escape lets go of the mouse first and only quits when the
+            // pointer is already free: a game that closes on the key people
+            // press to get their cursor back is a game nobody can alt-tab out
+            // of. Clicking back into the picture takes the mouse again.
+            int esc = dai_window_key_down(win, DAI_KEY_ESCAPE);
+            if (esc && !esc_was_down) {
+                if (dai_window_mouse_captured(win)) dai_window_mouse_capture(win, 0);
+                else break;
+            }
+            esc_was_down = esc;
+            if (!dai_window_mouse_captured(win)) {
+                uint32_t mb = 0;
+                dai_window_mouse(win, nullptr, nullptr, &mb);
+                if (mb & (1u << 1)) dai_window_mouse_capture(win, 1);
+            }
 
             float alpha = 1.0f;
+            /*PROFILE*/
+            static int prof_on = getenv("DAI_PROFILE") != nullptr;
+            static double pa=0,pb=0,pc=0,pd=0,pe=0,pf=0,pg=0; static int pn=0;
+            auto T0 = std::chrono::high_resolution_clock::now();
             dai_advance(g_world, dt, &alpha);
+            auto T1 = std::chrono::high_resolution_clock::now();
             scripts_frame(dt);
-            dai_doc_sync_apply(g_sync);
+            auto T2 = std::chrono::high_resolution_clock::now();
+            uint32_t sync_changed = dai_doc_sync_apply(g_sync);
+            auto T3 = std::chrono::high_resolution_clock::now();
+            rt_apply_materials(r, sync_changed != 0);
+            auto T4 = std::chrono::high_resolution_clock::now();
+            rt_apply_lights(r);
+            auto T5 = std::chrono::high_resolution_clock::now();
+            if (g_audio) dai_audio_update(g_audio);
+            auto T6 = std::chrono::high_resolution_clock::now();
+            if (prof_on) {
+                pa += std::chrono::duration<double,std::milli>(T1-T0).count();
+                pb += std::chrono::duration<double,std::milli>(T2-T1).count();
+                pc += std::chrono::duration<double,std::milli>(T3-T2).count();
+                pd += std::chrono::duration<double,std::milli>(T4-T3).count();
+                pe += std::chrono::duration<double,std::milli>(T5-T4).count();
+                pf += std::chrono::duration<double,std::milli>(T6-T5).count();
+            }
 
             uint32_t ww = (uint32_t)cfg.width, wh = (uint32_t)cfg.height;
             dai_window_size(win, &ww, &wh);
@@ -1170,8 +1684,23 @@ int main(int argc, char **argv) {
 
             draw_hud(r, (float)ww, (float)wh);
 
+            auto T7 = std::chrono::high_resolution_clock::now();
             dai_render_frame(r, inst.data(), n);
             dai_window_present(win);
+            if (prof_on) {
+                auto T8 = std::chrono::high_resolution_clock::now();
+                pg += std::chrono::duration<double,std::milli>(T8-T7).count();
+                double fms = std::chrono::duration<double,std::milli>(T8-T0).count();
+                static double worst = 0; if (fms > worst) worst = fms;
+                if (++pn >= 60) {
+                    rt_log("PROF max-frame-ms(cpu+render)=%.2f", worst); worst = 0;
+                    rt_log("PROF/frame ms: advance=%.3f scripts=%.3f sync=%.3f "
+                           "materials=%.3f lights=%.3f audio=%.3f render=%.3f  SUM=%.3f",
+                           pa/pn, pb/pn, pc/pn, pd/pn, pe/pn, pf/pn, pg/pn,
+                           (pa+pb+pc+pd+pe+pf+pg)/pn);
+                    pa=pb=pc=pd=pe=pf=pg=0; pn=0;
+                }
+            }
         }
     }
 
@@ -1184,6 +1713,7 @@ int main(int argc, char **argv) {
     g_assets.models.clear();
     if (win) dai_window_close(win);
     if (r) dai_render_destroy(r);
+    if (g_audio) { dai_audio_close(g_audio); g_audio = nullptr; }
     dai_doc_sync_destroy(g_sync);
     dai_doc_destroy(g_doc);
     dai_scene_destroy(g_scene);

@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
+#include <set>
 #include <vector>
 
 using namespace daidoc;
@@ -301,6 +302,13 @@ uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
     std::vector<dai_node> ids(count);
     if (count) dai_doc_nodes(s->doc, ids.data(), count);
 
+    // A moved parent moves its children, and their own revision does not
+    // change when it happens - so "only nodes whose revision moved" would
+    // leave a whole hierarchy standing where it was. dai_doc_nodes hands the
+    // list out parents first, so one set filled as we go is enough: a node
+    // whose parent was re-applied in THIS pass is re-applied as well.
+    std::set<dai_node> moved;
+
     // Parents first, so a child's world transform is computed against a parent
     // that already exists in this pass.
     for (dai_node n : ids) {
@@ -308,14 +316,17 @@ uint32_t dai_doc_sync_apply(dai_doc_sync *s) {
         if (dai_doc_get(s->doc, n, &r) != DAI_OK) continue;
         const Node *doc_node = find(s->doc, n);
         uint64_t rev = doc_node ? doc_node->rev : 0;
+        bool parent_moved = r.parent && moved.count(r.parent) != 0;
 
         auto it = s->live.find(n);
         if (it == s->live.end()) {
             if (spawn(s, n, r)) { s->live[n].rev = rev; ++changed; }
+            moved.insert(n);
             continue;
         }
         Live &l = it->second;
-        if (l.rev == rev) continue;                 // untouched: leave physics alone
+        if (l.rev == rev && !parent_moved) continue; // untouched: leave physics alone
+        moved.insert(n);
 
         // The path did not change, but the answer might have: the file has
         // finished loading, or a different resolver is in place. Anything that

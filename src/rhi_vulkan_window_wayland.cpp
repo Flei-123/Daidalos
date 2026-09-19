@@ -448,6 +448,17 @@ int dai_window_mouse(dai_window *w, int *x, int *y, uint32_t *buttons) {
     return 1;
 }
 
+int dai_window_mouse_capture(dai_window *w, int on) {
+    /* Wayland has pointer-constraints + relative-pointer for exactly this, but
+     * this backend does not bind those protocols yet. Saying so beats
+     * pretending: the host then knows the pointer is still free. */
+    (void)w; (void)on; return 0;
+}
+int dai_window_mouse_captured(dai_window *w) { (void)w; return 0; }
+void dai_window_mouse_delta(dai_window *w, int *dx, int *dy) {
+    (void)w; if (dx) *dx = 0; if (dy) *dy = 0;
+}
+
 void dai_window_cursor(dai_window *w, int cursor) {
     // Wayland has no "set the cursor" call: a client owns the pointer surface
     // and has to load a cursor theme, make a surface and attach the right

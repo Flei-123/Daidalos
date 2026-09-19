@@ -36,6 +36,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <map>
 
 // When the file on disk was last written. 0 for a file that is not there,
 // which is a value that differs from every real stamp and therefore rebuilds
@@ -68,15 +69,29 @@ static std::vector<dai_material_host_entry> g_material_host_cache;
 static std::vector<dai_material_host_tex>   g_material_host_textures;
 static const dai_renderer                  *g_material_host_renderer = nullptr;
 
+// One picture, from wherever this host keeps its assets: a folder (fopen, the
+// editor) or an archive (h->read, the shipped game).
+static dai_texture dai_material_host_load_tex(const dai_ext_host *h, const char *full, int srgb) {
+    if (!h->read) return dai_render_texture_load(h->renderer, full, srgb);
+    void *bytes = nullptr; size_t len = 0;
+    if (!h->read(full, &bytes, &len, h->read_user) || !bytes) return 0;
+    dai_texture t = dai_render_texture_load_memory(h->renderer, bytes, len, srgb);
+    if (h->release) h->release(bytes, h->read_user);
+    return t;
+}
+
 // A map, loaded once and shared by every material that names it. The stamp is
 // carried so a re-bake by module 3 (which rewrites the PNG in place) reaches
 // the screen without restarting the editor.
-static dai_texture dai_material_host_texture(dai_renderer *r, const char *assets_dir,
+static dai_texture dai_material_host_texture(const dai_ext_host *h,
                                              const char *rel, int srgb, long *stamp_out) {
     if (!rel || !*rel) { if (stamp_out) *stamp_out = 0; return 0; }
+    dai_renderer *r = h->renderer;
     char full[700];
-    std::snprintf(full, sizeof(full), "%s/%s", assets_dir, rel);
-    long stamp = dai_material_host_stamp(full);
+    std::snprintf(full, sizeof(full), "%s/%s", h->assets_dir, rel);
+    /* An archive entry cannot change while the game runs, so its stamp is
+     * constant - the whole re-bake path below is an editor concern. */
+    long stamp = h->read ? 1 : dai_material_host_stamp(full);
     if (stamp_out) *stamp_out += stamp;
 
     for (auto &t : g_material_host_textures) {
@@ -86,7 +101,7 @@ static dai_texture dai_material_host_texture(dai_renderer *r, const char *assets
         // material still pointing at it is re-pointed at the default rather
         // than left with a dangling descriptor.
         if (t.tex) dai_render_texture_destroy(r, t.tex);
-        t.tex = dai_render_texture_load(r, full, srgb);
+        t.tex = dai_material_host_load_tex(h, full, srgb);
         t.stamp = stamp;
         return t.tex;
     }
@@ -97,7 +112,7 @@ static dai_texture dai_material_host_texture(dai_renderer *r, const char *assets
     // A map that is not on disk yet is texture 0 - white, which multiplies to
     // exactly the material's own colour. A material is never broken by a file
     // that has not been baked yet.
-    t.tex = dai_render_texture_load(r, full, srgb);
+    t.tex = dai_material_host_load_tex(h, full, srgb);
     g_material_host_textures.push_back(t);
     return t.tex;
 }
@@ -130,7 +145,7 @@ static dai_material_desc dai_material_host_desc(const dai_matfile &m, const char
 static dai_material dai_material_host_for(const dai_ext_host *h, const std::string &rel) {
     char full[700];
     std::snprintf(full, sizeof(full), "%s/%s", h->assets_dir, rel.c_str());
-    long stamp = dai_material_host_stamp(full);
+    long stamp = h->read ? 1 : dai_material_host_stamp(full);
 
     dai_material_host_entry *e = nullptr;
     for (auto &c : g_material_host_cache)
@@ -139,12 +154,9 @@ static dai_material dai_material_host_for(const dai_ext_host *h, const std::stri
         // The material itself is unchanged - but a map it names may have been
         // re-baked, and that is a texture swap, not a new material.
         long map_stamp = 0;
-        dai_texture base = dai_material_host_texture(h->renderer, h->assets_dir,
-                                                     e->file.base_color_map, 1, &map_stamp);
-        dai_texture orm = dai_material_host_texture(h->renderer, h->assets_dir,
-                                                    e->file.orm_map, 0, &map_stamp);
-        dai_texture nrm = dai_material_host_texture(h->renderer, h->assets_dir,
-                                                    e->file.normal_map, 0, &map_stamp);
+        dai_texture base = dai_material_host_texture(h, e->file.base_color_map, 1, &map_stamp);
+        dai_texture orm = dai_material_host_texture(h, e->file.orm_map, 0, &map_stamp);
+        dai_texture nrm = dai_material_host_texture(h, e->file.normal_map, 0, &map_stamp);
         if (map_stamp != e->map_stamp) {
             dai_material_desc d = dai_material_host_desc(e->file, e->rel.c_str(), base, orm, nrm);
             dai_render_material_update(h->renderer, e->mat, &d);
@@ -155,15 +167,20 @@ static dai_material dai_material_host_for(const dai_ext_host *h, const std::stri
 
     dai_matfile m = dai_matfile_default();
     char merr[256] = { 0 };
-    if (dai_matfile_load(&m, full, merr, sizeof(merr)) != DAI_OK) return e ? e->mat : 0;
+    if (h->read) {
+        void *bytes = nullptr; size_t len = 0;
+        if (!h->read(full, &bytes, &len, h->read_user) || !bytes) return e ? e->mat : 0;
+        dai_result mr = dai_matfile_from_text(&m, (const char *)bytes, len);
+        if (h->release) h->release(bytes, h->read_user);
+        if (mr != DAI_OK) return e ? e->mat : 0;
+    } else if (dai_matfile_load(&m, full, merr, sizeof(merr)) != DAI_OK) {
+        return e ? e->mat : 0;
+    }
 
     long map_stamp = 0;
-    dai_texture base = dai_material_host_texture(h->renderer, h->assets_dir,
-                                                 m.base_color_map, 1, &map_stamp);
-    dai_texture orm = dai_material_host_texture(h->renderer, h->assets_dir,
-                                                m.orm_map, 0, &map_stamp);
-    dai_texture nrm = dai_material_host_texture(h->renderer, h->assets_dir,
-                                                m.normal_map, 0, &map_stamp);
+    dai_texture base = dai_material_host_texture(h, m.base_color_map, 1, &map_stamp);
+    dai_texture orm = dai_material_host_texture(h, m.orm_map, 0, &map_stamp);
+    dai_texture nrm = dai_material_host_texture(h, m.normal_map, 0, &map_stamp);
 
     if (!e) {
         g_material_host_cache.push_back(dai_material_host_entry{});
@@ -200,6 +217,16 @@ static void dai_material_host_apply(const dai_ext_host *h) {
     std::vector<dai_node> ids(count);
     dai_doc_nodes(h->doc, ids.data(), count);
 
+    // ONE resolve per material PATH, not per node. A scene of 569 blockouts
+    // painted with a dozen materials used to call dai_material_host_for 569
+    // times a frame, and every one of those stat()s its .daimat and all three
+    // of its maps - roughly 2000 syscalls per frame, which measured 6.8 ms and
+    // ate half the 16.7 ms a 60 Hz frame has before anything is drawn. The
+    // handles it returns are identical for identical paths, so the second ask
+    // was never anything but waste. Cleared every call: a material file that
+    // changed on disk is still picked up on the next frame, not cached away.
+    std::map<std::string, dai_material> resolved_this_frame;
+
     for (dai_node n : ids) {
         dai_node_desc r{};
         if (dai_doc_get(h->doc, n, &r) != DAI_OK || !r.materials[0]) continue;
@@ -210,7 +237,14 @@ static void dai_material_host_apply(const dai_ext_host *h) {
         if (semi != std::string::npos) first = first.substr(0, semi);
         if (!dai_matfile_is_file(first.c_str())) continue;
 
-        dai_material mat = dai_material_host_for(h, first);
+        dai_material mat;
+        std::map<std::string, dai_material>::iterator rit = resolved_this_frame.find(first);
+        if (rit != resolved_this_frame.end()) {
+            mat = rit->second;
+        } else {
+            mat = dai_material_host_for(h, first);
+            resolved_this_frame[first] = mat;
+        }
         if (!mat) continue;
         dai_entity e = dai_doc_sync_entity(h->sync, n);
         if (!e) continue;
