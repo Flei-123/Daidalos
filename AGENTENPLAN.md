@@ -401,6 +401,82 @@ Renderer, Physik, UI, Szenenformat und Export stehen bereits.
 
 ---
 
+## 6a. Stand der Umsetzung (19.09.2026, JARVIS)
+
+**M1 — erledigt, Ziel aber NICHT erreicht.** Commit `2269ca1`.
+`build.sh` hat jetzt ccache davor und führt die Compiler-Aufrufe eines
+Abschnitts parallel aus (`J` sammelt, `Jwait` ist die Barriere,
+`tools/parallel.sh`). Alles, was ein Artefakt benutzt — `ar`, ein gelaufener
+Test, ein Python-Schritt, der nächste Abschnitt — wartet vorher; die Ordnung,
+für die `build.sh` argumentiert, ist unangetastet.
+
+Gegen den Plan entschieden: **kein generiertes `build.ninja`.** Es wäre eine
+zweite Beschreibung desselben Builds, und `build.sh` ist keine Befehlsliste,
+sondern eine Argumentation mit einem Kommentar über jeder Zeile, die etwas
+schützt (Leak-Test, "compile und run sind zwei Statements", `rm` vor
+`ar rcs`). Ein Generator müsste das alles nachbilden und würde beim ersten
+einseitigen Edit auseinanderlaufen.
+
+Die erste Fassung von `tools/parallel.sh` drosselte über Hintergrund-Jobs und
+machte den Build **langsamer** — 7:08 gegen 2:35 — bei 40–44 laufbereiten
+Prozessen gegen ein Limit von 9. Grund: ein Aufruf ist nicht ein Prozess
+(g++ forkt cc1plus, as, collect2; ein Aufruf mit sechs `.cpp` arbeitet sie
+nacheinander ab). `xargs -P` begrenzt das, was wirklich begrenzt werden soll.
+
+**[gemessen] 19.09.2026, alle drei Läufe unter derselben Fremdlast** (ein
+anderer Chat hielt die Maschine bei Load 30–45, die Zahlen sind also
+pessimistisch):
+
+| Variante | Wall | CPU-Zeit |
+|---|---|---|
+| seriell, ohne ccache | **10:44** | 514 s |
+| parallel + ccache (66 % Hits) | **7:37** | 392 s |
+| parallel + ccache (heiß) | **5:58** | 357 s |
+
+Das sind **−44 %**, nicht die im Plan erhofften <30 s. Der Grund ist
+strukturell und war in der Rechnung des Plans nicht enthalten: **~50 der 98
+Aufrufe kompilieren UND linken in einem Schritt** (`g++ tests/x.cpp $LIBS -o
+build/x`). Die kann ccache grundsätzlich nicht cachen, und sie übersetzen ihre
+Quellen bei **jedem** Lauf neu — deshalb bleibt die CPU-Zeit bei ~357 s
+kleben, egal wie warm der Cache ist. Der nächste echte Schritt ist deshalb
+nicht mold, sondern: **Tests gegen Objektdateien linken statt Quellen neu zu
+übersetzen.** Das ist ein größerer Umbau als M1 selbst.
+
+Ebenfalls offen geblieben: die mold-Messung (im Plan schon als offen
+vermerkt). Sie lohnt erst, wenn die Compile-Phase wirklich klein ist.
+
+**M2 — erledigt und wirksam.** `tools/shot_guard.py`, eingehängt in
+`tools/run_tests.sh`. Prüft Byte-Duplikate (SHA-256), Fast-Duplikate über
+einen 16×16-Average-Hash, leere/flache Bilder, Name↔Datei, und fährt bei
+jedem Lauf einen **Canary**: eine absichtlich veränderte Kopie eines echten
+Frames, die als verschieden erkannt werden MUSS. Keine Abhängigkeiten — der
+PNG-Dekoder steht in der Datei.
+
+Bewertet wird das **Viewport-Rechteck** (`--crop 184,150,840,463`), nicht das
+ganze Bild: `modeling_shot` fotografiert den kompletten Editor, und ein Hash
+über die Panels misst überwiegend den Inspector.
+
+Am Tag der Einführung hat er **vier echte Lügen im Bestand** gefunden:
+
+| Paar | Abstand |
+|---|---|
+| `wide-01-editor-start` ↔ `wide-02-editor-hover` | **0** von 256 Bits, 0,025 % der Bytes |
+| `wide-01-editor-start` ↔ `wide-03-editor-gizmo-rotate` | 1 Bit |
+| `02c-cube-formation` ↔ `03-viewport-conflict` | 2 Bits, 0,47 % der Bytes |
+| `narrow-02c-cube-formation` ↔ `narrow-03-viewport-conflict` | 1 Bit |
+
+Ein „hover"-Screenshot, der der „start"-Screenshot ist, heißt: das Hover hat
+nie stattgefunden. Die Suite ist damit rot, wo sie vorher grün war
+(`TOTAL 5983 passed, 2 failed` statt `1 failed`) — genau dafür ist die
+Maßnahme da. Die drei alten Roten (`test_window_two` ohne X-Display,
+`bridge_check`, `innen_gen_shot`) sind unverändert und nicht von M1/M2
+verursacht.
+
+**Als Nächstes:** die vier Bildpaare reparieren (die Shot-Skripte erzeugen
+identische Frames), dann M3 (Layout-Assertions).
+
+---
+
 ## 7. Reihenfolge
 
 | Phase | Inhalt | Aufwand |
