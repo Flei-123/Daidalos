@@ -97,7 +97,10 @@ echo "   ok: $OUT/libdaidalos.a"
 echo "-- renderer (vulkan, win32 surface)"
 VKOBJS=""
 # rhi_vulkan_window.cpp IS the X11 backend; win32 is its sibling, not an addition.
-    for f in rhi_vulkan rhi_vulkan_frame rhi_vulkan_texture rhi_vulkan_window_win32; do
+# This list is named one by one, so every new backend translation unit has to be
+# added here as well as to build.sh: on Linux it would link anyway and the
+# Windows build would fail at the last step with an undefined symbol.
+    for f in rhi_vulkan rhi_vulkan_frame rhi_vulkan_texture rhi_vulkan_post rhi_vulkan_window_win32; do
     $CXX $FLAGS $ARCH -DVK_USE_PLATFORM_WIN32_KHR -DDAI_WINDOW_WIN32 \
         -Iinclude -Isrc -I"$VKINC" -c "src/$f.cpp" -o "$OUT/$f.o"
     VKOBJS="$VKOBJS $OUT/$f.o"

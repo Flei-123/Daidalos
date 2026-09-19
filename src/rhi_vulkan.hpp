@@ -221,6 +221,39 @@ struct dai_renderer {
     bool has_surface_ext = false;   // instance level VK_KHR_surface + xlib
     bool has_swapchain_ext = false;  // device level VK_KHR_swapchain
 
+    // ---- post processing ------------------------------------------------
+    // post_rt is the composite's destination and the readback source WHEN the
+    // chain is on; with it off the frame never touches any of this and the
+    // copy still comes straight out of color_rt, which is what keeps the
+    // visual tests bit identical. bloom_a/bloom_b are the quarter resolution
+    // ping pong pair - the blur cannot read and write one image, so there
+    // have to be two.
+    VkImage post_rt = VK_NULL_HANDLE, bloom_a = VK_NULL_HANDLE, bloom_b = VK_NULL_HANDLE;
+    VkDeviceMemory post_rt_mem = VK_NULL_HANDLE, bloom_a_mem = VK_NULL_HANDLE, bloom_b_mem = VK_NULL_HANDLE;
+    VkImageView post_rt_view = VK_NULL_HANDLE, bloom_a_view = VK_NULL_HANDLE, bloom_b_view = VK_NULL_HANDLE;
+    uint32_t bloom_w = 0, bloom_h = 0;
+
+    // A sampler of its own rather than tex_sampler: that one REPEATs, and a
+    // blur tap past the edge of the bloom image would then wrap in light from
+    // the opposite side of the screen - a bright sign on the left glowing
+    // faintly off the right edge. Clamp is the only correct choice here.
+    VkSampler post_sampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout post_dsl = VK_NULL_HANDLE;
+    VkDescriptorPool post_pool = VK_NULL_HANDLE;
+    // One set per image that is ever SAMPLED by a post pass. Allocated once at
+    // init and rewritten on resize - allocating per frame would drain a fixed
+    // pool in a few seconds of running.
+    VkDescriptorSet set_color = VK_NULL_HANDLE, set_bloom_a = VK_NULL_HANDLE, set_bloom_b = VK_NULL_HANDLE;
+    VkPipelineLayout post_layout = VK_NULL_HANDLE;
+    VkPipeline pipe_post_bright = VK_NULL_HANDLE, pipe_post_blur = VK_NULL_HANDLE,
+               pipe_post_comp = VK_NULL_HANDLE;
+    dai_postfx postfx{};        // enabled = 0: the chain does nothing at all
+    bool post_ready = false;    // images + pipelines all built
+    // Did the LAST recorded frame go through the chain? What the window
+    // backends blit from depends on it, and it is not the same question as
+    // "is the chain enabled right now".
+    bool post_used = false;
+
     char device_name[256] = {0};
     char err[256] = {0};
     double last_ms = 0.0;
@@ -243,5 +276,36 @@ void vk_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect,
 /* A descriptor set bound to one texture, for draws that name a texture instead
  * of a material - the UI. Built on first use and cached on the entry. */
 VkDescriptorSet vk_texture_set(dai_renderer *r, uint32_t tex);
+
+// ---- post processing (src/rhi_vulkan_post.cpp) ----------------------------
+
+// Shared with rhi_vulkan.cpp, which owns image creation and the shader loader.
+bool make_image(dai_renderer *r, uint32_t w, uint32_t h, VkFormat fmt, VkSampleCountFlagBits samples,
+                VkImageUsageFlags usage, VkImageAspectFlags aspect,
+                VkImage *img, VkDeviceMemory *mem, VkImageView *view);
+VkShaderModule load_module(dai_renderer *r, const char *name, bool *ok);
+
+// Builds the sampler, the layouts and the three pipelines. Called once from
+// dai_render_create. Returns false only if the SPIR-V is missing.
+bool vk_post_init(dai_renderer *r);
+// Creates post_rt and the two bloom images at the current size and points the
+// descriptor sets at them. Called from create and again from every resize -
+// a chain left pointing at a freed image is the resize bug this exists to
+// prevent.
+bool vk_post_make_targets(dai_renderer *r);
+// Frees only the size dependent half, so a resize can rebuild it.
+void vk_post_free_targets(dai_renderer *r);
+void vk_post_destroy(dai_renderer *r);
+// Records bright -> blur -> blur -> composite into an OPEN command buffer,
+// between the UI pass and the readback copy. Returns the image the readback
+// should be taken from: post_rt when it ran, color_rt when it did not.
+VkImage vk_post_record(dai_renderer *r);
+
+// The image the FINISHED frame lives in: post_rt when the chain ran for the
+// last frame, color_rt otherwise. The window backends blit from this rather
+// than naming color_rt, or a window would show the unprocessed frame while
+// dai_render_readback returned the processed one - the same frame looking
+// like two different pictures depending on how you asked for it.
+VkImage vk_present_image(dai_renderer *r);
 
 #endif

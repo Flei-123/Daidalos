@@ -76,6 +76,7 @@ test_daitex
 test_gltf_headless
 test_ui_headless
 test_viewport_headless
+test_postfx
 "
 # ...and the ones build.sh cannot build. That script is frozen and names every
 # translation unit it compiles one by one, so a feature whose implementation is
@@ -103,6 +104,16 @@ HEADER_ONLY="test_daitex"
 # check would.
 SPLIT_SUITES="test_gltf_headless test_ui_headless test_viewport_headless"
 
+# test_postfx is in the list above rather than on the GPU line below, and the
+# distinction is real: the suites on that line want a SWAPCHAIN, a display or a
+# font atlas. test_postfx wants a DEVICE, and a software device is a device -
+# it creates one, renders offscreen and reads the pixels back, which is what
+# every check in it is made of. It skips itself with a printed reason and a
+# 0/0 summary if no device can be created at all, so a machine without one
+# reports the truth instead of a failure. Excluded tests rot, and this one
+# guards the claim that post processing OFF leaves every reference image in
+# this repository bit identical.
+#
 # Deliberately NOT here (each needs a GPU or a display). The list is a VARIABLE
 # rather than a comment because the run prints it: a suite that is quietly
 # absent looks exactly like a suite that passed, and "all green" over an
