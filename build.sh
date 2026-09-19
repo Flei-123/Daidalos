@@ -5,7 +5,7 @@
 #   ./build.sh noaudio    build without Aulos
 #
 # The interesting part is the "leak test": dai_engine.cpp is compiled WITHOUT
-# the Jolt include path. If a Jolt header ever sneaks into the engine core,
+# the Talos include path. If a Talos header ever sneaks into the engine core,
 # this build fails - which is the whole point of dai_physics.hpp.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -34,18 +34,12 @@ fi
 # That is exactly how this checkout spent a round with a drone show suite that
 # had not compiled since the day before. Two statements: the compile fails, the
 # build stops.
+# Sibling repositories. Default: checked out next to this one
+# (../talos, ../aulos, ../mnemosyne); override with the environment.
+TALOS=${TALOS:-$PWD/../talos}
+AULOS=${AULOS:-$PWD/../aulos}
+MNEMOSYNE=${MNEMOSYNE:-$PWD/../mnemosyne}
 
-JOLT_SRC=${JOLT_SRC:-/root/projects/JoltPhysics}
-JOLT_LIB=${JOLT_LIB:-/root/projects/jolt-build}
-TALOS=${TALOS:-/root/projects/talos}
-AULOS=${AULOS:-/root/projects/aulos}
-MNEMOSYNE=${MNEMOSYNE:-/root/projects/mnemosyne}
-
-# These MUST match how libJolt.a was compiled. A mismatch is not a link error,
-# it is a runtime crash: the JPH_USE_* defines change the layout of Vec3/Mat44.
-JOLT_DEFS="-DJPH_DEBUG_RENDERER -DJPH_OBJECT_STREAM -DJPH_PROFILE_ENABLED \
- -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_CPU_COMPUTE -DJPH_USE_F16C -DJPH_USE_FMADD \
- -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DNDEBUG"
 ARCH="-mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse"
 FLAGS="-std=c++17 -O3 -fno-rtti -fno-exceptions -ffp-contract=fast -pthread -Wall -Wno-unused-parameter"
 
@@ -78,14 +72,14 @@ Jwait
 echo "-- physics backend availability"
 # Deciding this BEFORE the engine core is compiled, because dai_engine.cpp is
 # what refuses DAI_PHYSICS_TALOS when the backend was not linked in.
-if [ -f "${TALOS:-/root/projects/talos}/TalC/talos.h" ] && [ -f "${TALOS:-/root/projects/talos}/build/libtalos.a" ]; then
+if [ -f "$TALOS/TalC/talos.h" ] && [ -f "$TALOS/build/libtalos.a" ]; then
     ENGINE_DEFS=""
 else
     ENGINE_DEFS="-DDAI_NO_TALOS"
 fi
 
 Jwait
-echo "-- engine core (no Jolt include path - this is the leak test)"
+echo "-- engine core (no Talos include path - this is the leak test)"
 J $CXX $FLAGS $ARCH $ENGINE_DEFS -Iinclude -Isrc -c src/dai_engine.cpp -o build/dai_engine.o
 
 Jwait
@@ -93,12 +87,9 @@ echo "-- physics backend: null"
 J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/physics_null.cpp -o build/physics_null.o
 
 Jwait
-echo "-- physics backend: jolt"
-J $CXX $FLAGS $ARCH $JOLT_DEFS -Iinclude -Isrc -I"$JOLT_SRC" -c src/physics_jolt.cpp -o build/physics_jolt.o
-
-# Second real backend: Talos through its C API. Optional the same way audio is
+# Real backend: Talos through its C API. Optional the same way audio is
 # - without it the engine still builds and DAI_PHYSICS_TALOS is refused rather
-# than silently answered with Jolt.
+# than silently answered by another backend.
 TALOS_OBJ=""
 TALOS_LIB=""
 if [ -f "$TALOS/TalC/talos.h" ] && [ -f "$TALOS/build/libtalos.a" ]; then
@@ -141,18 +132,7 @@ J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc.cpp -o build/dai_doc.o
 J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_text.cpp -o build/dai_doc_text.o
 J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/dai_doc_sync.cpp -o build/dai_doc_sync.o
 
-# rm FIRST. `ar rcs` REPLACES the members it is given and leaves every other
-# member of an existing archive exactly where it was - so an object that was
-# once listed here and later moved to libdaidalos_vk.a stayed in this archive
-# forever, never recompiled, and whatever linked libdaidalos.a first got that
-# fossil. Measured today: eleven ghosts, among them dai_font.o, dai_ui.o and
-# dai_script.o - a font fix landed in the .o, the archive kept the old one,
-# and the difference was invisible because the editor happens to link the vk
-# archive first. Same failure as the stale .spv two blocks down, same fix.
-rm -f build/libdaidalos.a build/libdaidalos_vk.a build/libdaidalos_assets.a
-Jwait
-ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o build/physics_jolt.o ${TALOS_OBJ} \
-       build/dai_material.o \
+ar rcs build/libdaidalos.a build/dai_engine.o build/physics_null.o ${TALOS_OBJ} \
        build/dai_audio.o build/dai_scene.o build/dai_input.o build/dai_editor.o \
        build/dai_doc.o build/dai_doc_text.o build/dai_doc_sync.o build/dai_project.o \
        build/dai_show.o build/dai_show_sample.o build/dai_show_assign.o \
@@ -307,11 +287,11 @@ Jwait
     echo "-- assets: skipped (no Mnemosyne at $MNEMOSYNE)"
 fi
 
-LIBS="build/libdaidalos.a $AUDIO_LIB ${TALOS_LIB:-} -L$JOLT_LIB -lJolt -lpthread -lm"
-VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB ${TALOS_LIB:-} -L$JOLT_LIB -lJolt -lvulkan ${X11_LIB:-} -lpthread -lm -ldl"
+LIBS="build/libdaidalos.a $AUDIO_LIB ${TALOS_LIB:-} -lpthread -lm"
+VKLIBS="build/libdaidalos_vk.a build/libdaidalos.a build/libdaidalos_vk.a $AUDIO_LIB ${TALOS_LIB:-} -lvulkan ${X11_LIB:-} -lpthread -lm"
 
 # --- backend leak tests -------------------------------------------------
-# Same idea as the Jolt one, for the renderer: the RHI must be swappable for
+# Same idea as the physics one, for the renderer: the RHI must be swappable for
 # D3D12/Metal/an emitter into someone else's engine by replacing rhi_*.cpp.
 Jwait
 echo "-- leak test: no talos.h outside src/physics_talos.cpp"
@@ -460,7 +440,9 @@ J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_hud.cpp src/dai_ui.cpp src/dai_fo
     J $CXX $FLAGS $ARCH -Iinclude tests/test_ui.cpp $VKLIBS -o build/test_ui
     # The world clipped into the scene window, and picking in the same pixels.
     J $CXX $FLAGS $ARCH -Iinclude tests/test_viewport.cpp $VKLIBS -o build/test_viewport
-    DAI_SHADER_DIR=shaders ./build/test_viewport
+    # Exit 77 = "no Vulkan device here" (headers present, no driver). That is a
+    # skip, not a failure - CI runners without lavapipe hit exactly this.
+    DAI_SHADER_DIR=shaders ./build/test_viewport || { rc=$?; [ "$rc" = 77 ] && echo "   (skipped: no Vulkan device)" || exit $rc; }
     # Windows and the solid texel every rectangle in the interface is drawn
     # with. Needs no renderer: it reads the atlas and the vertices.
     J $CXX $FLAGS $ARCH -Iinclude -Isrc tests/test_ui_window.cpp src/dai_ui.cpp src/dai_font.cpp \

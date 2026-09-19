@@ -3,8 +3,8 @@
 // Gravity, velocity integration, a floor plane at y = 0 and nothing else. No
 // collision detection between bodies, no constraints, no solver.
 //
-// Its job is not to be useful. Its job is to fail loudly if a single Jolt
-// concept ever leaks out of physics_jolt.cpp: the engine, the tests and the
+// Its job is not to be useful. Its job is to fail loudly if a single Talos
+// concept ever leaks out of physics_talos.cpp: the engine, the tests and the
 // renderer must build and run against this file. Keep it that way.
 
 #include "dai_physics.hpp"

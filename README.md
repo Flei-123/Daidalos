@@ -6,7 +6,7 @@ painful to retrofit later.
 
 ```
   simulation   deterministic fixed tick, snapshots, rollback, input queue
-  physics      swappable backend (Talos ships; Jolt as reference, null for proof)
+  physics      swappable backend (Talos by default, null backend for proof)
   scene        entities: a body plus how it looks, compounds, camera helpers
   rendering    Vulkan 1.3, meshes, materials, sun, sky, shadows, MSAA
   audio        event driven, decoupled from the sim (Aulos)
@@ -23,17 +23,24 @@ The simulation is a pure function of state and input. It never reads the clock,
 the audio system, the renderer, or an unseeded random number. That is what makes
 rollback netcode possible - and it is the thing you cannot add afterwards.
 
-MIT licensed.
+Licensed under GPL-3.0-or-later with an attribution requirement — see LICENSE and NOTICE.
 
 ---
 
 ## Build and run
 
 ```bash
+# Sibling libraries (optional, all by the same author). build.sh looks for them
+# next to this checkout; override with TALOS=, AULOS=, MNEMOSYNE=.
+git clone https://github.com/Flei-123/Talos     ../talos     && (cd ../talos     && ./build.sh release)
+git clone https://github.com/Flei-123/Aulos     ../aulos     && (cd ../aulos     && ./build.sh)
+git clone https://github.com/Flei-123/Mnemosyne ../mnemosyne
+
 ./build.sh                     # engine + backends + renderer + tests + examples
 ./build.sh noaudio             # without Aulos
+cmake -B build-cmake && cmake --build build-cmake -j   # or: CMake, same layers
 
-./build/test_daidalos                                    # 48 simulation assertions
+./build/test_daidalos                                    # 51 simulation assertions
 ./build/test_merge                                       # 45 merge/split assertions
 ./build/test_font                                        # 16 font assertions
 DAI_SHADER_DIR=shaders ./build/test_ui /tmp              # 19 UI assertions
@@ -59,11 +66,9 @@ DAI_SHADER_DIR=shaders ./build/sandbox_demo 6 /tmp       # general sandbox scene
 DAI_SHADER_DIR=shaders ./build/vehicle_demo  6 /tmp      # machine built from joints
 ```
 
-`build.sh` compiles `dai_engine.cpp` **without any backend's include path** -
-not Jolt's, not Talos's. If a backend header ever leaks into the engine core,
-the build breaks. That is the entire point of `src/dai_physics.hpp`, and it is
-what made swapping the default from Jolt to Talos a link-line change rather
-than a rewrite.
+`build.sh` compiles `dai_engine.cpp` **without any physics include path**. If a
+backend header ever leaks into the engine core, the build breaks. That is the
+entire point of `src/dai_physics.hpp`.
 
 The same trick guards the renderer: the build fails if any Vulkan symbol
 appears outside `src/rhi_vulkan*`, and it links and runs a program that uses
@@ -72,12 +77,8 @@ or a bridge into someone else's engine means writing one `rhi_*.cpp`.
 
 ### Dependencies, in full
 
-Aulos (audio) is vendored. Talos - the physics engine that ships in the editor
-- is a sibling project built alongside this one; Jolt is vendored too but is
-opt-in now (`WITH_JOLT=1`), kept as the reference implementation the physics
-tests compare against rather than as something the binary carries. The Windows
-editor links Talos and the null backend only, which is what it says on start-up.
-Vulkan is an API, not a library that does work for us. Everything else - matrix maths, mesh generation, OBJ,
+Talos (physics) and Aulos (audio) are used. Vulkan is an API, not a library
+that does work for us. Everything else - matrix maths, mesh generation, OBJ,
 PNG **encode and decode**, DEFLATE, JSON, glTF, base64, the whole renderer - is
 written here. No stb, no zlib, no libpng, no GLM, no tinygltf, no VMA.
 
@@ -121,15 +122,15 @@ language - JS computes `-4 + (i % 8) * 1.1` in double and rounds on the way
 into a float parameter, C++ does it in float throughout, so the two builds
 start microns apart. Feed both sides bit identical inputs and they agree.
 
-40 KB of wasm for engine + scene + particles. `DAI_NO_JOLT` drops the physics
+40 KB of wasm for engine + scene + particles. `DAI_NO_PHYSICS` drops the physics
 backend from the link, which is also a stricter version of the leak test: the
 engine has to be complete without it.
 
 What does NOT port yet is the renderer - Vulkan has no browser equivalent. A
 web build needs a WebGPU backend behind `dai_render.h`, which is precisely the
 swap the RHI boundary exists for: one new `rhi_*.cpp`, nothing else changes.
-Jolt itself compiles to wasm (upstream supports Emscripten), so a full browser
-build is a build system exercise rather than a redesign.
+Talos is plain C++17 without OS dependencies, so it compiles to wasm as well:
+a full browser build is a build system exercise rather than a redesign.
 
 ## Layers
 
@@ -142,20 +143,9 @@ Bodies: box, sphere, capsule, compound. Joints: fixed, hinge (bearing), slider
 
 ### Physics backend - `src/dai_physics.hpp`
 
-One interface, no foreign types: `dai_vec3`, `dai_quat`, slot indices. Three
-implementations:
-
-* `physics_talos.cpp` - **what ships.** Talos is this project's own solver, and
-  the only backend the editor you download contains.
-* `physics_jolt.cpp` - the only file that includes Jolt. Opt-in (`WITH_JOLT=1`),
-  and worth keeping: an independent implementation is the only honest way to
-  tell "our solver is right" from "our solver and our test agree".
-* `physics_null.cpp` - gravity and a floor. It exists so the abstraction can be
-  proven, not assumed.
-
-Two backends that both pass the same suite is the reason the interface is
-trusted; a third that does almost nothing is the reason it is known to be an
-interface at all.
+One interface, no foreign types: `dai_vec3`, `dai_quat`, slot indices. Two
+implementations: `physics_talos.cpp` (Talos, the author's own deterministic physics engine) and `physics_null.cpp` (gravity and a floor - it exists so the abstraction
+can be proven, not assumed).
 
 ### Scene document - `include/dai_doc.h`
 
@@ -544,100 +534,6 @@ boxes and a radius for spheres.
 
 ---
 
-## Drone shows - `include/dai_show.h`, `include/dai_show_ui.h`
-
-A project has a `kind`, and the second one is `droneshow`. A project file
-without the line is a game, so every scene made before this existed opens
-exactly as it did. What changes on open is the panel set - not the engine, not
-the renderer, not the dock. There is one binary and one editor.
-
-The reason this fits here at all is the rule at the top of this file. A drone
-show is `state(n+1) = step(state(n), input(n))` with the stakes raised: if a
-tool says *collision free*, that answer has to come out the same on the
-operator's laptop, on the show director's workstation and in the accident
-report. So every random draw comes from a seed in the input, every parallel
-section reduces in a fixed index order, and nothing in the solve path reads a
-clock. `build/test_droneshow` runs the whole pipeline twice and compares the
-result with `memcmp` - not "within epsilon".
-
-Six stages, and each one exists because the naive version of it does not scale
-or does not tell the truth:
-
-```
-  sample     mesh -> exactly N points, Poisson disk + Lloyd, surface / volume /
-             silhouette. Says NO before it works when N drones do not fit into
-             the figure at min_distance, and names the size that would.
-  assign     drone -> point as a linear sum assignment. Exact (Jonker-Volgenant)
-             while it is affordable, a spatially decomposed auction when it is
-             not, and the panel says which one ran and what it cost in metres.
-  layer      optimal assignment still crosses. Legs are lifted onto height
-             layers and delayed until the crossings are gone; what cannot be
-             separated is ITEMISED, and the stage returns an error rather than
-             a clean bill.
-  profile    linear, smooth (v = 0 at both ends), smooth from one end.
-             Synchronised or staggered. v_max and a_max are refused, not hoped
-             for: a duration that breaks them comes back with the shortest one
-             that does not.
-  validate   distance, speed, acceleration, geofence, ground clearance over the
-             whole timeline, through a uniform grid and streamed over time.
-  export     .skyc (Skybrush's container, implemented from the format
-             description - no GPL code was copied, this is MIT), plus CSV and
-             JSON for anyone who wants to check the numbers themselves.
-```
-
-The two numbers that decide whether this is a tool or a demo are memory and
-time. A show is keyframes and never materialised ticks - 10,000 drones through
-the test show is **1.87 MB** of plan where a tick array would be 3.4 GB - and
-the validator walks time in windows rather than building that array. Measured
-by `build/test_droneshow`, which prints the table rather than claiming it:
-
-| drones | sample | assign | layer | profile | validate | plan | check peak |
-|--------|--------|--------|-------|---------|----------|------|------------|
-| 100 | 17 ms | 2 ms | 1 ms | 0.0 ms | 14 ms | 0.01 MB | 0.01 MB |
-| 1,000 | 98 ms | 452 ms | 18 ms | 0.1 ms | 221 ms | 0.14 MB | 0.09 MB |
-| 10,000 | 1167 ms | 268 ms | 979 ms | 1.2 ms | 7016 ms | 1.87 MB | 1.08 MB |
-
-Ten times the drones cost about twelve times the seconds, which is the shape of
-a broadphase; a quadratic tick would have cost a hundred times and a cubic
-assignment a thousand. The test asserts that shape, so the day one of the two
-paths comes back the build goes red instead of merely printing an ugly number.
-
-```bash
-./build/test_droneshow            # 235 assertions, the determinism proof, the table
-./build/test_droneshow quick      # the same without the 10,000 drone row
-DAI_SHADER_DIR=shaders ./build/droneshow_shot .gauntlet-shots 1600 900
-```
-
-The panels are the editor's own, not a second set beside them: the running
-order is the **Hierarchy** (every step with its figures under it; clicking a
-row selects the figure and takes the timeline to it), the show's numbers
-(fleet, minimum distance, v_max, a_max, sampling mode, assignment method,
-Solve) are in **Settings** where a project's settings live, the faults are
-written to the **Console** as a solve produces them - and `dai_show_ui_validation`
-still draws the conflict list into any rectangle a host gives it, which is what
-`04-validation.png` is a picture of. A click on a row jumps the timeline to the
-moment and selects the two drones. Then there is the **preview**, which draws the
-fleet as coloured points in their real LED colour with the conflicting pairs in
-red and a line between them. The preview goes through `dai_ui`, not through the
-renderer: a show at this stage is points, lines and text, and routing them
-through the 2D canvas is why a second project type needed no new pipeline, no
-new shader and no branch in `dai_render`.
-
-What this stage cannot do yet is on the screenshots rather than hidden in a
-comment. A detour has to cruise above BOTH formations - that is where the
-guarantee comes from, a lifted leg cannot meet a drone parked in either of them
-- and on a figure that is tall next to the seconds its transition was given,
-that climb breaks v_max. A detour that breaks a limit is not a fix, it is a
-different violation, so the leg stays where it is and the pair is listed. The
-demo show under `.gauntlet-shots` is that case: `11 crossings: 0 lifted, 0
-delayed, 11 left over`, ten of them reported rather than hidden and one near
-miss put there on purpose. The panel says which, when, and by how many
-centimetres; the seconds a move is given are the director's to change, and
-guessing on the operator's behalf is the one thing a tool with this claim on it
-may not do.
-
----
-
 ## Looking at the output
 
 A renderer that runs is not a renderer that is correct. Two tools exist for
@@ -866,31 +762,6 @@ library generated from a name list is enough to link against it
 (`thirdparty/win/vulkan-1.def`, regenerated by `tools/make_vulkan_def.sh` from
 the calls the engine actually makes). The shipped `.exe` needs no runtime, no
 redistributable and no SDK. It is statically linked, so it is one file.
-
-*Jolt for Windows.* Only needed with `WITH_JOLT=1` - the shipped editor uses
-Talos and does not link Jolt at all. Kept here because the traps are real and
-cost a day each. `tools/build_jolt_win.sh`, once. Two traps in there, both
-already sprung and documented in the script: Debian's default mingw uses the
-win32 thread model, which has no `std::mutex`, so Jolt does not compile at all -
-the `-posix` variants of the same compiler do. And Jolt turns on a DX12 compute
-backend for Windows targets that wants `dxcapi.h` from the DirectX shader
-compiler, which mingw does not ship and the engine does not use.
-
-The bug worth remembering is the third one. The first run opened the window,
-printed the device name, and then died inside `dai_create`. The cause was that
-`libJolt.a` had been built with `JPH_PROFILE_ENABLED` and `JPH_DEBUG_RENDERER`
-and the calling code had not - Jolt's headers change structure layout on those,
-so it links cleanly and crashes on the first call. `build_win.sh` now uses
-exactly the defines and `-m` flags the library was built with, and says where to
-read them back out of if it ever needs checking. A renderer that starts and a
-physics engine that crashes look identical from the outside until something
-prints between them.
-
-`examples/win_smoke.cpp` is what produced the output above: it opens a window,
-drops 24 bodies onto a floor, presents 120 frames, reads the last one back and
-writes it out, and fails if the frame comes back black - a window that presented
-nothing and a frame that rendered nothing would otherwise both look like
-success.
 
 ### The editor runs on Windows too
 
@@ -1127,8 +998,8 @@ A window alone on an edge gets all of it.
 **Removing a component does not remove the model.** Unchecking Box Collider
 used to make the mesh vanish, because the entity WAS the body. Rendering and
 physics are separate now: `dai_scene_spawn_render` gives a physics-less node
-a picture and a transform, `no_collider` becomes a physics **sensor** (Jolt
-`mIsSensor`, Talos `is_sensor` - which also gives Is Trigger its real
+a picture and a transform, `no_collider` becomes a physics **sensor** (Talos
+`is_sensor` - which also gives Is Trigger its real
 behaviour: reports overlaps, blocks nothing), `no_rigidbody` becomes static.
 
 **Duplicate keeps the colour.** The palette colour comes from the node id, the

@@ -94,6 +94,13 @@ function park(n) { if (n >= 0) node.setPos(n, 0, -60, 0); }
 
 /* ---- Aufbau ------------------------------------------------------------- */
 function init() {
+  /* Der Neon-Look. Die Halle ist gelb-pink gekachelt und voller Leuchtschrift -
+   * ohne Bloom bleibt dieses Licht auf der Oberflaeche kleben. Einmal armen,
+   * danach fasst das Spiel nur noch den Trefferblitz an. */
+  if (typeof fx === "object" && fx && fx.set) {
+    fx.set({ bloom: 0.85, threshold: 0.62, knee: 0.3,
+             vignette: 0.32, grain: 0.035, aberration: 0.0022, scanlines: 0.07 });
+  }
   SPEED = num("speed", 5.5); SPRINT = num("sprintMul", 1.75);
   SENS = num("mouseSens", 0.18); THROW = num("throwSpeed", 16);
   GRAV = num("gravity", 14);
@@ -504,6 +511,7 @@ function frame() {
   if (fed >= total) {
     score += Math.floor(timeLeft) * 10;
     phase = "clear"; stateT = 3.2;
+    if (typeof fx === "object" && fx && fx.flash) fx.flash(0.35, 1.0, 0.94, 0.55);
     msg = "LEVEL " + (level + 1) + " GESCHAFFT";
     snd("level_clear", 1, 1);
   } else if (timeLeft <= 0) {
@@ -530,6 +538,11 @@ function feedHorse(ho) {
    * Die Krone gehoert ueber DIESES Pferd - und muss ihm folgen, denn ein
    * gefuettertes Pferd laeuft dem Spieler hinterher. */
   if (ho.crown >= 0) node.setPos(ho.crown, ho.x, 3.1, ho.z);
+  /* Sofortiges Feedback im ganzen Bild, nicht nur am Tier: die Web-Version
+   * hat dafuer ein Hitmarker-Kreuz, und genau dieses "es hat gezaehlt" hat
+   * hier gefehlt. Warm und kurz, mit der Combo etwas kraeftiger. */
+  if (typeof fx === "object" && fx && fx.flash)
+    fx.flash(1.0, 0.82, 0.25, 0.18 + Math.min(combo, 5) * 0.03);
   snd3("wing_hit", ho.x, 1.6, ho.z, 0.8, 1);
   snd3("horse_feed", ho.x, 2.2, ho.z, 0.7, 1);
   snd3("horse_neigh", ho.x, 2.4, ho.z, 0.55, 1);

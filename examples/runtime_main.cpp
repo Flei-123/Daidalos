@@ -409,6 +409,49 @@ static int rt_audio_vfs_read(const char *path, void **out, size_t *len, void *) 
 }
 static void rt_audio_vfs_release(void *bytes, void *) { if (bytes) dai_vfs_free(bytes); }
 
+
+// ---- post processing ------------------------------------------------------
+// The renderer's bloom/grain/lens chain is OFF until a host arms it, and until
+// now no host did: only tests/test_postfx.cpp ever called it. So every shipped
+// game looked flat while the feature sat there finished. This arms it and puts
+// it on the `fx` global, which is what makes a hit FEEL like a hit.
+static dai_postfx g_fx{};
+static int        g_fx_on = 0;
+static float      g_flash_decay = 0.0f;
+
+static void rt_fx_set(const double *bloom, const double *threshold, const double *knee,
+                      const double *vignette, const double *grain, const double *aberration,
+                      const double *scanlines, void *) {
+    if (bloom)      g_fx.bloom_intensity = (float)*bloom;
+    if (threshold)  g_fx.bloom_threshold = (float)*threshold;
+    if (knee)       g_fx.bloom_knee      = (float)*knee;
+    if (vignette)   g_fx.vignette        = (float)*vignette;
+    if (grain)      g_fx.grain           = (float)*grain;
+    if (aberration) g_fx.aberration      = (float)*aberration;
+    if (scanlines)  g_fx.scanlines       = (float)*scanlines;
+    // Sensible companions the first time a game asks for bloom without saying
+    // where it starts: a threshold of 0 makes the whole picture glow.
+    if (bloom && g_fx.bloom_intensity > 0.0f && g_fx.bloom_threshold <= 0.0f) {
+        g_fx.bloom_threshold = 0.7f;
+        g_fx.bloom_knee      = 0.3f;
+    }
+    g_fx.enabled = 1;
+    g_fx_on = 1;
+}
+static void rt_fx_flash(double r, double g, double b, double amount, void *) {
+    g_fx.flash_color[0] = (float)r;
+    g_fx.flash_color[1] = (float)g;
+    g_fx.flash_color[2] = (float)b;
+    g_fx.flash_amount   = (float)amount;
+    // The renderer has no clock, so the fade lives here. ~0.2 s at 60 Hz.
+    g_flash_decay = (float)amount * 5.0f;
+    g_fx.enabled = 1;
+    g_fx_on = 1;
+}
+static void rt_fx_off(void *) { g_fx.enabled = 0; g_fx_on = 0; }
+
+static dai_script_fx_host g_fx_host = { rt_fx_set, rt_fx_flash, rt_fx_off, nullptr };
+
 static dai_script_audio_host g_audio_host = { rt_audio_play, rt_audio_stop,
                                               rt_audio_listener, nullptr };
 
@@ -1174,6 +1217,7 @@ static void scripts_start(void) {
             dai_script_bind_play(s, &g_play_host);
             dai_script_bind_gui(s, &g_gui_host);
             if (g_audio) dai_script_bind_audio(s, &g_audio_host);
+            dai_script_bind_fx(s, &g_fx_host);
             // The node the behaviour is ON, so a script can move itself
             // without looking its own name up.
             dai_script_set_number(s, "self", (double)(uint32_t)all[k]);
@@ -1684,6 +1728,17 @@ int main(int argc, char **argv) {
 
             draw_hud(r, (float)ww, (float)wh);
 
+            // Arm the chain for this frame: the grain is seeded from the
+            // frame counter (never the clock, so a replay looks identical),
+            // and the hit flash fades here because the renderer cannot.
+            if (g_fx_on) {
+                if (g_fx.flash_amount > 0.0f) {
+                    g_fx.flash_amount -= g_flash_decay * (float)dt;
+                    if (g_fx.flash_amount < 0.0f) g_fx.flash_amount = 0.0f;
+                }
+                g_fx.frame_index++;
+                dai_render_postfx(r, &g_fx);
+            }
             auto T7 = std::chrono::high_resolution_clock::now();
             dai_render_frame(r, inst.data(), n);
             dai_window_present(win);

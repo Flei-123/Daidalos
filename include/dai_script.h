@@ -285,6 +285,31 @@ typedef struct dai_script_audio_host {
 } dai_script_audio_host;
 DAI_API void dai_script_bind_audio(dai_script *s, const dai_script_audio_host *host);
 
+/* POST PROCESSING from a behaviour, as the global `fx`. The renderer has had
+ * bloom, grain and a lens for a while, but nothing outside the tests ever
+ * switched them on - a chain that is off by default and that no host arms is
+ * a feature the player never sees. This is the arming.
+ *
+ *   fx.set({ bloom: 0.8, threshold: 0.7, knee: 0.3, vignette: 0.35,
+ *            grain: 0.04, aberration: 0.002, scanlines: 0.1 })
+ *   fx.flash(1, 0.9, 0.2, 0.6)   -> colour + amount, THIS frame
+ *   fx.off()
+ *
+ * set() keeps what it is not given, so a game can arm its look once in init()
+ * and afterwards only touch the flash. The flash is what a hit feels like:
+ * the host drives it down itself, because the renderer has no clock. */
+typedef struct dai_script_fx_host {
+    /* All values 0..1 unless noted; see dai_postfx in dai_render.h. A NULL
+     * entry for any field means "leave it as it is". */
+    void (*set)(const double *bloom, const double *threshold, const double *knee,
+                const double *vignette, const double *grain, const double *aberration,
+                const double *scanlines, void *user);
+    void (*flash)(double r, double g, double b, double amount, void *user);
+    void (*off)(void *user);
+    void *user;
+} dai_script_fx_host;
+DAI_API void dai_script_bind_fx(dai_script *s, const dai_script_fx_host *host);
+
 /* Any host value scripts can read through `state.<name>`. */
 DAI_API void dai_script_set_number(dai_script *s, const char *name, double value);
 DAI_API void dai_script_set_string(dai_script *s, const char *name, const char *value);

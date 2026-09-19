@@ -31,6 +31,8 @@ struct dai_script {
     int has_editor = 0;
     dai_script_audio_host audio{};
     int has_audio = 0;
+    dai_script_fx_host fx{};
+    int has_fx = 0;
     std::string last_path;
     uint32_t errors = 0;
 };
@@ -646,6 +648,42 @@ void dai_script_bind_audio(dai_script *s, const dai_script_audio_host *host) {
     JS_FreeValue(s->ctx, global);
 }
 
+
+/* fx.set({...}) - only the fields that are present are changed, so a game
+ * arms its look once and afterwards touches nothing but the flash. */
+JSValue js_fx_set(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = self_of(ctx);
+    if (!s || !s->has_fx || !s->fx.set || argc < 1) return JS_UNDEFINED;
+    double v[7];
+    const double *p[7] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+    static const char *KEY[7] = { "bloom", "threshold", "knee", "vignette",
+                                  "grain", "aberration", "scanlines" };
+    if (JS_IsObject(argv[0])) {
+        for (int i = 0; i < 7; ++i) {
+            JSValue f = JS_GetPropertyStr(ctx, argv[0], KEY[i]);
+            if (!JS_IsUndefined(f) && !JS_IsNull(f)) { v[i] = num(ctx, f); p[i] = &v[i]; }
+            JS_FreeValue(ctx, f);
+        }
+    }
+    s->fx.set(p[0], p[1], p[2], p[3], p[4], p[5], p[6], s->fx.user);
+    return JS_UNDEFINED;
+}
+JSValue js_fx_flash(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv) {
+    dai_script *s = self_of(ctx);
+    if (!s || !s->has_fx || !s->fx.flash) return JS_UNDEFINED;
+    double r = argc > 0 ? num(ctx, argv[0], 1) : 1;
+    double g = argc > 1 ? num(ctx, argv[1], 1) : 1;
+    double b = argc > 2 ? num(ctx, argv[2], 1) : 1;
+    double a = argc > 3 ? num(ctx, argv[3], 0.5) : 0.5;
+    s->fx.flash(r, g, b, a, s->fx.user);
+    return JS_UNDEFINED;
+}
+JSValue js_fx_off(JSContext *ctx, JSValueConst, int, JSValueConst *) {
+    dai_script *s = self_of(ctx);
+    if (s && s->has_fx && s->fx.off) s->fx.off(s->fx.user);
+    return JS_UNDEFINED;
+}
+
 void dai_script_bind_gui(dai_script *s, const dai_script_gui_host *host) {
     if (!s || !host) return;
     s->gui = *host;
@@ -658,6 +696,19 @@ void dai_script_bind_gui(dai_script *s, const dai_script_gui_host *host) {
     JS_SetPropertyStr(s->ctx, gui, "button", JS_NewCFunction(s->ctx, js_gui_button, "button", 5));
     JS_SetPropertyStr(s->ctx, gui, "size", JS_NewCFunction(s->ctx, js_gui_size, "size", 0));
     JS_SetPropertyStr(s->ctx, global, "gui", gui);
+    JS_FreeValue(s->ctx, global);
+}
+
+void dai_script_bind_fx(dai_script *s, const dai_script_fx_host *host) {
+    if (!s || !host) return;
+    s->fx = *host;
+    s->has_fx = 1;
+    JSValue global = JS_GetGlobalObject(s->ctx);
+    JSValue fx = JS_NewObject(s->ctx);
+    JS_SetPropertyStr(s->ctx, fx, "set", JS_NewCFunction(s->ctx, js_fx_set, "set", 1));
+    JS_SetPropertyStr(s->ctx, fx, "flash", JS_NewCFunction(s->ctx, js_fx_flash, "flash", 4));
+    JS_SetPropertyStr(s->ctx, fx, "off", JS_NewCFunction(s->ctx, js_fx_off, "off", 0));
+    JS_SetPropertyStr(s->ctx, global, "fx", fx);
     JS_FreeValue(s->ctx, global);
 }
 

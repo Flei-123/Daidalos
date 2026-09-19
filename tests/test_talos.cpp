@@ -1,4 +1,4 @@
-// The Talos backend, held to the same claims as the Jolt one.
+// The Talos backend, held to the same claims the engine test makes.
 //
 // This is the file that decides whether "the physics backend is swappable" is
 // true. A backend that merely LINKS proves nothing: it has to collide, report
@@ -278,41 +278,6 @@ static void test_compound() {
     dai_destroy(w);
 }
 
-// The point of the exercise: the same scene, two engines. They may not agree to
-// the last bit - different solvers - but they must agree about the world.
-static void test_against_jolt() {
-    std::printf("\n[9] Dieselbe Szene auf beiden Backends\n");
-    struct Result { float y, x; uint32_t contacts; };
-    Result r[2]{};
-    const int backends[2] = { DAI_PHYSICS_JOLT, DAI_PHYSICS_TALOS };
-    const char *names[2] = { "jolt", "talos" };
-
-    for (int k = 0; k < 2; ++k) {
-        dai_world *w = world_with_floor(backends[k], 120);
-        if (!w) { CHECK(false, "no world for %s", names[k]); return; }
-        dai_body_desc bd{};
-        bd.shape = DAI_SHAPE_BOX; bd.motion = DAI_DYNAMIC;
-        bd.half_extent = { 0.5f, 0.5f, 0.5f };
-        bd.position = { 0.0f, 3.0f, 0.0f };
-        bd.rotation = { 0, 0, 0, 1 };
-        bd.density = 1000.0f;
-        bd.no_sleeping = 1;               // so the contact count means something
-        dai_body b = dai_body_create(w, &bd);
-        for (int i = 0; i < 480; ++i) dai_step(w);
-        dai_vec3 p = pos_of(w, b);
-        r[k].y = p.y; r[k].x = p.x;
-        r[k].contacts = dai_poll_contacts(w, nullptr, 0);
-        std::printf("  %-6s: Ruhelage y = %.4f, x = %.4f, Kontakte %u\n",
-                    names[k], p.y, p.x, r[k].contacts);
-        dai_destroy(w);
-    }
-    CHECK(std::fabs(r[0].y - r[1].y) < 0.05f,
-          "the two backends disagree about where the floor is: %.4f vs %.4f", r[0].y, r[1].y);
-    CHECK(std::fabs(r[0].x - r[1].x) < 0.05f,
-          "the two backends disagree about sideways drift: %.4f vs %.4f", r[0].x, r[1].x);
-    CHECK(r[0].contacts > 0 && r[1].contacts > 0, "one of the backends reports no contact");
-}
-
 int main() {
     test_exists();
     test_it_collides();
@@ -322,7 +287,6 @@ int main() {
     test_impact_impulse();
     test_hinge_motor();
     test_compound();
-    test_against_jolt();
     std::printf("\n==================================\n");
     std::printf("  %d bestanden, %d fehlgeschlagen\n", g_pass, g_fail);
     std::printf("==================================\n");

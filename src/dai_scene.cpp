@@ -1,6 +1,6 @@
 // Daidalos scene layer. See include/dai_scene.h for what it is for.
 //
-// No Vulkan, no Jolt: this file only knows the public engine API and the
+// No Vulkan, no Talos: this file only knows the public engine API and the
 // render instance struct, so it links into the core library and stays
 // backend agnostic.
 
