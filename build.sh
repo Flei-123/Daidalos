@@ -164,7 +164,12 @@ if command -v glslangValidator >/dev/null 2>&1; then
     # A failed shader compile used to leave the previous .spv in place, so the
     # renderer silently kept running the OLD shader - which cost an afternoon
     # of "why do the lights do nothing". Fail loudly instead.
-    for s in mesh.vert mesh.frag shadow.vert sky.vert sky.frag particle.vert particle.frag ui.vert ui.frag; do
+    # post.* are the post processing chain (src/rhi_vulkan_post.cpp). They go
+    # through the same loop as everything else so that a broken post shader
+    # stops the build here rather than at the first frame that switches the
+    # chain on - which could be weeks later.
+    for s in mesh.vert mesh.frag shadow.vert sky.vert sky.frag particle.vert particle.frag ui.vert ui.frag \
+             post.vert post_bright.frag post_blur.frag post_comp.frag; do
         if ! glslangValidator -V "shaders/$s" -o "shaders/$s.spv.new" >/tmp/glsl_$s.log 2>&1; then
             echo "   !! shader $s failed to compile:"; sed -n '1,12p' /tmp/glsl_$s.log; exit 1
         fi
@@ -181,6 +186,9 @@ Jwait
     J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan.cpp       -o build/rhi_vulkan.o
     J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_frame.cpp -o build/rhi_vulkan_frame.o
     J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_texture.cpp -o build/rhi_vulkan_texture.o
+    # The post processing chain: its own translation unit for the same reason
+    # the frame recorder has one - see the header comment in the file.
+    J $CXX $FLAGS $ARCH -Iinclude -Isrc -c src/rhi_vulkan_post.cpp -o build/rhi_vulkan_post.o
     # Window backend: DAI_WINDOW=x11|wayland|none (default: x11 if available).
     # Exactly one is linked - they define the same four entry points, which is
     # the same "one .cpp per platform" rule the renderer itself follows.
@@ -272,6 +280,7 @@ Jwait
     J $CXX $FLAGS $ARCH -Iinclude -Isrc -c build/dai_shaders_embed.cpp -o build/dai_shaders_embed.o
 Jwait
     ar rcs build/libdaidalos_vk.a build/rhi_vulkan.o build/rhi_vulkan_frame.o build/rhi_vulkan_texture.o \
+           build/rhi_vulkan_post.o \
            build/dai_shaders_embed.o \
            $WINDOW_OBJ build/dai_dock.o build/dai_meshgen.o build/dai_image.o build/dai_inflate.o build/dai_jpeg.o build/dai_json.o \
            build/dai_gltf.o build/dai_gltf_geom.o build/dai_gltf_write.o build/dai_fracture.o build/dai_particles.o build/dai_font.o build/dai_svg.o build/dai_icons.o build/dai_thumb.o build/dai_ui.o build/dai_update.o \
@@ -429,6 +438,11 @@ Jwait
 ./build/test_thumb
 if [ "$VK_OK" = "1" ]; then
     J $CXX $FLAGS $ARCH -Iinclude tests/test_render_visual.cpp $VKLIBS -o build/test_render_visual
+    # Post processing, measured rather than admired: the chain off has to be
+    # bit identical, the bloom has to widen a spot, the grain has to depend on
+    # the frame counter and nothing else. Run here rather than merely built -
+    # it needs a device, and this block only runs when there is one.
+    J $CXX $FLAGS $ARCH -Iinclude tests/test_postfx.cpp $VKLIBS -o build/test_postfx
     # Cheap and load bearing: dai_key must stay bit identical to the X11
     # keysyms it is defined as, or the X11 backend silently stops matching.
     J $CXX $FLAGS $ARCH -Iinclude tests/test_keys.cpp -o build/test_keys

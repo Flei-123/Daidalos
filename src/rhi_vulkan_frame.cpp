@@ -517,15 +517,27 @@ extern "C" dai_result dai_render_frame(dai_renderer *r, const dai_render_instanc
     }
     vkCmdEndRendering(r->cmd);
 
-    vk_barrier(r->cmd, r->color_rt, VK_IMAGE_ASPECT_COLOR_BIT,
-               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-               VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-               VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    // Post processing goes HERE: after the UI, before the frame leaves the
+    // GPU. It reads the finished colour target and writes post_rt, and it
+    // returns the image the readback must now come from - post_rt when the
+    // chain ran, color_rt when it did not. With dai_postfx.enabled == 0 this
+    // records nothing at all and `src` is color_rt, which is what keeps every
+    // existing reference image bit identical.
+    VkImage src = vk_post_record(r);
+
+    // Only the untouched path needs this transition; vk_post_record already
+    // left post_rt in TRANSFER_SRC, and barriering it a second time would be
+    // a transition from a layout it is no longer in.
+    if (src == r->color_rt)
+        vk_barrier(r->cmd, r->color_rt, VK_IMAGE_ASPECT_COLOR_BIT,
+                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                   VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
 
     VkBufferImageCopy region{};
     region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
     region.imageExtent = { r->width, r->height, 1 };
-    vkCmdCopyImageToBuffer(r->cmd, r->color_rt, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, r->readback.buf, 1, &region);
+    vkCmdCopyImageToBuffer(r->cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, r->readback.buf, 1, &region);
 
     vkEndCommandBuffer(r->cmd);
     VkSubmitInfo si{ VK_STRUCTURE_TYPE_SUBMIT_INFO };

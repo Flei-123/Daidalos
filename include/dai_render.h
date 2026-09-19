@@ -548,6 +548,69 @@ DAI_API int dai_window_double_click(dai_window *w);
 DAI_API uint32_t dai_window_dropped_files(dai_window *w, char *out, uint32_t max,
                                           int *x, int *y);
 
+/* ---- post processing ---------------------------------------------------- */
+
+/* The screen space chain that runs AFTER the world and the UI are drawn:
+ * bloom, vignette, film grain, chromatic aberration, scanlines and a hit
+ * flash. It is the difference between a scene that is lit and a scene that
+ * looks photographed, and none of it can be done per object - a glow is light
+ * that has already left the surface.
+ *
+ * It is OFF by default, and that is a deliberate contract rather than a
+ * default value: the visual tests and every screenshot in this repository
+ * compare pixels against arithmetic, and a renderer that quietly started
+ * adding grain would turn all of them red for a reason that is not a bug.
+ * Nothing in the frame changes until a host sets `enabled`.
+ *
+ * Determinism: the grain is seeded from `frame_index`, NOT from the clock.
+ * The engine's one rule is state(n+1) = step(state(n), input(n)); a frame that
+ * reads the wall clock cannot be replayed, and a recording would grain
+ * differently every time it was played back. The same frame_index always
+ * produces the same picture.
+ *
+ * Cost at 1280x720, measured on llvmpipe (docs/POSTFX.md has the table): the
+ * bloom runs at QUARTER resolution, which is 1/16 of the pixels, because a
+ * Gaussian wide enough to look like a glow at full resolution needs a kernel
+ * so large that the pass costs more than the scene it is decorating. Blurring
+ * something already blurry loses nothing.
+ *
+ * Everything is in 0..1 unless said otherwise. Zero disables an individual
+ * effect, so a host can have bloom without grain by leaving grain at 0. */
+typedef struct dai_postfx {
+    int   enabled;            /* 0 -> the frame is bit identical to no post-fx at all */
+
+    /* Bloom. threshold is the luma a pixel needs before it glows; knee is the
+     * half width of the soft ramp around it (0 = a hard cut, which visibly
+     * flickers as a surface crosses the limit). intensity scales what is
+     * added back. 0 intensity skips the three bloom passes entirely. */
+    float bloom_threshold;    /* typical 0.7 */
+    float bloom_knee;         /* typical 0.3 */
+    float bloom_intensity;    /* typical 0.8, 0 = no bloom */
+
+    float vignette;           /* 0..1, how dark the corners go. typical 0.35 */
+    float grain;              /* 0..1, noise amplitude. typical 0.04 */
+    float aberration;         /* 0..~0.01, radial channel split at the corners */
+    float scanlines;          /* 0..1, darkening of every second row. typical 0.1 */
+
+    /* A hit flash: colour added over the whole frame, scaled by amount. The
+     * host drives amount down over a few frames itself - the renderer has no
+     * clock and must not grow one. */
+    float flash_color[3];
+    float flash_amount;       /* 0 = no flash */
+
+    /* Seeds the grain. The host's own frame counter; anything that counts
+     * monotonically works, and the same value twice gives the same picture. */
+    uint32_t frame_index;
+} dai_postfx;
+
+/* Arms the chain for every following frame. Pass NULL to switch it off.
+ *
+ * The struct is COPIED, so the caller may keep it on the stack, and it stays
+ * in effect until changed - unlike dai_render_world_clip2, which the frame
+ * consumes. A host that wants a flash for three frames calls this three times
+ * with a falling flash_amount. */
+DAI_API void dai_render_postfx(dai_renderer *r, const dai_postfx *fx);
+
 /* ---- frame ------------------------------------------------------------- */
 
 /* The world draws into THIS rectangle of the frame (pixels); the UI pass is

@@ -509,7 +509,10 @@ dai_result dai_window_present(dai_window *w) {
     blit.srcOffsets[1] = { sx + sw, sy + sh, 1 };
     blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
     blit.dstOffsets[1] = { (int32_t)w->width, (int32_t)w->height, 1 };
-    vkCmdBlitImage(w->cmd, r->color_rt, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    // Whatever the last frame ENDED in - post_rt when the post chain ran,
+    // color_rt when it did not. Naming color_rt here would present the
+    // frame without its post processing while the readback returned it with.
+    vkCmdBlitImage(w->cmd, vk_present_image(r), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
 
     vk_barrier(w->cmd, dst, VK_IMAGE_ASPECT_COLOR_BIT,

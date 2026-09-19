@@ -149,8 +149,12 @@ void vk_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect,
     vkCmdPipelineBarrier2(cb, &d);
 }
 
-namespace {
-
+// make_image, spv_dir, load_spv and load_module are deliberately OUTSIDE the
+// anonymous namespace below: src/rhi_vulkan_post.cpp creates images and loads
+// shader modules exactly the way this file does, and a second copy of either
+// is a second place for the memory type search and the embedded-shader
+// fallback to drift. Declared in rhi_vulkan.hpp. Everything after them is
+// internal to this translation unit.
 bool make_image(dai_renderer *r, uint32_t w, uint32_t h, VkFormat fmt, VkSampleCountFlagBits samples,
                 VkImageUsageFlags usage, VkImageAspectFlags aspect,
                 VkImage *img, VkDeviceMemory *mem, VkImageView *view) {
@@ -216,6 +220,8 @@ VkShaderModule load_module(dai_renderer *r, const char *name, bool *ok) {
     if (vkCreateShaderModule(r->dev, &si, nullptr, &m) != VK_SUCCESS) *ok = false;
     return m;
 }
+
+namespace {
 
 // vertex layout shared by the mesh and shadow pipelines
 struct VertexLayout {
@@ -890,6 +896,13 @@ dai_renderer *dai_render_create(const dai_render_desc *desc, char *err, size_t e
 
     if (!vk_init_default_material(r)) { dai_render_destroy(r); return fail("default material failed"); }
 
+    // Post processing. A failure here is NOT fatal: the chain is off by
+    // default, so a device that could not build it still renders every frame
+    // the same way it did before the feature existed. post_ready is what
+    // dai_render_postfx checks, and a host that switches the chain on without
+    // it simply gets the plain frame.
+    r->post_ready = vk_post_init(r) && vk_post_make_targets(r);
+
     return r;
 }
 
@@ -922,6 +935,8 @@ void dai_render_destroy(dai_renderer *r) {
             if (t.image) vkDestroyImage(r->dev, t.image, nullptr);
             if (t.mem) vkFreeMemory(r->dev, t.mem, nullptr);
         }
+        // Before the colour targets: the post sets point at color_rt's view.
+        vk_post_destroy(r);
         for (auto v : { r->color_ms_view, r->color_rt_view, r->depth_view, r->shadow_view })
             if (v) vkDestroyImageView(r->dev, v, nullptr);
         for (uint32_t i = 0; i < DAI_SHADOW_CASCADES; ++i)
@@ -1142,6 +1157,10 @@ dai_result dai_render_resize(dai_renderer *r, uint32_t width, uint32_t height) {
     if (r->depth)    { vkDestroyImage(r->dev, r->depth, nullptr);    vkFreeMemory(r->dev, r->depth_mem, nullptr); }
     r->color_ms = r->color_rt = r->depth = VK_NULL_HANDLE;
     r->color_ms_mem = r->color_rt_mem = r->depth_mem = VK_NULL_HANDLE;
+    // The post chain's images are the frame's size too, and its descriptor
+    // sets point at color_rt's view - which was just destroyed. Leave them and
+    // the first post-fx frame after a resize samples freed memory.
+    vk_post_free_targets(r);
     vk_free_buffer(r, &r->readback);
 
     const uint32_t old_w = r->width, old_h = r->height;
@@ -1164,8 +1183,17 @@ dai_result dai_render_resize(dai_renderer *r, uint32_t width, uint32_t height) {
             return false;
         VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-        return vk_make_buffer(r, (VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                              host, &r->readback, false);
+        if (!vk_make_buffer(r, (VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                            host, &r->readback, false))
+            return false;
+        // Rebuilt at the NEW size and re-pointed at the new color_rt view. If
+        // the chain never initialised there is nothing to rebuild and the
+        // resize still succeeds - post_ready stays false and post-fx stays off.
+        if (r->post_ready && !vk_post_make_targets(r)) {
+            r->post_ready = false;
+            return false;
+        }
+        return true;
     };
 
     if (!rebuild(width, height)) {
