@@ -270,6 +270,13 @@ done
 # review. It needs a renderer, so it runs on the virtual screen the two-window
 # test already brought up, and a non-zero exit turns the run red like any suite.
 SHOTS=${DAI_SHOTS_DIR:-.gauntlet-shots}
+# The mark this run photographs against. Without it the guard below judges
+# whatever has accumulated in the directory: .gauntlet-shots still held five
+# editor shots from 09.09. that no script in this tree produces any more, and
+# two of them were the same picture - which is a true statement about a dead
+# run and a permanently red suite for a reason that is history, not code.
+SHOT_MARK=$(mktemp "${TMPDIR:-/tmp}/dai-shotmark.XXXXXX")
+mkdir -p "$SHOTS"
 if [ -x build/droneshow_shot ]; then
     mkdir -p "$SHOTS"
     # All three sets, exactly as build.sh makes them: the plain names at
@@ -810,6 +817,24 @@ if [ -f RUN.md ]; then
     fi
 fi
 
+# ---- and the text in them has to fit its box ------------------------------
+# M3: tools/modeling_shot.cpp writes <shot>.layout.json next to every picture -
+# every string with the box it went into and the clip it sat under. CUT_OFF and
+# OVERLAP are always errors (nobody decides those); a label the panel shortened
+# itself is a note, because a 174 px tree showing "Wall.Front.D..." is behaving
+# and an inspector reading "Pos..." is not, and only a human can tell those two
+# apart today.
+if ls "$SHOTS"/*.layout.json >/dev/null 2>&1; then
+    if python3 tools/layout_guard.py "$SHOTS" --newer-than "$SHOT_MARK" --quiet; then
+        TOTAL_PASS=$((TOTAL_PASS + 1))
+    else
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+        FAILED="$FAILED layout_guard"
+    fi
+else
+    MISSING="$MISSING layout_guard(no dumps)"
+fi
+
 # ---- the screenshots have to be different pictures -------------------------
 # Gauntlet round 1 delivered four required shots that were ONE file under four
 # names (md5 b598614a...), and nothing here noticed; a human reading the report
@@ -819,7 +844,8 @@ fi
 # the whole editor screenshot - a hash over the panels mostly measures the
 # inspector and calls two different rooms identical.
 if [ -d "$SHOTS" ] && ls "$SHOTS"/*.png >/dev/null 2>&1; then
-    if python3 tools/shot_guard.py "$SHOTS" --crop 184,150,840,463 --quiet; then
+    if python3 tools/shot_guard.py "$SHOTS" --crop 184,150,840,463 \
+            --newer-than "$SHOT_MARK" --quiet; then
         TOTAL_PASS=$((TOTAL_PASS + 1))
     else
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
@@ -828,6 +854,7 @@ if [ -d "$SHOTS" ] && ls "$SHOTS"/*.png >/dev/null 2>&1; then
 else
     MISSING="$MISSING shot_guard(no shots)"
 fi
+rm -f "$SHOT_MARK"
 
 echo "-------------------------------------------"
 printf 'TOTAL %d passed, %d failed\n' "$TOTAL_PASS" "$TOTAL_FAIL"

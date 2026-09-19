@@ -68,6 +68,7 @@ static char           g_assets_dir[512] = { 0 };
 // here as it does in the editor.
 #define DAI_PROPS_DOC g_doc
 #include "dai_props_host.inl"
+#include "dai_ui_layout.inl"
 
 static double sh_find(const char *name, void *) {
     if (!name || !*name || !g_doc) return -1.0;
@@ -250,9 +251,30 @@ static int modeling_editor_png(const char *path) {
         dai_editor_ui_viewport_rect(g_panels, &lx, &ly, &lw, &lh);
         dai_editor_camera_viewport_rect(g_ed, lx, ly, lw, lh);
     }
+    // M3: the strings of THIS frame, written down with the box and the clip
+    // they went into. Recording is switched on for the second pass only - the
+    // first pass exists to let the dock lay itself out, and a log of a layout
+    // that is about to change is a log of something nobody photographed.
+    dai_ui_text_record(ui, 1);
     dai_ui_begin(ui, W, H, &in);
     dai_editor_ui_frame(g_panels, W, H);
     dai_ui_end(ui);
+
+    {
+        // Next to the picture, same stem: 20-innen-zelle.png -> .layout.json.
+        // A reviewer gets the frame, a test gets the numbers, and they are the
+        // same frame - which is the whole point of writing it here rather than
+        // in a separate pass that could disagree.
+        static const char *const allowed[] = { "Add Component...", nullptr };
+        std::string lp(path);
+        const size_t dot = lp.rfind(".png");
+        if (dot != std::string::npos) lp = lp.substr(0, dot);
+        lp += ".layout.json";
+        const int issues = dai_ui_layout_dump(ui, lp.c_str(), allowed);
+        if (issues > 0)
+            std::printf("   layout: %d issue(s) in %s\n", issues, lp.c_str());
+    }
+    dai_ui_text_record(ui, 0);
 
     const dai_ui_draw *draws = nullptr;
     uint32_t nb = dai_ui_draws(ui, &draws);

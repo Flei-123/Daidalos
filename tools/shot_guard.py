@@ -293,6 +293,14 @@ def main():
                          "(viewport 840x463 of 1280x720), and a hash over the whole frame mostly "
                          "measures the inspector, so two different rooms look alike. For "
                          "tools/modeling_shot use --crop 184,150,840,463.")
+    ap.add_argument("--newer-than", default="",
+                    help="only judge pictures newer than this file. run_tests.sh touches a marker "
+                         "before it photographs anything: without this, a directory accumulates "
+                         "orphans from runs nobody remembers - .gauntlet-shots still held five "
+                         "editor shots from 09.09. that no script in the tree produces any more, "
+                         "and they made the suite permanently red for a reason that was history.")
+    ap.add_argument("--stale-is-error", action="store_true",
+                    help="treat those older pictures as a failure instead of a note")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -303,6 +311,15 @@ def main():
 
     files = sorted(f for f in os.listdir(d) if f.lower().endswith(".png")
                    and not f.endswith(".canary.png"))
+    stale = []
+    if args.newer_than:
+        if not os.path.exists(args.newer_than):
+            print("shot_guard: marker %s does not exist" % args.newer_than)
+            return 1
+        cutoff = os.path.getmtime(args.newer_than)
+        fresh = [f for f in files if os.path.getmtime(os.path.join(d, f)) >= cutoff]
+        stale = [f for f in files if f not in fresh]
+        files = fresh
     if not files:
         print("shot_guard: no PNGs in %s - nothing was photographed" % d)
         return 1
@@ -387,6 +404,15 @@ def main():
                                 "above this line is worthless" % os.path.basename(ref))
         except Exception as e:
             failures.append("CANARY could not run on %s: %s" % (os.path.basename(ref), e))
+
+    if stale:
+        line = ("%d picture(s) older than this run (%s%s)"
+                % (len(stale), ", ".join(sorted(stale)[:4]),
+                   ", ..." if len(stale) > 4 else ""))
+        if args.stale_is_error:
+            failures.append("STALE " + line)
+        elif not args.quiet:
+            print("shot_guard: note - " + line)
 
     if not args.quiet:
         print("shot_guard: %d picture(s) in %s" % (len(files), d))
