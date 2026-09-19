@@ -91,6 +91,12 @@ for f in $CORE; do
     $CXX $FLAGS $ARCH $TALOS_DEFS -Iinclude -Isrc -I"$VKINC" -c "src/$f.cpp" -o "$OUT/$f.o"
     OBJS="$OBJS $OUT/$f.o"
 done
+# dai_native.cpp calls dai_native_header_text(), which only exists in the
+# generated file. build.sh generates it; the windows build dropped it in a
+# merge and failed to link. Generate and compile it here too.
+python3 tools/embed_native.py include/dai_native.h "$OUT/dai_native_header.cpp"
+$CXX $FLAGS $ARCH -Iinclude -Isrc -c "$OUT/dai_native_header.cpp" -o "$OUT/dai_native_header.o"
+OBJS="$OBJS $OUT/dai_native_header.o"
 x86_64-w64-mingw32-ar rcs "$OUT/libdaidalos.a" $OBJS $EXTRA_OBJS
 echo "   ok: $OUT/libdaidalos.a"
 
