@@ -127,9 +127,18 @@ fi
 
 # -static so the .exe runs on a machine with no mingw runtime beside it. The
 # whole point is handing over one file.
-LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a $ASSETS \
-      ${TALOS_LINK:-} -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 \
-      "$QJS_WIN" -static -static-libgcc -static-libstdc++ -lpthread"
+# Four Windows libraries that origin's line had lost and that this build needs,
+# each for exactly one symbol the link named out loud:
+#   -lcomdlg32  GetOpenFileNameW - the editor's "open file" dialog. Its absence
+#               is what broke this build after the merge, and it fails at the
+#               LINK, not at the compile, so nothing before "-- programs" warns.
+#   -lole32 -lwinmm -lavrt -lksuser  the audio path (Aulos/WASAPI).
+# The second $OUT/libdaidalos.a is not a typo: mingw's ld resolves an archive
+# once, at the position it is written, and the assets layer calls back into the
+# engine after the engine has already gone past.
+LIBS="$OUT/libdaidalos_vk.a $OUT/libdaidalos.a $OUT/libdaidalos_vk.a $ASSETS $OUT/libdaidalos.a \
+      ${TALOS_LINK:-} ${AUDIO_LIB_WIN:-} -L$OUT -lvulkan-1 -lwinhttp -lgdi32 -luser32 -lshell32 -lcomdlg32 \
+      "$QJS_WIN" -lole32 -lwinmm -lavrt -lksuser -static -static-libgcc -static-libstdc++ -lpthread"
 
 echo "-- programs"
 for src in examples/win_smoke.cpp examples/win_keytest.cpp examples/editor_demo.cpp examples/window_demo.cpp; do
