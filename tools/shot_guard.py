@@ -207,6 +207,31 @@ def hamming(a, b):
     return bin(a ^ b).count("1")
 
 
+def pixel_diff_percent(path_a, path_b, crop=None, step=2, tol=3):
+    """How much of the frame actually changed, in percent.
+
+    The average hash answers "does this look like the same picture"; this
+    answers "is it the same picture". Both are needed, and in this order: the
+    hash is cheap and finds the candidates, this reads the pixels and decides.
+    `tol` ignores a difference of three levels per channel, which is encoder
+    noise rather than content."""
+    wa, ha, ba, pa = read_png(path_a)
+    wb, hb, bb, pb = read_png(path_b)
+    if crop:
+        pa, wa, ha = crop_pixels(pa, wa, ha, ba, crop)
+        pb, wb, hb = crop_pixels(pb, wb, hb, bb, crop)
+    if wa != wb or ha != hb or ba != bb:
+        return 100.0          # different sizes are different pictures
+    n = 0
+    total = 0
+    for i in range(0, min(len(pa), len(pb)) - ba + 1, ba * step):
+        total += 1
+        if (abs(pa[i] - pb[i]) > tol or abs(pa[i + 1] - pb[i + 1]) > tol
+                or abs(pa[i + 2] - pb[i + 2]) > tol):
+            n += 1
+    return 100.0 * n / max(total, 1)
+
+
 def load_allowed(directory):
     """Pairs that are allowed to be identical, one 'a.png b.png' per line.
     Comments with #. A pair has to be written down deliberately; that is the
@@ -287,7 +312,16 @@ def main():
     ap.add_argument("--min-std", type=float, default=6.0,
                     help="minimum standard deviation of luma (default 6.0)")
     ap.add_argument("--phash-distance", type=int, default=2,
-                    help="two frames closer than this in average-hash bits count as near-duplicates")
+                    help="two frames closer than this in average-hash bits are CANDIDATES for "
+                         "near-duplicates; the pixel test below decides")
+    ap.add_argument("--min-pixel-diff", type=float, default=0.15,
+                    help="percentage of pixels that must differ for two frames to count as "
+                         "genuinely different (default 0.15). The average hash alone is not "
+                         "enough: a drone show is a thin cloud of dots on black, and moving "
+                         "every dot changes a 16x16 block's mean by almost nothing. Measured "
+                         "on this tree: two different formations differ in 0.39-0.45%% of "
+                         "pixels, while a 'hover' shot that is really the 'start' shot differs "
+                         "in 0.0247%% - a factor of sixteen, so the line sits between them.")
     ap.add_argument("--crop", default="",
                     help="x,y,w,h - judge only this rectangle. The editor shot is 58%% panels "
                          "(viewport 840x463 of 1280x720), and a hash over the whole frame mostly "
@@ -370,9 +404,14 @@ def main():
             if frozenset((a, b)) in allowed:
                 continue
             dist = hamming(info[a]["ahash"], info[b]["ahash"])
-            if dist <= args.phash_distance:
-                failures.append("NEAR-DUPLICATE %s and %s differ in only %d of 256 hash bits"
-                                % (a, b, dist))
+            if dist > args.phash_distance:
+                continue
+            pct = pixel_diff_percent(os.path.join(d, a), os.path.join(d, b), crop=crop)
+            if pct >= args.min_pixel_diff:
+                continue      # looks alike, IS different - a thin cloud that moved
+            failures.append("NEAR-DUPLICATE %s and %s: %d of 256 hash bits apart and only "
+                            "%.4f%% of pixels differ (threshold %.2f%%)"
+                            % (a, b, dist, pct, args.min_pixel_diff))
 
     # --- blank
     for f, s in info.items():
