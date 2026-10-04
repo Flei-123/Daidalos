@@ -1,0 +1,84 @@
+manifest 1
+app daidalos
+title "Daidalos editor / runtime, driven through the MCP bridge (docs/MCP_SERVER.md)"
+# api 1.0 -- GENERATED from tools/dai_mcp.py by tools/gen_actions.py. Do not edit: change the TOOLS table,
+# run `python3 tools/gen_actions.py --write` and commit both. tools/check_actions.py fails when they differ.
+# These actions are the MCP tools of tools/dai_mcp.py (JARVIS config.json: mcp_servers.daidalos); the
+# editor socket behind them is include/dai_bridge_host.inl (one JSON object per line, docs/BRIDGE.md).
+# SemVer: a new tool or optional argument is a minor step, a removed or changed one a major step.
+
+action daidalos.state read "Is a Daidalos runtime up, which binaries exist and how old are they against the sources? Start here - it also answers the trap that build.sh does NOT build build/daidalos_runtime (tools/build_runtime.sh does)."
+  returns text string "The tool's text answer"
+
+action daidalos.api read "READ THIS FIRST if you have not worked in Daidalos before. The whole cheat sheet: the object model, every property name, the enums, the modifier fields, the two rules that are not guessable (csg.op sits on the PARENT; supports() is a library helper, not a ..."
+  returns text string "The tool's text answer"
+
+action daidalos.docs read "Read a file from the repository - without a name it lists docs/. The documents worth reading: BRIDGE.md (socket + property table), SCRIPTING.md (behaviours, object model), BLOCKOUT.md (kinds + CSG), MATERIALS.md, GDD_INNEN.md (the game), INNEN_*.md (what is ..."
+  arg file string optional "e.g. BRIDGE.md, or examples/scripts/innen_lib.js"
+  returns text string "The tool's text answer"
+
+action daidalos.add write "Create a node and set its properties in one undo step - the structured form of editor.add, for when you do not want to write JavaScript. props is a map of property name to value: a list of three is written as a vector, a number as a number, anything else as ..."
+  arg name string required "name"
+  arg parent int optional "Parent node id. Remember: for CSG the PARENT carries csg.op."
+  arg props string optional "e.g. {'blockout.kind':1,'blockout.size':[4,3,0.2],'transform.position':[0,1.5,0]} (a JSON object)"
+  arg material string optional "e.g. 'materials/raufaser.daimat'"
+  returns text string "The tool's text answer"
+  undo daidalos.undo
+
+action daidalos.set write "Change properties of an existing node and READ THEM BACK, so the answer is what the document says rather than what was sent - an unknown property name answers a harmless fallback, which would otherwise look like success."
+  arg id int required "id"
+  arg props string optional "(a JSON object)"
+  arg material string optional "material"
+  returns text string "The tool's text answer"
+  undo daidalos.undo
+
+action daidalos.get read "Read properties of a node. Without a list of names it reads the usual ones (name, tag, transform, blockout, csg, modifier count, script, collider, body). Each value comes back read as number, vector AND text, because one table serves all three and guessing ..."
+  arg id int required "id"
+  arg props string optional "(a JSON array of strings)"
+  returns text string "The tool's text answer"
+
+action daidalos.remove write "Delete a node and its subtree (one undo step)."
+  arg id int required "id"
+  returns text string "The tool's text answer"
+  undo daidalos.undo
+
+action daidalos.assets read "What is on disk to reference: materials (.daimat), textures, scenes (.daiscene) and the behaviour scripts. Use this instead of guessing a material path."
+  returns text string "The tool's text answer"
+
+action daidalos.undo write "Undo (or redo) whole steps. One bridge call was one step, however many nodes it touched."
+  arg steps int optional "steps"
+  arg redo bool optional "redo"
+  returns text string "The tool's text answer"
+  undo daidalos.undo
+
+action daidalos.js write "Run JavaScript in the runtime's script context and return the value of the last expression. This is how scenes are built in this project - the rooms are data, not C++. Either code, or files (concatenated into ONE eval, so a level script gets its library in ..."
+  arg code string optional "JavaScript source."
+  arg files string optional "Repo-relative files, evaluated as one program in this order. (a JSON array of strings)"
+  returns text string "The tool's text answer"
+
+action daidalos.shot read "Render the current scene and RETURN THE PICTURE (PNG) so it can be looked at, not just a file path. Camera: eye and target as [x,y,z], fov in degrees. Eye height 1.55 is where the player's camera is - a room that only reads from a drone shot is a room nobody ..."
+  arg eye string optional "(a JSON array of numbers [3 values])"
+  arg target string optional "(a JSON array of numbers [3 values])"
+  arg fov string optional "(a decimal number)"
+  arg path string optional "Where to keep the PNG (default .dai-mcp-shots/)."
+  returns text string "The tool's text answer"
+  returns picture string "The render as a picture (the PNG is kept in .dai-mcp-shots/)"
+
+action daidalos.scene read "The scene graph as JSON: nodes, names, transforms. Use this instead of guessing what the last script actually built, and instead of reading .daiscene files."
+  arg name string optional "Only the first node with this name."
+  returns text string "The tool's text answer"
+
+action daidalos.save write "Save the scene to a .daiscene file, so the editor can open exactly what was shot."
+  arg path string required "Repo-relative or absolute (repo or /tmp only)."
+  returns text string "The tool's text answer"
+
+action daidalos.build write "Build. target=all runs ./build.sh, target=runtime runs tools/build_runtime.sh (the one build.sh does not do), target=shot runs tools/build_modeling_shot.sh, target=win runs ./build_win.sh. Returns the tail of the log and the exit code."
+  arg target string required "(one of: all, runtime, shot, win)"
+  returns text string "The tool's text answer"
+
+action daidalos.tests read "Run tools/run_tests.sh and return the TOTAL line plus any failures. The suite has a freshness guard: a runtime older than a source in include/src/examples fails on purpose, because a stale binary measures nothing."
+  arg pattern string optional "Only tests whose name contains this."
+  returns text string "The tool's text answer"
+
+action daidalos.restart write "Kill the headless runtime this server started and start a fresh one - after a rebuild, or when --serve ran out. An editor started by a human is never killed."
+  returns text string "The tool's text answer"

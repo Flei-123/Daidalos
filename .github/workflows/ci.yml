@@ -32,6 +32,9 @@ jobs:
           [ -x build/test_talos ] && ./build/test_talos
           # lavapipe (mesa-vulkan-drivers) renders in software; 77 = no device
           DAI_SHADER_DIR=shaders ./build/test_render_visual /tmp || [ $? = 77 ]
+      - name: Action manifest (api/ACTIONS is generated from tools/dai_mcp.py and lints clean)
+        working-directory: daidalos
+        run: python3 tools/check_actions.py
       - name: CMake configure + core build
         working-directory: daidalos
         run: cmake -B build-cmake -DTALOS_DIR=$PWD/../talos -DAULOS_DIR=$PWD/../aulos -DMNEMOSYNE_DIR=$PWD/../mnemosyne && cmake --build build-cmake -j --target daidalos hello_daidalos test_daidalos && ctest --test-dir build-cmake -R test_daidalos --output-on-failure
