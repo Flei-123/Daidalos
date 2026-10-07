@@ -1,0 +1,14 @@
+{
+ "skip": [
+  "projects/"
+ ],
+ "catalogs": [
+  "src/dai_tr.cpp"
+ ],
+ "words": [
+  "lang",
+  "listen",
+  "attribute"
+ ],
+ "lines": []
+}

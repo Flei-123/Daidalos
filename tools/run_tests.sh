@@ -37,6 +37,10 @@ if [ "${DAI_RUN_LOG:-}" != "1" ]; then
     exit "${PIPESTATUS[0]}"
 fi
 
+# The shared no-German guard of Firn (frozen counts in no-german.baseline.json); it needs no build.
+GUARD_FAIL=0
+if ! bash "${FIRN:-/root/firn}/tools/english/no_german_ci.sh" .; then GUARD_FAIL=1; fi
+
 # Headless: arithmetic, documents, parsing, layout. No Vulkan instance is
 # created, no window is opened.
 SUITES="
@@ -873,6 +877,7 @@ echo "not run (needs GPU): $GPU_ONLY"
 [ -n "$MISSING" ] && echo "not built:$MISSING"
 [ -n "$SUITES_SKIPPED" ] && echo "skipped:$SUITES_SKIPPED"
 [ -n "$NOCOUNT" ] && echo "no counts parsed (summary line changed shape?):$NOCOUNT"
+if [ "$GUARD_FAIL" -ne 0 ]; then FAILED="$FAILED no_german_guard"; fi
 if [ -n "$FAILED" ]; then
     echo "RED:$FAILED"
     exit 1
