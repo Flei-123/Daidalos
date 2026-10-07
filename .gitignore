@@ -21,3 +21,5 @@ _dev_*.cpp
 
 # Renders des MCP-Servers (tools/dai_mcp.py) — Arbeitsmaterial, nicht Quelle
 .dai-mcp-shots/
+__pycache__/
+*.pyc
